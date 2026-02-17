@@ -1,0 +1,17 @@
+{
+  "id": "ses_test001",
+  "slug": "clever-knight",
+  "version": "1.1.36",
+  "projectID": "abc123def456",
+  "directory": "/tmp/test/myproject",
+  "title": "Implement hello world",
+  "time": {
+    "created": 1771245757992,
+    "updated": 1771255877946
+  },
+  "summary": {
+    "additions": 20,
+    "deletions": 0,
+    "files": 2
+  }
+}

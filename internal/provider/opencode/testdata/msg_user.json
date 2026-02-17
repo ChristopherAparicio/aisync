@@ -1,0 +1,17 @@
+{
+  "id": "msg_user01",
+  "sessionID": "ses_test001",
+  "role": "user",
+  "time": {
+    "created": 1771245758030
+  },
+  "summary": {
+    "title": "Add hello world function",
+    "diffs": []
+  },
+  "agent": "build",
+  "model": {
+    "providerID": "anthropic",
+    "modelID": "claude-opus-4-6"
+  }
+}

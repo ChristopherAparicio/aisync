@@ -1,0 +1,26 @@
+{
+  "id": "prt_tool02",
+  "sessionID": "ses_test001",
+  "messageID": "msg_asst01",
+  "type": "tool",
+  "callID": "toolu_02test",
+  "tool": "read",
+  "state": {
+    "status": "error",
+    "input": {
+      "file_path": "missing.go"
+    },
+    "output": "file not found: missing.go",
+    "title": "Read missing.go",
+    "metadata": {
+      "output": "file not found: missing.go",
+      "exit": 1,
+      "description": "Read missing.go",
+      "truncated": false
+    },
+    "time": {
+      "start": 1771247991000,
+      "end": 1771247991100
+    }
+  }
+}

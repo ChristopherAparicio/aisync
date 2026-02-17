@@ -1,0 +1,13 @@
+{
+  "id": "abc123def456",
+  "worktree": "/tmp/test/myproject",
+  "vcs": "git",
+  "sandboxes": [],
+  "time": {
+    "created": 1771245707631,
+    "updated": 1771245709642
+  },
+  "icon": {
+    "color": "cyan"
+  }
+}

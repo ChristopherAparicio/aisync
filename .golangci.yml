@@ -1,0 +1,66 @@
+version: "2"
+
+run:
+  timeout: 3m
+  go: "1.24"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ChristopherAparicio/aisync
+
+linters:
+  default: none
+  enable:
+    # Bug detection
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+
+    # Code simplification (gosimple is now part of staticcheck in v2)
+    - unused
+
+    # Style & quality
+    - revive
+    - misspell
+
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          arguments:
+            - "checkPrivateReceivers"
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: receiver-naming
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: unreachable-code
+
+    govet:
+      enable-all: true
+
+    errcheck:
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck

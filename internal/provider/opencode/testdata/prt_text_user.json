@@ -1,0 +1,7 @@
+{
+  "id": "prt_text01",
+  "sessionID": "ses_test001",
+  "messageID": "msg_user01",
+  "type": "text",
+  "text": "Add a hello world function to main.go"
+}

@@ -1,0 +1,25 @@
+{
+  "id": "ses_test002",
+  "slug": "quiet-lagoon",
+  "version": "1.1.36",
+  "projectID": "abc123def456",
+  "directory": "/tmp/test/myproject",
+  "parentID": "ses_test001",
+  "title": "Explore project structure (@explore subagent)",
+  "permission": [
+    {
+      "permission": "task",
+      "action": "deny",
+      "pattern": "*"
+    }
+  ],
+  "time": {
+    "created": 1771256711046,
+    "updated": 1771256765891
+  },
+  "summary": {
+    "additions": 0,
+    "deletions": 0,
+    "files": 0
+  }
+}

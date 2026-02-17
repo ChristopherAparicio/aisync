@@ -1,0 +1,11 @@
+{
+  "id": "prt_text02",
+  "sessionID": "ses_test001",
+  "messageID": "msg_asst01",
+  "type": "text",
+  "text": "I've created the main.go file with a HelloWorld function.",
+  "time": {
+    "start": 1771247994000,
+    "end": 1771247994500
+  }
+}

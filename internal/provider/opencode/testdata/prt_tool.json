@@ -1,0 +1,27 @@
+{
+  "id": "prt_tool01",
+  "sessionID": "ses_test001",
+  "messageID": "msg_asst01",
+  "type": "tool",
+  "callID": "toolu_01test",
+  "tool": "write",
+  "state": {
+    "status": "completed",
+    "input": {
+      "file_path": "main.go",
+      "content": "package main\n\nfunc HelloWorld() string {\n\treturn \"Hello, World!\"\n}"
+    },
+    "output": "File written successfully.",
+    "title": "Write main.go",
+    "metadata": {
+      "output": "File written successfully.",
+      "exit": 0,
+      "description": "Write main.go",
+      "truncated": false
+    },
+    "time": {
+      "start": 1771247990000,
+      "end": 1771247990500
+    }
+  }
+}

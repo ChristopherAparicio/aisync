@@ -1,0 +1,29 @@
+{
+  "id": "msg_asst01",
+  "sessionID": "ses_test001",
+  "role": "assistant",
+  "time": {
+    "created": 1771245758049,
+    "completed": 1771247994872
+  },
+  "parentID": "msg_user01",
+  "modelID": "claude-opus-4-6",
+  "providerID": "anthropic",
+  "mode": "build",
+  "agent": "build",
+  "path": {
+    "cwd": "/tmp/test/myproject",
+    "root": "/tmp/test/myproject"
+  },
+  "cost": 0,
+  "tokens": {
+    "input": 100,
+    "output": 250,
+    "reasoning": 0,
+    "cache": {
+      "read": 500,
+      "write": 200
+    }
+  },
+  "finish": "end-turn"
+}
