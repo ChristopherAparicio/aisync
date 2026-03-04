@@ -267,7 +267,7 @@ aisync follows **Hexagonal Architecture** (Ports & Adapters) with a clear server
 
 3 interfaces as ports: `Provider` (3 implementations), `Store` (extensibility + testing), `SessionConverter` (testing).
 
-For full details, see [architecture.md](./architecture.md), [spec.md](./spec.md), and [CONTRIBUTING.md](./CONTRIBUTING.md).
+For full details, see [architecture/](./architecture/), [spec.md](./spec.md), and [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Project Status
 

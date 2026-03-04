@@ -35,7 +35,7 @@ Decisions taken during the design phase, before any code was written.
 
 ---
 
-> **Architecture details** → see [architecture.md](./architecture.md)
+> **Architecture details** → see [architecture/](./architecture/)
 
 ---
 
@@ -256,7 +256,7 @@ Decisions taken during the design phase, before any code was written.
 
 > **Goal:** Transform aisync from a CLI-only tool into a **server that exposes services**, enabling multiple clients (CLI, Web UI, TUI, MCP Server) to share the same application logic. Follows Hexagonal / Ports & Adapters architecture.
 >
-> **See [architecture.md](./architecture.md)** for the full architectural design.
+> **See [architecture/](./architecture/)** for the full architectural design.
 
 ### Milestone 3.5.A — Extract Service Layer (COMPLETE)
 

@@ -1,6 +1,11 @@
 # aisync — Architecture
 
-> Last updated: 2026-03-03
+> Last updated: 2026-03-04
+
+This directory contains the architectural documentation for aisync:
+
+- **[README.md](./README.md)** — High-level architecture overview (this file)
+- **[blame.md](./blame.md)** — AI-Blame feature: design, queries, performance
 
 ---
 
