@@ -262,8 +262,8 @@ func (m detailModel) buildLines() []string {
 			if msg.Model != "" {
 				header += styleMuted.Render("  [" + msg.Model + "]")
 			}
-			if msg.Tokens > 0 {
-				header += styleMuted.Render(fmt.Sprintf("  %d tokens", msg.Tokens))
+			if totalTok := msg.InputTokens + msg.OutputTokens; totalTok > 0 {
+				header += styleMuted.Render(fmt.Sprintf("  %d tokens", totalTok))
 			}
 			lines = append(lines, header)
 

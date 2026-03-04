@@ -542,6 +542,7 @@ func TestNewServerRegistersAllTools(t *testing.T) {
 		"aisync_delete", "aisync_export", "aisync_import", "aisync_link",
 		"aisync_comment", "aisync_search", "aisync_blame", "aisync_explain",
 		"aisync_rewind", "aisync_stats", "aisync_cost",
+		"aisync_tool_usage", "aisync_efficiency",
 		"aisync_push", "aisync_pull", "aisync_sync", "aisync_index",
 	}
 

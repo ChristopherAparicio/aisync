@@ -44,8 +44,8 @@ func TestSession_JSONRoundTrip(t *testing.T) {
 						DurationMs: 150,
 					},
 				},
-				Tokens:    1500,
-				Timestamp: now,
+				OutputTokens: 1500,
+				Timestamp:    now,
 			},
 		},
 		FileChanges: []FileChange{

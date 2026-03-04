@@ -71,12 +71,12 @@ func testSession() *session.Session {
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
 			},
 			{
-				ID:        "msg-002",
-				Role:      session.RoleAssistant,
-				Content:   "Hi there!",
-				Model:     "claude-sonnet",
-				Timestamp: time.Date(2026, 2, 17, 9, 0, 5, 0, time.UTC),
-				Tokens:    100,
+				ID:           "msg-002",
+				Role:         session.RoleAssistant,
+				Content:      "Hi there!",
+				Model:        "claude-sonnet",
+				Timestamp:    time.Date(2026, 2, 17, 9, 0, 5, 0, time.UTC),
+				OutputTokens: 100,
 			},
 		},
 	}

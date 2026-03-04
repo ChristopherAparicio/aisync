@@ -156,9 +156,9 @@ func TestSessionCost_basic(t *testing.T) {
 		},
 		Messages: []session.Message{
 			{Role: session.RoleUser, Content: "Hello"},
-			{Role: session.RoleAssistant, Model: "claude-sonnet-4", Tokens: 6_000},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 6_000},
 			{Role: session.RoleUser, Content: "More work"},
-			{Role: session.RoleAssistant, Model: "claude-sonnet-4", Tokens: 4_000},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 4_000},
 		},
 	}
 
@@ -201,8 +201,8 @@ func TestSessionCost_multiModel(t *testing.T) {
 			TotalTokens:  45_000,
 		},
 		Messages: []session.Message{
-			{Role: session.RoleAssistant, Model: "claude-sonnet-4", Tokens: 10_000},
-			{Role: session.RoleAssistant, Model: "claude-opus-4", Tokens: 5_000},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 10_000},
+			{Role: session.RoleAssistant, Model: "claude-opus-4", OutputTokens: 5_000},
 		},
 	}
 
@@ -238,7 +238,7 @@ func TestSessionCost_unknownModel(t *testing.T) {
 
 	sess := &session.Session{
 		Messages: []session.Message{
-			{Role: session.RoleAssistant, Model: "mystery-llm-v99", Tokens: 5_000},
+			{Role: session.RoleAssistant, Model: "mystery-llm-v99", OutputTokens: 5_000},
 		},
 	}
 
@@ -283,7 +283,7 @@ func TestSessionCost_noInputTokens(t *testing.T) {
 			TotalTokens:  5_000,
 		},
 		Messages: []session.Message{
-			{Role: session.RoleAssistant, Model: "claude-sonnet-4", Tokens: 5_000},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 5_000},
 		},
 	}
 
@@ -303,8 +303,8 @@ func TestSessionCost_userMessagesIgnored(t *testing.T) {
 	sess := &session.Session{
 		TokenUsage: session.TokenUsage{InputTokens: 10_000},
 		Messages: []session.Message{
-			{Role: session.RoleUser, Model: "claude-sonnet-4", Tokens: 100},
-			{Role: session.RoleSystem, Model: "claude-sonnet-4", Tokens: 50},
+			{Role: session.RoleUser, Model: "claude-sonnet-4", InputTokens: 100},
+			{Role: session.RoleSystem, Model: "claude-sonnet-4", InputTokens: 50},
 		},
 	}
 

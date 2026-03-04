@@ -212,7 +212,8 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		if msg.Tokens.Input > 0 || msg.Tokens.Output > 0 {
 			totalInput += msg.Tokens.Input + msg.Tokens.Cache.Read + msg.Tokens.Cache.Write
 			totalOutput += msg.Tokens.Output
-			domainMsg.Tokens = msg.Tokens.Input + msg.Tokens.Output
+			domainMsg.InputTokens = msg.Tokens.Input + msg.Tokens.Cache.Read + msg.Tokens.Cache.Write
+			domainMsg.OutputTokens = msg.Tokens.Output
 		}
 
 		result.Messages = append(result.Messages, domainMsg)
@@ -379,9 +380,8 @@ func (p *Provider) writeMessages(sess *session.Session) error {
 			created = time.Now().UnixMilli()
 		}
 
-		// Rough token split for input/output
-		inputTokens := msg.Tokens / 2
-		outputTokens := msg.Tokens - inputTokens
+		inputTokens := msg.InputTokens
+		outputTokens := msg.OutputTokens
 
 		ocMsg := ocMessage{
 			ID:      msgID,
@@ -613,8 +613,8 @@ func MarshalJSON(sess *session.Session) ([]byte, error) {
 			ModelID: msg.Model,
 			Content: msg.Content,
 			Tokens: ExportTokens{
-				Input:  msg.Tokens / 2, // rough split
-				Output: msg.Tokens - msg.Tokens/2,
+				Input:  msg.InputTokens,
+				Output: msg.OutputTokens,
 			},
 			Time: ExportMsgTime{
 				Created:   msg.Timestamp.UnixMilli(),
@@ -713,7 +713,8 @@ func UnmarshalJSON(data []byte) (*session.Session, error) {
 
 		totalInput += msg.Tokens.Input
 		totalOutput += msg.Tokens.Output
-		domainMsg.Tokens = msg.Tokens.Input + msg.Tokens.Output
+		domainMsg.InputTokens = msg.Tokens.Input
+		domainMsg.OutputTokens = msg.Tokens.Output
 
 		// Process parts
 		var textParts []string
@@ -730,6 +731,7 @@ func UnmarshalJSON(data []byte) (*session.Session, error) {
 				}
 				if part.State != nil {
 					tc.Output = part.State.Output
+					tc.OutputTokens = roughTokenEstimate(len(tc.Output))
 					switch part.State.Status {
 					case "completed":
 						tc.State = session.ToolStateCompleted
@@ -743,6 +745,7 @@ func UnmarshalJSON(data []byte) (*session.Session, error) {
 					if part.State.Input != nil {
 						inputBytes, _ := json.Marshal(part.State.Input)
 						tc.Input = string(inputBytes)
+						tc.InputTokens = roughTokenEstimate(len(tc.Input))
 					}
 				}
 				domainMsg.ToolCalls = append(domainMsg.ToolCalls, tc)
@@ -982,6 +985,10 @@ func convertToolPart(part ocPart) session.ToolCall {
 
 	tc.Output = part.State.Output
 
+	// Estimate tokens from content size (~4 bytes per token).
+	tc.InputTokens = roughTokenEstimate(len(tc.Input))
+	tc.OutputTokens = roughTokenEstimate(len(tc.Output))
+
 	// Map status to domain ToolState
 	switch part.State.Status {
 	case "completed":
@@ -1000,6 +1007,15 @@ func convertToolPart(part ocPart) session.ToolCall {
 	}
 
 	return tc
+}
+
+// roughTokenEstimate estimates token count from byte length (~4 bytes per token).
+func roughTokenEstimate(byteLen int) int {
+	n := byteLen / 4
+	if n == 0 && byteLen > 0 {
+		n = 1
+	}
+	return n
 }
 
 func trackFileChange(part ocPart, sess *session.Session) {

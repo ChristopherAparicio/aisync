@@ -46,24 +46,27 @@ type Summary struct {
 
 // Message represents a single message in an AI conversation.
 type Message struct {
-	Timestamp time.Time   `json:"timestamp"`
-	ID        string      `json:"id"`
-	Content   string      `json:"content"`
-	Model     string      `json:"model,omitempty"`
-	Thinking  string      `json:"thinking,omitempty"`
-	Role      MessageRole `json:"role"`
-	ToolCalls []ToolCall  `json:"tool_calls,omitempty"`
-	Tokens    int         `json:"tokens,omitempty"`
+	Timestamp    time.Time   `json:"timestamp"`
+	ID           string      `json:"id"`
+	Content      string      `json:"content"`
+	Model        string      `json:"model,omitempty"`
+	Thinking     string      `json:"thinking,omitempty"`
+	Role         MessageRole `json:"role"`
+	ToolCalls    []ToolCall  `json:"tool_calls,omitempty"`
+	InputTokens  int         `json:"input_tokens,omitempty"`
+	OutputTokens int         `json:"output_tokens,omitempty"`
 }
 
 // ToolCall represents a tool invocation with its lifecycle.
 type ToolCall struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Input      string    `json:"input"`
-	Output     string    `json:"output,omitempty"`
-	State      ToolState `json:"state"`
-	DurationMs int       `json:"duration_ms,omitempty"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Input        string    `json:"input"`
+	Output       string    `json:"output,omitempty"`
+	State        ToolState `json:"state"`
+	DurationMs   int       `json:"duration_ms,omitempty"`
+	InputTokens  int       `json:"input_tokens,omitempty"`  // estimated tokens consumed by this tool's input
+	OutputTokens int       `json:"output_tokens,omitempty"` // estimated tokens consumed by this tool's output
 }
 
 // FileChange records a file touched during a session.
@@ -107,6 +110,36 @@ type ModelCost struct {
 	OutputTokens int    `json:"output_tokens"`
 	Cost         Cost   `json:"cost"`
 	MessageCount int    `json:"message_count"`
+}
+
+// ToolUsageStats is the aggregated tool usage breakdown for a session.
+type ToolUsageStats struct {
+	Tools      []ToolUsageEntry `json:"tools"`
+	TotalCalls int              `json:"total_calls"`
+	TotalCost  Cost             `json:"total_cost,omitempty"` // populated when pricing is available
+}
+
+// ToolUsageEntry aggregates token usage and call count for a single tool name.
+type ToolUsageEntry struct {
+	Name         string  `json:"name"`
+	Calls        int     `json:"calls"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	TotalTokens  int     `json:"total_tokens"`
+	AvgDuration  int     `json:"avg_duration_ms,omitempty"` // average duration in ms
+	ErrorCount   int     `json:"error_count"`
+	Cost         Cost    `json:"cost,omitempty"`
+	Percentage   float64 `json:"percentage"` // share of total tokens (0-100)
+}
+
+// EfficiencyReport is an LLM-generated analysis of session efficiency.
+type EfficiencyReport struct {
+	Score       int      `json:"score"`       // 0-100 efficiency score
+	Summary     string   `json:"summary"`     // one-paragraph assessment
+	Strengths   []string `json:"strengths"`   // what went well
+	Issues      []string `json:"issues"`      // inefficiencies found
+	Suggestions []string `json:"suggestions"` // actionable improvements
+	Patterns    []string `json:"patterns"`    // detected patterns (retry loops, over-reading, etc.)
 }
 
 // ListOptions controls session listing queries.

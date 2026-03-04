@@ -501,6 +501,60 @@ func (s *Server) handleRewind(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Tool Usage ──
+
+func (s *Server) handleToolUsage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "session ID is required")
+		return
+	}
+
+	result, err := s.sessionSvc.ToolUsage(r.Context(), id)
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Efficiency ──
+
+type efficiencyRequest struct {
+	SessionID string `json:"session_id"`
+	Model     string `json:"model,omitempty"`
+}
+
+func (s *Server) handleEfficiency(w http.ResponseWriter, r *http.Request) {
+	var req efficiencyRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if req.SessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	sid, err := session.ParseID(req.SessionID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := s.sessionSvc.AnalyzeEfficiency(r.Context(), service.EfficiencyRequest{
+		SessionID: sid,
+		Model:     req.Model,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ── Stats ──
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

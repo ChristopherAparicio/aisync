@@ -266,12 +266,12 @@ func TestImport_basicSession(t *testing.T) {
 				Timestamp: time.Date(2025, 2, 25, 10, 0, 0, 0, time.UTC),
 			},
 			{
-				ID:        "msg-002",
-				Role:      session.RoleAssistant,
-				Content:   "I'll create a hello world function for you.",
-				Model:     "claude-sonnet-4-20250514",
-				Timestamp: time.Date(2025, 2, 25, 10, 0, 1, 0, time.UTC),
-				Tokens:    150,
+				ID:           "msg-002",
+				Role:         session.RoleAssistant,
+				Content:      "I'll create a hello world function for you.",
+				Model:        "claude-sonnet-4-20250514",
+				Timestamp:    time.Date(2025, 2, 25, 10, 0, 1, 0, time.UTC),
+				OutputTokens: 150,
 				ToolCalls: []session.ToolCall{
 					{
 						ID:    "tc-001",

@@ -621,3 +621,71 @@ func (c *Client) EstimateCost(idOrSHA string) (*CostEstimate, error) {
 	var result CostEstimate
 	return &result, decode(data, &result)
 }
+
+// ── Tool Usage ──
+
+// ToolUsageEntry aggregates token usage for a single tool name.
+type ToolUsageEntry struct {
+	Name         string  `json:"name"`
+	Calls        int     `json:"calls"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	TotalTokens  int     `json:"total_tokens"`
+	AvgDuration  int     `json:"avg_duration_ms,omitempty"`
+	ErrorCount   int     `json:"error_count"`
+	Cost         Cost    `json:"cost,omitempty"`
+	Percentage   float64 `json:"percentage"`
+}
+
+// ToolUsageStats is the aggregated tool usage breakdown for a session.
+type ToolUsageStats struct {
+	Tools      []ToolUsageEntry `json:"tools"`
+	TotalCalls int              `json:"total_calls"`
+	TotalCost  Cost             `json:"total_cost,omitempty"`
+}
+
+// ToolUsage retrieves per-tool token usage breakdown for a session.
+func (c *Client) ToolUsage(idOrSHA string) (*ToolUsageStats, error) {
+	data, err := c.doGet("/api/v1/sessions/" + url.PathEscape(idOrSHA) + "/tool-usage")
+	if err != nil {
+		return nil, err
+	}
+	var result ToolUsageStats
+	return &result, decode(data, &result)
+}
+
+// ── Efficiency ──
+
+// EfficiencyRequest contains inputs for analyzing session efficiency.
+type EfficiencyRequest struct {
+	SessionID string `json:"session_id"`
+	Model     string `json:"model,omitempty"`
+}
+
+// EfficiencyReport is an LLM-generated efficiency analysis.
+type EfficiencyReport struct {
+	Score       int      `json:"score"`
+	Summary     string   `json:"summary"`
+	Strengths   []string `json:"strengths"`
+	Issues      []string `json:"issues"`
+	Suggestions []string `json:"suggestions"`
+	Patterns    []string `json:"patterns"`
+}
+
+// EfficiencyResult contains the AI-generated efficiency report.
+type EfficiencyResult struct {
+	Report     EfficiencyReport `json:"Report"`
+	SessionID  string           `json:"SessionID"`
+	Model      string           `json:"Model"`
+	TokensUsed int              `json:"TokensUsed"`
+}
+
+// AnalyzeEfficiency generates an LLM-powered efficiency analysis of a session.
+func (c *Client) AnalyzeEfficiency(req EfficiencyRequest) (*EfficiencyResult, error) {
+	data, err := c.doPost("/api/v1/sessions/efficiency", req)
+	if err != nil {
+		return nil, err
+	}
+	var result EfficiencyResult
+	return &result, decode(data, &result)
+}

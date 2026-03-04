@@ -145,8 +145,7 @@ func (c *Calculator) SessionCost(sess *session.Session) *session.CostEstimate {
 	perModel := make(map[string]*modelAgg)
 	unknownSet := make(map[string]struct{})
 
-	// First pass: sum output tokens per model, total output tokens for ratio.
-	totalOutputTokens := 0
+	// First pass: sum per-model input and output tokens from messages.
 	for i := range sess.Messages {
 		msg := &sess.Messages[i]
 		if msg.Role != session.RoleAssistant || msg.Model == "" {
@@ -163,16 +162,23 @@ func (c *Calculator) SessionCost(sess *session.Session) *session.CostEstimate {
 			agg = &modelAgg{}
 			perModel[msg.Model] = agg
 		}
-		agg.outputTokens += msg.Tokens
+		agg.inputTokens += msg.InputTokens
+		agg.outputTokens += msg.OutputTokens
 		agg.msgCount++
-		totalOutputTokens += msg.Tokens
 	}
 
-	// Distribute session-level input tokens proportionally.
+	// Fallback: if messages have no per-message input tokens, distribute
+	// session-level InputTokens proportionally based on output token share.
+	totalMsgInput := 0
+	totalMsgOutput := 0
+	for _, agg := range perModel {
+		totalMsgInput += agg.inputTokens
+		totalMsgOutput += agg.outputTokens
+	}
 	sessionInput := sess.TokenUsage.InputTokens
-	if totalOutputTokens > 0 && sessionInput > 0 {
+	if totalMsgInput == 0 && totalMsgOutput > 0 && sessionInput > 0 {
 		for _, agg := range perModel {
-			ratio := float64(agg.outputTokens) / float64(totalOutputTokens)
+			ratio := float64(agg.outputTokens) / float64(totalMsgOutput)
 			agg.inputTokens = int(float64(sessionInput) * ratio)
 		}
 	}

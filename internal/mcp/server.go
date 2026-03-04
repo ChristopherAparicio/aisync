@@ -186,6 +186,19 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithDescription("Estimate the monetary cost of a captured session based on model pricing. Returns per-model cost breakdown."),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID or commit SHA")),
 	), h.handleCost)
+
+	// ── Tool Usage ──
+	s.AddTool(mcp.NewTool("aisync_tool_usage",
+		mcp.WithDescription("Get per-tool token usage breakdown for a session. Shows call count, token consumption, error rate, and average duration for each tool."),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID or commit SHA")),
+	), h.handleToolUsage)
+
+	// ── Efficiency ──
+	s.AddTool(mcp.NewTool("aisync_efficiency",
+		mcp.WithDescription("Generate an LLM-powered efficiency analysis of a session. Evaluates token waste, tool usage patterns, and provides a score (0-100) with actionable suggestions. Requires an LLM client."),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to analyze")),
+		mcp.WithString("model", mcp.Description("LLM model to use (default: adapter default)")),
+	), h.handleEfficiency)
 }
 
 // registerSyncTools registers all sync-related MCP tools.

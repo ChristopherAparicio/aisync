@@ -262,10 +262,10 @@ func MarshalJSONL(sess *session.Session) ([]byte, error) {
 			ID:      msg.ID,
 			Content: nativeContent,
 		}
-		if msg.Tokens > 0 && msg.Role == session.RoleAssistant {
+		if (msg.InputTokens > 0 || msg.OutputTokens > 0) && msg.Role == session.RoleAssistant {
 			nativeMsg.Usage = &claudeUsage{
-				InputTokens:  sess.TokenUsage.InputTokens / max(len(sess.Messages), 1),
-				OutputTokens: msg.Tokens,
+				InputTokens:  msg.InputTokens,
+				OutputTokens: msg.OutputTokens,
 			}
 		}
 
@@ -694,9 +694,9 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 			domainMsg.Content = parsed.text
 			domainMsg.Thinking = parsed.thinking
 			domainMsg.ToolCalls = parsed.toolCalls
-			domainMsg.Tokens = parsed.tokens
 			if msg.Usage != nil {
-				domainMsg.Tokens = msg.Usage.InputTokens + msg.Usage.OutputTokens
+				domainMsg.InputTokens = msg.Usage.InputTokens + msg.Usage.CacheCreationInputTokens + msg.Usage.CacheReadInputTokens
+				domainMsg.OutputTokens = msg.Usage.OutputTokens
 			}
 
 			// For tool_result user messages, match with pending tool_uses
@@ -704,6 +704,7 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 				for _, tr := range parsed.toolResults {
 					if tc, ok := toolUses[tr.toolUseID]; ok {
 						tc.Output = tr.output
+						tc.OutputTokens = tr.outputTokens
 						if tr.isError {
 							tc.State = session.ToolStateError
 						} else {
@@ -753,9 +754,19 @@ type parsedContent struct {
 }
 
 type toolResultInfo struct {
-	toolUseID string
-	output    string
-	isError   bool
+	toolUseID    string
+	output       string
+	outputTokens int
+	isError      bool
+}
+
+// roughTokenEstimate estimates token count from byte length (~4 bytes per token).
+func roughTokenEstimate(byteLen int) int {
+	n := byteLen / 4
+	if n == 0 && byteLen > 0 {
+		n = 1
+	}
+	return n
 }
 
 func parseContentBlocks(raw json.RawMessage, role string, mode session.StorageMode, toolUses map[string]*session.ToolCall, fileChanges map[string]session.ChangeType) parsedContent {
@@ -789,10 +800,11 @@ func parseContentBlocks(raw json.RawMessage, role string, mode session.StorageMo
 			if mode == session.StorageModeFull || mode == session.StorageModeCompact {
 				inputStr := string(block.Input)
 				tc := session.ToolCall{
-					ID:    block.ID,
-					Name:  block.Name,
-					Input: inputStr,
-					State: session.ToolStatePending, // Will be updated when tool_result arrives
+					ID:          block.ID,
+					Name:        block.Name,
+					Input:       inputStr,
+					State:       session.ToolStatePending, // Will be updated when tool_result arrives
+					InputTokens: roughTokenEstimate(len(inputStr)),
 				}
 				result.toolCalls = append(result.toolCalls, tc)
 				toolUses[block.ID] = &result.toolCalls[len(result.toolCalls)-1]
@@ -804,9 +816,10 @@ func parseContentBlocks(raw json.RawMessage, role string, mode session.StorageMo
 		case "tool_result":
 			output := extractToolResultContent(block.Content)
 			result.toolResults = append(result.toolResults, toolResultInfo{
-				toolUseID: block.ToolUseID,
-				output:    output,
-				isError:   block.IsError,
+				toolUseID:    block.ToolUseID,
+				output:       output,
+				outputTokens: roughTokenEstimate(len(output)),
+				isError:      block.IsError,
 			})
 		}
 	}

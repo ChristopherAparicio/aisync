@@ -756,6 +756,152 @@ func (s *SessionService) EstimateCost(ctx context.Context, idOrSHA string) (*ses
 	return s.pricing.SessionCost(sess), nil
 }
 
+// ToolUsage computes per-tool token usage breakdown for a session.
+// If tool calls don't have token data, it estimates from content size (~4 chars/token).
+func (s *SessionService) ToolUsage(ctx context.Context, idOrSHA string) (*session.ToolUsageStats, error) {
+	sess, err := s.Get(idOrSHA)
+	if err != nil {
+		return nil, err
+	}
+
+	type toolAgg struct {
+		calls        int
+		inputTokens  int
+		outputTokens int
+		totalDur     int
+		errorCount   int
+	}
+
+	perTool := make(map[string]*toolAgg)
+	totalCalls := 0
+
+	for i := range sess.Messages {
+		msg := &sess.Messages[i]
+		for j := range msg.ToolCalls {
+			tc := &msg.ToolCalls[j]
+			totalCalls++
+
+			agg, ok := perTool[tc.Name]
+			if !ok {
+				agg = &toolAgg{}
+				perTool[tc.Name] = agg
+			}
+			agg.calls++
+
+			// Use explicit token data if available, otherwise estimate from content size.
+			inTok := tc.InputTokens
+			outTok := tc.OutputTokens
+			if inTok == 0 && len(tc.Input) > 0 {
+				inTok = estimateTokens(tc.Input)
+			}
+			if outTok == 0 && len(tc.Output) > 0 {
+				outTok = estimateTokens(tc.Output)
+			}
+			agg.inputTokens += inTok
+			agg.outputTokens += outTok
+
+			if tc.DurationMs > 0 {
+				agg.totalDur += tc.DurationMs
+			}
+			if tc.State == session.ToolStateError {
+				agg.errorCount++
+			}
+		}
+	}
+
+	// Build sorted result.
+	names := make([]string, 0, len(perTool))
+	for name := range perTool {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var grandTotal int
+	entries := make([]session.ToolUsageEntry, 0, len(names))
+	for _, name := range names {
+		agg := perTool[name]
+		total := agg.inputTokens + agg.outputTokens
+		grandTotal += total
+
+		entry := session.ToolUsageEntry{
+			Name:         name,
+			Calls:        agg.calls,
+			InputTokens:  agg.inputTokens,
+			OutputTokens: agg.outputTokens,
+			TotalTokens:  total,
+			ErrorCount:   agg.errorCount,
+		}
+		if agg.calls > 0 && agg.totalDur > 0 {
+			entry.AvgDuration = agg.totalDur / agg.calls
+		}
+		entries = append(entries, entry)
+	}
+
+	// Compute percentages.
+	for i := range entries {
+		if grandTotal > 0 {
+			entries[i].Percentage = float64(entries[i].TotalTokens) / float64(grandTotal) * 100
+		}
+	}
+
+	// Sort by total tokens descending (most expensive first).
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].TotalTokens > entries[j].TotalTokens
+	})
+
+	// Optionally compute cost per tool.
+	var totalCost session.Cost
+	if s.pricing != nil {
+		for i := range entries {
+			e := &entries[i]
+			// Use session's primary model for tool cost estimation.
+			model := primaryModel(sess)
+			if model != "" {
+				e.Cost = s.pricing.MessageCost(model, e.InputTokens, e.OutputTokens)
+				totalCost.InputCost += e.Cost.InputCost
+				totalCost.OutputCost += e.Cost.OutputCost
+				totalCost.TotalCost += e.Cost.TotalCost
+			}
+		}
+		totalCost.Currency = "USD"
+	}
+
+	return &session.ToolUsageStats{
+		Tools:      entries,
+		TotalCalls: totalCalls,
+		TotalCost:  totalCost,
+	}, nil
+}
+
+// estimateTokens roughly estimates token count from text length.
+// Uses the common heuristic of ~4 characters per token for English/JSON text.
+func estimateTokens(text string) int {
+	n := len(text) / 4
+	if n == 0 && len(text) > 0 {
+		n = 1
+	}
+	return n
+}
+
+// primaryModel returns the most-used model in a session (by message count).
+func primaryModel(sess *session.Session) string {
+	counts := make(map[string]int)
+	for i := range sess.Messages {
+		if m := sess.Messages[i].Model; m != "" {
+			counts[m]++
+		}
+	}
+	var best string
+	var bestCount int
+	for m, c := range counts {
+		if c > bestCount {
+			best = m
+			bestCount = c
+		}
+	}
+	return best
+}
+
 // Stats computes aggregated statistics across sessions.
 func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 	listOpts := session.ListOptions{
@@ -1092,6 +1238,223 @@ func (s *SessionService) Explain(ctx context.Context, req ExplainRequest) (*Expl
 	}, nil
 }
 
+// ── AnalyzeEfficiency ──
+
+// efficiencySystemPrompt is the system instruction for AI efficiency analysis.
+const efficiencySystemPrompt = `You are a senior AI coding efficiency analyst. Given statistics about an AI coding session
+(token usage, tool call breakdown, message patterns, timing), produce a structured JSON efficiency report with these fields:
+- score: integer 0-100 (100 = perfectly efficient, 0 = extremely wasteful)
+- summary: one-paragraph assessment of the session's efficiency
+- strengths: array of short strings describing what went well
+- issues: array of short strings describing inefficiencies found
+- suggestions: array of actionable improvement recommendations
+- patterns: array of detected anti-patterns (e.g., "retry loops", "over-reading", "redundant writes", "large context")
+
+Scoring guidelines:
+- 80-100: Excellent. Minimal wasted tokens, focused tool usage, clean conversation flow.
+- 60-79: Good. Some minor inefficiencies but generally well-structured.
+- 40-59: Fair. Noticeable waste — retry loops, excessive reads, or bloated contexts.
+- 20-39: Poor. Significant token waste from retries, hallucination recovery, or unfocused exploration.
+- 0-19: Very poor. Most tokens wasted on failed attempts or circular conversation.
+
+Respond ONLY with valid JSON, no markdown fences, no explanation.`
+
+// EfficiencyRequest contains inputs for analyzing session efficiency.
+type EfficiencyRequest struct {
+	SessionID session.ID // the session to analyze
+	Model     string     // optional — override default model
+}
+
+// EfficiencyResult contains the AI-generated efficiency report.
+type EfficiencyResult struct {
+	Report     session.EfficiencyReport
+	SessionID  session.ID
+	Model      string
+	TokensUsed int
+}
+
+// AnalyzeEfficiency generates an LLM-powered efficiency analysis for a session.
+// It computes tool usage stats, token distribution, and message patterns,
+// then asks the LLM to evaluate overall efficiency.
+func (s *SessionService) AnalyzeEfficiency(ctx context.Context, req EfficiencyRequest) (*EfficiencyResult, error) {
+	if s.llm == nil {
+		return nil, fmt.Errorf("efficiency analysis requires an LLM client")
+	}
+
+	sess, err := s.store.Get(req.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("loading session: %w", err)
+	}
+
+	if len(sess.Messages) == 0 {
+		return nil, fmt.Errorf("session has no messages to analyze")
+	}
+
+	prompt := buildEfficiencyPrompt(sess, s.pricing)
+
+	resp, err := s.llm.Complete(ctx, llm.CompletionRequest{
+		SystemPrompt: efficiencySystemPrompt,
+		UserPrompt:   prompt,
+		Model:        req.Model,
+		MaxTokens:    2048,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("LLM efficiency analysis: %w", err)
+	}
+
+	var report session.EfficiencyReport
+	if jsonErr := json.Unmarshal([]byte(resp.Content), &report); jsonErr != nil {
+		return nil, fmt.Errorf("parsing LLM efficiency response: %w (raw: %s)", jsonErr, truncate(resp.Content, 200))
+	}
+
+	// Clamp score to valid range.
+	if report.Score < 0 {
+		report.Score = 0
+	}
+	if report.Score > 100 {
+		report.Score = 100
+	}
+
+	return &EfficiencyResult{
+		Report:     report,
+		SessionID:  sess.ID,
+		Model:      resp.Model,
+		TokensUsed: resp.InputTokens + resp.OutputTokens,
+	}, nil
+}
+
+// buildEfficiencyPrompt constructs a data-rich prompt for the LLM efficiency analysis.
+// It includes token breakdown, tool call statistics, message patterns, and timing.
+func buildEfficiencyPrompt(sess *session.Session, calc *pricing.Calculator) string {
+	var b strings.Builder
+
+	// Header
+	b.WriteString(fmt.Sprintf("Session: %s\n", sess.ID))
+	b.WriteString(fmt.Sprintf("Provider: %s\n", sess.Provider))
+	if sess.Branch != "" {
+		b.WriteString(fmt.Sprintf("Branch: %s\n", sess.Branch))
+	}
+	b.WriteString(fmt.Sprintf("Messages: %d\n", len(sess.Messages)))
+	b.WriteString(fmt.Sprintf("Tokens: input=%d output=%d total=%d\n",
+		sess.TokenUsage.InputTokens, sess.TokenUsage.OutputTokens, sess.TokenUsage.TotalTokens))
+	b.WriteString("\n")
+
+	// Cost estimate
+	if calc != nil {
+		est := calc.SessionCost(sess)
+		if est.TotalCost.TotalCost > 0 {
+			b.WriteString(fmt.Sprintf("Estimated cost: $%.4f (input=$%.4f output=$%.4f)\n\n",
+				est.TotalCost.TotalCost, est.TotalCost.InputCost, est.TotalCost.OutputCost))
+		}
+	}
+
+	// Message role distribution
+	roleCounts := make(map[session.MessageRole]int)
+	var totalToolCalls, errorToolCalls int
+	for i := range sess.Messages {
+		msg := &sess.Messages[i]
+		roleCounts[msg.Role]++
+		for j := range msg.ToolCalls {
+			totalToolCalls++
+			if msg.ToolCalls[j].State == session.ToolStateError {
+				errorToolCalls++
+			}
+		}
+	}
+	b.WriteString("Message distribution:\n")
+	for role, count := range roleCounts {
+		b.WriteString(fmt.Sprintf("  %s: %d\n", role, count))
+	}
+	b.WriteString("\n")
+
+	// Tool call breakdown
+	if totalToolCalls > 0 {
+		b.WriteString(fmt.Sprintf("Tool calls: %d total, %d errors (%.0f%% error rate)\n",
+			totalToolCalls, errorToolCalls,
+			safePercent(errorToolCalls, totalToolCalls)))
+
+		// Per-tool summary
+		type toolAgg struct {
+			calls, errors, inputTok, outputTok, totalDur int
+		}
+		perTool := make(map[string]*toolAgg)
+		for i := range sess.Messages {
+			for j := range sess.Messages[i].ToolCalls {
+				tc := &sess.Messages[i].ToolCalls[j]
+				agg, ok := perTool[tc.Name]
+				if !ok {
+					agg = &toolAgg{}
+					perTool[tc.Name] = agg
+				}
+				agg.calls++
+				inTok, outTok := tc.InputTokens, tc.OutputTokens
+				if inTok == 0 && len(tc.Input) > 0 {
+					inTok = estimateTokens(tc.Input)
+				}
+				if outTok == 0 && len(tc.Output) > 0 {
+					outTok = estimateTokens(tc.Output)
+				}
+				agg.inputTok += inTok
+				agg.outputTok += outTok
+				agg.totalDur += tc.DurationMs
+				if tc.State == session.ToolStateError {
+					agg.errors++
+				}
+			}
+		}
+
+		b.WriteString("\nPer-tool breakdown:\n")
+		for name, agg := range perTool {
+			b.WriteString(fmt.Sprintf("  %s: calls=%d tokens=%d errors=%d",
+				name, agg.calls, agg.inputTok+agg.outputTok, agg.errors))
+			if agg.calls > 0 && agg.totalDur > 0 {
+				b.WriteString(fmt.Sprintf(" avg_duration=%dms", agg.totalDur/agg.calls))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// Conversation flow patterns (detect potential retries)
+	b.WriteString("Conversation flow (last 20 messages):\n")
+	start := 0
+	if len(sess.Messages) > 20 {
+		start = len(sess.Messages) - 20
+	}
+	for i := start; i < len(sess.Messages); i++ {
+		msg := &sess.Messages[i]
+		toolCount := len(msg.ToolCalls)
+		tokens := msg.InputTokens + msg.OutputTokens
+		b.WriteString(fmt.Sprintf("  [%d] %s tokens=%d tools=%d content_len=%d\n",
+			i+1, msg.Role, tokens, toolCount, len(msg.Content)))
+	}
+
+	// File changes
+	if len(sess.FileChanges) > 0 {
+		b.WriteString(fmt.Sprintf("\nFiles changed: %d\n", len(sess.FileChanges)))
+		limit := len(sess.FileChanges)
+		if limit > 15 {
+			limit = 15
+		}
+		for _, fc := range sess.FileChanges[:limit] {
+			b.WriteString(fmt.Sprintf("  %s (%s)\n", fc.FilePath, fc.ChangeType))
+		}
+		if len(sess.FileChanges) > 15 {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(sess.FileChanges)-15))
+		}
+	}
+
+	return b.String()
+}
+
+// safePercent computes (part/total)*100, returning 0 if total is 0.
+func safePercent(part, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(part) / float64(total) * 100
+}
+
 // ── Rewind ──
 
 // RewindRequest contains inputs for rewinding a session.
@@ -1145,11 +1508,8 @@ func (s *SessionService) Rewind(ctx context.Context, req RewindRequest) (*Rewind
 	// Recalculate token usage from truncated messages
 	var inputTokens, outputTokens int
 	for _, msg := range rewound.Messages {
-		if msg.Role == session.RoleUser {
-			inputTokens += msg.Tokens
-		} else {
-			outputTokens += msg.Tokens
-		}
+		inputTokens += msg.InputTokens
+		outputTokens += msg.OutputTokens
 	}
 	rewound.TokenUsage = session.TokenUsage{
 		InputTokens:  inputTokens,

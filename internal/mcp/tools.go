@@ -482,6 +482,53 @@ func (h *handlers) handleCost(ctx context.Context, req mcp.CallToolRequest) (*mc
 	return toolJSON(est)
 }
 
+// ── Tool Usage ──
+
+func (h *handlers) handleToolUsage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id, err := req.RequireString("id")
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	result, err := h.sessionSvc.ToolUsage(ctx, id)
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
+// ── Efficiency ──
+
+func (h *handlers) handleEfficiency(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		SessionID string `json:"session_id"`
+		Model     string `json:"model"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	if args.SessionID == "" {
+		return toolError(fmt.Errorf("session_id is required")), nil
+	}
+
+	sid, err := session.ParseID(args.SessionID)
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	result, err := h.sessionSvc.AnalyzeEfficiency(ctx, service.EfficiencyRequest{
+		SessionID: sid,
+		Model:     args.Model,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
 // ── Helpers ──
 
 // toolError returns an MCP error result from any error.

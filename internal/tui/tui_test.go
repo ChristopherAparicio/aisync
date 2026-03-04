@@ -149,11 +149,11 @@ func TestDetailBuildLines(t *testing.T) {
 				Content: "Hello",
 			},
 			{
-				ID:      "msg-2",
-				Role:    session.RoleAssistant,
-				Content: "Hi there!",
-				Model:   "claude-3",
-				Tokens:  100,
+				ID:           "msg-2",
+				Role:         session.RoleAssistant,
+				Content:      "Hi there!",
+				Model:        "claude-3",
+				OutputTokens: 100,
 			},
 		},
 		FileChanges: []session.FileChange{

@@ -30,13 +30,13 @@ func testSession() *session.Session {
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
 			},
 			{
-				ID:        "msg-002",
-				Role:      session.RoleAssistant,
-				Content:   "I'll create the function for you.",
-				Model:     "claude-sonnet-4-5-20250929",
-				Thinking:  "Need to write a simple Go function",
-				Timestamp: time.Date(2026, 2, 17, 9, 0, 5, 0, time.UTC),
-				Tokens:    150,
+				ID:           "msg-002",
+				Role:         session.RoleAssistant,
+				Content:      "I'll create the function for you.",
+				Model:        "claude-sonnet-4-5-20250929",
+				Thinking:     "Need to write a simple Go function",
+				Timestamp:    time.Date(2026, 2, 17, 9, 0, 5, 0, time.UTC),
+				OutputTokens: 150,
 				ToolCalls: []session.ToolCall{
 					{
 						ID:     "tool-001",
