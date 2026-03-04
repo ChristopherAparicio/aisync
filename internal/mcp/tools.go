@@ -362,6 +362,75 @@ func (h *handlers) handleBlame(ctx context.Context, req mcp.CallToolRequest) (*m
 	return toolJSON(result)
 }
 
+// ── Explain ──
+
+func (h *handlers) handleExplain(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		SessionID string `json:"session_id"`
+		Model     string `json:"model"`
+		Short     bool   `json:"short"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	if args.SessionID == "" {
+		return toolError(fmt.Errorf("session_id is required")), nil
+	}
+
+	sid, err := session.ParseID(args.SessionID)
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	result, err := h.sessionSvc.Explain(ctx, service.ExplainRequest{
+		SessionID: sid,
+		Model:     args.Model,
+		Short:     args.Short,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
+// ── Rewind ──
+
+func (h *handlers) handleRewind(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		SessionID string  `json:"session_id"`
+		AtMessage float64 `json:"at_message"` // MCP numbers are float64
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	if args.SessionID == "" {
+		return toolError(fmt.Errorf("session_id is required")), nil
+	}
+
+	sid, err := session.ParseID(args.SessionID)
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	atMessage := int(args.AtMessage)
+	if atMessage < 1 {
+		return toolError(fmt.Errorf("at_message must be >= 1")), nil
+	}
+
+	result, err := h.sessionSvc.Rewind(ctx, service.RewindRequest{
+		SessionID: sid,
+		AtMessage: atMessage,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
 // ── Stats ──
 
 func (h *handlers) handleStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

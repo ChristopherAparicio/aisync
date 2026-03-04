@@ -17,6 +17,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/git"
 	capturesvc "github.com/ChristopherAparicio/aisync/internal/capture"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
+	"github.com/ChristopherAparicio/aisync/internal/llm"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	restoresvc "github.com/ChristopherAparicio/aisync/internal/restore"
@@ -35,6 +36,7 @@ type SessionService struct {
 	converter *converter.Converter
 	git       *git.Client       // optional — nil when git is unavailable
 	platform  platform.Platform // optional — nil when platform is unavailable
+	llm       llm.Client        // optional — nil disables AI features (summarize, explain)
 }
 
 // SessionServiceConfig holds all dependencies for creating a SessionService.
@@ -45,6 +47,7 @@ type SessionServiceConfig struct {
 	Converter *converter.Converter
 	Git       *git.Client       // optional
 	Platform  platform.Platform // optional
+	LLM       llm.Client        // optional — nil disables AI features
 }
 
 // NewSessionService creates a SessionService with all dependencies.
@@ -60,6 +63,7 @@ func NewSessionService(cfg SessionServiceConfig) *SessionService {
 		converter: conv,
 		git:       cfg.Git,
 		platform:  cfg.Platform,
+		llm:       cfg.LLM,
 	}
 }
 
@@ -110,16 +114,22 @@ type CaptureRequest struct {
 	Mode         session.StorageMode
 	ProviderName session.ProviderName // empty = auto-detect
 	Message      string               // optional manual summary
+	Summarize    bool                 // if true, AI-summarize after export
+	Model        string               // optional model override for summarization
 }
 
 // CaptureResult contains the output of a capture operation.
 type CaptureResult struct {
-	Session      *session.Session
-	Provider     session.ProviderName
-	SecretsFound int
+	Session           *session.Session
+	Provider          session.ProviderName
+	SecretsFound      int
+	Summarized        bool                       // true if AI summarization was applied
+	StructuredSummary *session.StructuredSummary // non-nil if summarized
 }
 
 // Capture detects the active AI session, exports it, and stores it.
+// If Summarize is true and an LLM client is available, it generates an AI summary.
+// Summarization is non-blocking: if it fails, capture proceeds with the native summary.
 func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 	var svc *capturesvc.Service
 	if s.scanner != nil {
@@ -143,11 +153,36 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 		return nil, err
 	}
 
-	return &CaptureResult{
+	captureResult := &CaptureResult{
 		Session:      result.Session,
 		Provider:     result.Provider,
 		SecretsFound: result.SecretsFound,
-	}, nil
+	}
+
+	// AI summarization: only if requested, no --message override, and LLM is available.
+	// Priority: --message > AI summary > provider-native summary.
+	if req.Summarize && req.Message == "" && s.llm != nil {
+		ctx := context.Background()
+		sumResult, sumErr := s.Summarize(ctx, SummarizeRequest{
+			Session: result.Session,
+			Model:   req.Model,
+		})
+		if sumErr == nil {
+			// Apply the AI-generated summary
+			result.Session.Summary = sumResult.OneLine
+			captureResult.Summarized = true
+			captureResult.StructuredSummary = &sumResult.Summary
+
+			// Re-save with updated summary (session already in store from capture).
+			// Log error but don't fail capture — summary loss is acceptable.
+			if saveErr := s.store.Save(result.Session); saveErr != nil {
+				captureResult.Summarized = false // summary was not persisted
+			}
+		}
+		// On failure: silently keep the provider-native summary (non-blocking).
+	}
+
+	return captureResult, nil
 }
 
 // ── Restore ──
@@ -897,6 +932,284 @@ func (s *SessionService) Blame(ctx context.Context, req BlameRequest) (*BlameRes
 	}
 
 	return result, nil
+}
+
+// ── Summarize ──
+
+// summarizeSystemPrompt is the system instruction for AI session summarization.
+const summarizeSystemPrompt = `You are a technical session analyzer. Given an AI coding session transcript,
+produce a structured JSON summary with these fields:
+- intent: What the user was trying to accomplish (1 sentence)
+- outcome: What was actually achieved (1 sentence)
+- decisions: Key technical decisions made (array of short strings)
+- friction: Problems or difficulties encountered (array of short strings)
+- open_items: Things left unfinished or needing follow-up (array of short strings)
+
+Respond ONLY with valid JSON, no markdown fences, no explanation.`
+
+// SummarizeRequest contains inputs for summarizing a session.
+type SummarizeRequest struct {
+	Session *session.Session // the session to summarize
+	Model   string           // optional — override default model
+}
+
+// SummarizeResult contains the AI-generated summary.
+type SummarizeResult struct {
+	Summary    session.StructuredSummary
+	OneLine    string // compact "Intent: Outcome" string
+	Model      string // model that produced the summary
+	TokensUsed int    // total tokens consumed
+}
+
+// Summarize generates an AI-powered structured summary for a session.
+// Returns an error if LLM is not configured or the LLM call fails.
+func (s *SessionService) Summarize(ctx context.Context, req SummarizeRequest) (*SummarizeResult, error) {
+	if s.llm == nil {
+		return nil, fmt.Errorf("AI summarization requires an LLM client (set summarize.enabled or use --summarize)")
+	}
+	if req.Session == nil {
+		return nil, fmt.Errorf("session is required for summarization")
+	}
+
+	userPrompt := buildSessionTranscript(req.Session)
+	if userPrompt == "" {
+		return nil, fmt.Errorf("session has no messages to summarize")
+	}
+
+	resp, err := s.llm.Complete(ctx, llm.CompletionRequest{
+		SystemPrompt: summarizeSystemPrompt,
+		UserPrompt:   userPrompt,
+		Model:        req.Model,
+		MaxTokens:    1024,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("LLM summarize: %w", err)
+	}
+
+	var summary session.StructuredSummary
+	if jsonErr := json.Unmarshal([]byte(resp.Content), &summary); jsonErr != nil {
+		return nil, fmt.Errorf("parsing LLM summary response: %w (raw: %s)", jsonErr, truncate(resp.Content, 200))
+	}
+
+	return &SummarizeResult{
+		Summary:    summary,
+		OneLine:    summary.OneLine(),
+		Model:      resp.Model,
+		TokensUsed: resp.InputTokens + resp.OutputTokens,
+	}, nil
+}
+
+// ── Explain ──
+
+// explainSystemPrompt is the system instruction for AI session explanation.
+const explainSystemPrompt = `You are a technical analyst. Given an AI coding session transcript,
+write a clear explanation of what happened during this session.
+Cover: what was the goal, what approach was taken, what files were changed,
+what decisions were made and why, and what the outcome was.
+Write for a developer who is taking over this branch.`
+
+// explainShortSystemPrompt produces a brief explanation.
+const explainShortSystemPrompt = `You are a technical analyst. Given an AI coding session transcript,
+write a brief 2-3 sentence summary of what happened. Focus on the goal and outcome.`
+
+// ExplainRequest contains inputs for explaining a session.
+type ExplainRequest struct {
+	SessionID session.ID
+	Model     string // optional — override default model
+	Short     bool   // if true, produce a brief explanation
+}
+
+// ExplainResult contains the AI-generated explanation.
+type ExplainResult struct {
+	Explanation string
+	SessionID   session.ID
+	Model       string
+	TokensUsed  int
+}
+
+// Explain generates an AI-powered natural language explanation of a session.
+// The result is ephemeral — it is NOT stored.
+func (s *SessionService) Explain(ctx context.Context, req ExplainRequest) (*ExplainResult, error) {
+	if s.llm == nil {
+		return nil, fmt.Errorf("AI explanation requires an LLM client")
+	}
+
+	sess, err := s.store.Get(req.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("loading session: %w", err)
+	}
+
+	userPrompt := buildSessionTranscript(sess)
+	if userPrompt == "" {
+		return nil, fmt.Errorf("session has no messages to explain")
+	}
+
+	systemPrompt := explainSystemPrompt
+	if req.Short {
+		systemPrompt = explainShortSystemPrompt
+	}
+
+	resp, err := s.llm.Complete(ctx, llm.CompletionRequest{
+		SystemPrompt: systemPrompt,
+		UserPrompt:   userPrompt,
+		Model:        req.Model,
+		MaxTokens:    4096,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("LLM explain: %w", err)
+	}
+
+	return &ExplainResult{
+		Explanation: resp.Content,
+		SessionID:   sess.ID,
+		Model:       resp.Model,
+		TokensUsed:  resp.InputTokens + resp.OutputTokens,
+	}, nil
+}
+
+// ── Rewind ──
+
+// RewindRequest contains inputs for rewinding a session.
+type RewindRequest struct {
+	SessionID session.ID // the session to rewind
+	AtMessage int        // truncate at this message index (1-based, inclusive)
+}
+
+// RewindResult contains the outcome of a rewind operation.
+type RewindResult struct {
+	NewSession      *session.Session
+	OriginalID      session.ID
+	TruncatedAt     int // message index where the session was truncated
+	MessagesRemoved int // number of messages discarded
+}
+
+// Rewind creates a new session that is a fork of an existing session,
+// truncated at the given message index. The original session is never modified.
+func (s *SessionService) Rewind(ctx context.Context, req RewindRequest) (*RewindResult, error) {
+	original, err := s.store.Get(req.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("loading session: %w", err)
+	}
+
+	if len(original.Messages) == 0 {
+		return nil, fmt.Errorf("session has no messages to rewind")
+	}
+
+	if req.AtMessage < 1 || req.AtMessage > len(original.Messages) {
+		return nil, fmt.Errorf("message index %d out of range [1, %d]", req.AtMessage, len(original.Messages))
+	}
+
+	// Create the rewound session (fork)
+	rewound := &session.Session{
+		ID:          session.NewID(),
+		Provider:    original.Provider,
+		Agent:       original.Agent,
+		Branch:      original.Branch,
+		CommitSHA:   original.CommitSHA,
+		ProjectPath: original.ProjectPath,
+		StorageMode: original.StorageMode,
+		OwnerID:     original.OwnerID,
+		ParentID:    original.ID,
+		Messages:    make([]session.Message, req.AtMessage),
+		FileChanges: append([]session.FileChange(nil), original.FileChanges...), // deep copy
+		Links:       append([]session.Link(nil), original.Links...),             // deep copy
+		Summary:     fmt.Sprintf("Rewind of %s at message %d", original.ID, req.AtMessage),
+	}
+	copy(rewound.Messages, original.Messages[:req.AtMessage])
+
+	// Recalculate token usage from truncated messages
+	var inputTokens, outputTokens int
+	for _, msg := range rewound.Messages {
+		if msg.Role == session.RoleUser {
+			inputTokens += msg.Tokens
+		} else {
+			outputTokens += msg.Tokens
+		}
+	}
+	rewound.TokenUsage = session.TokenUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
+
+	if err := s.store.Save(rewound); err != nil {
+		return nil, fmt.Errorf("saving rewound session: %w", err)
+	}
+
+	return &RewindResult{
+		NewSession:      rewound,
+		OriginalID:      original.ID,
+		TruncatedAt:     req.AtMessage,
+		MessagesRemoved: len(original.Messages) - req.AtMessage,
+	}, nil
+}
+
+// ── LLM helpers ──
+
+// buildSessionTranscript builds a prompt-friendly transcript from session messages.
+// It includes the first 3 and last 5 user messages plus file changes to fit context.
+func buildSessionTranscript(sess *session.Session) string {
+	if len(sess.Messages) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	// Header
+	b.WriteString(fmt.Sprintf("Session: %s\n", sess.ID))
+	b.WriteString(fmt.Sprintf("Provider: %s\n", sess.Provider))
+	if sess.Branch != "" {
+		b.WriteString(fmt.Sprintf("Branch: %s\n", sess.Branch))
+	}
+	if sess.Summary != "" {
+		b.WriteString(fmt.Sprintf("Summary: %s\n", sess.Summary))
+	}
+	b.WriteString("\n")
+
+	// File changes
+	if len(sess.FileChanges) > 0 {
+		b.WriteString("Files changed:\n")
+		for _, fc := range sess.FileChanges {
+			b.WriteString(fmt.Sprintf("  - %s (%s)\n", fc.FilePath, fc.ChangeType))
+		}
+		b.WriteString("\n")
+	}
+
+	// Messages — truncation strategy:
+	// If ≤ 20 messages, include all. Otherwise first 3 + last 5 user/assistant messages.
+	messages := sess.Messages
+	if len(messages) > 20 {
+		var selected []session.Message
+		selected = append(selected, messages[:3]...)
+		// Last 5 messages
+		start := len(messages) - 5
+		if start < 3 {
+			start = 3
+		}
+		selected = append(selected, messages[start:]...)
+		messages = selected
+		b.WriteString(fmt.Sprintf("(showing %d of %d messages)\n\n", len(messages), len(sess.Messages)))
+	}
+
+	b.WriteString("Conversation:\n")
+	for _, msg := range messages {
+		b.WriteString(fmt.Sprintf("[%s] %s\n", msg.Role, truncate(msg.Content, 2000)))
+		if len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				b.WriteString(fmt.Sprintf("  tool:%s → %s\n", tc.Name, truncate(tc.Output, 500)))
+			}
+		}
+	}
+
+	return b.String()
+}
+
+// truncate shortens a string to maxLen characters, appending "..." if truncated.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // ── Helpers ──

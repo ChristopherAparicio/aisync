@@ -22,6 +22,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Search
 	mux.HandleFunc("GET /api/v1/sessions/search", s.handleSearch)
 
+	// Explain & Rewind
+	mux.HandleFunc("POST /api/v1/sessions/explain", s.handleExplain)
+	mux.HandleFunc("POST /api/v1/sessions/rewind", s.handleRewind)
+
 	// Blame
 	mux.HandleFunc("GET /api/v1/blame", s.handleBlame)
 

@@ -16,11 +16,12 @@ const configFileName = "config.json"
 
 // configData is the JSON-serializable configuration structure.
 type configData struct {
-	StorageMode string   `json:"storage_mode"`
-	Providers   []string `json:"providers"`
-	Secrets     secrets  `json:"secrets"`
-	Version     int      `json:"version"`
-	AutoCapture bool     `json:"auto_capture"`
+	StorageMode string    `json:"storage_mode"`
+	Providers   []string  `json:"providers"`
+	Secrets     secrets   `json:"secrets"`
+	Summarize   summarize `json:"summarize"`
+	Version     int       `json:"version"`
+	AutoCapture bool      `json:"auto_capture"`
 }
 
 type secrets struct {
@@ -28,6 +29,11 @@ type secrets struct {
 	CustomPatterns  []string `json:"custom_patterns"`
 	IgnorePatterns  []string `json:"ignore_patterns"`
 	ScanToolOutputs bool     `json:"scan_tool_outputs"`
+}
+
+type summarize struct {
+	Enabled bool   `json:"enabled"`
+	Model   string `json:"model"`
 }
 
 func defaultConfig() configData {
@@ -108,6 +114,12 @@ func (c *Config) loadFrom(dir string) error {
 		c.data.Secrets.IgnorePatterns = loaded.Secrets.IgnorePatterns
 	}
 
+	// Summarize — bools always take the loaded value
+	c.data.Summarize.Enabled = loaded.Summarize.Enabled
+	if loaded.Summarize.Model != "" {
+		c.data.Summarize.Model = loaded.Summarize.Model
+	}
+
 	return nil
 }
 
@@ -123,6 +135,13 @@ func (c *Config) Get(key string) (string, error) {
 			return "true", nil
 		}
 		return "false", nil
+	case "summarize.enabled":
+		if c.data.Summarize.Enabled {
+			return "true", nil
+		}
+		return "false", nil
+	case "summarize.model":
+		return c.data.Summarize.Model, nil
 	default:
 		return "", fmt.Errorf("unknown config key %q", key)
 	}
@@ -145,6 +164,10 @@ func (c *Config) Set(key string, value string) error {
 		c.data.Secrets.CustomPatterns = append(c.data.Secrets.CustomPatterns, value)
 	case "auto_capture":
 		c.data.AutoCapture = value == "true"
+	case "summarize.enabled":
+		c.data.Summarize.Enabled = value == "true"
+	case "summarize.model":
+		c.data.Summarize.Model = value
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
@@ -184,6 +207,17 @@ func (c *Config) GetSecretsMode() session.SecretMode {
 // GetCustomPatterns returns the list of custom secret patterns (NAME REGEX format).
 func (c *Config) GetCustomPatterns() []string {
 	return c.data.Secrets.CustomPatterns
+}
+
+// IsSummarizeEnabled returns whether AI summarization is enabled by default.
+func (c *Config) IsSummarizeEnabled() bool {
+	return c.data.Summarize.Enabled
+}
+
+// GetSummarizeModel returns the model to use for AI summarization.
+// Empty string means let the adapter pick the default.
+func (c *Config) GetSummarizeModel() string {
+	return c.data.Summarize.Model
 }
 
 // AddCustomPattern adds a custom secret pattern in "NAME REGEX" format.

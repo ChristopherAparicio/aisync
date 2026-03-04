@@ -6,6 +6,7 @@ This directory contains the architectural documentation for aisync:
 
 - **[README.md](./README.md)** — High-level architecture overview (this file)
 - **[blame.md](./blame.md)** — AI-Blame feature: design, queries, performance
+- **[summarize.md](./summarize.md)** — AI Summarization, Explain, Resume & Rewind: design, prompts, performance
 
 ---
 
@@ -138,6 +139,15 @@ Added `Search()` method to Store (now 13 methods), `SearchQuery`/`SearchResult` 
 ### Phase 5.2 — AI-Blame (Completed)
 Added `GetSessionsByFile()` method to Store (now 14 methods), `BlameEntry`/`BlameQuery` domain types, blame endpoint (`GET /api/v1/blame`), MCP tool (`aisync_blame`), CLI command (`aisync blame <file>`), and client SDK method. File-level reverse lookup from `file_changes` table via JOIN. See [blame.md](./blame.md) for design details.
 
+### Phase 5.0 — AI Summarization, Explain, Resume & Rewind (Completed)
+Added LLM-powered session intelligence. New port: `llm.Client` interface with Claude CLI adapter (`internal/llm/`). Four new capabilities:
+- **Summarize**: AI-generated structured summaries at capture time (`--summarize` flag)
+- **Explain**: On-demand session explanation via LLM (`aisync explain <id>`)
+- **Resume**: Convenience `git checkout` + `aisync restore` (`aisync resume <branch>`)
+- **Rewind**: Fork a session at message N (`aisync rewind <id> --message N`)
+
+New service methods: `SessionService.Summarize()`, `.Explain()`, `.Rewind()`. New domain type: `StructuredSummary`. Two new API endpoints (explain + rewind), two new MCP tools, three new CLI commands. Config: `summarize.enabled`, `summarize.model`. LLM client auto-detected from `claude` binary in PATH. See [summarize.md](./summarize.md) for design details.
+
 ### What Stays the Same
 - Domain entities in `internal/session/` — stable core
 - Interfaces (`Provider`, `Store`, `SessionConverter`) — well-defined ports
@@ -172,7 +182,8 @@ aisync/
 
     # ── APPLICATION LAYER (services) ──────────────────────────────────
     service/                        # Application services
-      session.go                    #   SessionService: capture, restore, export, import, list, get, link, comment, search, blame, stats, delete + resolveOwner
+      session.go                    #   SessionService: capture, restore, summarize, explain, rewind, export, import, list, get, link, comment, search, blame, stats, delete + resolveOwner
+      session_test.go               #   12 tests: Summarize, Explain, Rewind, OneLine, transcript builder
       sync.go                       #   SyncService: push, pull, sync, readIndex
 
     # ── DRIVEN ADAPTERS (outbound infrastructure) ─────────────────────
@@ -194,6 +205,12 @@ aisync/
         sqlite.go
         migrations.go               #     Embedded SQL migrations (//go:embed)
         sqlite_test.go
+
+    llm/                            # LLM client port + adapters
+      client.go                     #   Client interface, CompletionRequest/Response types
+      claude/                       #   Claude CLI adapter (calls `claude` binary)
+        claude.go                   #     Pipes prompt to `claude --print --output-format json`
+        claude_test.go              #     6 tests: mock binary, fallback, context cancellation
 
     converter/                      # Cross-provider format conversion
       converter.go                  #   Delegates to provider marshal/unmarshal functions
@@ -238,15 +255,15 @@ aisync/
     # ── DRIVING ADAPTERS (inbound) ────────────────────────────────────
     api/                            # HTTP/REST API server
       server.go                     #   Router, composition root, graceful shutdown
-      routes.go                     #   Route registration (17 endpoints)
-      handlers.go                   #   Session + search + blame + stats handlers calling SessionService
+      routes.go                     #   Route registration (19 endpoints)
+      handlers.go                   #   Session + search + blame + explain + rewind + stats handlers
       sync_handlers.go              #   Sync handlers calling SyncService
       middleware.go                 #   JSON helpers, error mapping, logging
       server_test.go                #   19 integration tests
 
     mcp/                            # MCP Server for AI tool integration
       server.go                     #   MCP server using mark3labs/mcp-go (stdio)
-      tools.go                      #   12 session tool handlers (incl. search + blame)
+      tools.go                      #   14 session tool handlers (incl. search + blame + explain + rewind)
       sync_tools.go                 #   4 sync tool handlers
       server_test.go                #   17 tests
 
@@ -279,6 +296,9 @@ aisync/
       commentcmd/commentcmd.go      #   aisync comment
       searchcmd/searchcmd.go        #   aisync search → SessionService.Search()
       blamecmd/blamecmd.go          #   aisync blame → SessionService.Blame()
+      explaincmd/explaincmd.go      #   aisync explain → SessionService.Explain()
+      resumecmd/resumecmd.go        #   aisync resume → git.Checkout() + SessionService.Restore()
+      rewindcmd/rewindcmd.go        #   aisync rewind → SessionService.Rewind()
       statscmd/statscmd.go          #   aisync stats → SessionService.Stats()
       synccmd/synccmd.go            #   aisync push/pull/sync → SyncService
       tuicmd/tuicmd.go              #   aisync tui
@@ -293,12 +313,12 @@ aisync/
 
   client/                            # Public Go HTTP client SDK
     client.go                       #   Client struct, New(baseURL), HTTP helpers, APIError
-    sessions.go                     #   Session methods + search + client-side types (decoupled from internal/)
+    sessions.go                     #   Session methods + search + explain + rewind + client-side types
     sync.go                         #   Sync methods + types
     client_test.go                  #   12 integration tests
 
   git/                              # Git CLI wrapper (public package)
-    client.go                       #   Branch, hooks, notes, sync branch operations, UserName/UserEmail
+    client.go                       #   Branch, hooks, notes, sync branch operations, UserName/UserEmail, Checkout
 
   examples/
     plugins/
@@ -347,6 +367,7 @@ aisync/
   internal/provider/opencode/ (implements Provider)
   internal/provider/cursor/   (implements Provider)
   internal/storage/sqlite/    (implements Store)
+  internal/llm/claude/        (implements llm.Client)
   internal/converter/         (format conversion)
   internal/secrets/           (secret scanning)
   internal/platform/github/   (GitHub API)
@@ -407,7 +428,7 @@ type Store interface {
 }
 ```
 
-**Why an interface:** Enables testing with in-memory mocks (13 mockStores across test files), and leaves the door open for alternative backends (flat file, remote storage).
+**Why an interface:** Enables testing with in-memory mocks (14 mockStores across test files), and leaves the door open for alternative backends (flat file, remote storage).
 
 ### SessionConverter (in `internal/restore/service.go`)
 
@@ -420,6 +441,18 @@ type SessionConverter interface {
     ToContextMD(sess *session.Session) ([]byte, error)
 }
 ```
+
+### LLM Client (in `internal/llm/client.go`)
+
+```go
+// LLMClient is the port for language model interactions.
+// Current adapter: claude/ (Claude CLI). Future: openai/, ollama/.
+type Client interface {
+    Complete(ctx context.Context, req CompletionRequest) (*CompletionResponse, error)
+}
+```
+
+**Why an interface:** Decision D34. Allows swapping Claude CLI for OpenAI API, Ollama, or any other LLM backend without touching services. Enables testing with a mock LLM client.
 
 ### Everything Else Is Concrete
 
@@ -448,6 +481,7 @@ type SessionService struct {
     scanner   *secrets.Scanner
     config    *config.Config
     git       *git.Client
+    llm       llm.Client           // Optional — nil-safe for LLM features
 }
 
 func (s *SessionService) Capture(ctx context.Context, req CaptureRequest) (*session.Session, error)
@@ -460,6 +494,9 @@ func (s *SessionService) Link(ctx context.Context, req LinkRequest) error
 func (s *SessionService) Search(ctx context.Context, req SearchRequest) (*session.SearchResult, error)
 func (s *SessionService) Blame(ctx context.Context, req BlameRequest) (*BlameResult, error)
 func (s *SessionService) Stats(ctx context.Context, req StatsRequest) (*StatsResult, error)
+func (s *SessionService) Summarize(ctx context.Context, sess *session.Session, model string) (*session.StructuredSummary, error)
+func (s *SessionService) Explain(ctx context.Context, id session.ID, short bool, model string) (string, error)
+func (s *SessionService) Rewind(ctx context.Context, id session.ID, messageIndex int) (*session.Session, error)
 func (s *SessionService) Delete(ctx context.Context, id session.ID) error
 ```
 
@@ -545,6 +582,8 @@ POST   /api/v1/sessions/comment          → SessionService.Comment()
 GET    /api/v1/sessions/search           → SessionService.Search()
 GET    /api/v1/blame                     → SessionService.Blame()
 GET    /api/v1/stats                     → SessionService.Stats()
+POST   /api/v1/sessions/explain          → SessionService.Explain()
+POST   /api/v1/sessions/rewind           → SessionService.Rewind()
 POST   /api/v1/sync/push                 → SyncService.Push()
 POST   /api/v1/sync/pull                 → SyncService.Pull()
 POST   /api/v1/sync/sync                 → SyncService.Sync()
@@ -570,6 +609,8 @@ Tool: aisync_link            → SessionService.Link()
 Tool: aisync_comment         → SessionService.Comment()
 Tool: aisync_search          → SessionService.Search()
 Tool: aisync_blame           → SessionService.Blame()
+Tool: aisync_explain         → SessionService.Explain()
+Tool: aisync_rewind          → SessionService.Rewind()
 Tool: aisync_stats           → SessionService.Stats()
 Tool: aisync_push            → SyncService.Push()
 Tool: aisync_pull            → SyncService.Pull()
@@ -608,6 +649,13 @@ Session
 +-- file_changes: []FileChange
 +-- token_usage: TokenUsage
 +-- links: []Link
+
+StructuredSummary                    (AI-generated structured analysis)
++-- intent: string                   (what the user was trying to do)
++-- outcome: string                  (what was achieved)
++-- decisions: []string              (key decisions made)
++-- friction: []string               (problems encountered)
++-- open_items: []string             (things left undone)
 
 User
 +-- id: ID                           (UUID)
@@ -858,6 +906,10 @@ Two-level config (global + per-repo), per-repo overrides global:
     "ignore_patterns": [],
     "scan_tool_outputs": true
   },
+  "summarize": {
+    "enabled": false,
+    "model": ""
+  },
   "commit_trailer": "AI-Session",
   "exclude_thinking": false,
   "max_session_size_mb": 10,
@@ -967,6 +1019,9 @@ All plugin mechanisms are managed by `internal/secrets/scanplugin/`. The `Scanne
 | `aisync comment` | Post session summary on PR | `SessionService` + `Platform` |
 | `aisync search` | Search sessions | `SessionService.Search()` |
 | `aisync blame <file>` | Find AI sessions that touched a file | `SessionService.Blame()` |
+| `aisync explain <id>` | AI-generated session explanation | `SessionService.Explain()` |
+| `aisync resume <branch>` | Checkout branch + restore session | `git.Checkout()` + `SessionService.Restore()` |
+| `aisync rewind <id>` | Fork session at message N | `SessionService.Rewind()` |
 | `aisync stats` | Show usage statistics | `SessionService.Stats()` |
 | `aisync config` | View or edit configuration | — |
 | `aisync push/pull/sync` | Team session sharing | `SyncService` |

@@ -404,6 +404,85 @@ func (s *Server) handleBlame(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Explain ──
+
+type explainRequest struct {
+	SessionID string `json:"session_id"`
+	Model     string `json:"model,omitempty"`
+	Short     bool   `json:"short,omitempty"`
+}
+
+func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
+	var req explainRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if req.SessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	sid, err := session.ParseID(req.SessionID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := s.sessionSvc.Explain(r.Context(), service.ExplainRequest{
+		SessionID: sid,
+		Model:     req.Model,
+		Short:     req.Short,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Rewind ──
+
+type rewindRequest struct {
+	SessionID string `json:"session_id"`
+	AtMessage int    `json:"at_message"`
+}
+
+func (s *Server) handleRewind(w http.ResponseWriter, r *http.Request) {
+	var req rewindRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if req.SessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	sid, err := session.ParseID(req.SessionID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if req.AtMessage < 1 {
+		writeError(w, http.StatusBadRequest, "at_message must be >= 1")
+		return
+	}
+
+	result, err := s.sessionSvc.Rewind(r.Context(), service.RewindRequest{
+		SessionID: sid,
+		AtMessage: req.AtMessage,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ── Stats ──
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

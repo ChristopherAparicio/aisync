@@ -6,26 +6,28 @@
 
 ```
 cmd/aisync/main.go           Entry point
-pkg/cmd/root/root.go         All commands registered here (25 subcommands)
+pkg/cmd/root/root.go         All commands registered here (28 subcommands)
 pkg/cmd/<name>/              One subpackage per CLI command (Cobra)
 pkg/cmdutil/factory.go       Factory struct (lazy DI container)
 pkg/cmd/factory/default.go   Composition root (wires all dependencies)
-internal/session/            Shared types: Session, Message, User, enums, errors
+internal/session/            Shared types: Session, Message, User, StructuredSummary, enums, errors
 internal/provider/           Provider interface + claude/, opencode/, cursor/
 internal/storage/            Store interface (14 methods) + sqlite/ implementation
 internal/capture/            Capture orchestration service
 internal/restore/            Restore orchestration service
-internal/service/            SessionService (high-level ops), SyncService (push/pull)
-internal/api/                HTTP API server (17 endpoints, stdlib net/http)
-internal/mcp/                MCP server (16 tools, via mark3labs/mcp-go)
+internal/service/            SessionService (high-level ops: Summarize, Explain, Rewind), SyncService (push/pull)
+internal/llm/                LLM client port (interface) + claude/ adapter
+internal/api/                HTTP API server (19 endpoints, stdlib net/http)
+internal/mcp/                MCP server (18 tools, via mark3labs/mcp-go)
 internal/gitsync/            Git branch sync service (push/pull)
 internal/converter/          Cross-provider format conversion (SessionConverter)
 internal/secrets/            Secret detection & masking + plugin system
 internal/platform/           GitHub/GitLab platform integration
 internal/hooks/              Git hooks management
 internal/tui/                Interactive terminal UI (Bubble Tea)
-client/                      HTTP client SDK (17 methods, mirrors API 1:1)
-git/                         Git CLI wrapper (includes UserName/UserEmail)
+internal/config/             Config with summarize.enabled / summarize.model
+client/                      HTTP client SDK (19 methods, mirrors API 1:1)
+git/                         Git CLI wrapper (includes UserName/UserEmail, Checkout)
 ```
 
 ## Architecture
@@ -39,19 +41,26 @@ Three layers:
 
 Service orchestration:
 - `internal/capture/` and `internal/restore/` -- core capture/restore logic
-- `internal/service/SessionService` -- high-level operations (Capture with owner resolution, Restore, ListByBranch, etc.)
+- `internal/service/SessionService` -- high-level operations (Capture with owner resolution, Restore, Summarize, Explain, Rewind, ListByBranch, etc.)
 - `internal/service/SyncService` -- git-based session sync (push/pull/bidirectional)
+
+LLM integration:
+- `internal/llm/client.go` -- `LLMClient` interface (port) with `Complete(ctx, CompletionRequest) → CompletionResponse`
+- `internal/llm/claude/` -- Claude CLI adapter (`claude --print --output-format json`)
 
 HTTP API flow: `CLI cmd` -> `client.Client` -> HTTP -> `internal/api/` -> `SessionService` -> `Store`/`Provider`
 
-## Commands (25 total)
+## Commands (28 total)
 
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
 | `aisync init` | Initialize aisync in current repo, create `.aisync/config.json`, offer to install hooks | `--no-hooks` |
 | `aisync status` | Show branch, detected providers, sessions, hooks status | |
-| `aisync capture` | Capture active AI session and store it | `--provider`, `--mode full\|compact\|summary`, `--message`, `--auto` |
+| `aisync capture` | Capture active AI session and store it | `--provider`, `--mode full\|compact\|summary`, `--message`, `--auto`, `--summarize` |
 | `aisync restore` | Restore a session into an AI tool | `--session <id>`, `--provider`, `--agent`, `--pr <n>`, `--as-context` |
+| `aisync explain <id>` | AI-generated explanation of a session | `--short`, `--json`, `--model` |
+| `aisync resume <branch>` | Checkout branch + restore session in one step | `--session <id>`, `--provider`, `--as-context` |
+| `aisync rewind <id>` | Fork a session at message N, discard later messages | `--message <n>`, `--json` |
 | `aisync list` | List captured sessions | `--all`, `--branch`, `--pr <n>` |
 | `aisync show <id>` | Show session details (by session ID or commit SHA) | `--files`, `--tokens` |
 | `aisync export` | Export a session to file | `--format aisync\|claude\|opencode\|context`, `--session <id>`, `-o <file>` |
@@ -82,13 +91,15 @@ HTTP API flow: `CLI cmd` -> `client.Client` -> HTTP -> `internal/api/` -> `Sessi
 | OpenCode | Yes | Yes | SQLite / `opencode session export` |
 | Cursor | Yes | No (CONTEXT.md fallback) | `state.vscdb` SQLite |
 
-## Key Interfaces (3)
+## Key Interfaces (5)
 
 - **`Provider`** in `internal/provider/provider.go` -- `Name()`, `Detect()`, `Export()`, `CanImport()`, `Import()`
 - **`Store`** in `internal/storage/store.go` -- 14 methods: `Save`, `Get`, `GetByBranch`, `List`, `Delete`, `AddLink`, `GetByLink`, `Search`, `GetSessionsByFile`, `SaveUser`, `GetUser`, `GetUserByEmail`, `Close`
 - **`SessionConverter`** in `internal/converter/converter.go` -- `Convert(session, targetFormat)`, `SupportedFormats()`
+- **`llm.Client`** in `internal/llm/client.go` -- `Complete(ctx, CompletionRequest) → CompletionResponse`
+- **`platform.Platform`** in `internal/platform/` -- GitHub/GitLab integration
 
-## HTTP API (17 endpoints)
+## HTTP API (19 endpoints)
 
 All served by `internal/api/` using stdlib `net/http`. Client SDK in `client/` mirrors 1:1.
 
@@ -107,13 +118,15 @@ All served by `internal/api/` using stdlib `net/http`. Client SDK in `client/` m
 | POST | `/api/sessions/import` | Import session |
 | POST | `/api/sessions/{id}/restore` | Restore session |
 | GET | `/api/v1/blame` | Find sessions that touched a file |
+| POST | `/api/v1/sessions/explain` | AI-generated session explanation |
+| POST | `/api/v1/sessions/rewind` | Fork session at message N |
 | POST | `/api/sync/push` | Push sessions |
 | POST | `/api/sync/pull` | Pull sessions |
 | POST | `/api/sync` | Bidirectional sync |
 
-## MCP Server (16 tools)
+## MCP Server (18 tools)
 
-Served via `internal/mcp/` using `mark3labs/mcp-go`. Tools: `aisync_capture`, `aisync_restore`, `aisync_get`, `aisync_list`, `aisync_delete`, `aisync_export`, `aisync_import`, `aisync_link`, `aisync_comment`, `aisync_search`, `aisync_blame`, `aisync_stats`, `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`.
+Served via `internal/mcp/` using `mark3labs/mcp-go`. Tools: `aisync_capture`, `aisync_restore`, `aisync_get`, `aisync_list`, `aisync_delete`, `aisync_export`, `aisync_import`, `aisync_link`, `aisync_comment`, `aisync_search`, `aisync_blame`, `aisync_explain`, `aisync_rewind`, `aisync_stats`, `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`.
 
 ## SQLite Schema
 
@@ -141,7 +154,7 @@ make install     # Install to $GOPATH/bin
 
 Two levels: global (`~/.aisync/config.json`) + per-repo (`.aisync/config.json`). Per-repo overrides global.
 
-Key settings: `storage_mode` (full/compact/summary), `providers`, `auto_capture`, `secrets.mode` (mask/warn/block).
+Key settings: `storage_mode` (full/compact/summary), `providers`, `auto_capture`, `secrets.mode` (mask/warn/block), `summarize.enabled` (bool), `summarize.model` (string).
 
 ## Search Feature
 
@@ -156,7 +169,8 @@ Search across all captured sessions using keyword matching, filters, or a combin
 
 ## Testing Notes
 
-- 38 test files, all passing
-- 13 test files contain `mockStore` structs implementing `Store` -- when adding methods to `Store`, all 13 must be updated
-- `internal/service/` has no test files yet (known gap)
-- Mock locations: `internal/capture/`, `internal/restore/`, and 11 `pkg/cmd/*/` test files (including blamecmd)
+- 39 test files, all passing
+- 14 test files contain `mockStore` structs implementing `Store` -- when adding methods to `Store`, all 14 must be updated
+- `internal/service/session_test.go` -- 12 tests for Summarize, Explain, Rewind, OneLine, transcript builder
+- `internal/llm/claude/claude_test.go` -- 6 tests with mock binary, fallback, context cancellation
+- Mock locations: `internal/capture/`, `internal/restore/`, `internal/service/`, and 11 `pkg/cmd/*/` test files (including blamecmd)

@@ -5,6 +5,7 @@ package factory
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/hooks"
+	"github.com/ChristopherAparicio/aisync/internal/llm"
+	claudellm "github.com/ChristopherAparicio/aisync/internal/llm/claude"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
 	ghplatform "github.com/ChristopherAparicio/aisync/internal/platform/github"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
@@ -213,6 +216,13 @@ func New() *cmdutil.Factory {
 			gitClient, _ := f.Git()
 			plat, _ := f.Platform()
 
+			// LLM client is optional — nil disables AI features (summarize, explain).
+			// Only created if the claude binary is available in PATH.
+			var llmClient llm.Client
+			if _, lookupErr := exec.LookPath("claude"); lookupErr == nil {
+				llmClient = claudellm.New()
+			}
+
 			cachedSessionSvc = service.NewSessionService(service.SessionServiceConfig{
 				Store:     store,
 				Registry:  registry,
@@ -220,6 +230,7 @@ func New() *cmdutil.Factory {
 				Converter: conv,
 				Git:       gitClient,
 				Platform:  plat,
+				LLM:       llmClient,
 			})
 		})
 		return cachedSessionSvc, sessionSvcErr

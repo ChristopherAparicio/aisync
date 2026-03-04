@@ -413,6 +413,59 @@ func (c *Client) Search(opts SearchOptions) (*SearchResult, error) {
 	return &result, decode(data, &result)
 }
 
+// ── Explain ──
+
+// ExplainRequest contains inputs for explaining a session.
+type ExplainRequest struct {
+	SessionID string `json:"session_id"`
+	Model     string `json:"model,omitempty"`
+	Short     bool   `json:"short,omitempty"`
+}
+
+// ExplainResult contains the AI-generated explanation.
+type ExplainResult struct {
+	Explanation string `json:"Explanation"`
+	SessionID   string `json:"SessionID"`
+	Model       string `json:"Model"`
+	TokensUsed  int    `json:"TokensUsed"`
+}
+
+// Explain generates an AI-powered explanation of a session.
+func (c *Client) Explain(req ExplainRequest) (*ExplainResult, error) {
+	data, err := c.doPost("/api/v1/sessions/explain", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ExplainResult
+	return &result, decode(data, &result)
+}
+
+// ── Rewind ──
+
+// RewindRequest contains inputs for rewinding a session.
+type RewindRequest struct {
+	SessionID string `json:"session_id"`
+	AtMessage int    `json:"at_message"`
+}
+
+// RewindResult contains the outcome of a rewind operation.
+type RewindResult struct {
+	NewSession      *Session `json:"NewSession"`
+	OriginalID      string   `json:"OriginalID"`
+	TruncatedAt     int      `json:"TruncatedAt"`
+	MessagesRemoved int      `json:"MessagesRemoved"`
+}
+
+// Rewind creates a fork of a session truncated at the given message index.
+func (c *Client) Rewind(req RewindRequest) (*RewindResult, error) {
+	data, err := c.doPost("/api/v1/sessions/rewind", req)
+	if err != nil {
+		return nil, err
+	}
+	var result RewindResult
+	return &result, decode(data, &result)
+}
+
 // ── Blame ──
 
 // BlameOptions controls blame lookup queries.

@@ -157,6 +157,21 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithBoolean("all", mcp.Description("If true, return all sessions (default: most recent only)")),
 	), h.handleBlame)
 
+	// ── Explain ──
+	s.AddTool(mcp.NewTool("aisync_explain",
+		mcp.WithDescription("Generate an AI-powered explanation of a captured session. The explanation covers the goal, approach, files changed, decisions made, and outcome. Requires an LLM client (Claude CLI in PATH)."),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to explain")),
+		mcp.WithString("model", mcp.Description("LLM model to use (default: adapter default)")),
+		mcp.WithBoolean("short", mcp.Description("If true, produce a brief 2-3 sentence summary")),
+	), h.handleExplain)
+
+	// ── Rewind ──
+	s.AddTool(mcp.NewTool("aisync_rewind",
+		mcp.WithDescription("Fork a session at a specific message index. Creates a new session with only the first N messages. The original session is never modified."),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to rewind")),
+		mcp.WithNumber("at_message", mcp.Required(), mcp.Description("Truncate at this message index (1-based, inclusive)")),
+	), h.handleRewind)
+
 	// ── Stats ──
 	s.AddTool(mcp.NewTool("aisync_stats",
 		mcp.WithDescription("Get aggregated statistics about captured sessions: total counts, token usage, per-branch breakdown, per-provider counts, and top files."),

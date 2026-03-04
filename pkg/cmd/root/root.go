@@ -10,6 +10,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/capture"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/commentcmd"
 	configcmd "github.com/ChristopherAparicio/aisync/pkg/cmd/config"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/explaincmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/export"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/hooks"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/importcmd"
@@ -18,6 +19,8 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/listcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/mcpcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/restore"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/rewindcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/searchcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/secrets"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd"
@@ -59,6 +62,9 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(statscmd.NewCmdStats(f))
 	cmd.AddCommand(searchcmd.NewCmdSearch(f))
 	cmd.AddCommand(blamecmd.NewCmdBlame(f))
+	cmd.AddCommand(explaincmd.NewCmdExplain(f))
+	cmd.AddCommand(resumecmd.NewCmdResume(f))
+	cmd.AddCommand(rewindcmd.NewCmdRewind(f))
 	cmd.AddCommand(tuicmd.NewCmdTUI(f))
 	cmd.AddCommand(configcmd.NewCmdConfig(f))
 	cmd.AddCommand(synccmd.NewCmdPush(f))

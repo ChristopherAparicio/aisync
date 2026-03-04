@@ -140,6 +140,15 @@ func ParseSessionTrailer(commitMessage string) string {
 	return ""
 }
 
+// Checkout switches to the given branch.
+func (c *Client) Checkout(branch string) error {
+	_, err := c.run("checkout", "--", branch)
+	if err != nil {
+		return fmt.Errorf("checkout %s: %w", branch, err)
+	}
+	return nil
+}
+
 // --- Sync branch operations ---
 // These methods use git plumbing to read/write files on the aisync/sessions
 // branch without touching the working directory.

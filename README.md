@@ -73,6 +73,9 @@ With hooks installed (`aisync init` offers this), capture happens automatically 
 | `aisync init` | Initialize aisync in a Git repo, install hooks |
 | `aisync capture` | Capture active AI session (auto-detects provider) |
 | `aisync restore` | Restore a session for the current branch or PR |
+| `aisync explain` | AI-generated explanation of a session |
+| `aisync resume` | Checkout branch + restore session in one step |
+| `aisync rewind` | Fork a session at message N (discard bad turns) |
 | `aisync list` | List captured sessions |
 | `aisync show` | Inspect a session (by ID or commit SHA) |
 | `aisync export` | Export a session to a file (unified, Claude, or OpenCode format) |
@@ -85,9 +88,9 @@ With hooks installed (`aisync init` offers this), capture happens automatically 
 | `aisync secrets scan` | Scan sessions for leaked secrets |
 | `aisync tui` | Interactive terminal UI to browse sessions |
 | `aisync blame` | Find which AI sessions touched a file |
-| `aisync serve` | Start HTTP/REST API server (17 endpoints) |
+| `aisync serve` | Start HTTP/REST API server (19 endpoints) |
 | `aisync search` | Search sessions by keyword, branch, provider, time range |
-| `aisync mcp` | Start MCP server for AI tool integration (16 tools) |
+| `aisync mcp` | Start MCP server for AI tool integration (18 tools) |
 
 Run `aisync <command> --help` for detailed flags and usage.
 
@@ -108,6 +111,12 @@ Sessions captured from one provider can be restored into another:
 - **Any -> Cursor**: generates a `CONTEXT.md` file you can reference with `@CONTEXT.md`
 
 ## Key Features
+
+### AI-Powered Session Intelligence
+- **Auto-summarize** -- `aisync capture --summarize` generates structured AI summaries (intent, outcome, decisions, friction, open items)
+- **Explain** -- `aisync explain <id>` produces a natural language explanation of what happened during a session
+- **Resume** -- `aisync resume <branch>` switches branch and restores session context in one step
+- **Rewind** -- `aisync rewind <id> --message N` forks a session at a specific point, discarding bad turns
 
 ### Automatic Capture on Commit
 Git hooks capture the active AI session every time you commit. A `AI-Session: <id>` trailer is added to the commit message for traceability.
@@ -132,7 +141,7 @@ Link sessions to PRs, post session summaries as comments, restore sessions from 
 
 ## MCP Server Integration
 
-aisync exposes 16 tools via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), allowing your AI assistant to capture, restore, list, search, and manage sessions directly from within your coding conversation.
+aisync exposes 18 tools via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), allowing your AI assistant to capture, restore, explain, rewind, list, search, and manage sessions directly from within your coding conversation.
 
 Start the MCP server manually:
 
@@ -195,6 +204,8 @@ Add an `mcp` section to your `opencode.json` (at project root or `~/.config/open
 | `aisync_list` | List captured sessions |
 | `aisync_search` | Search sessions by keyword, branch, provider, time range |
 | `aisync_blame` | Find which AI sessions touched a file |
+| `aisync_explain` | AI-generated explanation of a session |
+| `aisync_rewind` | Fork a session at message N |
 | `aisync_delete` | Delete a session |
 | `aisync_export` | Export a session (aisync, Claude, OpenCode, or context format) |
 | `aisync_import` | Import a session from raw data |
@@ -241,6 +252,8 @@ Two-level config: global (`~/.aisync/config.json`) + per-repo (`.aisync/config.j
 aisync config set storage-mode summary
 aisync config set secrets.mode warn
 aisync config set auto-capture false
+aisync config set summarize.enabled true    # AI-powered summaries on every capture
+aisync config set summarize.model sonnet    # Specific model for summarization
 ```
 
 ## Build from Source
@@ -260,14 +273,15 @@ Cross-platform releases (Linux, macOS, Windows / amd64, arm64) are built with Go
 
 aisync follows **Hexagonal Architecture** (Ports & Adapters) with a clear server/client split:
 
-- **Service layer** -- `SessionService` (12 methods) and `SyncService` (4 methods) orchestrate all business logic
+- **Service layer** -- `SessionService` (15 methods incl. Summarize, Explain, Rewind) and `SyncService` (4 methods) orchestrate all business logic
 - **Three driving adapters** -- CLI (Cobra), HTTP/REST API (stdlib `net/http`), MCP Server (`mark3labs/mcp-go`)
+- **LLM integration** -- optional `llm.Client` port with Claude CLI adapter for AI-powered features
 - **Provider layer** -- pluggable readers/writers for each AI tool (3 implementations)
 - **Storage layer** -- local SQLite with 4 tables (sessions, session_links, file_changes, users)
 - **Client SDK** -- public Go HTTP client (`client/` package) for programmatic access
 - **User identity** -- auto-detected from git config, sessions tagged with owner
 
-3 interfaces as ports: `Provider` (3 implementations), `Store` (extensibility + testing), `SessionConverter` (testing).
+5 interfaces as ports: `Provider` (3 implementations), `Store` (extensibility + testing), `SessionConverter` (testing), `llm.Client` (LLM backends), `platform.Platform` (GitHub/GitLab).
 
 For full details, see [architecture/](./architecture/), [spec.md](./spec.md), and [CONTRIBUTING.md](./CONTRIBUTING.md).
 
@@ -278,9 +292,11 @@ For full details, see [architecture/](./architecture/), [spec.md](./spec.md), an
 | Phase 1 -- MVP | Done | Capture, restore, list, show, hooks, secrets, export/import |
 | Phase 2 -- Team Sharing | Done | Git sync, Cursor provider, cross-provider, plugin system |
 | Phase 3 -- PR Integration | Done | GitHub platform, PR linking, comments, stats, TUI |
-| Phase 3.5 -- Architecture | Done | Service layer, HTTP API (17 endpoints), Client SDK, MCP Server (16 tools), Search, User Identity |
+| Phase 3.5 -- Architecture | Done | Service layer, HTTP API (19 endpoints), Client SDK, MCP Server (18 tools), Search, User Identity |
 | Phase 4 -- CI Automation | Planned | Auto-fix sessions on CI failure, webhooks, Slack/n8n |
-| Phase 5 -- Session Intelligence | In Progress | Multi-session branches, AI-blame (done), tool token accounting, cost tracking |
+| Phase 5.0 -- AI Intelligence | Done | Summarize, Explain, Resume, Rewind (LLM-powered session intelligence) |
+| Phase 5.2 -- AI-Blame | Done | File-level reverse lookup from sessions |
+| Phase 5.1/5.3/5.4 -- Multi-session & Cost | Planned | Multi-session branches, tool token accounting, cost tracking |
 | Phase 6 -- Replay & Web UI | Designed | Session replay for model comparison, cost forecasting, web dashboard |
 
 See [roadmap.md](./roadmap.md) for detailed milestones and [spec.md](./spec.md) for user stories.

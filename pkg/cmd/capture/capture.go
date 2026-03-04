@@ -21,6 +21,7 @@ type Options struct {
 	ModeFlag     string
 	Message      string
 	Auto         bool
+	Summarize    bool
 }
 
 // NewCmdCapture creates the `aisync capture` command.
@@ -43,6 +44,7 @@ func NewCmdCapture(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModeFlag, "mode", "", "Storage mode: full, compact, summary")
 	cmd.Flags().StringVar(&opts.Message, "message", "", "Manual summary message")
 	cmd.Flags().BoolVar(&opts.Auto, "auto", false, "Auto mode (used by git hooks, silent)")
+	cmd.Flags().BoolVar(&opts.Summarize, "summarize", false, "AI-summarize the session after capture")
 
 	return cmd
 }
@@ -96,6 +98,18 @@ func runCapture(opts *Options) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
+	// Determine whether to summarize (flag overrides config)
+	shouldSummarize := opts.Summarize
+	if !shouldSummarize && cfgErr == nil {
+		shouldSummarize = cfg.IsSummarizeEnabled()
+	}
+
+	// Determine model for summarization
+	var summarizeModel string
+	if cfgErr == nil {
+		summarizeModel = cfg.GetSummarizeModel()
+	}
+
 	// Capture
 	result, err := svc.Capture(service.CaptureRequest{
 		ProjectPath:  topLevel,
@@ -103,6 +117,8 @@ func runCapture(opts *Options) error {
 		Mode:         mode,
 		ProviderName: providerName,
 		Message:      opts.Message,
+		Summarize:    shouldSummarize,
+		Model:        summarizeModel,
 	})
 	if err != nil {
 		if opts.Auto {
@@ -119,6 +135,9 @@ func runCapture(opts *Options) error {
 		fmt.Fprintf(out, "  Messages: %d\n", len(result.Session.Messages))
 		if result.Session.Summary != "" {
 			fmt.Fprintf(out, "  Summary:  %s\n", result.Session.Summary)
+		}
+		if result.Summarized {
+			fmt.Fprintf(out, "  AI:       summarized\n")
 		}
 		if result.SecretsFound > 0 {
 			scanner := opts.Factory.Scanner()

@@ -1,8 +1,8 @@
 # aisync — Roadmap
 
-> Last updated: 2026-03-03
-> Status: Phase 1-3.5 COMPLETE — Phase 4-6 designed.
-> Phase 3.5 completed: Service Layer, HTTP API Server, Client SDK, MCP Server, User Identity Layer.
+> Last updated: 2026-03-04
+> Status: Phase 1-3.5, 5.0, 5.2 COMPLETE — Phase 4, 5.1, 5.3-5.4, 6 designed.
+> Phase 5.0 completed: AI Summarization, Explain, Resume, Rewind (LLM-powered session intelligence).
 
 ---
 
@@ -336,35 +336,38 @@ Decisions taken during the design phase, before any code was written.
 
 > **Goal:** Transform aisync from a capture/restore tool into a session intelligence platform. Multiple sessions per branch, file-level blame, per-tool token accounting, and real cost tracking.
 
-### Milestone 5.0 — AI Summarization, Explain & Resume
+### Milestone 5.0 — AI Summarization, Explain & Resume (COMPLETE)
 
 **Goal:** Add AI-powered session intelligence: auto-summarization, session explanation, resume workflow, and session rewind.
 
-- [ ] **5.0.1** Create `internal/summarize/` package — AI summarization service
-  - Interface: `Summarize(session) → StructuredSummary`
-  - Structured output: intent, outcome, decisions, friction, open items
-  - Backend: Claude CLI (`claude` command), configurable model endpoint
-  - Non-blocking: failures logged, do not prevent capture
-- [ ] **5.0.2** Integrate auto-summarization into capture service
+- [x] **5.0.1** Create LLM client port + Claude CLI adapter
+  - `llm.Client` interface in `internal/llm/client.go` with `Complete(ctx, CompletionRequest) → CompletionResponse`
+  - Claude CLI adapter in `internal/llm/claude/claude.go` — calls `claude --print --output-format json`
+  - `StructuredSummary` domain type in `internal/session/session.go`
+  - 6 tests: mock binary, fallback, context cancellation
+- [x] **5.0.2** Integrate auto-summarization into capture service
   - New config: `summarize.enabled` (bool), `summarize.model` (string)
   - `aisync capture --summarize` flag for one-time override
-  - Store AI summary in `Session.Summary` field (replaces provider native summary when enabled)
-- [ ] **5.0.3** Implement `aisync explain` command
-  - `aisync explain [session-id | commit-sha]` — generates natural language explanation
-  - Uses AI model to analyze session messages and produce explanation
-  - Fallback: show stored summary if no AI model available
-  - `--short` / `--detailed` flags for output depth
-- [ ] **5.0.4** Implement `aisync resume <branch>` command
-  - Step 1: `git checkout <branch>`
-  - Step 2: `aisync restore` (latest session, or `--session <id>`)
-  - Step 3: Print continuation instructions
-  - Flags: `--session`, `--provider`, `--as-context`
-- [ ] **5.0.5** Implement `aisync rewind <session-id>` command
-  - Interactive message selection (numbered list) or `--message <n>` flag
-  - Create new session with messages truncated at selected point
-  - Restore truncated session into target provider
-  - Link new session as "fork-of" original with `forked_at_message` reference
-  - Original session preserved unchanged
+  - `SessionService.Summarize()` method with JSON response parsing
+  - Non-blocking: failure logs warning, capture proceeds with provider-native summary
+  - Priority: `--message` > AI summary > provider-native summary
+- [x] **5.0.3** Implement `aisync explain` command (full vertical slice)
+  - `SessionService.Explain()` with short/detailed modes
+  - CLI: `aisync explain <id>` with `--short`, `--json`, `--model` flags
+  - API: `POST /api/v1/sessions/explain`
+  - MCP: `aisync_explain` tool
+  - Client SDK: `client.Explain()`
+- [x] **5.0.4** Implement `aisync resume <branch>` command
+  - `git.Client.Checkout()` method
+  - CLI: `aisync resume <branch>` with `--session`, `--provider`, `--as-context`
+  - Pure composition: no new service method
+- [x] **5.0.5** Implement `aisync rewind <session-id>` command (full vertical slice)
+  - `SessionService.Rewind()` — creates fork with truncated messages
+  - CLI: `aisync rewind <id> --message N` with `--json`
+  - API: `POST /api/v1/sessions/rewind`
+  - MCP: `aisync_rewind` tool
+  - Client SDK: `client.Rewind()`
+  - Original session never modified — new session with `ParentID = original.ID`
 - [ ] **5.0.6** Add `--similar` flag to `aisync list`
   - Compare AI summaries + file change overlap across sessions on same branch
   - Group similar sessions (same intent / retries) vs standalone sessions

@@ -179,6 +179,31 @@ type PRComment struct {
 	ID        int64     `json:"id"`
 }
 
+// StructuredSummary is an AI-generated structured analysis of a session.
+// It breaks down a session into intent, outcome, decisions, friction, and open items
+// for richer understanding than a one-line summary.
+type StructuredSummary struct {
+	Intent    string   `json:"intent"`     // what the user was trying to do
+	Outcome   string   `json:"outcome"`    // what was achieved
+	Decisions []string `json:"decisions"`  // key technical decisions made
+	Friction  []string `json:"friction"`   // problems or difficulties encountered
+	OpenItems []string `json:"open_items"` // things left unfinished or needing follow-up
+}
+
+// OneLine returns a compact one-line summary in the form "Intent: Outcome".
+func (s StructuredSummary) OneLine() string {
+	if s.Intent == "" && s.Outcome == "" {
+		return ""
+	}
+	if s.Outcome == "" {
+		return s.Intent
+	}
+	if s.Intent == "" {
+		return s.Outcome
+	}
+	return s.Intent + ": " + s.Outcome
+}
+
 // User represents an aisync user, identified by their git identity.
 type User struct {
 	CreatedAt time.Time `json:"created_at"`
