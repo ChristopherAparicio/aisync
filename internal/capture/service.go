@@ -133,13 +133,6 @@ func (s *Service) Capture(req Request) (*Result, error) {
 		}
 	}
 
-	// Deduplication: if a session for the same project+branch already exists, update it
-	// instead of creating a duplicate. The provider may assign different IDs each time,
-	// but logically one branch = one active session.
-	if existing, lookupErr := s.store.GetByBranch(sess.ProjectPath, sess.Branch); lookupErr == nil {
-		sess.ID = existing.ID
-	}
-
 	// Attach owner identity if provided
 	if req.OwnerID != "" {
 		sess.OwnerID = req.OwnerID

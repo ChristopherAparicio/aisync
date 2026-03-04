@@ -12,7 +12,7 @@ pkg/cmdutil/factory.go       Factory struct (lazy DI container)
 pkg/cmd/factory/default.go   Composition root (wires all dependencies)
 internal/session/            Shared types: Session, Message, User, StructuredSummary, enums, errors
 internal/provider/           Provider interface + claude/, opencode/, cursor/
-internal/storage/            Store interface (14 methods) + sqlite/ implementation
+internal/storage/            Store interface (15 methods) + sqlite/ implementation
 internal/capture/            Capture orchestration service
 internal/restore/            Restore orchestration service
 internal/service/            SessionService (high-level ops: Summarize, Explain, Rewind), SyncService (push/pull)

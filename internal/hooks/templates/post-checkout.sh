@@ -7,8 +7,10 @@
 BRANCH_CHECKOUT="$3"
 
 if [ "$BRANCH_CHECKOUT" = "1" ] && command -v aisync >/dev/null 2>&1; then
-    SESSION_ID=$(aisync list --quiet 2>/dev/null | head -1)
-    if [ -n "$SESSION_ID" ]; then
+    SESSION_COUNT=$(aisync list --quiet 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$SESSION_COUNT" -gt 1 ] 2>/dev/null; then
+        echo "[aisync] $SESSION_COUNT AI sessions available for this branch. Run 'aisync list' to browse or 'aisync restore' for the latest."
+    elif [ "$SESSION_COUNT" -eq 1 ] 2>/dev/null; then
         echo "[aisync] AI session available for this branch. Run 'aisync restore' to load context."
     fi
 fi

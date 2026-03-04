@@ -13,15 +13,16 @@ import (
 
 // dashboardDataMsg carries loaded dashboard data.
 type dashboardDataMsg struct {
-	session       *session.Summary
-	branch        string
-	repoRoot      string
-	provider      string
-	hookStatus    string
-	platformName  string
-	sessionCount  int
-	totalTokens   int
-	syncAvailable bool
+	session            *session.Summary
+	branch             string
+	repoRoot           string
+	provider           string
+	hookStatus         string
+	platformName       string
+	sessionCount       int
+	branchSessionCount int
+	totalTokens        int
+	syncAvailable      bool
 }
 
 // dashboardModel holds the state for the dashboard view.
@@ -86,7 +87,7 @@ func (m dashboardModel) init() tea.Cmd {
 		store, storeErr := f.Store()
 		if storeErr == nil {
 			// Current branch session
-			sess, branchErr := store.GetByBranch(data.repoRoot, data.branch)
+			sess, branchErr := store.GetLatestByBranch(data.repoRoot, data.branch)
 			if branchErr == nil {
 				summary := &session.Summary{
 					ID:           sess.ID,
@@ -98,6 +99,8 @@ func (m dashboardModel) init() tea.Cmd {
 					CreatedAt:    sess.CreatedAt,
 				}
 				data.session = summary
+				// Best-effort count — failure defaults to 0 (single-session display).
+				data.branchSessionCount, _ = store.CountByBranch(data.repoRoot, data.branch)
 			}
 
 			// Total sessions
@@ -189,7 +192,11 @@ func (m dashboardModel) view() string {
 	b.WriteString("\n")
 
 	// Current session
-	b.WriteString(styleSubtitle.Render("  Current Branch Session"))
+	branchTitle := "  Current Branch Session"
+	if m.data.branchSessionCount > 1 {
+		branchTitle = fmt.Sprintf("  Current Branch Session (%d total)", m.data.branchSessionCount)
+	}
+	b.WriteString(styleSubtitle.Render(branchTitle))
 	b.WriteString("\n")
 	if m.data.session != nil {
 		s := m.data.session

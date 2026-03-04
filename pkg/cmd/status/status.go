@@ -71,10 +71,20 @@ func runStatus(opts *Options) error {
 	if storeErr == nil {
 		topLevel, topErr := gitClient.TopLevel()
 		if topErr == nil {
-			session, sessionErr := store.GetByBranch(topLevel, branch)
+			sess, sessionErr := store.GetLatestByBranch(topLevel, branch)
 			if sessionErr == nil {
-				fmt.Fprintf(out, "Session:   %s (%s, %d messages)\n",
-					session.ID, session.Provider, len(session.Messages))
+				// Best-effort count — failure falls back to single-session display.
+				count, countErr := store.CountByBranch(topLevel, branch)
+				if countErr != nil {
+					fmt.Fprintf(opts.IO.ErrOut, "Warning: could not count branch sessions: %v\n", countErr)
+				}
+				if count > 1 {
+					fmt.Fprintf(out, "Session:   %s (%s, %d messages) [%d sessions on branch]\n",
+						sess.ID, sess.Provider, len(sess.Messages), count)
+				} else {
+					fmt.Fprintf(out, "Session:   %s (%s, %d messages)\n",
+						sess.ID, sess.Provider, len(sess.Messages))
+				}
 			} else {
 				fmt.Fprintln(out, "Session:   none on this branch")
 			}

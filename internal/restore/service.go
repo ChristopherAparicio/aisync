@@ -141,7 +141,7 @@ func (s *Service) findSession(req Request) (*session.Session, error) {
 		return sess, nil
 	}
 
-	sess, err := s.store.GetByBranch(req.ProjectPath, req.Branch)
+	sess, err := s.store.GetLatestByBranch(req.ProjectPath, req.Branch)
 	if err != nil {
 		return nil, fmt.Errorf("no session found for branch %q: %w", req.Branch, err)
 	}

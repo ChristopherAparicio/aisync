@@ -275,7 +275,7 @@ func TestCapture_noScanner(t *testing.T) {
 	}
 }
 
-func TestCapture_deduplication(t *testing.T) {
+func TestCapture_multiSession(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
@@ -327,12 +327,17 @@ func TestCapture_deduplication(t *testing.T) {
 		t.Fatalf("Second Capture() error: %v", err)
 	}
 
-	// Should reuse the first session's ID (dedup)
-	if result2.Session.ID != firstID {
-		t.Errorf("Second capture ID = %q, want %q (should reuse existing)", result2.Session.ID, firstID)
+	// Multi-session: each capture should produce a distinct ID
+	if result2.Session.ID == firstID {
+		t.Errorf("Second capture ID = %q, should differ from first (no dedup)", firstID)
 	}
 
-	// But summary should be updated
+	// Both sessions should be saved (saveCount == 2)
+	if store.saveCount != 2 {
+		t.Errorf("saveCount = %d, want 2", store.saveCount)
+	}
+
+	// Summary should reflect the second session
 	if result2.Session.Summary != "Updated session" {
 		t.Errorf("Summary = %q, want %q", result2.Session.Summary, "Updated session")
 	}
@@ -379,7 +384,7 @@ func (m *mockStore) Save(sess *session.Session) error {
 func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
 	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) GetByBranch(projectPath string, branch string) (*session.Session, error) {
+func (m *mockStore) GetLatestByBranch(projectPath string, branch string) (*session.Session, error) {
 	if m.byBranch == nil {
 		return nil, session.ErrSessionNotFound
 	}
@@ -390,6 +395,10 @@ func (m *mockStore) GetByBranch(projectPath string, branch string) (*session.Ses
 	}
 	return s, nil
 }
+
+// CountByBranch is a stub — capture service does not call it.
+// Use saveCount to verify multi-session behavior instead.
+func (m *mockStore) CountByBranch(_, _ string) (int, error) { return m.saveCount, nil }
 func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return nil, nil
 }

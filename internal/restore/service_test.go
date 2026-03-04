@@ -286,12 +286,13 @@ func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
 	}
 	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) GetByBranch(_ string, _ string) (*session.Session, error) {
+func (m *mockStore) GetLatestByBranch(_ string, _ string) (*session.Session, error) {
 	if m.sessionByBranch != nil {
 		return m.sessionByBranch, nil
 	}
 	return nil, session.ErrSessionNotFound
 }
+func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
 func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return nil, nil
 }

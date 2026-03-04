@@ -79,7 +79,7 @@ func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	return s, nil
 }
 
-func (m *mockStore) GetByBranch(projectPath, branch string) (*session.Session, error) {
+func (m *mockStore) GetLatestByBranch(projectPath, branch string) (*session.Session, error) {
 	key := projectPath + ":" + branch
 	s, ok := m.byBranch[key]
 	if !ok {
@@ -87,6 +87,7 @@ func (m *mockStore) GetByBranch(projectPath, branch string) (*session.Session, e
 	}
 	return s, nil
 }
+func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
 
 func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
 func (m *mockStore) Delete(_ session.ID) error                             { return nil }

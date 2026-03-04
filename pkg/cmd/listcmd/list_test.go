@@ -31,11 +31,12 @@ func (m *mockStore) Save(_ *session.Session) error { return nil }
 func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
 	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) GetByBranch(_, _ string) (*session.Session, error) {
+func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
 	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) Delete(_ session.ID) error { return nil }
-func (m *mockStore) Close() error              { return nil }
+func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
+func (m *mockStore) Delete(_ session.ID) error              { return nil }
+func (m *mockStore) Close() error                           { return nil }
 
 func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return m.sessions, nil

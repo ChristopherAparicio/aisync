@@ -12,9 +12,12 @@ type Store interface {
 	// Returns ErrSessionNotFound if the session does not exist.
 	Get(id session.ID) (*session.Session, error)
 
-	// GetByBranch retrieves the most recent session for a project and branch.
+	// GetLatestByBranch retrieves the most recent session for a project and branch.
 	// Returns ErrSessionNotFound if no session matches.
-	GetByBranch(projectPath string, branch string) (*session.Session, error)
+	GetLatestByBranch(projectPath string, branch string) (*session.Session, error)
+
+	// CountByBranch returns the number of sessions for a project and branch.
+	CountByBranch(projectPath string, branch string) (int, error)
 
 	// List returns session summaries matching the given options.
 	List(opts session.ListOptions) ([]session.Summary, error)

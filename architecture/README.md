@@ -7,6 +7,7 @@ This directory contains the architectural documentation for aisync:
 - **[README.md](./README.md)** — High-level architecture overview (this file)
 - **[blame.md](./blame.md)** — AI-Blame feature: design, queries, performance
 - **[summarize.md](./summarize.md)** — AI Summarization, Explain, Resume & Rewind: design, prompts, performance
+- **[multi-session.md](./multi-session.md)** — Multi-Session per Branch: design, migration, implementation plan
 
 ---
 
@@ -148,6 +149,9 @@ Added LLM-powered session intelligence. New port: `llm.Client` interface with Cl
 
 New service methods: `SessionService.Summarize()`, `.Explain()`, `.Rewind()`. New domain type: `StructuredSummary`. Two new API endpoints (explain + rewind), two new MCP tools, three new CLI commands. Config: `summarize.enabled`, `summarize.model`. LLM client auto-detected from `claude` binary in PATH. See [summarize.md](./summarize.md) for design details.
 
+### Phase 5.1 — Multi-Session per Branch (Completed)
+Removed the 1:1 branch-to-session constraint. Each `aisync capture` now creates a new session instead of overwriting the previous one on the same branch. Store interface grew from 14 to 15 methods (`CountByBranch` added, `GetByBranch` renamed to `GetLatestByBranch`). No schema migration needed — the DB already supported multi-session. All callers that previously assumed a single session per branch now explicitly use `GetLatestByBranch`. CLI (`aisync status`) and TUI dashboard show session count when multiple sessions exist on a branch. Post-checkout hook template uses plural-aware messaging. See [multi-session.md](./multi-session.md) for design details.
+
 ### What Stays the Same
 - Domain entities in `internal/session/` — stable core
 - Interfaces (`Provider`, `Store`, `SessionConverter`) — well-defined ports
@@ -178,7 +182,7 @@ aisync/
       provider.go                   #   Provider interface (5 methods)
       registry.go                   #   Registry: auto-detection + manual selection
     storage/                        # Storage port
-      store.go                      #   Store interface (14 methods)
+      store.go                      #   Store interface (15 methods)
 
     # ── APPLICATION LAYER (services) ──────────────────────────────────
     service/                        # Application services
@@ -414,7 +418,8 @@ type Provider interface {
 type Store interface {
     Save(session *session.Session) error
     Get(id session.ID) (*session.Session, error)
-    GetByBranch(projectPath string, branch string) (*session.Session, error)
+    GetLatestByBranch(projectPath string, branch string) (*session.Session, error)
+    CountByBranch(projectPath string, branch string) (int, error)
     List(opts session.ListOptions) ([]session.Summary, error)
     Delete(id session.ID) error
     AddLink(sessionID session.ID, link session.Link) error
@@ -428,7 +433,7 @@ type Store interface {
 }
 ```
 
-**Why an interface:** Enables testing with in-memory mocks (14 mockStores across test files), and leaves the door open for alternative backends (flat file, remote storage).
+**Why an interface:** Enables testing with in-memory mocks (14 mockStores across test files), and leaves the door open for alternative backends (flat file, remote storage). 15 methods total.
 
 ### SessionConverter (in `internal/restore/service.go`)
 
@@ -849,7 +854,7 @@ SessionService.Restore(ctx, RestoreRequest{...})
        │
        ├── git.CurrentBranch()
        │
-       ├── store.GetByBranch(projectPath, branch)
+        ├── store.GetLatestByBranch(projectPath, branch)
        │
        ├── Detect target provider (or use --provider flag)
        │

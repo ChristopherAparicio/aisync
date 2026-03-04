@@ -135,39 +135,91 @@ func TestSave_Upsert(t *testing.T) {
 	}
 }
 
-func TestGetByBranch(t *testing.T) {
+func TestGetLatestByBranch(t *testing.T) {
 	store := mustOpenStore(t)
 
 	s1 := testSession("sess-1")
 	s1.Branch = "feature/auth"
 	s1.ProjectPath = "/project"
+	s1.CreatedAt = time.Date(2026, 2, 16, 10, 0, 0, 0, time.UTC)
 
 	s2 := testSession("sess-2")
 	s2.Branch = "feature/other"
 	s2.ProjectPath = "/project"
 
-	if err := store.Save(s1); err != nil {
-		t.Fatalf("Save(s1) error = %v", err)
-	}
-	if err := store.Save(s2); err != nil {
-		t.Fatalf("Save(s2) error = %v", err)
+	s3 := testSession("sess-3")
+	s3.Branch = "feature/auth"
+	s3.ProjectPath = "/project"
+	s3.CreatedAt = time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC)
+
+	for _, s := range []*session.Session{s1, s2, s3} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
 	}
 
-	got, err := store.GetByBranch("/project", "feature/auth")
+	got, err := store.GetLatestByBranch("/project", "feature/auth")
 	if err != nil {
-		t.Fatalf("GetByBranch() error = %v", err)
+		t.Fatalf("GetLatestByBranch() error = %v", err)
 	}
-	if got.ID != session.ID("sess-1") {
-		t.Errorf("ID = %q, want %q", got.ID, "sess-1")
+	// Should return the most recent session (sess-3, created Feb 17)
+	if got.ID != session.ID("sess-3") {
+		t.Errorf("ID = %q, want %q (most recent)", got.ID, "sess-3")
 	}
 }
 
-func TestGetByBranch_NotFound(t *testing.T) {
+func TestGetLatestByBranch_NotFound(t *testing.T) {
 	store := mustOpenStore(t)
 
-	_, err := store.GetByBranch("/project", "nonexistent")
+	_, err := store.GetLatestByBranch("/project", "nonexistent")
 	if !errors.Is(err, session.ErrSessionNotFound) {
-		t.Errorf("GetByBranch(nonexistent) error = %v, want ErrSessionNotFound", err)
+		t.Errorf("GetLatestByBranch(nonexistent) error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestCountByBranch(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("count-1")
+	s1.Branch = "feature/auth"
+	s1.ProjectPath = "/project"
+
+	s2 := testSession("count-2")
+	s2.Branch = "feature/auth"
+	s2.ProjectPath = "/project"
+
+	s3 := testSession("count-3")
+	s3.Branch = "main"
+	s3.ProjectPath = "/project"
+
+	for _, s := range []*session.Session{s1, s2, s3} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	count, err := store.CountByBranch("/project", "feature/auth")
+	if err != nil {
+		t.Fatalf("CountByBranch() error = %v", err)
+	}
+	if count != 2 {
+		t.Errorf("CountByBranch(feature/auth) = %d, want 2", count)
+	}
+
+	count, err = store.CountByBranch("/project", "main")
+	if err != nil {
+		t.Fatalf("CountByBranch() error = %v", err)
+	}
+	if count != 1 {
+		t.Errorf("CountByBranch(main) = %d, want 1", count)
+	}
+
+	count, err = store.CountByBranch("/project", "nonexistent")
+	if err != nil {
+		t.Fatalf("CountByBranch() error = %v", err)
+	}
+	if count != 0 {
+		t.Errorf("CountByBranch(nonexistent) = %d, want 0", count)
 	}
 }
 

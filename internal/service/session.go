@@ -522,7 +522,7 @@ func (s *SessionService) Link(req LinkRequest) (*LinkResult, error) {
 	// Resolve session ID
 	sessionID := req.SessionID
 	if sessionID == "" {
-		sess, err := s.store.GetByBranch(req.ProjectPath, req.Branch)
+		sess, err := s.store.GetLatestByBranch(req.ProjectPath, req.Branch)
 		if err != nil {
 			return nil, fmt.Errorf("no session found for branch %q: %w", req.Branch, err)
 		}
@@ -663,7 +663,7 @@ func (s *SessionService) resolveSessionForComment(req CommentRequest, prNumber i
 	}
 
 	// Fall back to branch
-	return s.store.GetByBranch(req.ProjectPath, req.Branch)
+	return s.store.GetLatestByBranch(req.ProjectPath, req.Branch)
 }
 
 // BuildCommentBody creates the Markdown comment body from a session.
@@ -1219,7 +1219,7 @@ func (s *SessionService) resolveSession(id session.ID, projectPath, branch strin
 	if id != "" {
 		return s.store.Get(id)
 	}
-	return s.store.GetByBranch(projectPath, branch)
+	return s.store.GetLatestByBranch(projectPath, branch)
 }
 
 // looksLikeCommitSHA returns true if s looks like a hex commit SHA (7-40 chars).

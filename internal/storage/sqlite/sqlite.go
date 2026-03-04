@@ -194,8 +194,8 @@ func (s *Store) Get(id session.ID) (*session.Session, error) {
 	return &session, nil
 }
 
-// GetByBranch retrieves the most recent session for a project and branch.
-func (s *Store) GetByBranch(projectPath string, branch string) (*session.Session, error) {
+// GetLatestByBranch retrieves the most recent session for a project and branch.
+func (s *Store) GetLatestByBranch(projectPath string, branch string) (*session.Session, error) {
 	var id string
 	err := s.db.QueryRow(
 		"SELECT id FROM sessions WHERE project_path = ? AND branch = ? ORDER BY created_at DESC LIMIT 1",
@@ -209,6 +209,19 @@ func (s *Store) GetByBranch(projectPath string, branch string) (*session.Session
 	}
 
 	return s.Get(session.ID(id))
+}
+
+// CountByBranch returns the number of sessions for a project and branch.
+func (s *Store) CountByBranch(projectPath string, branch string) (int, error) {
+	var count int
+	err := s.db.QueryRow(
+		"SELECT COUNT(*) FROM sessions WHERE project_path = ? AND branch = ?",
+		projectPath, branch,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting sessions by branch: %w", err)
+	}
+	return count, nil
 }
 
 // List returns session summaries matching the given options.

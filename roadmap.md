@@ -1,8 +1,8 @@
 # aisync — Roadmap
 
 > Last updated: 2026-03-04
-> Status: Phase 1-3.5, 5.0, 5.2 COMPLETE — Phase 4, 5.1, 5.3-5.4, 6 designed.
-> Phase 5.0 completed: AI Summarization, Explain, Resume, Rewind (LLM-powered session intelligence).
+> Status: Phase 1-3.5, 5.0-5.2 COMPLETE — Phase 4, 5.3-5.4, 6 designed.
+> Phase 5.1 completed: Multi-Session per Branch (removed 1:1 constraint, CountByBranch, plural-aware UIs).
 
 ---
 
@@ -14,7 +14,7 @@ Decisions taken during the design phase, before any code was written.
 |---|----------|--------|-----------|
 | D1 | Language & stack | **Go** (Cobra CLI, SQLite via modernc.org/sqlite) | Single binary, fast, great CLI ecosystem |
 | D2 | Providers (MVP) | **Claude Code + OpenCode** | Both support export AND import. Cursor is read-only (Phase 2) |
-| D3 | Session granularity | **1 session per branch** | A branch = a feature = a conversation. Updated on each capture. |
+| D3 | Session granularity | **Multiple sessions per branch** | Each capture creates a new session. Commands default to the latest. Phase 5.1 removed the 1:1 constraint. |
 | D4 | Summary generation | **Use provider's native summary** | Claude Code and OpenCode already generate summaries. No LLM dependency. |
 | D5 | Commit trailer | **Visible trailer + Git notes** | Trailer (`AI-Session: <id>`) for traceability, git notes for full metadata |
 | D6 | Config location | **Global (`~/.aisync/`) + per-repo (`.aisync/`)** | Like `.gitconfig` + `.git/config`. Per-repo overrides global. |
@@ -373,18 +373,25 @@ Decisions taken during the design phase, before any code was written.
   - Group similar sessions (same intent / retries) vs standalone sessions
   - Requires AI summaries to be available (warn if not)
 
-### Milestone 5.1 — Multi-Session per Branch
+### Milestone 5.1 — Multi-Session per Branch (COMPLETE)
 
-**Goal:** Remove the 1:1 branch-to-session constraint. Version sessions, detect forks and off-topic conversations.
+**Goal:** Remove the 1:1 branch-to-session constraint. Each capture creates a new session; commands default to the latest.
 
-- [ ] **5.1.1** Change data model: remove deduplication in capture service (stop overwriting same-branch sessions)
-- [ ] **5.1.2** Migrate existing sessions: existing single sessions become "v1" entries
-- [ ] **5.1.3** Update `aisync list` to show all sessions per branch (not just the latest)
-- [ ] **5.1.4** Add `session_relationships` table: parent/child, fork-of, off-topic flags
-- [ ] **5.1.5** Fork detection: hash first N user messages, compare across sessions on same branch
-- [ ] **5.1.6** `aisync list --tree` to show fork visualization (include rewind forks from 5.0.5)
-- [ ] **5.1.7** Off-topic detection: compare file changes + topic overlap between sessions on same branch
-- [ ] **5.1.8** Update `aisync restore` to let user pick from multiple sessions per branch
+- [x] **5.1.1** Remove deduplication in capture service — each capture creates a new session with its own ID
+- [x] **5.1.2** Rename `GetByBranch` → `GetLatestByBranch` — clarifies semantics (returns most recent session)
+- [x] **5.1.3** Add `CountByBranch` to Store interface — lightweight count for UI messages
+- [x] **5.1.4** Update `aisync status` to show session count when multiple exist
+- [x] **5.1.5** Update TUI dashboard to show branch session count
+- [x] **5.1.6** Update `post-checkout.sh` hook template — plural-aware messaging
+- [x] **5.1.7** Add tests: CountByBranch, GetLatestByBranch (multi-session), multi-session capture test
+- [x] **5.1.8** No schema migration needed — DB already supports multi-session (no UNIQUE constraint)
+
+**Future (deferred to later milestones):**
+- [ ] **5.1.9** Add `session_relationships` table: parent/child, fork-of, off-topic flags
+- [ ] **5.1.10** Fork detection: hash first N user messages, compare across sessions on same branch
+- [ ] **5.1.11** `aisync list --tree` to show fork visualization (include rewind forks from 5.0.5)
+- [ ] **5.1.12** Off-topic detection: compare file changes + topic overlap between sessions on same branch
+- [ ] **5.1.13** Update `aisync restore` to let user pick from multiple sessions per branch
 
 ### Milestone 5.2 — AI-Blame
 
@@ -497,7 +504,7 @@ Decisions taken during the design phase, before any code was written.
 - [x] Extracted shared test helpers to `internal/testutil/` (InitTestRepo, MustOpenStore, NewSession)
 - [x] Added 8 capture CLI tests (`pkg/cmd/capture/capture_test.go`)
 - [x] Added 9 restore CLI tests (`pkg/cmd/restore/restore_test.go`)
-- [x] Session deduplication in capture service — same project+branch reuses existing session ID
+- [x] ~~Session deduplication~~ — Removed in Phase 5.1. Each capture now creates a new session (multi-session per branch)
 - [x] Deduplicated CONTEXT.md generation — restore service now uses `converter.ToContextMD()`
 - [x] Fixed hardcoded version — injected via `-ldflags` from `main.go`, `aisync version` subcommand + `--version` flag
 - [x] Added shell completions — `aisync completion [bash|zsh|fish|powershell]` subcommand
