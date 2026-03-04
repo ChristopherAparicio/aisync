@@ -20,8 +20,16 @@ type configData struct {
 	Providers   []string  `json:"providers"`
 	Secrets     secrets   `json:"secrets"`
 	Summarize   summarize `json:"summarize"`
+	Pricing     pricing   `json:"pricing"`
 	Version     int       `json:"version"`
 	AutoCapture bool      `json:"auto_capture"`
+}
+
+// PricingOverride is an exported type for pricing overrides, used by Factory.
+type PricingOverride struct {
+	Model           string  `json:"model"`
+	InputPerMToken  float64 `json:"input_per_mtoken"`
+	OutputPerMToken float64 `json:"output_per_mtoken"`
 }
 
 type secrets struct {
@@ -34,6 +42,10 @@ type secrets struct {
 type summarize struct {
 	Enabled bool   `json:"enabled"`
 	Model   string `json:"model"`
+}
+
+type pricing struct {
+	Overrides []PricingOverride `json:"overrides"`
 }
 
 func defaultConfig() configData {
@@ -118,6 +130,11 @@ func (c *Config) loadFrom(dir string) error {
 	c.data.Summarize.Enabled = loaded.Summarize.Enabled
 	if loaded.Summarize.Model != "" {
 		c.data.Summarize.Model = loaded.Summarize.Model
+	}
+
+	// Pricing overrides
+	if len(loaded.Pricing.Overrides) > 0 {
+		c.data.Pricing.Overrides = loaded.Pricing.Overrides
 	}
 
 	return nil
@@ -218,6 +235,28 @@ func (c *Config) IsSummarizeEnabled() bool {
 // Empty string means let the adapter pick the default.
 func (c *Config) GetSummarizeModel() string {
 	return c.data.Summarize.Model
+}
+
+// GetPricingOverrides returns the list of user-configured pricing overrides.
+func (c *Config) GetPricingOverrides() []PricingOverride {
+	return c.data.Pricing.Overrides
+}
+
+// AddPricingOverride adds or updates a model price override.
+func (c *Config) AddPricingOverride(model string, inputPerMToken, outputPerMToken float64) {
+	// Update existing or append new
+	for i, o := range c.data.Pricing.Overrides {
+		if o.Model == model {
+			c.data.Pricing.Overrides[i].InputPerMToken = inputPerMToken
+			c.data.Pricing.Overrides[i].OutputPerMToken = outputPerMToken
+			return
+		}
+	}
+	c.data.Pricing.Overrides = append(c.data.Pricing.Overrides, PricingOverride{
+		Model:           model,
+		InputPerMToken:  inputPerMToken,
+		OutputPerMToken: outputPerMToken,
+	})
 }
 
 // AddCustomPattern adds a custom secret pattern in "NAME REGEX" format.

@@ -180,6 +180,12 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithString("provider", mcp.Description("Filter by provider")),
 		mcp.WithBoolean("all", mcp.Description("Include all sessions")),
 	), h.handleStats)
+
+	// ── Cost ──
+	s.AddTool(mcp.NewTool("aisync_cost",
+		mcp.WithDescription("Estimate the monetary cost of a captured session based on model pricing. Returns per-model cost breakdown."),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID or commit SHA")),
+	), h.handleCost)
 }
 
 // registerSyncTools registers all sync-related MCP tools.

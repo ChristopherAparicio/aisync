@@ -61,6 +61,24 @@ func (s *Server) handleCapture(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Cost ──
+
+func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "session ID is required")
+		return
+	}
+
+	est, err := s.sessionSvc.EstimateCost(r.Context(), id)
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, est)
+}
+
 // ── Restore ──
 
 // restoreRequest is the JSON body for POST /api/v1/sessions/restore.

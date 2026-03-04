@@ -534,9 +534,10 @@ type StatsOptions struct {
 
 // BranchStats holds aggregated stats per branch.
 type BranchStats struct {
-	Branch       string `json:"Branch"`
-	TotalTokens  int    `json:"TotalTokens"`
-	SessionCount int    `json:"SessionCount"`
+	Branch       string  `json:"Branch"`
+	TotalTokens  int     `json:"TotalTokens"`
+	TotalCost    float64 `json:"TotalCost"`
+	SessionCount int     `json:"SessionCount"`
 }
 
 // FileEntry is a file path with its touch count.
@@ -550,6 +551,7 @@ type StatsResult struct {
 	TotalSessions int            `json:"TotalSessions"`
 	TotalMessages int            `json:"TotalMessages"`
 	TotalTokens   int            `json:"TotalTokens"`
+	TotalCost     float64        `json:"TotalCost"`
 	PerBranch     []*BranchStats `json:"PerBranch"`
 	PerProvider   map[string]int `json:"PerProvider"`
 	TopFiles      []FileEntry    `json:"TopFiles"`
@@ -581,5 +583,41 @@ func (c *Client) Stats(opts StatsOptions) (*StatsResult, error) {
 		return nil, err
 	}
 	var result StatsResult
+	return &result, decode(data, &result)
+}
+
+// ── Cost ──
+
+// Cost represents a monetary amount.
+type Cost struct {
+	InputCost  float64 `json:"input_cost"`
+	OutputCost float64 `json:"output_cost"`
+	TotalCost  float64 `json:"total_cost"`
+	Currency   string  `json:"currency"`
+}
+
+// ModelCost groups cost by model within a session.
+type ModelCost struct {
+	Model        string `json:"model"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	Cost         Cost   `json:"cost"`
+	MessageCount int    `json:"message_count"`
+}
+
+// CostEstimate is the full cost breakdown for a session.
+type CostEstimate struct {
+	TotalCost     Cost        `json:"total_cost"`
+	PerModel      []ModelCost `json:"per_model"`
+	UnknownModels []string    `json:"unknown_models,omitempty"`
+}
+
+// EstimateCost retrieves the cost breakdown for a session.
+func (c *Client) EstimateCost(idOrSHA string) (*CostEstimate, error) {
+	data, err := c.doGet("/api/v1/sessions/" + url.PathEscape(idOrSHA) + "/cost")
+	if err != nil {
+		return nil, err
+	}
+	var result CostEstimate
 	return &result, decode(data, &result)
 }

@@ -17,16 +17,17 @@ internal/capture/            Capture orchestration service
 internal/restore/            Restore orchestration service
 internal/service/            SessionService (high-level ops: Summarize, Explain, Rewind), SyncService (push/pull)
 internal/llm/                LLM client port (interface) + claude/ adapter
-internal/api/                HTTP API server (19 endpoints, stdlib net/http)
-internal/mcp/                MCP server (18 tools, via mark3labs/mcp-go)
+internal/pricing/            Pricing engine (Calculator, prefix matching, DefaultPrices, 17 tests)
+internal/api/                HTTP API server (20 endpoints, stdlib net/http)
+internal/mcp/                MCP server (19 tools, via mark3labs/mcp-go)
 internal/gitsync/            Git branch sync service (push/pull)
 internal/converter/          Cross-provider format conversion (SessionConverter)
 internal/secrets/            Secret detection & masking + plugin system
 internal/platform/           GitHub/GitLab platform integration
 internal/hooks/              Git hooks management
 internal/tui/                Interactive terminal UI (Bubble Tea)
-internal/config/             Config with summarize.enabled / summarize.model
-client/                      HTTP client SDK (19 methods, mirrors API 1:1)
+internal/config/             Config with summarize.enabled / summarize.model + pricing.overrides
+client/                      HTTP client SDK (20 methods, mirrors API 1:1)
 git/                         Git CLI wrapper (includes UserName/UserEmail, Checkout)
 ```
 
@@ -41,7 +42,7 @@ Three layers:
 
 Service orchestration:
 - `internal/capture/` and `internal/restore/` -- core capture/restore logic
-- `internal/service/SessionService` -- high-level operations (Capture with owner resolution, Restore, Summarize, Explain, Rewind, ListByBranch, etc.)
+- `internal/service/SessionService` -- high-level operations (Capture with owner resolution, Restore, Summarize, Explain, Rewind, EstimateCost, ListByBranch, etc.). `SessionServiceConfig.Pricing` field accepts an optional `*pricing.Calculator` (nil defaults to built-in prices).
 - `internal/service/SyncService` -- git-based session sync (push/pull/bidirectional)
 
 LLM integration:
@@ -62,14 +63,14 @@ HTTP API flow: `CLI cmd` -> `client.Client` -> HTTP -> `internal/api/` -> `Sessi
 | `aisync resume <branch>` | Checkout branch + restore session in one step | `--session <id>`, `--provider`, `--as-context` |
 | `aisync rewind <id>` | Fork a session at message N, discard later messages | `--message <n>`, `--json` |
 | `aisync list` | List captured sessions | `--all`, `--branch`, `--pr <n>` |
-| `aisync show <id>` | Show session details (by session ID or commit SHA) | `--files`, `--tokens` |
+| `aisync show <id>` | Show session details (by session ID or commit SHA) | `--files`, `--tokens`, `--cost` |
 | `aisync export` | Export a session to file | `--format aisync\|claude\|opencode\|context`, `--session <id>`, `-o <file>` |
 | `aisync import <file>` | Import a session from file | `--format`, `--into aisync\|claude-code\|opencode`, `--agent` |
 | `aisync link` | Link a session to a Git object | `--pr <n>`, `--commit <sha>`, `--session <id>`, `--auto` |
 | `aisync comment` | Post session summary as PR comment | `--pr <n>`, `--session <id>` |
 | `aisync search` | Search sessions by keyword, branch, user, date | `[keyword]`, `--branch`, `--provider`, `--owner-id`, `--since`, `--until`, `--limit`, `--json`, `-q` |
 | `aisync blame <file>` | Find which AI sessions touched a file | `--all`, `--restore`, `--branch`, `--provider`, `--json`, `-q` |
-| `aisync stats` | Show usage statistics (tokens, sessions, files) | `--branch`, `--provider`, `--all`, `--json` |
+| `aisync stats` | Show usage statistics (tokens, sessions, files) | `--branch`, `--provider`, `--all`, `--json`, `--cost` |
 | `aisync hooks install` | Install git hooks (pre-commit, commit-msg, post-checkout) | |
 | `aisync hooks uninstall` | Remove aisync hooks | |
 | `aisync secrets scan` | Scan stored sessions for secrets | `--session <id>` |
@@ -94,12 +95,12 @@ HTTP API flow: `CLI cmd` -> `client.Client` -> HTTP -> `internal/api/` -> `Sessi
 ## Key Interfaces (5)
 
 - **`Provider`** in `internal/provider/provider.go` -- `Name()`, `Detect()`, `Export()`, `CanImport()`, `Import()`
-- **`Store`** in `internal/storage/store.go` -- 14 methods: `Save`, `Get`, `GetByBranch`, `List`, `Delete`, `AddLink`, `GetByLink`, `Search`, `GetSessionsByFile`, `SaveUser`, `GetUser`, `GetUserByEmail`, `Close`
+- **`Store`** in `internal/storage/store.go` -- 15 methods: `Save`, `Get`, `GetLatestByBranch`, `CountByBranch`, `List`, `Delete`, `AddLink`, `GetByLink`, `Search`, `GetSessionsByFile`, `SaveUser`, `GetUser`, `GetUserByEmail`, `Close`
 - **`SessionConverter`** in `internal/converter/converter.go` -- `Convert(session, targetFormat)`, `SupportedFormats()`
 - **`llm.Client`** in `internal/llm/client.go` -- `Complete(ctx, CompletionRequest) → CompletionResponse`
 - **`platform.Platform`** in `internal/platform/` -- GitHub/GitLab integration
 
-## HTTP API (19 endpoints)
+## HTTP API (20 endpoints)
 
 All served by `internal/api/` using stdlib `net/http`. Client SDK in `client/` mirrors 1:1.
 
@@ -120,13 +121,14 @@ All served by `internal/api/` using stdlib `net/http`. Client SDK in `client/` m
 | GET | `/api/v1/blame` | Find sessions that touched a file |
 | POST | `/api/v1/sessions/explain` | AI-generated session explanation |
 | POST | `/api/v1/sessions/rewind` | Fork session at message N |
+| GET | `/api/v1/sessions/{id}/cost` | Estimate session cost |
 | POST | `/api/sync/push` | Push sessions |
 | POST | `/api/sync/pull` | Pull sessions |
 | POST | `/api/sync` | Bidirectional sync |
 
-## MCP Server (18 tools)
+## MCP Server (19 tools)
 
-Served via `internal/mcp/` using `mark3labs/mcp-go`. Tools: `aisync_capture`, `aisync_restore`, `aisync_get`, `aisync_list`, `aisync_delete`, `aisync_export`, `aisync_import`, `aisync_link`, `aisync_comment`, `aisync_search`, `aisync_blame`, `aisync_explain`, `aisync_rewind`, `aisync_stats`, `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`.
+Served via `internal/mcp/` using `mark3labs/mcp-go`. Tools: `aisync_capture`, `aisync_restore`, `aisync_get`, `aisync_list`, `aisync_delete`, `aisync_export`, `aisync_import`, `aisync_link`, `aisync_comment`, `aisync_search`, `aisync_blame`, `aisync_explain`, `aisync_rewind`, `aisync_stats`, `aisync_cost`, `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`.
 
 ## SQLite Schema
 
@@ -154,7 +156,7 @@ make install     # Install to $GOPATH/bin
 
 Two levels: global (`~/.aisync/config.json`) + per-repo (`.aisync/config.json`). Per-repo overrides global.
 
-Key settings: `storage_mode` (full/compact/summary), `providers`, `auto_capture`, `secrets.mode` (mask/warn/block), `summarize.enabled` (bool), `summarize.model` (string).
+Key settings: `storage_mode` (full/compact/summary), `providers`, `auto_capture`, `secrets.mode` (mask/warn/block), `summarize.enabled` (bool), `summarize.model` (string), `pricing.overrides` (array of `{model, input_per_mtoken, output_per_mtoken}`).
 
 ## Search Feature
 

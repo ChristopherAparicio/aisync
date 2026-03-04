@@ -2,6 +2,7 @@
 package show
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -19,6 +20,7 @@ type Options struct {
 
 	ShowFiles  bool
 	ShowTokens bool
+	ShowCost   bool
 }
 
 // NewCmdShow creates the `aisync show` command.
@@ -44,6 +46,7 @@ associated session.`,
 
 	cmd.Flags().BoolVar(&opts.ShowFiles, "files", false, "Show files changed in session")
 	cmd.Flags().BoolVar(&opts.ShowTokens, "tokens", false, "Show token usage breakdown")
+	cmd.Flags().BoolVar(&opts.ShowCost, "cost", false, "Show estimated cost breakdown")
 
 	return cmd
 }
@@ -101,8 +104,38 @@ func runShow(opts *Options, idArg string) error {
 		fmt.Fprintf(out, "Summary:  %s\n", sess.Summary)
 	}
 
+	// Cost estimate
+	if opts.ShowCost {
+		est, costErr := svc.EstimateCost(context.Background(), idArg)
+		if costErr != nil {
+			fmt.Fprintf(out, "\nCost: (error: %v)\n", costErr)
+		} else if est.TotalCost.TotalCost > 0 || len(est.UnknownModels) > 0 {
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "Cost Estimate:")
+			fmt.Fprintf(out, "  %-30s  %10s  %10s  %10s\n", "MODEL", "INPUT $", "OUTPUT $", "TOTAL $")
+			for _, mc := range est.PerModel {
+				fmt.Fprintf(out, "  %-30s  %10s  %10s  %10s\n",
+					mc.Model,
+					formatCost(mc.Cost.InputCost),
+					formatCost(mc.Cost.OutputCost),
+					formatCost(mc.Cost.TotalCost))
+			}
+			fmt.Fprintf(out, "  %-30s  %10s  %10s  %10s\n",
+				"────────────────────────────",
+				"──────────", "──────────", "──────────")
+			fmt.Fprintf(out, "  %-30s  %10s  %10s  %10s\n",
+				"Total",
+				formatCost(est.TotalCost.InputCost),
+				formatCost(est.TotalCost.OutputCost),
+				formatCost(est.TotalCost.TotalCost))
+			if len(est.UnknownModels) > 0 {
+				fmt.Fprintf(out, "  (unknown pricing: %s)\n", strings.Join(est.UnknownModels, ", "))
+			}
+		}
+	}
+
 	// Files
-	if len(sess.FileChanges) > 0 && (opts.ShowFiles || true) {
+	if len(sess.FileChanges) > 0 && opts.ShowFiles {
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "Files changed:")
 		for _, fc := range sess.FileChanges {
@@ -154,4 +187,14 @@ func formatNumber(n int) string {
 	}
 	parts = append([]string{s}, parts...)
 	return strings.Join(parts, ",")
+}
+
+func formatCost(cost float64) string {
+	if cost == 0 {
+		return "$0.00"
+	}
+	if cost < 0.01 {
+		return fmt.Sprintf("$%.4f", cost)
+	}
+	return fmt.Sprintf("$%.2f", cost)
 }

@@ -466,6 +466,22 @@ func (h *handlers) handleStats(ctx context.Context, req mcp.CallToolRequest) (*m
 	return toolJSON(result)
 }
 
+// ── Cost ──
+
+func (h *handlers) handleCost(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id, err := req.RequireString("id")
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	est, err := h.sessionSvc.EstimateCost(ctx, id)
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(est)
+}
+
 // ── Helpers ──
 
 // toolError returns an MCP error result from any error.

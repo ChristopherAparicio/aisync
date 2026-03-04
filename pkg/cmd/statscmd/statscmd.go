@@ -21,6 +21,7 @@ type Options struct {
 	BranchFlag   string
 	ProviderFlag string
 	All          bool
+	ShowCost     bool
 }
 
 // NewCmdStats creates the `aisync stats` command.
@@ -42,6 +43,7 @@ func NewCmdStats(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.BranchFlag, "branch", "", "Filter by branch name")
 	cmd.Flags().StringVar(&opts.ProviderFlag, "provider", "", "Filter by provider name")
 	cmd.Flags().BoolVar(&opts.All, "all", false, "Show stats across all projects")
+	cmd.Flags().BoolVar(&opts.ShowCost, "cost", false, "Show estimated cost per branch")
 
 	return cmd
 }
@@ -97,6 +99,9 @@ func runStats(opts *Options) error {
 	fmt.Fprintf(out, "  Sessions:  %d\n", result.TotalSessions)
 	fmt.Fprintf(out, "  Messages:  %d\n", result.TotalMessages)
 	fmt.Fprintf(out, "  Tokens:    %s\n", formatTokens(result.TotalTokens))
+	if opts.ShowCost {
+		fmt.Fprintf(out, "  Cost:      %s\n", formatCost(result.TotalCost))
+	}
 	fmt.Fprintln(out)
 
 	// Print per-provider stats
@@ -108,9 +113,19 @@ func runStats(opts *Options) error {
 
 	// Print per-branch stats
 	fmt.Fprintln(out, "=== By Branch ===")
-	fmt.Fprintf(out, "  %-30s  %8s  %8s\n", "BRANCH", "SESSIONS", "TOKENS")
-	for _, bs := range result.PerBranch {
-		fmt.Fprintf(out, "  %-30s  %8d  %8s\n", truncate(bs.Branch, 30), bs.SessionCount, formatTokens(bs.TotalTokens))
+	if opts.ShowCost {
+		fmt.Fprintf(out, "  %-30s  %8s  %8s  %10s\n", "BRANCH", "SESSIONS", "TOKENS", "COST")
+		for _, bs := range result.PerBranch {
+			fmt.Fprintf(out, "  %-30s  %8d  %8s  %10s\n",
+				truncate(bs.Branch, 30), bs.SessionCount,
+				formatTokens(bs.TotalTokens), formatCost(bs.TotalCost))
+		}
+	} else {
+		fmt.Fprintf(out, "  %-30s  %8s  %8s\n", "BRANCH", "SESSIONS", "TOKENS")
+		for _, bs := range result.PerBranch {
+			fmt.Fprintf(out, "  %-30s  %8d  %8s\n",
+				truncate(bs.Branch, 30), bs.SessionCount, formatTokens(bs.TotalTokens))
+		}
 	}
 	fmt.Fprintln(out)
 
@@ -136,6 +151,16 @@ func formatTokens(n int) string {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+func formatCost(cost float64) string {
+	if cost == 0 {
+		return "$0.00"
+	}
+	if cost < 0.01 {
+		return fmt.Sprintf("$%.4f", cost)
+	}
+	return fmt.Sprintf("$%.2f", cost)
 }
 
 func truncate(s string, maxLen int) string {

@@ -19,6 +19,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/llm"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
+	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	restoresvc "github.com/ChristopherAparicio/aisync/internal/restore"
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
@@ -34,6 +35,7 @@ type SessionService struct {
 	registry  *provider.Registry
 	scanner   *secrets.Scanner // optional — nil means no scanning
 	converter *converter.Converter
+	pricing   *pricing.Calculator
 	git       *git.Client       // optional — nil when git is unavailable
 	platform  platform.Platform // optional — nil when platform is unavailable
 	llm       llm.Client        // optional — nil disables AI features (summarize, explain)
@@ -45,9 +47,10 @@ type SessionServiceConfig struct {
 	Registry  *provider.Registry
 	Scanner   *secrets.Scanner // optional
 	Converter *converter.Converter
-	Git       *git.Client       // optional
-	Platform  platform.Platform // optional
-	LLM       llm.Client        // optional — nil disables AI features
+	Pricing   *pricing.Calculator // optional — nil uses defaults
+	Git       *git.Client         // optional
+	Platform  platform.Platform   // optional
+	LLM       llm.Client          // optional — nil disables AI features
 }
 
 // NewSessionService creates a SessionService with all dependencies.
@@ -56,11 +59,16 @@ func NewSessionService(cfg SessionServiceConfig) *SessionService {
 	if conv == nil {
 		conv = converter.New()
 	}
+	calc := cfg.Pricing
+	if calc == nil {
+		calc = pricing.NewCalculator()
+	}
 	return &SessionService{
 		store:     cfg.Store,
 		registry:  cfg.Registry,
 		scanner:   cfg.Scanner,
 		converter: conv,
+		pricing:   calc,
 		git:       cfg.Git,
 		platform:  cfg.Platform,
 		llm:       cfg.LLM,
@@ -718,6 +726,7 @@ type StatsRequest struct {
 type BranchStats struct {
 	Branch       string
 	TotalTokens  int
+	TotalCost    float64 // estimated cost in USD
 	SessionCount int
 }
 
@@ -726,6 +735,7 @@ type StatsResult struct {
 	TotalSessions int
 	TotalMessages int
 	TotalTokens   int
+	TotalCost     float64 // estimated cost in USD
 	PerBranch     []*BranchStats
 	PerProvider   map[session.ProviderName]int
 	TopFiles      []FileEntry // sorted by count descending, max 10
@@ -735,6 +745,15 @@ type StatsResult struct {
 type FileEntry struct {
 	Path  string
 	Count int
+}
+
+// EstimateCost computes the cost breakdown for a session.
+func (s *SessionService) EstimateCost(ctx context.Context, idOrSHA string) (*session.CostEstimate, error) {
+	sess, err := s.Get(idOrSHA)
+	if err != nil {
+		return nil, err
+	}
+	return s.pricing.SessionCost(sess), nil
 }
 
 // Stats computes aggregated statistics across sessions.
@@ -781,12 +800,18 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		// Per-provider
 		result.PerProvider[sm.Provider]++
 
-		// File changes (requires loading full session)
+		// File changes + cost (requires loading full session)
 		full, getErr := s.store.Get(sm.ID)
 		if getErr == nil {
 			for _, fc := range full.FileChanges {
 				fileCounts[fc.FilePath]++
 			}
+
+			// Cost estimation
+			est := s.pricing.SessionCost(full)
+			sessionCost := est.TotalCost.TotalCost
+			result.TotalCost += sessionCost
+			bs.TotalCost += sessionCost
 		}
 	}
 

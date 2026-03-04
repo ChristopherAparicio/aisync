@@ -17,6 +17,7 @@ import (
 	claudellm "github.com/ChristopherAparicio/aisync/internal/llm/claude"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
 	ghplatform "github.com/ChristopherAparicio/aisync/internal/platform/github"
+	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/provider/claude"
 	cursorprov "github.com/ChristopherAparicio/aisync/internal/provider/cursor"
@@ -223,11 +224,30 @@ func New() *cmdutil.Factory {
 				llmClient = claudellm.New()
 			}
 
+			// Pricing calculator — apply user overrides from config if available.
+			var calc *pricing.Calculator
+			cfg, cfgErr := f.Config()
+			if cfgErr == nil {
+				overrides := cfg.GetPricingOverrides()
+				if len(overrides) > 0 {
+					modelPrices := make([]pricing.ModelPrice, len(overrides))
+					for i, o := range overrides {
+						modelPrices[i] = pricing.ModelPrice{
+							Model:           o.Model,
+							InputPerMToken:  o.InputPerMToken,
+							OutputPerMToken: o.OutputPerMToken,
+						}
+					}
+					calc = pricing.NewCalculator().WithOverrides(modelPrices)
+				}
+			}
+
 			cachedSessionSvc = service.NewSessionService(service.SessionServiceConfig{
 				Store:     store,
 				Registry:  registry,
 				Scanner:   scanner,
 				Converter: conv,
+				Pricing:   calc,
 				Git:       gitClient,
 				Platform:  plat,
 				LLM:       llmClient,

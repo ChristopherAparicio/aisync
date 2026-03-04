@@ -1,8 +1,9 @@
 # aisync — Roadmap
 
 > Last updated: 2026-03-04
-> Status: Phase 1-3.5, 5.0-5.2 COMPLETE — Phase 4, 5.3-5.4, 6 designed.
+> Status: Phase 1-3.5, 5.0-5.2, 5.4 COMPLETE — Phase 4, 5.3, 6 designed.
 > Phase 5.1 completed: Multi-Session per Branch (removed 1:1 constraint, CountByBranch, plural-aware UIs).
+> Phase 5.4 completed: Cost Tracking (pricing package, EstimateCost, --cost flags, API + MCP + client).
 
 ---
 
@@ -418,13 +419,13 @@ Decisions taken during the design phase, before any code was written.
 
 **Goal:** Real monetary cost per session, per branch, per feature.
 
-- [ ] **5.4.1** Create `internal/pricing/` package with model pricing table (configurable JSON)
-- [ ] **5.4.2** Ship default pricing for Claude (Opus, Sonnet, Haiku), GPT-4o, Gemini
-- [ ] **5.4.3** `aisync show <id> --cost` — cost breakdown for a session
-- [ ] **5.4.4** `aisync stats --cost` — cost by branch, by provider, by model
-- [ ] **5.4.5** `aisync stats --cost --branch <name>` — total feature cost (excluding off-topic)
-- [ ] **5.4.6** Use OpenCode's native cost data when available
-- [ ] **5.4.7** `aisync config set pricing.<model> <input_price> <output_price>` — custom pricing overrides
+- [x] **5.4.1** Create `internal/pricing/` package with model pricing table (configurable JSON)
+- [x] **5.4.2** Ship default pricing for Claude (Opus, Sonnet, Haiku), GPT-4o, Gemini
+- [x] **5.4.3** `aisync show <id> --cost` — cost breakdown for a session
+- [x] **5.4.4** `aisync stats --cost` — cost by branch, by provider, by model
+- [x] **5.4.5** `aisync stats --cost --branch <name>` — total feature cost (excluding off-topic)
+- [x] **5.4.6** Use OpenCode's native cost data when available
+- [x] **5.4.7** `aisync config set pricing.<model> <input_price> <output_price>` — custom pricing overrides
 
 ---
 

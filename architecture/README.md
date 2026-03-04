@@ -8,6 +8,7 @@ This directory contains the architectural documentation for aisync:
 - **[blame.md](./blame.md)** — AI-Blame feature: design, queries, performance
 - **[summarize.md](./summarize.md)** — AI Summarization, Explain, Resume & Rewind: design, prompts, performance
 - **[multi-session.md](./multi-session.md)** — Multi-Session per Branch: design, migration, implementation plan
+- **[cost-tracking.md](./cost-tracking.md)** — Cost Tracking: pricing engine, prefix matching, input token distribution
 
 ---
 
@@ -152,6 +153,9 @@ New service methods: `SessionService.Summarize()`, `.Explain()`, `.Rewind()`. Ne
 ### Phase 5.1 — Multi-Session per Branch (Completed)
 Removed the 1:1 branch-to-session constraint. Each `aisync capture` now creates a new session instead of overwriting the previous one on the same branch. Store interface grew from 14 to 15 methods (`CountByBranch` added, `GetByBranch` renamed to `GetLatestByBranch`). No schema migration needed — the DB already supported multi-session. All callers that previously assumed a single session per branch now explicitly use `GetLatestByBranch`. CLI (`aisync status`) and TUI dashboard show session count when multiple sessions exist on a branch. Post-checkout hook template uses plural-aware messaging. See [multi-session.md](./multi-session.md) for design details.
 
+### Phase 5.4 — Cost Tracking (Completed)
+Added real monetary cost estimation per session, per branch, per model. New pure-computation package `internal/pricing/` with prefix-based model lookup (longer prefixes match first, case-insensitive). Ships with built-in prices for Claude (Opus/Sonnet/Haiku), GPT (4o/4.1/o3/o4-mini), and Gemini (2.5-pro/2.5-flash/2.0-flash). Supports user-configured overrides via `config.json`. New domain types: `Cost`, `CostEstimate`, `ModelCost` in `internal/session/session.go`. New service method: `SessionService.EstimateCost()`. `Stats()` extended with `TotalCost` fields on `StatsResult` and `BranchStats`. New CLI flags: `aisync show --cost`, `aisync stats --cost`. New API endpoint: `GET /api/v1/sessions/{id}/cost` (20 endpoints total). New MCP tool: `aisync_cost` (19 tools total). Client SDK: `Client.EstimateCost()` + cost types. Store interface unchanged (15 methods). See [cost-tracking.md](./cost-tracking.md) for design details.
+
 ### What Stays the Same
 - Domain entities in `internal/session/` — stable core
 - Interfaces (`Provider`, `Store`, `SessionConverter`) — well-defined ports
@@ -216,6 +220,10 @@ aisync/
         claude.go                   #     Pipes prompt to `claude --print --output-format json`
         claude_test.go              #     6 tests: mock binary, fallback, context cancellation
 
+    pricing/                        # Cost computation from token usage + model identifiers
+      pricing.go                    #   Calculator, DefaultPrices, prefix matching, SessionCost
+      pricing_test.go               #   17 tests (lookup, overrides, cost math, edge cases)
+
     converter/                      # Cross-provider format conversion
       converter.go                  #   Delegates to provider marshal/unmarshal functions
       converter_test.go
@@ -259,15 +267,15 @@ aisync/
     # ── DRIVING ADAPTERS (inbound) ────────────────────────────────────
     api/                            # HTTP/REST API server
       server.go                     #   Router, composition root, graceful shutdown
-      routes.go                     #   Route registration (19 endpoints)
-      handlers.go                   #   Session + search + blame + explain + rewind + stats handlers
+      routes.go                     #   Route registration (20 endpoints)
+      handlers.go                   #   Session + search + blame + explain + rewind + stats + cost handlers
       sync_handlers.go              #   Sync handlers calling SyncService
       middleware.go                 #   JSON helpers, error mapping, logging
       server_test.go                #   19 integration tests
 
     mcp/                            # MCP Server for AI tool integration
       server.go                     #   MCP server using mark3labs/mcp-go (stdio)
-      tools.go                      #   14 session tool handlers (incl. search + blame + explain + rewind)
+      tools.go                      #   15 session tool handlers (incl. search + blame + explain + rewind + cost)
       sync_tools.go                 #   4 sync tool handlers
       server_test.go                #   17 tests
 
@@ -484,6 +492,7 @@ type SessionService struct {
     store     storage.Store
     converter SessionConverter
     scanner   *secrets.Scanner
+    pricing   *pricing.Calculator  // Optional — nil uses default prices
     config    *config.Config
     git       *git.Client
     llm       llm.Client           // Optional — nil-safe for LLM features
@@ -502,6 +511,7 @@ func (s *SessionService) Stats(ctx context.Context, req StatsRequest) (*StatsRes
 func (s *SessionService) Summarize(ctx context.Context, sess *session.Session, model string) (*session.StructuredSummary, error)
 func (s *SessionService) Explain(ctx context.Context, id session.ID, short bool, model string) (string, error)
 func (s *SessionService) Rewind(ctx context.Context, id session.ID, messageIndex int) (*session.Session, error)
+func (s *SessionService) EstimateCost(ctx context.Context, idOrSHA string) (*session.CostEstimate, error)
 func (s *SessionService) Delete(ctx context.Context, id session.ID) error
 ```
 
@@ -589,6 +599,7 @@ GET    /api/v1/blame                     → SessionService.Blame()
 GET    /api/v1/stats                     → SessionService.Stats()
 POST   /api/v1/sessions/explain          → SessionService.Explain()
 POST   /api/v1/sessions/rewind           → SessionService.Rewind()
+GET    /api/v1/sessions/{id}/cost        → SessionService.EstimateCost()
 POST   /api/v1/sync/push                 → SyncService.Push()
 POST   /api/v1/sync/pull                 → SyncService.Pull()
 POST   /api/v1/sync/sync                 → SyncService.Sync()
@@ -617,6 +628,7 @@ Tool: aisync_blame           → SessionService.Blame()
 Tool: aisync_explain         → SessionService.Explain()
 Tool: aisync_rewind          → SessionService.Rewind()
 Tool: aisync_stats           → SessionService.Stats()
+Tool: aisync_cost            → SessionService.EstimateCost()
 Tool: aisync_push            → SyncService.Push()
 Tool: aisync_pull            → SyncService.Pull()
 Tool: aisync_sync            → SyncService.Sync()
@@ -699,6 +711,22 @@ TokenUsage
 +-- input_tokens: int
 +-- output_tokens: int
 +-- total_tokens: int
+
+Cost                                 (monetary cost breakdown)
++-- input_cost: float64              ($ spent on input tokens)
++-- output_cost: float64             ($ spent on output tokens)
++-- total_cost: float64              (input + output)
+
+CostEstimate                         (full session cost analysis)
++-- session_id: ID
++-- total_cost: Cost
++-- models: []ModelCost              (per-model breakdown)
+
+ModelCost
++-- model: string
++-- input_tokens: int
++-- output_tokens: int
++-- cost: Cost
 
 SearchQuery                          (all filters optional, AND logic)
 +-- keyword: string                  (LIKE %keyword% on summary)

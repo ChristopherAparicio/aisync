@@ -29,8 +29,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Blame
 	mux.HandleFunc("GET /api/v1/blame", s.handleBlame)
 
-	// Stats
+	// Stats & Cost
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/cost", s.handleCost)
 
 	// Sync
 	mux.HandleFunc("POST /api/v1/sync/push", s.handleSyncPush)

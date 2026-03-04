@@ -85,6 +85,30 @@ type TokenUsage struct {
 	TotalTokens  int `json:"total_tokens"`
 }
 
+// Cost represents a monetary amount in a given currency.
+type Cost struct {
+	InputCost  float64 `json:"input_cost"`
+	OutputCost float64 `json:"output_cost"`
+	TotalCost  float64 `json:"total_cost"`
+	Currency   string  `json:"currency"` // always "USD"
+}
+
+// CostEstimate is the full cost breakdown for a session.
+type CostEstimate struct {
+	TotalCost     Cost        `json:"total_cost"`
+	PerModel      []ModelCost `json:"per_model"`
+	UnknownModels []string    `json:"unknown_models,omitempty"` // models without pricing data
+}
+
+// ModelCost groups cost by model within a session.
+type ModelCost struct {
+	Model        string `json:"model"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	Cost         Cost   `json:"cost"`
+	MessageCount int    `json:"message_count"`
+}
+
 // ListOptions controls session listing queries.
 type ListOptions struct {
 	ProjectPath string
