@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/blamecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/capture"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/commentcmd"
 	configcmd "github.com/ChristopherAparicio/aisync/pkg/cmd/config"
@@ -57,6 +58,7 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(commentcmd.NewCmdComment(f))
 	cmd.AddCommand(statscmd.NewCmdStats(f))
 	cmd.AddCommand(searchcmd.NewCmdSearch(f))
+	cmd.AddCommand(blamecmd.NewCmdBlame(f))
 	cmd.AddCommand(tuicmd.NewCmdTUI(f))
 	cmd.AddCommand(configcmd.NewCmdConfig(f))
 	cmd.AddCommand(synccmd.NewCmdPush(f))

@@ -61,6 +61,9 @@ func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil
 func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
 	return &session.SearchResult{}, nil
 }
+func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
+	return nil, nil
+}
 
 func listTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
 	t.Helper()

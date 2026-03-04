@@ -367,6 +367,43 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Blame ──
+
+func (s *Server) handleBlame(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	file := q.Get("file")
+	if file == "" {
+		writeError(w, http.StatusBadRequest, "file parameter is required")
+		return
+	}
+
+	var provider session.ProviderName
+	if p := q.Get("provider"); p != "" {
+		parsed, err := session.ParseProviderName(p)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		provider = parsed
+	}
+
+	all := q.Get("all") == "true"
+
+	result, err := s.sessionSvc.Blame(r.Context(), service.BlameRequest{
+		FilePath: file,
+		Branch:   q.Get("branch"),
+		Provider: provider,
+		All:      all,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ── Stats ──
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

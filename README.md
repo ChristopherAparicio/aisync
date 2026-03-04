@@ -84,9 +84,10 @@ With hooks installed (`aisync init` offers this), capture happens automatically 
 | `aisync hooks install` | Install Git hooks for automatic capture |
 | `aisync secrets scan` | Scan sessions for leaked secrets |
 | `aisync tui` | Interactive terminal UI to browse sessions |
-| `aisync serve` | Start HTTP/REST API server (16 endpoints) |
+| `aisync blame` | Find which AI sessions touched a file |
+| `aisync serve` | Start HTTP/REST API server (17 endpoints) |
 | `aisync search` | Search sessions by keyword, branch, provider, time range |
-| `aisync mcp` | Start MCP server for AI tool integration (15 tools) |
+| `aisync mcp` | Start MCP server for AI tool integration (16 tools) |
 
 Run `aisync <command> --help` for detailed flags and usage.
 
@@ -131,7 +132,7 @@ Link sessions to PRs, post session summaries as comments, restore sessions from 
 
 ## MCP Server Integration
 
-aisync exposes 15 tools via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), allowing your AI assistant to capture, restore, list, search, and manage sessions directly from within your coding conversation.
+aisync exposes 16 tools via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), allowing your AI assistant to capture, restore, list, search, and manage sessions directly from within your coding conversation.
 
 Start the MCP server manually:
 
@@ -193,6 +194,7 @@ Add an `mcp` section to your `opencode.json` (at project root or `~/.config/open
 | `aisync_get` | Get session details by ID |
 | `aisync_list` | List captured sessions |
 | `aisync_search` | Search sessions by keyword, branch, provider, time range |
+| `aisync_blame` | Find which AI sessions touched a file |
 | `aisync_delete` | Delete a session |
 | `aisync_export` | Export a session (aisync, Claude, OpenCode, or context format) |
 | `aisync_import` | Import a session from raw data |
@@ -276,9 +278,9 @@ For full details, see [architecture/](./architecture/), [spec.md](./spec.md), an
 | Phase 1 -- MVP | Done | Capture, restore, list, show, hooks, secrets, export/import |
 | Phase 2 -- Team Sharing | Done | Git sync, Cursor provider, cross-provider, plugin system |
 | Phase 3 -- PR Integration | Done | GitHub platform, PR linking, comments, stats, TUI |
-| Phase 3.5 -- Architecture | Done | Service layer, HTTP API (16 endpoints), Client SDK, MCP Server (15 tools), Search, User Identity |
+| Phase 3.5 -- Architecture | Done | Service layer, HTTP API (17 endpoints), Client SDK, MCP Server (16 tools), Search, User Identity |
 | Phase 4 -- CI Automation | Planned | Auto-fix sessions on CI failure, webhooks, Slack/n8n |
-| Phase 5 -- Session Intelligence | Designed | Multi-session branches, AI-blame, tool token accounting, cost tracking |
+| Phase 5 -- Session Intelligence | In Progress | Multi-session branches, AI-blame (done), tool token accounting, cost tracking |
 | Phase 6 -- Replay & Web UI | Designed | Session replay for model comparison, cost forecasting, web dashboard |
 
 See [roadmap.md](./roadmap.md) for detailed milestones and [spec.md](./spec.md) for user stories.

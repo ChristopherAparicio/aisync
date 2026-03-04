@@ -6,25 +6,25 @@
 
 ```
 cmd/aisync/main.go           Entry point
-pkg/cmd/root/root.go         All commands registered here (23 subcommands)
+pkg/cmd/root/root.go         All commands registered here (25 subcommands)
 pkg/cmd/<name>/              One subpackage per CLI command (Cobra)
 pkg/cmdutil/factory.go       Factory struct (lazy DI container)
 pkg/cmd/factory/default.go   Composition root (wires all dependencies)
 internal/session/            Shared types: Session, Message, User, enums, errors
 internal/provider/           Provider interface + claude/, opencode/, cursor/
-internal/storage/            Store interface (13 methods) + sqlite/ implementation
+internal/storage/            Store interface (14 methods) + sqlite/ implementation
 internal/capture/            Capture orchestration service
 internal/restore/            Restore orchestration service
 internal/service/            SessionService (high-level ops), SyncService (push/pull)
-internal/api/                HTTP API server (16 endpoints, stdlib net/http)
-internal/mcp/                MCP server (15 tools, via mark3labs/mcp-go)
+internal/api/                HTTP API server (17 endpoints, stdlib net/http)
+internal/mcp/                MCP server (16 tools, via mark3labs/mcp-go)
 internal/gitsync/            Git branch sync service (push/pull)
 internal/converter/          Cross-provider format conversion (SessionConverter)
 internal/secrets/            Secret detection & masking + plugin system
 internal/platform/           GitHub/GitLab platform integration
 internal/hooks/              Git hooks management
 internal/tui/                Interactive terminal UI (Bubble Tea)
-client/                      HTTP client SDK (16 methods, mirrors API 1:1)
+client/                      HTTP client SDK (17 methods, mirrors API 1:1)
 git/                         Git CLI wrapper (includes UserName/UserEmail)
 ```
 
@@ -44,7 +44,7 @@ Service orchestration:
 
 HTTP API flow: `CLI cmd` -> `client.Client` -> HTTP -> `internal/api/` -> `SessionService` -> `Store`/`Provider`
 
-## Commands (23 total)
+## Commands (25 total)
 
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
@@ -59,10 +59,12 @@ HTTP API flow: `CLI cmd` -> `client.Client` -> HTTP -> `internal/api/` -> `Sessi
 | `aisync link` | Link a session to a Git object | `--pr <n>`, `--commit <sha>`, `--session <id>`, `--auto` |
 | `aisync comment` | Post session summary as PR comment | `--pr <n>`, `--session <id>` |
 | `aisync search` | Search sessions by keyword, branch, user, date | `[keyword]`, `--branch`, `--provider`, `--owner-id`, `--since`, `--until`, `--limit`, `--json`, `-q` |
+| `aisync blame <file>` | Find which AI sessions touched a file | `--all`, `--restore`, `--branch`, `--provider`, `--json`, `-q` |
 | `aisync stats` | Show usage statistics (tokens, sessions, files) | `--branch`, `--provider`, `--all`, `--json` |
 | `aisync hooks install` | Install git hooks (pre-commit, commit-msg, post-checkout) | |
 | `aisync hooks uninstall` | Remove aisync hooks | |
 | `aisync secrets scan` | Scan stored sessions for secrets | `--session <id>` |
+| `aisync config` | View or edit aisync configuration | |
 | `aisync push` | Push sessions to git sync branch (`aisync/sessions`) | |
 | `aisync pull` | Pull sessions from git sync branch | |
 | `aisync sync` | Bidirectional sync (push + pull) | |
@@ -83,10 +85,10 @@ HTTP API flow: `CLI cmd` -> `client.Client` -> HTTP -> `internal/api/` -> `Sessi
 ## Key Interfaces (3)
 
 - **`Provider`** in `internal/provider/provider.go` -- `Name()`, `Detect()`, `Export()`, `CanImport()`, `Import()`
-- **`Store`** in `internal/storage/store.go` -- 13 methods: `Save`, `Get`, `GetByBranch`, `List`, `Delete`, `AddLink`, `GetByLink`, `Search`, `SaveUser`, `GetUser`, `GetUserByEmail`, `Close`
+- **`Store`** in `internal/storage/store.go` -- 14 methods: `Save`, `Get`, `GetByBranch`, `List`, `Delete`, `AddLink`, `GetByLink`, `Search`, `GetSessionsByFile`, `SaveUser`, `GetUser`, `GetUserByEmail`, `Close`
 - **`SessionConverter`** in `internal/converter/converter.go` -- `Convert(session, targetFormat)`, `SupportedFormats()`
 
-## HTTP API (16 endpoints)
+## HTTP API (17 endpoints)
 
 All served by `internal/api/` using stdlib `net/http`. Client SDK in `client/` mirrors 1:1.
 
@@ -104,13 +106,14 @@ All served by `internal/api/` using stdlib `net/http`. Client SDK in `client/` m
 | POST | `/api/sessions/{id}/export` | Export session |
 | POST | `/api/sessions/import` | Import session |
 | POST | `/api/sessions/{id}/restore` | Restore session |
+| GET | `/api/v1/blame` | Find sessions that touched a file |
 | POST | `/api/sync/push` | Push sessions |
 | POST | `/api/sync/pull` | Pull sessions |
 | POST | `/api/sync` | Bidirectional sync |
 
-## MCP Server (15 tools)
+## MCP Server (16 tools)
 
-Served via `internal/mcp/` using `mark3labs/mcp-go`. Tools: `aisync_capture`, `aisync_restore`, `aisync_get`, `aisync_list`, `aisync_delete`, `aisync_export`, `aisync_import`, `aisync_link`, `aisync_comment`, `aisync_search`, `aisync_stats`, `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`.
+Served via `internal/mcp/` using `mark3labs/mcp-go`. Tools: `aisync_capture`, `aisync_restore`, `aisync_get`, `aisync_list`, `aisync_delete`, `aisync_export`, `aisync_import`, `aisync_link`, `aisync_comment`, `aisync_search`, `aisync_blame`, `aisync_stats`, `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`.
 
 ## SQLite Schema
 
@@ -154,6 +157,6 @@ Search across all captured sessions using keyword matching, filters, or a combin
 ## Testing Notes
 
 - 38 test files, all passing
-- 11 test files contain `mockStore` structs implementing `Store` -- when adding methods to `Store`, all 11 must be updated
+- 13 test files contain `mockStore` structs implementing `Store` -- when adding methods to `Store`, all 13 must be updated
 - `internal/service/` has no test files yet (known gap)
-- Mock locations: `internal/capture/`, `internal/restore/`, and 9 `pkg/cmd/*/` test files
+- Mock locations: `internal/capture/`, `internal/restore/`, and 11 `pkg/cmd/*/` test files (including blamecmd)

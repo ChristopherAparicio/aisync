@@ -124,6 +124,25 @@ type SearchResult struct {
 	Offset     int       `json:"offset"`
 }
 
+// BlameEntry represents one session that touched a file.
+type BlameEntry struct {
+	CreatedAt  time.Time    `json:"created_at"`
+	SessionID  ID           `json:"session_id"`
+	OwnerID    ID           `json:"owner_id,omitempty"`
+	Provider   ProviderName `json:"provider"`
+	Branch     string       `json:"branch"`
+	Summary    string       `json:"summary,omitempty"`
+	ChangeType ChangeType   `json:"change_type"`
+}
+
+// BlameQuery contains parameters for a blame lookup.
+type BlameQuery struct {
+	FilePath string       // required — relative to project root
+	Branch   string       // optional filter
+	Provider ProviderName // optional filter
+	Limit    int          // 0 = no limit (all sessions); >0 = cap results
+}
+
 // SecretMatch represents a single secret detected in content.
 type SecretMatch struct {
 	// Type is the category of secret (e.g., "AWS_ACCESS_KEY", "GITHUB_TOKEN").

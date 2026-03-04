@@ -148,6 +148,15 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithNumber("offset", mcp.Description("Offset for pagination")),
 	), h.handleSearch)
 
+	// ── Blame ──
+	s.AddTool(mcp.NewTool("aisync_blame",
+		mcp.WithDescription("Find which AI sessions touched a given file. Reverse lookup from file changes to sessions, like git blame but for AI sessions."),
+		mcp.WithString("file", mcp.Required(), mcp.Description("File path relative to project root")),
+		mcp.WithString("branch", mcp.Description("Filter by git branch")),
+		mcp.WithString("provider", mcp.Description("Filter by provider: claude-code, opencode, or cursor")),
+		mcp.WithBoolean("all", mcp.Description("If true, return all sessions (default: most recent only)")),
+	), h.handleBlame)
+
 	// ── Stats ──
 	s.AddTool(mcp.NewTool("aisync_stats",
 		mcp.WithDescription("Get aggregated statistics about captured sessions: total counts, token usage, per-branch breakdown, per-provider counts, and top files."),

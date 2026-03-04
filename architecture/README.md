@@ -65,7 +65,7 @@ aisync is split into two sides: a **Server** (DDD/Hexagonal) and **Clients** (pr
   │  │  ├─ Export()          ├─ Summarize()         └─ Sync()     │  │
   │  │  ├─ Import()          └─ ProposeChanges()                  │  │
   │  │  ├─ List() / Get()                                         │  │
-  │  │  ├─ Search()                                               │  │
+  │  │  ├─ Search() / Blame()                                      │  │
   │  │  ├─ Link() / Stats()                                       │  │
   │  │  └─ Delete()                                               │  │
   │  └─────────────────────────────────────────────────────────────┘  │
@@ -127,13 +127,16 @@ CLI commands directly called infrastructure. `capture/service.go` and `restore/s
 Extracted orchestration logic from `capture/`, `restore/`, and `gitsync/` into `internal/service/SessionService` (10 methods) and `internal/service/SyncService` (4 methods). All 13 CLI commands rewired as thin adapters calling services.
 
 ### Phase 2 — API Server + Multiple Clients (Completed)
-Added HTTP/REST API (`internal/api/`, 16 endpoints), Client SDK (`client/`, 16 methods), and MCP Server (`internal/mcp/`, 15 tools). Three driving adapters now share the same service layer.
+Added HTTP/REST API (`internal/api/`, 17 endpoints), Client SDK (`client/`, 17 methods), and MCP Server (`internal/mcp/`, 16 tools). Three driving adapters now share the same service layer.
 
 ### Phase 3 — User Identity Layer (Completed)
 Added `users` table, `OwnerID` field on sessions, auto-detection from git config. Store interface grew from 8 to 12 methods.
 
 ### Phase 3.5 — Search (Completed)
 Added `Search()` method to Store (now 13 methods), `SearchQuery`/`SearchResult` domain types, search endpoint, MCP tool, CLI command (`aisync search`), and client SDK method. Keyword search uses SQL LIKE on summary (FTS5 for message content deferred).
+
+### Phase 5.2 — AI-Blame (Completed)
+Added `GetSessionsByFile()` method to Store (now 14 methods), `BlameEntry`/`BlameQuery` domain types, blame endpoint (`GET /api/v1/blame`), MCP tool (`aisync_blame`), CLI command (`aisync blame <file>`), and client SDK method. File-level reverse lookup from `file_changes` table via JOIN. See [blame.md](./blame.md) for design details.
 
 ### What Stays the Same
 - Domain entities in `internal/session/` — stable core
@@ -165,11 +168,11 @@ aisync/
       provider.go                   #   Provider interface (5 methods)
       registry.go                   #   Registry: auto-detection + manual selection
     storage/                        # Storage port
-      store.go                      #   Store interface (13 methods)
+      store.go                      #   Store interface (14 methods)
 
     # ── APPLICATION LAYER (services) ──────────────────────────────────
     service/                        # Application services
-      session.go                    #   SessionService: capture, restore, export, import, list, get, link, comment, search, stats, delete + resolveOwner
+      session.go                    #   SessionService: capture, restore, export, import, list, get, link, comment, search, blame, stats, delete + resolveOwner
       sync.go                       #   SyncService: push, pull, sync, readIndex
 
     # ── DRIVEN ADAPTERS (outbound infrastructure) ─────────────────────
@@ -235,17 +238,17 @@ aisync/
     # ── DRIVING ADAPTERS (inbound) ────────────────────────────────────
     api/                            # HTTP/REST API server
       server.go                     #   Router, composition root, graceful shutdown
-      routes.go                     #   Route registration (16 endpoints)
-      handlers.go                   #   Session + search + stats handlers calling SessionService
+      routes.go                     #   Route registration (17 endpoints)
+      handlers.go                   #   Session + search + blame + stats handlers calling SessionService
       sync_handlers.go              #   Sync handlers calling SyncService
       middleware.go                 #   JSON helpers, error mapping, logging
       server_test.go                #   19 integration tests
 
     mcp/                            # MCP Server for AI tool integration
       server.go                     #   MCP server using mark3labs/mcp-go (stdio)
-      tools.go                      #   11 session tool handlers (incl. search)
+      tools.go                      #   12 session tool handlers (incl. search + blame)
       sync_tools.go                 #   4 sync tool handlers
-      server_test.go                #   14 tests
+      server_test.go                #   17 tests
 
     tui/                            # Terminal UI (Bubble Tea)
       tui.go
@@ -275,6 +278,7 @@ aisync/
       linkcmd/linkcmd.go            #   aisync link → SessionService.Link()
       commentcmd/commentcmd.go      #   aisync comment
       searchcmd/searchcmd.go        #   aisync search → SessionService.Search()
+      blamecmd/blamecmd.go          #   aisync blame → SessionService.Blame()
       statscmd/statscmd.go          #   aisync stats → SessionService.Stats()
       synccmd/synccmd.go            #   aisync push/pull/sync → SyncService
       tuicmd/tuicmd.go              #   aisync tui
@@ -395,6 +399,7 @@ type Store interface {
     AddLink(sessionID session.ID, link session.Link) error
     GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error)
     Search(query session.SearchQuery) (*session.SearchResult, error)
+    GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntry, error)
     SaveUser(user *session.User) error
     GetUser(id session.ID) (*session.User, error)
     GetUserByEmail(email string) (*session.User, error)
@@ -402,7 +407,7 @@ type Store interface {
 }
 ```
 
-**Why an interface:** Enables testing with in-memory mocks (11 mockStores across test files), and leaves the door open for alternative backends (flat file, remote storage).
+**Why an interface:** Enables testing with in-memory mocks (13 mockStores across test files), and leaves the door open for alternative backends (flat file, remote storage).
 
 ### SessionConverter (in `internal/restore/service.go`)
 
@@ -453,6 +458,7 @@ func (s *SessionService) List(ctx context.Context, req ListRequest) ([]*session.
 func (s *SessionService) Get(ctx context.Context, id session.ID) (*session.Session, error)
 func (s *SessionService) Link(ctx context.Context, req LinkRequest) error
 func (s *SessionService) Search(ctx context.Context, req SearchRequest) (*session.SearchResult, error)
+func (s *SessionService) Blame(ctx context.Context, req BlameRequest) (*BlameResult, error)
 func (s *SessionService) Stats(ctx context.Context, req StatsRequest) (*StatsResult, error)
 func (s *SessionService) Delete(ctx context.Context, id session.ID) error
 ```
@@ -537,6 +543,7 @@ POST   /api/v1/sessions/import           → SessionService.Import()
 POST   /api/v1/sessions/link             → SessionService.Link()
 POST   /api/v1/sessions/comment          → SessionService.Comment()
 GET    /api/v1/sessions/search           → SessionService.Search()
+GET    /api/v1/blame                     → SessionService.Blame()
 GET    /api/v1/stats                     → SessionService.Stats()
 POST   /api/v1/sync/push                 → SyncService.Push()
 POST   /api/v1/sync/pull                 → SyncService.Pull()
@@ -562,6 +569,7 @@ Tool: aisync_import          → SessionService.Import()
 Tool: aisync_link            → SessionService.Link()
 Tool: aisync_comment         → SessionService.Comment()
 Tool: aisync_search          → SessionService.Search()
+Tool: aisync_blame           → SessionService.Blame()
 Tool: aisync_stats           → SessionService.Stats()
 Tool: aisync_push            → SyncService.Push()
 Tool: aisync_pull            → SyncService.Pull()
@@ -655,6 +663,21 @@ SearchResult
 +-- total_count: int
 +-- limit: int
 +-- offset: int
+
+BlameQuery                           (file_path required, rest optional)
++-- file_path: string                (required)
++-- branch: string
++-- provider: ProviderName
++-- limit: int
+
+BlameEntry
++-- session_id: ID
++-- provider: ProviderName
++-- branch: string
++-- summary: string
++-- change_type: ChangeType
++-- created_at: time.Time
++-- owner_id: ID
 ```
 
 ### Typed Enums
@@ -943,7 +966,9 @@ All plugin mechanisms are managed by `internal/secrets/scanplugin/`. The `Scanne
 | `aisync link` | Link session to git objects | `SessionService.Link()` |
 | `aisync comment` | Post session summary on PR | `SessionService` + `Platform` |
 | `aisync search` | Search sessions | `SessionService.Search()` |
+| `aisync blame <file>` | Find AI sessions that touched a file | `SessionService.Blame()` |
 | `aisync stats` | Show usage statistics | `SessionService.Stats()` |
+| `aisync config` | View or edit configuration | — |
 | `aisync push/pull/sync` | Team session sharing | `SyncService` |
 | `aisync hooks` | Manage git hooks | — |
 | `aisync secrets` | Secret detection | — |

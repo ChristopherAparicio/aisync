@@ -323,6 +323,45 @@ func (h *handlers) handleSearch(ctx context.Context, req mcp.CallToolRequest) (*
 	return toolJSON(result)
 }
 
+// ── Blame ──
+
+func (h *handlers) handleBlame(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		File     string `json:"file"`
+		Branch   string `json:"branch"`
+		Provider string `json:"provider"`
+		All      bool   `json:"all"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	if args.File == "" {
+		return toolError(fmt.Errorf("file parameter is required")), nil
+	}
+
+	var providerName session.ProviderName
+	if args.Provider != "" {
+		parsed, err := session.ParseProviderName(args.Provider)
+		if err != nil {
+			return toolError(err), nil
+		}
+		providerName = parsed
+	}
+
+	result, err := h.sessionSvc.Blame(ctx, service.BlameRequest{
+		FilePath: args.File,
+		Branch:   args.Branch,
+		Provider: providerName,
+		All:      args.All,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
 // ── Stats ──
 
 func (h *handlers) handleStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

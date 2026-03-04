@@ -864,3 +864,194 @@ func TestSessionWithOwnerID(t *testing.T) {
 		t.Errorf("Summary.OwnerID = %q, want %q", summaries[0].OwnerID, user.ID)
 	}
 }
+
+// ── Blame (GetSessionsByFile) ──
+
+func TestGetSessionsByFile_Basic(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("blame-1")
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "src/handler.go", ChangeType: session.ChangeModified},
+		{FilePath: "src/main.go", ChangeType: session.ChangeCreated},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePath: "src/handler.go",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].SessionID != "blame-1" {
+		t.Errorf("SessionID = %q, want blame-1", entries[0].SessionID)
+	}
+	if entries[0].ChangeType != session.ChangeModified {
+		t.Errorf("ChangeType = %q, want modified", entries[0].ChangeType)
+	}
+	if entries[0].Provider != session.ProviderClaudeCode {
+		t.Errorf("Provider = %q, want claude-code", entries[0].Provider)
+	}
+	if entries[0].Branch != "feature/auth" {
+		t.Errorf("Branch = %q, want feature/auth", entries[0].Branch)
+	}
+}
+
+func TestGetSessionsByFile_NoMatch(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("blame-nomatch")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePath: "nonexistent.go",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(entries))
+	}
+}
+
+func TestGetSessionsByFile_MultipleSessions(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Two sessions touching the same file
+	sess1 := testSession("blame-multi-1")
+	sess1.CreatedAt = time.Date(2026, 2, 16, 10, 0, 0, 0, time.UTC)
+	sess1.FileChanges = []session.FileChange{
+		{FilePath: "shared.go", ChangeType: session.ChangeModified},
+	}
+	sess2 := testSession("blame-multi-2")
+	sess2.CreatedAt = time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC)
+	sess2.FileChanges = []session.FileChange{
+		{FilePath: "shared.go", ChangeType: session.ChangeCreated},
+	}
+
+	if err := store.Save(sess1); err != nil {
+		t.Fatalf("Save(1) error = %v", err)
+	}
+	if err := store.Save(sess2); err != nil {
+		t.Fatalf("Save(2) error = %v", err)
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePath: "shared.go",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	// Most recent first
+	if entries[0].SessionID != "blame-multi-2" {
+		t.Errorf("first entry SessionID = %q, want blame-multi-2", entries[0].SessionID)
+	}
+}
+
+func TestGetSessionsByFile_Limit(t *testing.T) {
+	store := mustOpenStore(t)
+
+	for i := 0; i < 5; i++ {
+		sess := testSession(fmt.Sprintf("blame-limit-%d", i))
+		sess.CreatedAt = time.Date(2026, 2, 16+i, 10, 0, 0, 0, time.UTC)
+		sess.FileChanges = []session.FileChange{
+			{FilePath: "limited.go", ChangeType: session.ChangeModified},
+		}
+		if err := store.Save(sess); err != nil {
+			t.Fatalf("Save(%d) error = %v", i, err)
+		}
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePath: "limited.go",
+		Limit:    2,
+	})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(entries))
+	}
+}
+
+func TestGetSessionsByFile_FilterByBranch(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess1 := testSession("blame-branch-1")
+	sess1.Branch = "feat/a"
+	sess1.FileChanges = []session.FileChange{
+		{FilePath: "branched.go", ChangeType: session.ChangeModified},
+	}
+	sess2 := testSession("blame-branch-2")
+	sess2.Branch = "feat/b"
+	sess2.FileChanges = []session.FileChange{
+		{FilePath: "branched.go", ChangeType: session.ChangeCreated},
+	}
+
+	if err := store.Save(sess1); err != nil {
+		t.Fatalf("Save(1) error = %v", err)
+	}
+	if err := store.Save(sess2); err != nil {
+		t.Fatalf("Save(2) error = %v", err)
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePath: "branched.go",
+		Branch:   "feat/a",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].SessionID != "blame-branch-1" {
+		t.Errorf("SessionID = %q, want blame-branch-1", entries[0].SessionID)
+	}
+}
+
+func TestGetSessionsByFile_FilterByProvider(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess1 := testSession("blame-prov-1")
+	sess1.Provider = session.ProviderClaudeCode
+	sess1.FileChanges = []session.FileChange{
+		{FilePath: "prov.go", ChangeType: session.ChangeModified},
+	}
+	sess2 := testSession("blame-prov-2")
+	sess2.Provider = session.ProviderOpenCode
+	sess2.FileChanges = []session.FileChange{
+		{FilePath: "prov.go", ChangeType: session.ChangeCreated},
+	}
+
+	if err := store.Save(sess1); err != nil {
+		t.Fatalf("Save(1) error = %v", err)
+	}
+	if err := store.Save(sess2); err != nil {
+		t.Fatalf("Save(2) error = %v", err)
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePath: "prov.go",
+		Provider: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].SessionID != "blame-prov-2" {
+		t.Errorf("SessionID = %q, want blame-prov-2", entries[0].SessionID)
+	}
+}

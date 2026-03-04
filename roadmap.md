@@ -387,10 +387,10 @@ Decisions taken during the design phase, before any code was written.
 
 **Goal:** Find which AI session modified a file, and restore it.
 
-- [ ] **5.2.1** Implement `aisync blame <file>` — reverse lookup from file_changes table
-- [ ] **5.2.2** Show session info, summary, and suggested actions (restore/show)
-- [ ] **5.2.3** `aisync blame <file> --restore` — shortcut to restore the session that last touched the file
-- [ ] **5.2.4** `aisync blame <file> --all` — show all sessions that ever touched this file
+- [x] **5.2.1** Implement `aisync blame <file>` — reverse lookup from file_changes table
+- [x] **5.2.2** Show session info, summary, and suggested actions (restore/show)
+- [x] **5.2.3** `aisync blame <file> --restore` — shortcut to restore the session that last touched the file
+- [x] **5.2.4** `aisync blame <file> --all` — show all sessions that ever touched this file
 - [ ] **5.2.5** Integrate with `aisync show` — link from session detail to blame view
 
 ### Milestone 5.3 — Tool/MCP Token Accounting

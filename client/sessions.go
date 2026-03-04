@@ -413,6 +413,62 @@ func (c *Client) Search(opts SearchOptions) (*SearchResult, error) {
 	return &result, decode(data, &result)
 }
 
+// ── Blame ──
+
+// BlameOptions controls blame lookup queries.
+type BlameOptions struct {
+	File     string // required — file path
+	Branch   string // optional filter
+	Provider string // optional filter
+	All      bool   // true = all sessions; false = most recent only
+}
+
+// BlameEntry represents one session that touched a file.
+type BlameEntry struct {
+	CreatedAt  time.Time `json:"created_at"`
+	SessionID  string    `json:"session_id"`
+	OwnerID    string    `json:"owner_id,omitempty"`
+	Provider   string    `json:"provider"`
+	Branch     string    `json:"branch"`
+	Summary    string    `json:"summary,omitempty"`
+	ChangeType string    `json:"change_type"`
+}
+
+// BlameResult contains the outcome of a blame lookup.
+type BlameResult struct {
+	Entries  []BlameEntry   `json:"Entries"`
+	Restored *RestoreResult `json:"Restored,omitempty"`
+	FilePath string         `json:"FilePath"`
+}
+
+// Blame finds AI sessions that touched the given file.
+func (c *Client) Blame(opts BlameOptions) (*BlameResult, error) {
+	if opts.File == "" {
+		return nil, fmt.Errorf("file parameter is required")
+	}
+
+	q := url.Values{}
+	q.Set("file", opts.File)
+	if opts.Branch != "" {
+		q.Set("branch", opts.Branch)
+	}
+	if opts.Provider != "" {
+		q.Set("provider", opts.Provider)
+	}
+	if opts.All {
+		q.Set("all", "true")
+	}
+
+	path := "/api/v1/blame?" + q.Encode()
+
+	data, err := c.doGet(path)
+	if err != nil {
+		return nil, err
+	}
+	var result BlameResult
+	return &result, decode(data, &result)
+}
+
 // ── Stats ──
 
 // StatsOptions controls statistics queries.

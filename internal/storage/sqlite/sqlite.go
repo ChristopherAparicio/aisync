@@ -474,6 +474,66 @@ func buildSearchWhere(q session.SearchQuery) (string, []interface{}) {
 	return " WHERE " + strings.Join(conditions, " AND "), args
 }
 
+// ── Blame methods ──
+
+// GetSessionsByFile returns sessions that touched the given file path.
+// Results are ordered by created_at DESC. Optional filters narrow by branch/provider.
+func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntry, error) {
+	var conditions []string
+	var args []interface{}
+
+	conditions = append(conditions, "fc.file_path = ?")
+	args = append(args, query.FilePath)
+
+	if query.Branch != "" {
+		conditions = append(conditions, "s.branch = ?")
+		args = append(args, query.Branch)
+	}
+	if query.Provider != "" {
+		conditions = append(conditions, "s.provider = ?")
+		args = append(args, string(query.Provider))
+	}
+
+	where := " WHERE " + strings.Join(conditions, " AND ")
+
+	q := `SELECT s.id, s.provider, s.branch, s.summary, s.created_at,
+	             COALESCE(s.owner_id, ''), fc.change_type
+	      FROM sessions s
+	      JOIN file_changes fc ON fc.session_id = s.id` + where + `
+	      ORDER BY s.created_at DESC`
+
+	if query.Limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", query.Limit)
+	}
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying blame: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entries []session.BlameEntry
+	for rows.Next() {
+		var e session.BlameEntry
+		var createdAt string
+		if err := rows.Scan(&e.SessionID, &e.Provider, &e.Branch, &e.Summary,
+			&createdAt, &e.OwnerID, &e.ChangeType); err != nil {
+			return nil, fmt.Errorf("scanning blame entry: %w", err)
+		}
+		e.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if entries == nil {
+		entries = []session.BlameEntry{}
+	}
+
+	return entries, nil
+}
+
 // ── User methods ──
 
 // SaveUser creates or updates a user. If a user with the same email exists,

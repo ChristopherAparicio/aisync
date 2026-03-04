@@ -383,6 +383,80 @@ func TestHandleSearchBadProvider(t *testing.T) {
 	}
 }
 
+// ── Blame ──
+
+func TestHandleBlame(t *testing.T) {
+	h, svc := newTestHandlers(t)
+	seedSession(t, svc, "blame-mcp-1")
+
+	req := callToolReq("aisync_blame", map[string]any{
+		"file": "src/main.go", // matches testutil.NewSession's FileChanges
+		"all":  true,
+	})
+
+	result, err := h.handleBlame(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleBlame error: %v", err)
+	}
+
+	text := requireTextResult(t, result)
+
+	var blameResult struct {
+		Entries []struct {
+			SessionID string `json:"session_id"`
+		} `json:"Entries"`
+	}
+	if err := json.Unmarshal([]byte(text), &blameResult); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(blameResult.Entries) < 1 {
+		t.Errorf("expected at least 1 blame entry, got %d", len(blameResult.Entries))
+	}
+}
+
+func TestHandleBlame_NoFile(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	req := callToolReq("aisync_blame", map[string]any{
+		"file": "",
+	})
+
+	result, err := h.handleBlame(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleBlame error: %v", err)
+	}
+
+	errText := requireErrorResult(t, result)
+	if !strings.Contains(errText, "file") {
+		t.Errorf("expected error about file, got: %s", errText)
+	}
+}
+
+func TestHandleBlame_NoResults(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	req := callToolReq("aisync_blame", map[string]any{
+		"file": "nonexistent.go",
+	})
+
+	result, err := h.handleBlame(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleBlame error: %v", err)
+	}
+
+	text := requireTextResult(t, result)
+
+	var blameResult struct {
+		Entries []struct{} `json:"Entries"`
+	}
+	if err := json.Unmarshal([]byte(text), &blameResult); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(blameResult.Entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(blameResult.Entries))
+	}
+}
+
 // ── Stats ──
 
 func TestHandleStats(t *testing.T) {
@@ -466,7 +540,7 @@ func TestNewServerRegistersAllTools(t *testing.T) {
 	expectedTools := []string{
 		"aisync_capture", "aisync_restore", "aisync_get", "aisync_list",
 		"aisync_delete", "aisync_export", "aisync_import", "aisync_link",
-		"aisync_comment", "aisync_search", "aisync_stats",
+		"aisync_comment", "aisync_search", "aisync_blame", "aisync_stats",
 		"aisync_push", "aisync_pull", "aisync_sync", "aisync_index",
 	}
 

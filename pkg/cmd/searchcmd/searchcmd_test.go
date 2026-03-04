@@ -99,6 +99,9 @@ func (m *mockStore) Search(q session.SearchQuery) (*session.SearchResult, error)
 		Offset:     q.Offset,
 	}, nil
 }
+func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
+	return nil, nil
+}
 
 func searchTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
 	t.Helper()

@@ -46,6 +46,11 @@ type Store interface {
 	// and keyword search across summary content.
 	Search(query session.SearchQuery) (*session.SearchResult, error)
 
+	// GetSessionsByFile returns sessions that touched the given file path.
+	// Results are ordered by created_at DESC. Optional filters narrow by branch/provider.
+	// Limit 0 means return all matching sessions.
+	GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntry, error)
+
 	// Close releases any resources held by the store.
 	Close() error
 }
