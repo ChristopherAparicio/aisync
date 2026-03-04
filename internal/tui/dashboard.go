@@ -7,13 +7,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
 
 // dashboardDataMsg carries loaded dashboard data.
 type dashboardDataMsg struct {
-	session       *domain.SessionSummary
+	session       *session.Summary
 	branch        string
 	repoRoot      string
 	provider      string
@@ -86,22 +86,22 @@ func (m dashboardModel) init() tea.Cmd {
 		store, storeErr := f.Store()
 		if storeErr == nil {
 			// Current branch session
-			session, branchErr := store.GetByBranch(data.repoRoot, data.branch)
+			sess, branchErr := store.GetByBranch(data.repoRoot, data.branch)
 			if branchErr == nil {
-				summary := &domain.SessionSummary{
-					ID:           session.ID,
-					Provider:     session.Provider,
-					Branch:       session.Branch,
-					Summary:      session.Summary,
-					MessageCount: len(session.Messages),
-					TotalTokens:  session.TokenUsage.TotalTokens,
-					CreatedAt:    session.CreatedAt,
+				summary := &session.Summary{
+					ID:           sess.ID,
+					Provider:     sess.Provider,
+					Branch:       sess.Branch,
+					Summary:      sess.Summary,
+					MessageCount: len(sess.Messages),
+					TotalTokens:  sess.TokenUsage.TotalTokens,
+					CreatedAt:    sess.CreatedAt,
 				}
 				data.session = summary
 			}
 
 			// Total sessions
-			all, listErr := store.List(domain.ListOptions{
+			all, listErr := store.List(session.ListOptions{
 				ProjectPath: data.repoRoot,
 				All:         true,
 			})

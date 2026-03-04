@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	capturesvc "github.com/ChristopherAparicio/aisync/internal/capture"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -68,12 +68,12 @@ func runCapture(opts *Options) error {
 
 	// Resolve storage mode
 	cfg, cfgErr := opts.Factory.Config()
-	mode := domain.StorageModeCompact
+	mode := session.StorageModeCompact
 	if cfgErr == nil {
 		mode = cfg.GetStorageMode()
 	}
 	if opts.ModeFlag != "" {
-		parsed, parseErr := domain.ParseStorageMode(opts.ModeFlag)
+		parsed, parseErr := session.ParseStorageMode(opts.ModeFlag)
 		if parseErr != nil {
 			return parseErr
 		}
@@ -81,34 +81,23 @@ func runCapture(opts *Options) error {
 	}
 
 	// Resolve provider
-	var providerName domain.ProviderName
+	var providerName session.ProviderName
 	if opts.ProviderFlag != "" {
-		parsed, parseErr := domain.ParseProviderName(opts.ProviderFlag)
+		parsed, parseErr := session.ParseProviderName(opts.ProviderFlag)
 		if parseErr != nil {
 			return parseErr
 		}
 		providerName = parsed
 	}
 
-	// Get dependencies
-	store, err := opts.Factory.Store()
+	// Get service
+	svc, err := opts.Factory.SessionService()
 	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
-	}
-
-	registry := opts.Factory.Registry()
-
-	// Create capture service with optional scanner
-	scanner := opts.Factory.Scanner()
-	var svc *capturesvc.Service
-	if scanner != nil {
-		svc = capturesvc.NewServiceWithScanner(registry, store, scanner)
-	} else {
-		svc = capturesvc.NewService(registry, store)
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
 	// Capture
-	result, err := svc.Capture(capturesvc.Request{
+	result, err := svc.Capture(service.CaptureRequest{
 		ProjectPath:  topLevel,
 		Branch:       branch,
 		Mode:         mode,
@@ -117,8 +106,7 @@ func runCapture(opts *Options) error {
 	})
 	if err != nil {
 		if opts.Auto {
-			// Silent failure in auto mode
-			return nil
+			return nil // silent failure in auto mode
 		}
 		return err
 	}
@@ -133,12 +121,13 @@ func runCapture(opts *Options) error {
 			fmt.Fprintf(out, "  Summary:  %s\n", result.Session.Summary)
 		}
 		if result.SecretsFound > 0 {
+			scanner := opts.Factory.Scanner()
 			fmt.Fprintf(out, "  Secrets:  %d detected", result.SecretsFound)
 			if scanner != nil {
 				switch scanner.Mode() {
-				case domain.SecretModeMask:
+				case session.SecretModeMask:
 					fmt.Fprint(out, " (masked)")
-				case domain.SecretModeWarn:
+				case session.SecretModeWarn:
 					fmt.Fprint(out, " (warning: stored as-is)")
 				}
 			}

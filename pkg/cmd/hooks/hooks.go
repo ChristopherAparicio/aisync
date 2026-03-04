@@ -95,7 +95,7 @@ func newCmdStatus(f *cmdutil.Factory) *cobra.Command {
 func runInstall(opts *InstallOptions) error {
 	out := opts.IO.Out
 
-	mgr, err := createManager(opts.Factory)
+	mgr, err := resolveManager(opts.Factory)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func runInstall(opts *InstallOptions) error {
 func runUninstall(opts *UninstallOptions) error {
 	out := opts.IO.Out
 
-	mgr, err := createManager(opts.Factory)
+	mgr, err := resolveManager(opts.Factory)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func runUninstall(opts *UninstallOptions) error {
 func runStatus(opts *StatusOptions) error {
 	out := opts.IO.Out
 
-	mgr, err := createManager(opts.Factory)
+	mgr, err := resolveManager(opts.Factory)
 	if err != nil {
 		return err
 	}
@@ -148,16 +148,23 @@ func runStatus(opts *StatusOptions) error {
 	return nil
 }
 
-// createManager resolves the git hooks directory and creates a hooks manager.
-func createManager(f *cmdutil.Factory) (*hooks.Manager, error) {
-	gitClient, err := f.Git()
-	if err != nil {
+// resolveManager uses the Factory's HooksManager if available, falling back to
+// direct creation for backward compatibility.
+func resolveManager(f *cmdutil.Factory) (*hooks.Manager, error) {
+	mgr, err := f.HooksManager()
+	if err == nil {
+		return mgr, nil
+	}
+
+	// Fallback: resolve manually
+	gitClient, gitErr := f.Git()
+	if gitErr != nil {
 		return nil, fmt.Errorf("not a git repository")
 	}
 
-	hooksDir, err := gitClient.HooksPath()
-	if err != nil {
-		return nil, fmt.Errorf("could not determine hooks directory: %w", err)
+	hooksDir, hooksErr := gitClient.HooksPath()
+	if hooksErr != nil {
+		return nil, fmt.Errorf("could not determine hooks directory: %w", hooksErr)
 	}
 
 	return hooks.NewManager(hooksDir), nil

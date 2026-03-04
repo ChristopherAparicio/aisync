@@ -1,4 +1,4 @@
-// Package github implements domain.Platform for GitHub using the gh CLI.
+// Package github implements the Platform operations for GitHub using the gh CLI.
 // It shells out to `gh` instead of using the API directly, which avoids
 // token management — users already have `gh auth login` configured.
 package github
@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
-// Client implements domain.Platform using the gh CLI.
+// Client implements the Platform operations for GitHub.
 type Client struct {
 	// repoDir is the git repository directory (for running gh commands in context).
 	repoDir string
@@ -28,8 +28,8 @@ func New(repoDir string) *Client {
 }
 
 // Name returns the platform identifier.
-func (c *Client) Name() domain.PlatformName {
-	return domain.PlatformGitHub
+func (c *Client) Name() session.PlatformName {
+	return session.PlatformGitHub
 }
 
 // Available checks whether the gh CLI is installed and authenticated.
@@ -39,7 +39,7 @@ func (c *Client) Available() bool {
 }
 
 // GetPRForBranch finds the most recent open PR for a given branch.
-func (c *Client) GetPRForBranch(branch string) (*domain.PullRequest, error) {
+func (c *Client) GetPRForBranch(branch string) (*session.PullRequest, error) {
 	out, err := c.run(
 		"pr", "list",
 		"--head", branch,
@@ -57,21 +57,21 @@ func (c *Client) GetPRForBranch(branch string) (*domain.PullRequest, error) {
 	}
 
 	if len(prs) == 0 {
-		return nil, domain.ErrPRNotFound
+		return nil, session.ErrPRNotFound
 	}
 
 	return prs[0].toDomain(), nil
 }
 
 // GetPR retrieves a PR by number.
-func (c *Client) GetPR(number int) (*domain.PullRequest, error) {
+func (c *Client) GetPR(number int) (*session.PullRequest, error) {
 	out, err := c.run(
 		"pr", "view",
 		strconv.Itoa(number),
 		"--json", "number,title,headRefName,baseRefName,state,url,author,createdAt,updatedAt",
 	)
 	if err != nil {
-		return nil, fmt.Errorf("getting PR #%d: %w", number, domain.ErrPRNotFound)
+		return nil, fmt.Errorf("getting PR #%d: %w", number, session.ErrPRNotFound)
 	}
 
 	var pr ghPR
@@ -83,7 +83,7 @@ func (c *Client) GetPR(number int) (*domain.PullRequest, error) {
 }
 
 // ListPRsForBranch returns all PRs (open, closed, merged) for a branch.
-func (c *Client) ListPRsForBranch(branch string) ([]domain.PullRequest, error) {
+func (c *Client) ListPRsForBranch(branch string) ([]session.PullRequest, error) {
 	out, err := c.run(
 		"pr", "list",
 		"--head", branch,
@@ -100,7 +100,7 @@ func (c *Client) ListPRsForBranch(branch string) ([]domain.PullRequest, error) {
 		return nil, fmt.Errorf("parsing PR list: %w", jsonErr)
 	}
 
-	result := make([]domain.PullRequest, 0, len(prs))
+	result := make([]session.PullRequest, 0, len(prs))
 	for _, pr := range prs {
 		result = append(result, *pr.toDomain())
 	}
@@ -135,7 +135,7 @@ func (c *Client) UpdateComment(commentID int64, body string) error {
 }
 
 // ListComments returns comments on a PR.
-func (c *Client) ListComments(prNumber int) ([]domain.PRComment, error) {
+func (c *Client) ListComments(prNumber int) ([]session.PRComment, error) {
 	endpoint := fmt.Sprintf("repos/{owner}/{repo}/issues/%d/comments", prNumber)
 	out, err := c.run("api", endpoint, "--paginate", "--jq", ".[].id,.[].body,.[].user.login,.[].created_at")
 	if err != nil {
@@ -151,9 +151,9 @@ func (c *Client) ListComments(prNumber int) ([]domain.PRComment, error) {
 		return nil, fmt.Errorf("parsing comments: %w", jsonErr)
 	}
 
-	result := make([]domain.PRComment, 0, len(ghComments))
+	result := make([]session.PRComment, 0, len(ghComments))
 	for _, c := range ghComments {
-		result = append(result, domain.PRComment{
+		result = append(result, session.PRComment{
 			ID:        c.ID,
 			Body:      c.Body,
 			Author:    c.User.Login,
@@ -197,8 +197,8 @@ type ghPR struct {
 	Number      int       `json:"number"`
 }
 
-func (p *ghPR) toDomain() *domain.PullRequest {
-	return &domain.PullRequest{
+func (p *ghPR) toDomain() *session.PullRequest {
+	return &session.PullRequest{
 		Number:     p.Number,
 		Title:      p.Title,
 		Branch:     p.HeadRefName,

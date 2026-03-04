@@ -12,8 +12,8 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
 	pb "github.com/ChristopherAparicio/aisync/internal/secrets/scanplugin/proto"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 // TestGRPCPlugin_inProcess uses go-plugin's test mode to validate the gRPC
@@ -131,7 +131,7 @@ func TestGRPCPlugin_inProcess(t *testing.T) {
 }
 
 // TestGRPCAdapter_wrapsPlugin tests the GRPCAdapter wrapping a real gRPC client
-// into domain.SecretScanner using in-process test mode.
+// into a SecretScanner using in-process test mode.
 func TestGRPCAdapter_wrapsPlugin(t *testing.T) {
 	impl := &testScannerImpl{}
 
@@ -175,14 +175,14 @@ func TestGRPCAdapter_wrapsPlugin(t *testing.T) {
 	adapter := &GRPCAdapter{
 		client: client,
 		raw:    scannerPlugin,
-		mode:   domain.SecretModeMask,
+		mode:   session.SecretModeMask,
 	}
 	defer adapter.Close()
 
-	// Verify it satisfies domain.SecretScanner
-	var _ domain.SecretScanner = adapter
+	// Verify it satisfies SecretScanner
+	var _ SecretScanner = adapter
 
-	t.Run("Scan returns domain matches", func(t *testing.T) {
+	t.Run("Scan returns session matches", func(t *testing.T) {
 		matches := adapter.Scan("TEST_SECRET_ABCDEFGH here")
 		if len(matches) != 1 {
 			t.Fatalf("expected 1 match, got %d", len(matches))
@@ -200,7 +200,7 @@ func TestGRPCAdapter_wrapsPlugin(t *testing.T) {
 	})
 
 	t.Run("Mode returns configured mode", func(t *testing.T) {
-		if adapter.Mode() != domain.SecretModeMask {
+		if adapter.Mode() != session.SecretModeMask {
 			t.Errorf("Mode() = %q, want mask", adapter.Mode())
 		}
 	})
@@ -225,7 +225,7 @@ func TestGRPCPlugin_externalBinary(t *testing.T) {
 	}
 
 	// Load via the full LoadGRPCPlugin flow
-	adapter, err := LoadGRPCPlugin(pluginBin, domain.SecretModeMask)
+	adapter, err := LoadGRPCPlugin(pluginBin, session.SecretModeMask)
 	if err != nil {
 		t.Fatalf("LoadGRPCPlugin() error: %v", err)
 	}
@@ -251,10 +251,10 @@ func TestNativePlugin_concept(t *testing.T) {
 		t.Skip("Go native plugins not supported on Windows")
 	}
 
-	mock := &mockDomainScanner{mode: domain.SecretModeMask}
+	mock := &mockDomainScanner{mode: session.SecretModeMask}
 	adapter := &NativeAdapter{
 		scanner: mock,
-		mode:    domain.SecretModeMask,
+		mode:    session.SecretModeMask,
 	}
 
 	t.Run("scan delegates to wrapped scanner", func(t *testing.T) {
@@ -275,7 +275,7 @@ func TestNativePlugin_concept(t *testing.T) {
 	})
 
 	t.Run("mode returns configured mode", func(t *testing.T) {
-		if adapter.Mode() != domain.SecretModeMask {
+		if adapter.Mode() != session.SecretModeMask {
 			t.Errorf("Mode() = %q, want mask", adapter.Mode())
 		}
 	})
@@ -325,14 +325,14 @@ func (s *testScannerImpl) Mask(content string) (string, error) {
 }
 
 type mockDomainScanner struct {
-	mode domain.SecretMode
+	mode session.SecretMode
 }
 
-func (m *mockDomainScanner) Scan(_ string) []domain.SecretMatch {
-	return []domain.SecretMatch{{Type: "MOCK_SECRET", Value: "test"}}
+func (m *mockDomainScanner) Scan(_ string) []session.SecretMatch {
+	return []session.SecretMatch{{Type: "MOCK_SECRET", Value: "test"}}
 }
-func (m *mockDomainScanner) Mask(_ string) string    { return "***MASKED***" }
-func (m *mockDomainScanner) Mode() domain.SecretMode { return m.mode }
+func (m *mockDomainScanner) Mask(_ string) string     { return "***MASKED***" }
+func (m *mockDomainScanner) Mode() session.SecretMode { return m.mode }
 
 func findRepoRoot(t *testing.T) string {
 	t.Helper()

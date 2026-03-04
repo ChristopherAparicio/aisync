@@ -88,6 +88,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.status = statusMsg{text: msg.Error(), isError: true}
+		// If we're in detail view and still loading, the load failed — go back to list.
+		if m.active == viewDetail && m.detail.loading {
+			m.detail.loading = false
+			m.active = viewList
+		}
 		return m, nil
 	}
 
@@ -192,6 +197,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Enter on a selected session → detail view
 		if msg.String() == "enter" {
 			if sid := m.list.selectedID(); sid != "" {
+				m.detail.startLoading()
+				m.active = viewDetail
 				return m, m.detail.loadSession(m.factory, sid)
 			}
 		}

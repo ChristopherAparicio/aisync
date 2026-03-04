@@ -3,13 +3,11 @@ package restore
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/converter"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
-	restoresvc "github.com/ChristopherAparicio/aisync/internal/restore"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -70,61 +68,41 @@ func runRestore(opts *Options) error {
 		return fmt.Errorf("could not determine repository root: %w", err)
 	}
 
-	// Parse session ID if provided
-	var sessionID domain.SessionID
+	// Parse session ID
+	var sessionID session.ID
 	if opts.SessionFlag != "" {
-		parsed, parseErr := domain.ParseSessionID(opts.SessionFlag)
+		parsed, parseErr := session.ParseID(opts.SessionFlag)
 		if parseErr != nil {
 			return parseErr
 		}
 		sessionID = parsed
 	}
 
-	// If --pr is set, look up the session linked to that PR
-	if opts.PRFlag > 0 && sessionID == "" {
-		store, storeErr := opts.Factory.Store()
-		if storeErr != nil {
-			return fmt.Errorf("opening store: %w", storeErr)
-		}
-		summaries, lookupErr := store.GetByLink(domain.LinkPR, strconv.Itoa(opts.PRFlag))
-		if lookupErr != nil {
-			return fmt.Errorf("no session linked to PR #%d: %w", opts.PRFlag, lookupErr)
-		}
-		if len(summaries) == 0 {
-			return fmt.Errorf("no session linked to PR #%d", opts.PRFlag)
-		}
-		sessionID = summaries[0].ID
-		fmt.Fprintf(out, "Found session %s linked to PR #%d\n", sessionID, opts.PRFlag)
-	}
-
-	// Parse provider if provided
-	var providerName domain.ProviderName
+	// Parse provider
+	var providerName session.ProviderName
 	if opts.ProviderFlag != "" {
-		parsed, parseErr := domain.ParseProviderName(opts.ProviderFlag)
+		parsed, parseErr := session.ParseProviderName(opts.ProviderFlag)
 		if parseErr != nil {
 			return parseErr
 		}
 		providerName = parsed
 	}
 
-	// Get dependencies
-	store, err := opts.Factory.Store()
+	// Get service
+	svc, err := opts.Factory.SessionService()
 	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	registry := opts.Factory.Registry()
-	conv := converter.New()
-	svc := restoresvc.NewServiceWithConverter(registry, store, conv)
-
 	// Restore
-	result, err := svc.Restore(restoresvc.Request{
+	result, err := svc.Restore(service.RestoreRequest{
 		ProjectPath:  topLevel,
 		Branch:       branch,
 		SessionID:    sessionID,
 		ProviderName: providerName,
 		Agent:        opts.AgentFlag,
 		AsContext:    opts.AsContext,
+		PRNumber:     opts.PRFlag,
 	})
 	if err != nil {
 		return err

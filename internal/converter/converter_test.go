@@ -6,58 +6,58 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
-func testSession() *domain.Session {
-	return &domain.Session{
+func testSession() *session.Session {
+	return &session.Session{
 		ID:          "test-session-001",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feat/hello",
 		ProjectPath: "/tmp/test/myproject",
-		StorageMode: domain.StorageModeFull,
+		StorageMode: session.StorageModeFull,
 		Summary:     "Implemented hello world",
 		Version:     1,
 		ExportedBy:  "aisync",
 		ExportedAt:  time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC),
 		CreatedAt:   time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
-		Messages: []domain.Message{
+		Messages: []session.Message{
 			{
 				ID:        "msg-001",
-				Role:      domain.RoleUser,
+				Role:      session.RoleUser,
 				Content:   "Add a hello world function",
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
 			},
 			{
 				ID:        "msg-002",
-				Role:      domain.RoleAssistant,
+				Role:      session.RoleAssistant,
 				Content:   "I'll create the function for you.",
 				Model:     "claude-sonnet-4-5-20250929",
 				Thinking:  "Need to write a simple Go function",
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 5, 0, time.UTC),
 				Tokens:    150,
-				ToolCalls: []domain.ToolCall{
+				ToolCalls: []session.ToolCall{
 					{
 						ID:     "tool-001",
 						Name:   "Write",
 						Input:  `{"file_path":"main.go","content":"package main"}`,
-						State:  domain.ToolStateCompleted,
+						State:  session.ToolStateCompleted,
 						Output: "File written successfully.",
 					},
 				},
 			},
 			{
 				ID:        "msg-003",
-				Role:      domain.RoleUser,
+				Role:      session.RoleUser,
 				Content:   "Looks great, thanks!",
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 20, 0, time.UTC),
 			},
 		},
-		FileChanges: []domain.FileChange{
-			{FilePath: "main.go", ChangeType: domain.ChangeCreated},
+		FileChanges: []session.FileChange{
+			{FilePath: "main.go", ChangeType: session.ChangeCreated},
 		},
-		TokenUsage: domain.TokenUsage{
+		TokenUsage: session.TokenUsage{
 			InputTokens:  100,
 			OutputTokens: 50,
 			TotalTokens:  150,
@@ -71,21 +71,21 @@ func TestConverter_SupportedFormats(t *testing.T) {
 	if len(formats) != 2 {
 		t.Fatalf("expected 2 formats, got %d", len(formats))
 	}
-	found := map[domain.ProviderName]bool{}
+	found := map[session.ProviderName]bool{}
 	for _, f := range formats {
 		found[f] = true
 	}
-	if !found[domain.ProviderClaudeCode] {
+	if !found[session.ProviderClaudeCode] {
 		t.Error("expected claude-code in supported formats")
 	}
-	if !found[domain.ProviderOpenCode] {
+	if !found[session.ProviderOpenCode] {
 		t.Error("expected opencode in supported formats")
 	}
 }
 
 func TestConverter_ToNative_UnsupportedFormat(t *testing.T) {
 	c := New()
-	_, err := c.ToNative(testSession(), domain.ProviderCursor)
+	_, err := c.ToNative(testSession(), session.ProviderCursor)
 	if err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
@@ -93,7 +93,7 @@ func TestConverter_ToNative_UnsupportedFormat(t *testing.T) {
 
 func TestConverter_FromNative_UnsupportedFormat(t *testing.T) {
 	c := New()
-	_, err := c.FromNative([]byte("{}"), domain.ProviderCursor)
+	_, err := c.FromNative([]byte("{}"), session.ProviderCursor)
 	if err == nil {
 		t.Fatal("expected error for unsupported format")
 	}
@@ -101,10 +101,10 @@ func TestConverter_FromNative_UnsupportedFormat(t *testing.T) {
 
 func TestConverter_RoundTrip_Claude(t *testing.T) {
 	c := New()
-	session := testSession()
+	sess := testSession()
 
 	// Convert to Claude JSONL
-	data, err := c.ToNative(session, domain.ProviderClaudeCode)
+	data, err := c.ToNative(sess, session.ProviderClaudeCode)
 	if err != nil {
 		t.Fatalf("ToNative(claude) error: %v", err)
 	}
@@ -123,22 +123,22 @@ func TestConverter_RoundTrip_Claude(t *testing.T) {
 	}
 
 	// Parse back
-	restored, err := c.FromNative(data, domain.ProviderClaudeCode)
+	restored, err := c.FromNative(data, session.ProviderClaudeCode)
 	if err != nil {
 		t.Fatalf("FromNative(claude) error: %v", err)
 	}
 
 	// Verify key fields
-	if restored.Summary != session.Summary {
-		t.Errorf("Summary = %q, want %q", restored.Summary, session.Summary)
+	if restored.Summary != sess.Summary {
+		t.Errorf("Summary = %q, want %q", restored.Summary, sess.Summary)
 	}
-	if restored.Branch != session.Branch {
-		t.Errorf("Branch = %q, want %q", restored.Branch, session.Branch)
+	if restored.Branch != sess.Branch {
+		t.Errorf("Branch = %q, want %q", restored.Branch, sess.Branch)
 	}
-	if restored.ProjectPath != session.ProjectPath {
-		t.Errorf("ProjectPath = %q, want %q", restored.ProjectPath, session.ProjectPath)
+	if restored.ProjectPath != sess.ProjectPath {
+		t.Errorf("ProjectPath = %q, want %q", restored.ProjectPath, sess.ProjectPath)
 	}
-	if restored.Provider != domain.ProviderClaudeCode {
+	if restored.Provider != session.ProviderClaudeCode {
 		t.Errorf("Provider = %q, want claude-code", restored.Provider)
 	}
 
@@ -148,7 +148,7 @@ func TestConverter_RoundTrip_Claude(t *testing.T) {
 	}
 
 	// First message should be user
-	if restored.Messages[0].Role != domain.RoleUser {
+	if restored.Messages[0].Role != session.RoleUser {
 		t.Errorf("first message role = %q, want user", restored.Messages[0].Role)
 	}
 	if restored.Messages[0].Content != "Add a hello world function" {
@@ -158,10 +158,10 @@ func TestConverter_RoundTrip_Claude(t *testing.T) {
 
 func TestConverter_RoundTrip_OpenCode(t *testing.T) {
 	c := New()
-	session := testSession()
+	sess := testSession()
 
 	// Convert to OpenCode JSON
-	data, err := c.ToNative(session, domain.ProviderOpenCode)
+	data, err := c.ToNative(sess, session.ProviderOpenCode)
 	if err != nil {
 		t.Fatalf("ToNative(opencode) error: %v", err)
 	}
@@ -172,23 +172,23 @@ func TestConverter_RoundTrip_OpenCode(t *testing.T) {
 	}
 
 	// Parse back
-	restored, err := c.FromNative(data, domain.ProviderOpenCode)
+	restored, err := c.FromNative(data, session.ProviderOpenCode)
 	if err != nil {
 		t.Fatalf("FromNative(opencode) error: %v", err)
 	}
 
 	// Verify key fields
-	if restored.Summary != session.Summary {
-		t.Errorf("Summary = %q, want %q", restored.Summary, session.Summary)
+	if restored.Summary != sess.Summary {
+		t.Errorf("Summary = %q, want %q", restored.Summary, sess.Summary)
 	}
-	if restored.ProjectPath != session.ProjectPath {
-		t.Errorf("ProjectPath = %q, want %q", restored.ProjectPath, session.ProjectPath)
+	if restored.ProjectPath != sess.ProjectPath {
+		t.Errorf("ProjectPath = %q, want %q", restored.ProjectPath, sess.ProjectPath)
 	}
-	if restored.Provider != domain.ProviderOpenCode {
+	if restored.Provider != session.ProviderOpenCode {
 		t.Errorf("Provider = %q, want opencode", restored.Provider)
 	}
-	if len(restored.Messages) != len(session.Messages) {
-		t.Fatalf("expected %d messages, got %d", len(session.Messages), len(restored.Messages))
+	if len(restored.Messages) != len(sess.Messages) {
+		t.Fatalf("expected %d messages, got %d", len(sess.Messages), len(restored.Messages))
 	}
 
 	// Verify tool calls preserved
@@ -197,7 +197,7 @@ func TestConverter_RoundTrip_OpenCode(t *testing.T) {
 		for _, tc := range msg.ToolCalls {
 			if tc.Name == "Write" {
 				foundToolCall = true
-				if tc.State != domain.ToolStateCompleted {
+				if tc.State != session.ToolStateCompleted {
 					t.Errorf("tool state = %q, want completed", tc.State)
 				}
 			}
@@ -209,8 +209,8 @@ func TestConverter_RoundTrip_OpenCode(t *testing.T) {
 }
 
 func TestConverter_ToContextMD(t *testing.T) {
-	session := testSession()
-	md := ToContextMD(session)
+	sess := testSession()
+	md := ToContextMD(sess)
 	content := string(md)
 
 	checks := []string{
@@ -236,19 +236,19 @@ func TestConverter_ToContextMD(t *testing.T) {
 }
 
 func TestConverter_ToContextMD_WithChildren(t *testing.T) {
-	session := testSession()
-	session.Children = []domain.Session{
+	sess := testSession()
+	sess.Children = []session.Session{
 		{
 			ID:    "child-001",
 			Agent: "task",
-			Messages: []domain.Message{
-				{Role: domain.RoleUser, Content: "Subtask: run tests"},
-				{Role: domain.RoleAssistant, Content: "Tests passed!"},
+			Messages: []session.Message{
+				{Role: session.RoleUser, Content: "Subtask: run tests"},
+				{Role: session.RoleAssistant, Content: "Tests passed!"},
 			},
 		},
 	}
 
-	md := ToContextMD(session)
+	md := ToContextMD(sess)
 	content := string(md)
 
 	if !strings.Contains(content, "Sub-agent: task") {
@@ -263,7 +263,7 @@ func TestDetectFormat_ClaudeJSONL(t *testing.T) {
 	data := `{"type":"summary","summary":"test"}
 {"type":"user","message":{"role":"user","content":"hello"}}`
 	format := DetectFormat([]byte(data))
-	if format != domain.ProviderClaudeCode {
+	if format != session.ProviderClaudeCode {
 		t.Errorf("DetectFormat = %q, want claude-code", format)
 	}
 }
@@ -271,7 +271,7 @@ func TestDetectFormat_ClaudeJSONL(t *testing.T) {
 func TestDetectFormat_OpenCodeJSON(t *testing.T) {
 	data := `{"projectID":"abc","directory":"/tmp/test"}`
 	format := DetectFormat([]byte(data))
-	if format != domain.ProviderOpenCode {
+	if format != session.ProviderOpenCode {
 		t.Errorf("DetectFormat = %q, want opencode", format)
 	}
 }
@@ -291,25 +291,25 @@ func TestConverter_FromClaude_PreservesToolCalls(t *testing.T) {
 {"type":"user","uuid":"u2","timestamp":"2026-02-17T09:00:06Z","sessionId":"sess1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool1","content":"File written."}]},"isSidechain":false}`
 
 	c := New()
-	session, err := c.FromNative([]byte(jsonl), domain.ProviderClaudeCode)
+	sess, err := c.FromNative([]byte(jsonl), session.ProviderClaudeCode)
 	if err != nil {
 		t.Fatalf("FromNative error: %v", err)
 	}
 
-	if session.Summary != "Test session" {
-		t.Errorf("Summary = %q, want 'Test session'", session.Summary)
+	if sess.Summary != "Test session" {
+		t.Errorf("Summary = %q, want 'Test session'", sess.Summary)
 	}
 
 	// The assistant message should have a tool call with output merged
 	var foundTool bool
-	for _, msg := range session.Messages {
+	for _, msg := range sess.Messages {
 		for _, tc := range msg.ToolCalls {
 			if tc.Name == "Write" {
 				foundTool = true
 				if tc.Output != "File written." {
 					t.Errorf("tool output = %q, want 'File written.'", tc.Output)
 				}
-				if tc.State != domain.ToolStateCompleted {
+				if tc.State != session.ToolStateCompleted {
 					t.Errorf("tool state = %q, want completed", tc.State)
 				}
 			}

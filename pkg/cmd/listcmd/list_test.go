@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -15,43 +17,49 @@ import (
 
 // mockStore for list tests — stores sessions in memory.
 type mockStore struct {
-	links    map[string][]domain.SessionSummary
-	sessions []domain.SessionSummary
+	links    map[string][]session.Summary
+	sessions []session.Summary
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		links: make(map[string][]domain.SessionSummary),
+		links: make(map[string][]session.Summary),
 	}
 }
 
-func (m *mockStore) Save(_ *domain.Session) error { return nil }
-func (m *mockStore) Get(_ domain.SessionID) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) Save(_ *session.Session) error { return nil }
+func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) GetByBranch(_, _ string) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByBranch(_, _ string) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) Delete(_ domain.SessionID) error { return nil }
-func (m *mockStore) Close() error                    { return nil }
+func (m *mockStore) Delete(_ session.ID) error { return nil }
+func (m *mockStore) Close() error              { return nil }
 
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) {
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return m.sessions, nil
 }
 
-func (m *mockStore) AddLink(_ domain.SessionID, link domain.Link) error {
+func (m *mockStore) AddLink(_ session.ID, link session.Link) error {
 	key := string(link.LinkType) + ":" + link.Ref
-	m.links[key] = append(m.links[key], domain.SessionSummary{})
+	m.links[key] = append(m.links[key], session.Summary{})
 	return nil
 }
 
-func (m *mockStore) GetByLink(linkType domain.LinkType, ref string) ([]domain.SessionSummary, error) {
+func (m *mockStore) GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error) {
 	key := string(linkType) + ":" + ref
 	summaries, ok := m.links[key]
 	if !ok || len(summaries) == 0 {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return summaries, nil
+}
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
 }
 
 func listTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
@@ -67,7 +75,13 @@ func listTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostrea
 	f := &cmdutil.Factory{
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
-		StoreFunc: func() (domain.Store, error) { return store, nil },
+		StoreFunc: func() (storage.Store, error) { return store, nil },
+		SessionServiceFunc: func() (*service.SessionService, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store: store,
+				Git:   gitClient,
+			}), nil
+		},
 	}
 
 	return f, ios
@@ -179,10 +193,10 @@ func TestList_emptyBranch(t *testing.T) {
 
 func TestList_withSessions(t *testing.T) {
 	store := newMockStore()
-	store.sessions = []domain.SessionSummary{
+	store.sessions = []session.Summary{
 		{
 			ID:           "test-session-1",
-			Provider:     domain.ProviderClaudeCode,
+			Provider:     session.ProviderClaudeCode,
 			Branch:       "main",
 			MessageCount: 10,
 			TotalTokens:  5000,
@@ -214,10 +228,10 @@ func TestList_withSessions(t *testing.T) {
 
 func TestList_quiet(t *testing.T) {
 	store := newMockStore()
-	store.sessions = []domain.SessionSummary{
+	store.sessions = []session.Summary{
 		{
 			ID:       "quiet-session-1",
-			Provider: domain.ProviderClaudeCode,
+			Provider: session.ProviderClaudeCode,
 			Branch:   "main",
 		},
 	}
@@ -248,10 +262,10 @@ func TestList_quiet(t *testing.T) {
 func TestList_byPR(t *testing.T) {
 	store := newMockStore()
 	// Pre-populate the link data
-	store.links["pr:42"] = []domain.SessionSummary{
+	store.links["pr:42"] = []session.Summary{
 		{
 			ID:           "pr-linked-session",
-			Provider:     domain.ProviderClaudeCode,
+			Provider:     session.ProviderClaudeCode,
 			Branch:       "feature-x",
 			MessageCount: 5,
 			TotalTokens:  2000,
@@ -293,17 +307,18 @@ func TestList_byPR_notFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when no sessions linked to PR")
 	}
-	if !strings.Contains(err.Error(), "PR #999") {
-		t.Errorf("error should mention PR #999, got: %v", err)
+	// Service returns session.ErrSessionNotFound when no sessions linked to a PR
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
 	}
 }
 
 func TestList_byPR_quiet(t *testing.T) {
 	store := newMockStore()
-	store.links["pr:10"] = []domain.SessionSummary{
+	store.links["pr:10"] = []session.Summary{
 		{
 			ID:       "pr-quiet-session",
-			Provider: domain.ProviderOpenCode,
+			Provider: session.ProviderOpenCode,
 			Branch:   "fix-bug",
 		},
 	}

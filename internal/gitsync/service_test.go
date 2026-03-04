@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
 )
 
@@ -46,34 +46,34 @@ func mustOpenStore(t *testing.T) *sqlite.Store {
 	return store
 }
 
-func testSession(id string) *domain.Session {
+func testSession(id string) *session.Session {
 	now := time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC)
-	return &domain.Session{
-		ID:          domain.SessionID(id),
+	return &session.Session{
+		ID:          session.ID(id),
 		Version:     1,
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feature/sync",
 		ProjectPath: "/tmp/test-project",
 		CreatedAt:   now,
 		ExportedAt:  now,
 		Summary:     "Test session " + id,
-		StorageMode: domain.StorageModeCompact,
-		Messages: []domain.Message{
+		StorageMode: session.StorageModeCompact,
+		Messages: []session.Message{
 			{
 				ID:        "msg-001",
-				Role:      domain.RoleUser,
+				Role:      session.RoleUser,
 				Content:   "Hello from " + id,
 				Timestamp: now,
 			},
 			{
 				ID:        "msg-002",
-				Role:      domain.RoleAssistant,
+				Role:      session.RoleAssistant,
 				Content:   "Response for " + id,
 				Timestamp: now,
 			},
 		},
-		TokenUsage: domain.TokenUsage{
+		TokenUsage: session.TokenUsage{
 			InputTokens:  100,
 			OutputTokens: 200,
 			TotalTokens:  300,
@@ -106,8 +106,8 @@ func TestPush_oneSession(t *testing.T) {
 	svc := NewService(gitClient, store)
 
 	// Save a session to the store
-	session := testSession("sess-push-1")
-	if err := store.Save(session); err != nil {
+	sess := testSession("sess-push-1")
+	if err := store.Save(sess); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -135,8 +135,8 @@ func TestPush_oneSession(t *testing.T) {
 	if len(idx.Entries) != 1 {
 		t.Fatalf("len(Entries) = %d, want 1", len(idx.Entries))
 	}
-	if idx.Entries[0].ID != session.ID {
-		t.Errorf("Entry.ID = %q, want %q", idx.Entries[0].ID, session.ID)
+	if idx.Entries[0].ID != sess.ID {
+		t.Errorf("Entry.ID = %q, want %q", idx.Entries[0].ID, sess.ID)
 	}
 	if idx.Entries[0].MessageCount != 2 {
 		t.Errorf("Entry.MessageCount = %d, want 2", idx.Entries[0].MessageCount)
@@ -191,8 +191,8 @@ func TestPush_noRemote(t *testing.T) {
 	store := mustOpenStore(t)
 	svc := NewService(gitClient, store)
 
-	session := testSession("sess-noremote")
-	if err := store.Save(session); err != nil {
+	sess := testSession("sess-noremote")
+	if err := store.Save(sess); err != nil {
 		t.Fatal(err)
 	}
 
@@ -285,8 +285,8 @@ func TestPull_skipsExisting(t *testing.T) {
 	// Push a session
 	storeA := mustOpenStore(t)
 	svcA := NewService(gitClient, storeA)
-	session := testSession("sess-existing")
-	if err := storeA.Save(session); err != nil {
+	sess := testSession("sess-existing")
+	if err := storeA.Save(sess); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svcA.Push(false); err != nil {
@@ -295,7 +295,7 @@ func TestPull_skipsExisting(t *testing.T) {
 
 	// Pull into store that already has the session
 	storeB := mustOpenStore(t)
-	if err := storeB.Save(session); err != nil {
+	if err := storeB.Save(sess); err != nil {
 		t.Fatal(err)
 	}
 	svcB := NewService(gitClient, storeB)
@@ -333,8 +333,8 @@ func TestPush_multipleSessions(t *testing.T) {
 
 	// Save multiple sessions
 	for i := range 5 {
-		session := testSession("sess-multi-" + string(rune('a'+i)))
-		if err := store.Save(session); err != nil {
+		sess := testSession("sess-multi-" + string(rune('a'+i)))
+		if err := store.Save(sess); err != nil {
 			t.Fatalf("Save() error for session %d: %v", i, err)
 		}
 	}
@@ -362,8 +362,8 @@ func TestPush_idempotent(t *testing.T) {
 	store := mustOpenStore(t)
 	svc := NewService(gitClient, store)
 
-	session := testSession("sess-idempotent")
-	if err := store.Save(session); err != nil {
+	sess := testSession("sess-idempotent")
+	if err := store.Save(sess); err != nil {
 		t.Fatal(err)
 	}
 

@@ -1,7 +1,8 @@
 # aisync — Roadmap
 
-> Last updated: 2026-02-17
-> Status: Phase 1 MVP + Phase 2 + Phase 3 PR Integration COMPLETE — Ready for Phase 4.
+> Last updated: 2026-03-03
+> Status: Phase 1-3.5 COMPLETE — Phase 4-6 designed.
+> Phase 3.5 completed: Service Layer, HTTP API Server, Client SDK, MCP Server, User Identity Layer.
 
 ---
 
@@ -21,7 +22,7 @@ Decisions taken during the design phase, before any code was written.
 | D8 | Plugin system (future) | **Go compiled interface (MVP) → Go native plugin + Hashicorp go-plugin** | Start simple, evolve to external plugins |
 | D9 | Distribution | **GoReleaser → GitHub Releases** | Cross-platform binaries, checksums, standard Go approach |
 | D10 | Tests | **Day 1, table-driven, Go standard `testing` package** | No external test framework. Fixtures with real session data. |
-| D11 | Architecture | **DDD-inspired, gh (GitHub CLI) patterns** | Factory DI, interface in domain, 1 package per command |
+| D11 | Architecture | **Hexagonal / Ports & Adapters + gh CLI patterns** | Service layer, Factory DI, interfaces as ports, multiple driving adapters (CLI, API, MCP) |
 | D12 | Performance (hooks) | **No hard constraint for MVP** | Reliability over speed. Can optimize later. |
 | D13 | Claude Code restore | **CLI `claude --resume` or JSONL copy** | Investigate both, prefer CLI if available |
 | D14 | Storage modes | **full / compact / summary** | Configurable per capture, default `compact` |
@@ -251,12 +252,238 @@ Decisions taken during the design phase, before any code was written.
 
 ---
 
+## Phase 3.5 — Architecture Evolution: Server + Services (COMPLETE)
+
+> **Goal:** Transform aisync from a CLI-only tool into a **server that exposes services**, enabling multiple clients (CLI, Web UI, TUI, MCP Server) to share the same application logic. Follows Hexagonal / Ports & Adapters architecture.
+>
+> **See [architecture.md](./architecture.md)** for the full architectural design.
+
+### Milestone 3.5.A — Extract Service Layer (COMPLETE)
+
+**Goal:** Move orchestration logic from CLI commands into proper application services. CLI commands become thin adapters.
+
+- [x] **3.5.A.1** Create `internal/service/` package with `SessionService` struct
+- [x] **3.5.A.2** Extract `Capture()` method — wraps `internal/capture/service.go`, adds owner identity resolution
+- [x] **3.5.A.3** Extract `Restore()` method — wraps `internal/restore/service.go`
+- [x] **3.5.A.4** Extract `Export()`, `Import()`, `List()`, `Get()`, `Link()`, `Comment()`, `Stats()`, `Delete()` methods (10 total)
+- [x] **3.5.A.5** Create `SyncService` — wraps `internal/gitsync/service.go` with `Push()`, `Pull()`, `Sync()`, `ReadIndex()`
+- [x] **3.5.A.6** Update all 13 CLI commands in `pkg/cmd/*` to call services instead of infrastructure directly
+- [x] **3.5.A.7** Update Factory to expose `SessionServiceFunc()` and `SyncServiceFunc()` via lazy init
+- [x] **3.5.A.8** Old orchestrators (`capture/`, `restore/`, `gitsync/`) now internal implementation details of services
+- [x] **3.5.A.9** All 35+ test packages pass with zero regressions
+
+### Milestone 3.5.B — HTTP/REST API Server (COMPLETE)
+
+**Goal:** Add an API server as a second driving adapter. Exposes the same services over HTTP.
+
+- [x] **3.5.B.1** Create `internal/api/server.go` — stdlib `net/http` router, graceful shutdown, composition root
+- [x] **3.5.B.2** Create `internal/api/handlers.go` — session CRUD handlers calling `SessionService` (capture, restore, get, list, delete, export, import, link, comment, stats)
+- [x] **3.5.B.3** Create `internal/api/sync_handlers.go` — push/pull/sync/index handlers calling `SyncService`
+- [x] **3.5.B.4** Request/response types inline in handlers (DTOs decoupled from domain)
+- [x] **3.5.B.5** Create `pkg/cmd/servecmd/serve.go` — `aisync serve` command with `--port` and `--host` flags
+- [x] **3.5.B.6** 15 API endpoints registered in `internal/api/routes.go`
+- [x] **3.5.B.7** Middleware: JSON content-type, error mapping (404/400/422), request logging
+- [x] **3.5.B.8** 14 integration tests in `internal/api/server_test.go`
+- [x] **3.5.B.9** All tests pass
+
+### Milestone 3.5.C — Client SDK (COMPLETE)
+
+**Goal:** Public Go HTTP client for interacting with the API server.
+
+- [x] **3.5.C.1** Create `client/client.go` — `Client` struct, `New(baseURL)`, HTTP helpers, `APIError` type
+- [x] **3.5.C.2** Create `client/sessions.go` — 12 session methods + client-side types (Session, Summary, decoupled from internal/)
+- [x] **3.5.C.3** Create `client/sync.go` — sync methods + types
+- [x] **3.5.C.4** 12 integration tests in `client/client_test.go`
+
+### Milestone 3.5.D — MCP Server Integration (COMPLETE)
+
+**Goal:** Expose aisync capabilities as MCP tools callable from within Claude Code or OpenCode.
+
+- [x] **3.5.D.1** Create `internal/mcp/server.go` — MCP server using `mark3labs/mcp-go` v0.44.1
+- [x] **3.5.D.2** Define 10 session tools: `aisync_capture`, `aisync_restore`, `aisync_get`, `aisync_list`, `aisync_delete`, `aisync_export`, `aisync_import`, `aisync_link`, `aisync_comment`, `aisync_stats`
+- [x] **3.5.D.3** Define 4 sync tools: `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`
+- [x] **3.5.D.4** Create `pkg/cmd/mcpcmd/mcp.go` — `aisync mcp serve` command (stdio transport)
+- [x] **3.5.D.5** 10 tests in `internal/mcp/server_test.go`
+- [ ] **3.5.D.6** Documentation: how to configure Claude Code / OpenCode to use aisync MCP server
+
+### Milestone 3.5.E — User Identity Layer (COMPLETE)
+
+**Goal:** Add user ownership to sessions, auto-detected from git config.
+
+- [x] **3.5.E.1** Add `UserName()` and `UserEmail()` methods to `git/client.go`
+- [x] **3.5.E.2** Create `User` domain type in `internal/session/session.go` (ID, Name, Email, Source, CreatedAt)
+- [x] **3.5.E.3** Add `OwnerID` field to `Session` and `Summary` structs
+- [x] **3.5.E.4** Extend `Store` interface with `SaveUser()`, `GetUser()`, `GetUserByEmail()` (now 12 methods)
+- [x] **3.5.E.5** Add `users` table + `owner_id` column migration to SQLite
+- [x] **3.5.E.6** Implement all 3 user methods in `sqlite.Store`, update Save/List/GetByLink queries
+- [x] **3.5.E.7** Add `resolveOwner()` to `SessionService` — auto-detects git identity, creates/finds user
+- [x] **3.5.E.8** Wire into `Capture()` (via `capture.Request.OwnerID`) and `Import()` flows
+- [x] **3.5.E.9** Add `OwnerID` to client SDK types
+- [x] **3.5.E.10** Update all 11 mockStores with new user methods, all 37 test files pass
+
+---
+
 ## Phase 4 — CI Automation (Future)
 
 - [ ] GitHub Action: on CI failure → prepare fix session with original context + CI errors
 - [ ] Webhook notification: "Session available to fix PR #42"
 - [ ] Slack/n8n integration
 - [ ] GitLab / Bitbucket support
+
+---
+
+## Phase 5 — Session Intelligence & Cost Tracking
+
+> **Goal:** Transform aisync from a capture/restore tool into a session intelligence platform. Multiple sessions per branch, file-level blame, per-tool token accounting, and real cost tracking.
+
+### Milestone 5.0 — AI Summarization, Explain & Resume
+
+**Goal:** Add AI-powered session intelligence: auto-summarization, session explanation, resume workflow, and session rewind.
+
+- [ ] **5.0.1** Create `internal/summarize/` package — AI summarization service
+  - Interface: `Summarize(session) → StructuredSummary`
+  - Structured output: intent, outcome, decisions, friction, open items
+  - Backend: Claude CLI (`claude` command), configurable model endpoint
+  - Non-blocking: failures logged, do not prevent capture
+- [ ] **5.0.2** Integrate auto-summarization into capture service
+  - New config: `summarize.enabled` (bool), `summarize.model` (string)
+  - `aisync capture --summarize` flag for one-time override
+  - Store AI summary in `Session.Summary` field (replaces provider native summary when enabled)
+- [ ] **5.0.3** Implement `aisync explain` command
+  - `aisync explain [session-id | commit-sha]` — generates natural language explanation
+  - Uses AI model to analyze session messages and produce explanation
+  - Fallback: show stored summary if no AI model available
+  - `--short` / `--detailed` flags for output depth
+- [ ] **5.0.4** Implement `aisync resume <branch>` command
+  - Step 1: `git checkout <branch>`
+  - Step 2: `aisync restore` (latest session, or `--session <id>`)
+  - Step 3: Print continuation instructions
+  - Flags: `--session`, `--provider`, `--as-context`
+- [ ] **5.0.5** Implement `aisync rewind <session-id>` command
+  - Interactive message selection (numbered list) or `--message <n>` flag
+  - Create new session with messages truncated at selected point
+  - Restore truncated session into target provider
+  - Link new session as "fork-of" original with `forked_at_message` reference
+  - Original session preserved unchanged
+- [ ] **5.0.6** Add `--similar` flag to `aisync list`
+  - Compare AI summaries + file change overlap across sessions on same branch
+  - Group similar sessions (same intent / retries) vs standalone sessions
+  - Requires AI summaries to be available (warn if not)
+
+### Milestone 5.1 — Multi-Session per Branch
+
+**Goal:** Remove the 1:1 branch-to-session constraint. Version sessions, detect forks and off-topic conversations.
+
+- [ ] **5.1.1** Change data model: remove deduplication in capture service (stop overwriting same-branch sessions)
+- [ ] **5.1.2** Migrate existing sessions: existing single sessions become "v1" entries
+- [ ] **5.1.3** Update `aisync list` to show all sessions per branch (not just the latest)
+- [ ] **5.1.4** Add `session_relationships` table: parent/child, fork-of, off-topic flags
+- [ ] **5.1.5** Fork detection: hash first N user messages, compare across sessions on same branch
+- [ ] **5.1.6** `aisync list --tree` to show fork visualization (include rewind forks from 5.0.5)
+- [ ] **5.1.7** Off-topic detection: compare file changes + topic overlap between sessions on same branch
+- [ ] **5.1.8** Update `aisync restore` to let user pick from multiple sessions per branch
+
+### Milestone 5.2 — AI-Blame
+
+**Goal:** Find which AI session modified a file, and restore it.
+
+- [ ] **5.2.1** Implement `aisync blame <file>` — reverse lookup from file_changes table
+- [ ] **5.2.2** Show session info, summary, and suggested actions (restore/show)
+- [ ] **5.2.3** `aisync blame <file> --restore` — shortcut to restore the session that last touched the file
+- [ ] **5.2.4** `aisync blame <file> --all` — show all sessions that ever touched this file
+- [ ] **5.2.5** Integrate with `aisync show` — link from session detail to blame view
+
+### Milestone 5.3 — Tool/MCP Token Accounting
+
+**Goal:** Per-tool token breakdown to understand where tokens are spent.
+
+- [ ] **5.3.1** Add `tool_tokens` field to ToolCall struct (estimated or actual)
+- [ ] **5.3.2** Claude Code provider: estimate per-tool tokens from usage deltas between messages
+- [ ] **5.3.3** OpenCode provider: extract per-tool tokens if available in part metadata
+- [ ] **5.3.4** `aisync show <id> --tool-usage` — per-tool breakdown table
+- [ ] **5.3.5** `aisync stats --tools` — aggregated tool usage across sessions
+- [ ] **5.3.6** Warn when `compact` mode is used that tool accounting requires `full` mode
+
+### Milestone 5.4 — Cost Tracking
+
+**Goal:** Real monetary cost per session, per branch, per feature.
+
+- [ ] **5.4.1** Create `internal/pricing/` package with model pricing table (configurable JSON)
+- [ ] **5.4.2** Ship default pricing for Claude (Opus, Sonnet, Haiku), GPT-4o, Gemini
+- [ ] **5.4.3** `aisync show <id> --cost` — cost breakdown for a session
+- [ ] **5.4.4** `aisync stats --cost` — cost by branch, by provider, by model
+- [ ] **5.4.5** `aisync stats --cost --branch <name>` — total feature cost (excluding off-topic)
+- [ ] **5.4.6** Use OpenCode's native cost data when available
+- [ ] **5.4.7** `aisync config set pricing.<model> <input_price> <output_price>` — custom pricing overrides
+
+---
+
+## Phase 6 — Replay, Forecasting & Web UI
+
+> **Goal:** Session replay for model comparison, cost forecasting, and a visual web dashboard.
+
+### Milestone 6.1 — Session Replay
+
+**Goal:** Replay user messages from a captured session through a different model.
+
+- [ ] **6.1.1** Design replay architecture: how to call target model (embedded client vs provider CLI vs MCP)
+- [ ] **6.1.2** `aisync replay <session-id> --model <model>` — replay with different model
+- [ ] **6.1.3** `aisync replay <session-id> --provider <provider>` — replay with different provider
+- [ ] **6.1.4** Store replay sessions with `replay_of` link to original
+- [ ] **6.1.5** `aisync compare <id1> <id2>` — side-by-side comparison (tokens, cost, files, output diff)
+
+### Milestone 6.2 — Cost Forecasting
+
+**Goal:** Predict future AI costs based on historical patterns.
+
+- [ ] **6.2.1** Collect historical cost data per branch type (feature, fix, refactor)
+- [ ] **6.2.2** `aisync stats --forecast` — average cost per feature, per model, confidence interval
+- [ ] **6.2.3** Model recommendation: "For this type of task, Sonnet saves 60% vs Opus"
+
+### Milestone 6.3 — Web UI
+
+**Goal:** Local web dashboard for visual session browsing and cost analysis.
+
+- [x] **6.3.1** Decide tech stack: **Go templates + HTMX + D3.js** (decision D25)
+- [ ] **6.3.2** `aisync web` — launch local HTTP server (Go templates embedded via `go:embed`)
+- [ ] **6.3.3** Session list page: filterable table with search bar (keyword, branch, user, date)
+- [ ] **6.3.4** Session detail page: messages, tool calls, file changes, cost
+- [ ] **6.3.5** Branch tree view: all sessions per branch with fork visualization (D3.js)
+- [ ] **6.3.6** Cost dashboard: per-branch, per-model, trends over time
+- [ ] **6.3.7** Click-to-restore: generate restore command from the UI
+
+---
+
+## Decisions Log (Phase 3.5)
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| D30 | Architecture style | **Hexagonal / Ports & Adapters** | Service layer enables multiple driving adapters (CLI, API, MCP). Incremental migration from flat CLI. |
+| D31 | Service extraction strategy | **Incremental, not big-bang** | Wrap existing capture/restore/gitsync services, then gradually inline. Old packages deprecated, not deleted. |
+| D32 | API framework | **stdlib `net/http` only** | No external router. Minimal dependencies, idiomatic Go. |
+| D33 | API server lifecycle | **`aisync serve` command** | Server runs as a separate process. CLI commands still work standalone (no server required). |
+| D34 | LLM client port | **Interface `LLMClient`** with Claude CLI adapter | Allows future backends (OpenAI, Ollama) without changing AnalysisService. Deferred to Phase 5. |
+| D35 | MCP Server implementation | **Embedded in aisync binary** | `aisync mcp serve` starts MCP server via stdio. Same binary, different mode. Uses `mark3labs/mcp-go`. |
+| D36 | Service layer testing | **Mock-based unit tests** | Services accept interfaces (Store, Provider, LLMClient), easily mockable. |
+| D37 | User Identity source | **Auto-detect from `git config`** | Best-effort — silently skips if unavailable. `user.email` as unique key. |
+| D38 | Client SDK location | **Root-level `client/` package** | Public Go SDK alongside `git/`. Imports `internal/session/` for shared types (pragmatic choice). |
+| D39 | MCP SDK | **`mark3labs/mcp-go` v0.44.1** | Only supported Go MCP SDK. Stdio transport. `mcp.WithNumber` (no WithInteger). |
+
+---
+
+## Decisions Log (Phase 5-6)
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| D21 | Multi-session migration | Keep existing as "v1", new captures create new entries | Non-breaking, backward compatible |
+| D22 | Fork detection method | Hash first 3 user messages | Balance between accuracy and false positives |
+| D23 | Cost data source | Built-in pricing table + OpenCode native data + user overrides | Flexible, works offline |
+| D24 | Replay execution | TBD — needs architecture design | Options: embedded LLM client, provider CLI wrapper, MCP bridge |
+| D25 | Web UI stack | **Go templates + HTMX** (D3.js for graphs) | Single binary (`go:embed`), no JS build step, HTMX consumes existing HTTP API. D3.js/Mermaid inlined for fork graph visualization. |
+| D26 | Auto-summarization backend | **Claude CLI** (`claude` command in PATH) | Already required by providers, no new dependency. Configurable for future backends. |
+| D27 | Summarization timing | **At capture time, non-blocking** | Simpler than async queue. Failure does not block capture. Can re-summarize later. |
+| D28 | Rewind scope | **Session context only** (messages 1..N), not code state | Code state restore is complex (needs git stash integration). Start with context-only rewind. |
+| D29 | Resume implementation | **Convenience command** wrapping `git checkout` + `aisync restore` | Not a new feature, just UX improvement. Thin wrapper. |
 
 ---
 
@@ -290,9 +517,22 @@ Decisions taken during the design phase, before any code was written.
 - [x] `aisync tui` command wired into root
 - [x] 15 tests (formatTokenCount, truncateStr, formatTimeAgo, wrapText, changeIcon, renderField, buildLines, view states, navigation, scrolling)
 
+### Provider/Converter Refactoring (COMPLETE — 2026-02-25)
+
+- [x] Exported `claude.MarshalJSONL()` and `claude.UnmarshalJSONL()` as public pure functions
+- [x] Exported `opencode.MarshalJSON()` and `opencode.UnmarshalJSON()` with `ExportBundle` structs
+- [x] Gutted `converter.go` from 870 → 165 lines — delegates to provider marshal/unmarshal
+- [x] Eliminated all 11 duplicate struct pairs and 6 duplicate functions between provider/converter
+- [x] Defined `SessionConverter` interface in restore service
+- [x] Removed double-conversion round-trip in `restoreWithConversion()`
+- [x] All 31 test packages pass with zero regressions
+
 ### Remaining
 
-- [ ] Session expiration / cleanup policy
+- [ ] Session expiration / cleanup policy (ties into multi-session + garbage collection)
 - [ ] Compression for large sessions (zstd)
-- [ ] `aisync diff <session-1> <session-2>` to compare sessions
+- [ ] `aisync diff <session-1> <session-2>` to compare sessions (ties into Phase 6 Replay/Compare)
 - [ ] Telemetry opt-in (anonymous usage stats)
+- [ ] Fix `Import()` for Claude Code and OpenCode providers (currently returns `ErrImportNotSupported`)
+- [ ] Fix `aisync show <commit-sha>` to parse AI-Session trailer from commit message and resolve to session
+- [ ] Add `forked_at_message` field to session relationships (needed for rewind → fork linking in 5.0.5 + 5.1.4)

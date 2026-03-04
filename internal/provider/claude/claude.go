@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/google/uuid"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 	exportedByLabel = "aisync"
 )
 
-// Provider implements domain.Provider for Claude Code.
+// Provider implements session.Provider for Claude Code.
 type Provider struct {
 	// claudeHome overrides the default ~/.claude path (for testing).
 	claudeHome string
@@ -46,12 +47,12 @@ func New(claudeHome string) *Provider {
 }
 
 // Name returns the provider identifier.
-func (p *Provider) Name() domain.ProviderName {
-	return domain.ProviderClaudeCode
+func (p *Provider) Name() session.ProviderName {
+	return session.ProviderClaudeCode
 }
 
 // Detect finds sessions matching the given project and branch.
-func (p *Provider) Detect(projectPath string, branch string) ([]domain.SessionSummary, error) {
+func (p *Provider) Detect(projectPath string, branch string) ([]session.Summary, error) {
 	projectDir := p.projectDir(projectPath)
 	indexPath := filepath.Join(projectDir, sessionsIndex)
 
@@ -60,7 +61,7 @@ func (p *Provider) Detect(projectPath string, branch string) ([]domain.SessionSu
 		return nil, fmt.Errorf("reading sessions index: %w", err)
 	}
 
-	var matches []domain.SessionSummary
+	var matches []session.Summary
 	for _, entry := range index.Entries {
 		// Filter by branch if specified
 		if branch != "" && entry.GitBranch != branch {
@@ -72,9 +73,9 @@ func (p *Provider) Detect(projectPath string, branch string) ([]domain.SessionSu
 		}
 
 		created, _ := time.Parse(time.RFC3339, entry.Created)
-		matches = append(matches, domain.SessionSummary{
-			ID:           domain.SessionID(entry.SessionID),
-			Provider:     domain.ProviderClaudeCode,
+		matches = append(matches, session.Summary{
+			ID:           session.ID(entry.SessionID),
+			Provider:     session.ProviderClaudeCode,
 			Agent:        defaultAgent,
 			Branch:       entry.GitBranch,
 			Summary:      entry.Summary,
@@ -92,7 +93,7 @@ func (p *Provider) Detect(projectPath string, branch string) ([]domain.SessionSu
 }
 
 // Export reads a session JSONL file and converts it to the unified Session model.
-func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (*domain.Session, error) {
+func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error) {
 	// Find the JSONL file for this session
 	jsonlPath, err := p.findSessionFile(sessionID)
 	if err != nil {
@@ -113,10 +114,315 @@ func (p *Provider) CanImport() bool {
 }
 
 // Import writes a session back to Claude Code's native JSONL format.
-// For MVP, this copies the JSONL file to the appropriate project directory.
-func (p *Provider) Import(session *domain.Session) error {
-	// TODO: Implement in Milestone 1.6 (Export/Import)
-	return domain.ErrImportNotSupported
+// It converts the unified session to JSONL, writes it to the project directory,
+// and updates the sessions-index.json file.
+func (p *Provider) Import(sess *session.Session) error {
+	if sess == nil {
+		return fmt.Errorf("session is nil")
+	}
+
+	// Determine the project directory
+	projectPath := sess.ProjectPath
+	if projectPath == "" {
+		return fmt.Errorf("session has no project path")
+	}
+	projDir := p.projectDir(projectPath)
+
+	// Ensure directory exists
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		return fmt.Errorf("creating project directory: %w", err)
+	}
+
+	// Generate session ID if empty
+	sessionID := string(sess.ID)
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+		sess.ID = session.ID(sessionID)
+	}
+
+	// Build JSONL content
+	jsonlData, err := MarshalJSONL(sess)
+	if err != nil {
+		return fmt.Errorf("building JSONL: %w", err)
+	}
+
+	// Write JSONL file
+	jsonlPath := filepath.Join(projDir, sessionID+jsonlExtension)
+	if err := os.WriteFile(jsonlPath, jsonlData, 0o644); err != nil {
+		return fmt.Errorf("writing JSONL file: %w", err)
+	}
+
+	// Update sessions-index.json
+	if err := p.updateSessionsIndex(sess, projDir); err != nil {
+		return fmt.Errorf("updating sessions index: %w", err)
+	}
+
+	return nil
+}
+
+// MarshalJSONL converts a unified Session to Claude Code JSONL bytes.
+// This is a pure function with no I/O — it only serializes data.
+// It is the canonical marshaling logic for Claude's native format.
+func MarshalJSONL(sess *session.Session) ([]byte, error) {
+	var lines []string
+	prevUUID := ""
+
+	// Summary line
+	if sess.Summary != "" {
+		summaryLine := jsonlLine{
+			Type:      "summary",
+			Summary:   sess.Summary,
+			SessionID: string(sess.ID),
+		}
+		data, err := json.Marshal(summaryLine)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, string(data))
+	}
+
+	for i, msg := range sess.Messages {
+		msgUUID := msg.ID
+		if msgUUID == "" {
+			msgUUID = uuid.New().String()
+		}
+
+		ts := msg.Timestamp.Format(time.RFC3339Nano)
+		if msg.Timestamp.IsZero() {
+			ts = time.Now().Format(time.RFC3339Nano)
+		}
+
+		// Build content blocks
+		var nativeContent json.RawMessage
+
+		if msg.Role == session.RoleUser && len(msg.ToolCalls) == 0 {
+			// Simple user message: content is a plain string
+			var err error
+			nativeContent, err = json.Marshal(msg.Content)
+			if err != nil {
+				return nil, err
+			}
+		} else if msg.Role == session.RoleUser && len(msg.ToolCalls) > 0 {
+			// User message with tool_results
+			var blocks []contentBlock
+			for _, tc := range msg.ToolCalls {
+				resultContent, _ := json.Marshal(tc.Output)
+				blocks = append(blocks, contentBlock{
+					Type:      "tool_result",
+					ToolUseID: tc.ID,
+					Content:   resultContent,
+					IsError:   tc.State == session.ToolStateError,
+				})
+			}
+			var err error
+			nativeContent, err = json.Marshal(blocks)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// Assistant message with content blocks
+			var blocks []contentBlock
+
+			if msg.Thinking != "" {
+				blocks = append(blocks, contentBlock{
+					Type:     "thinking",
+					Thinking: msg.Thinking,
+				})
+			}
+			if msg.Content != "" {
+				blocks = append(blocks, contentBlock{
+					Type: "text",
+					Text: msg.Content,
+				})
+			}
+			for _, tc := range msg.ToolCalls {
+				inputRaw := json.RawMessage(tc.Input)
+				if !json.Valid(inputRaw) {
+					inputRaw = json.RawMessage(`{}`)
+				}
+				blocks = append(blocks, contentBlock{
+					Type:  "tool_use",
+					ID:    tc.ID,
+					Name:  tc.Name,
+					Input: inputRaw,
+				})
+			}
+
+			var err error
+			nativeContent, err = json.Marshal(blocks)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		role := string(msg.Role)
+		nativeMsg := claudeMessage{
+			Role:    role,
+			Model:   msg.Model,
+			ID:      msg.ID,
+			Content: nativeContent,
+		}
+		if msg.Tokens > 0 && msg.Role == session.RoleAssistant {
+			nativeMsg.Usage = &claudeUsage{
+				InputTokens:  sess.TokenUsage.InputTokens / max(len(sess.Messages), 1),
+				OutputTokens: msg.Tokens,
+			}
+		}
+
+		msgData, err := json.Marshal(nativeMsg)
+		if err != nil {
+			return nil, err
+		}
+
+		line := jsonlLine{
+			Cwd:        sess.ProjectPath,
+			UUID:       msgUUID,
+			Timestamp:  ts,
+			SessionID:  string(sess.ID),
+			GitBranch:  sess.Branch,
+			Type:       role,
+			ParentUUID: prevUUID,
+			Message:    msgData,
+		}
+
+		lineData, err := json.Marshal(line)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, string(lineData))
+		prevUUID = msgUUID
+
+		// After an assistant message with tool calls, emit tool_result user messages
+		if msg.Role == session.RoleAssistant && len(msg.ToolCalls) > 0 {
+			var resultBlocks []contentBlock
+			for _, tc := range msg.ToolCalls {
+				resultContent, _ := json.Marshal(tc.Output)
+				resultBlocks = append(resultBlocks, contentBlock{
+					Type:      "tool_result",
+					ToolUseID: tc.ID,
+					Content:   resultContent,
+					IsError:   tc.State == session.ToolStateError,
+				})
+			}
+			resultContent, resultErr := json.Marshal(resultBlocks)
+			if resultErr != nil {
+				return nil, resultErr
+			}
+
+			resultMsg := claudeMessage{
+				Role:    "user",
+				Content: resultContent,
+			}
+			resultMsgData, resultMarshalErr := json.Marshal(resultMsg)
+			if resultMarshalErr != nil {
+				return nil, resultMarshalErr
+			}
+
+			resultUUID := msgUUID + "-result"
+			resultLine := jsonlLine{
+				Cwd:        sess.ProjectPath,
+				UUID:       resultUUID,
+				Timestamp:  ts,
+				SessionID:  string(sess.ID),
+				GitBranch:  sess.Branch,
+				Type:       "user",
+				ParentUUID: msgUUID,
+				Message:    resultMsgData,
+			}
+			resultLineData, resultLineErr := json.Marshal(resultLine)
+			if resultLineErr != nil {
+				return nil, resultLineErr
+			}
+			lines = append(lines, string(resultLineData))
+			prevUUID = resultUUID
+		}
+
+		_ = i // used in original for fallback uuid generation
+	}
+
+	result := strings.Join(lines, "\n") + "\n"
+	return []byte(result), nil
+}
+
+// updateSessionsIndex adds or updates a session entry in the sessions-index.json.
+func (p *Provider) updateSessionsIndex(sess *session.Session, projDir string) error {
+	indexPath := filepath.Join(projDir, sessionsIndex)
+
+	// Read existing index or create new
+	var index sessionsIndexFile
+	data, err := os.ReadFile(indexPath)
+	if err == nil {
+		if parseErr := json.Unmarshal(data, &index); parseErr != nil {
+			// Corrupted index — start fresh
+			index = sessionsIndexFile{Version: 1}
+		}
+	} else {
+		index = sessionsIndexFile{Version: 1}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	sessionID := string(sess.ID)
+
+	// Find the last UUID for leafUuid
+	leafUUID := ""
+	if len(sess.Messages) > 0 {
+		lastMsg := sess.Messages[len(sess.Messages)-1]
+		leafUUID = lastMsg.ID
+	}
+
+	// Check if entry already exists
+	found := false
+	for i, entry := range index.Entries {
+		if entry.SessionID == sessionID {
+			index.Entries[i].Modified = now
+			index.Entries[i].MessageCount = len(sess.Messages)
+			index.Entries[i].Summary = sess.Summary
+			index.Entries[i].LeafUUID = leafUUID
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		firstPrompt := ""
+		if len(sess.Messages) > 0 && sess.Messages[0].Role == session.RoleUser {
+			firstPrompt = sess.Messages[0].Content
+			// Truncate long prompts
+			if len(firstPrompt) > 200 {
+				firstPrompt = firstPrompt[:200]
+			}
+		}
+
+		created := sess.CreatedAt.Format(time.RFC3339)
+		if sess.CreatedAt.IsZero() {
+			created = now
+		}
+
+		index.Entries = append(index.Entries, indexEntry{
+			SessionID:    sessionID,
+			FullPath:     filepath.Join(projDir, sessionID+jsonlExtension),
+			FirstPrompt:  firstPrompt,
+			Created:      created,
+			Modified:     now,
+			GitBranch:    sess.Branch,
+			ProjectPath:  sess.ProjectPath,
+			Summary:      sess.Summary,
+			LeafUUID:     leafUUID,
+			MessageCount: len(sess.Messages),
+		})
+	}
+
+	// Write updated index
+	indexData, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling sessions index: %w", err)
+	}
+
+	if err := os.WriteFile(indexPath, indexData, 0o644); err != nil {
+		return fmt.Errorf("writing sessions index: %w", err)
+	}
+
+	return nil
 }
 
 // projectDir returns the Claude Code project directory for a given project path.
@@ -128,7 +434,7 @@ func (p *Provider) projectDir(projectPath string) string {
 
 // findSessionFile locates the JSONL file for a given session ID.
 // It searches all project directories.
-func (p *Provider) findSessionFile(sessionID domain.SessionID) (string, error) {
+func (p *Provider) findSessionFile(sessionID session.ID) (string, error) {
 	projectsRoot := filepath.Join(p.claudeHome, projectsDir)
 	entries, err := os.ReadDir(projectsRoot)
 	if err != nil {
@@ -146,7 +452,7 @@ func (p *Provider) findSessionFile(sessionID domain.SessionID) (string, error) {
 		}
 	}
 
-	return "", domain.ErrSessionNotFound
+	return "", session.ErrSessionNotFound
 }
 
 // encodeProjectPath converts an absolute path to Claude Code's directory naming.
@@ -233,6 +539,39 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
+// UnmarshalJSONL parses Claude Code JSONL bytes into a unified Session.
+// This is a pure function with no I/O — it only deserializes data.
+// It is the canonical unmarshaling logic for Claude's native format.
+func UnmarshalJSONL(data []byte, mode session.StorageMode) (*session.Session, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty JSONL data")
+	}
+
+	var lines []jsonlLine
+	for _, lineStr := range strings.Split(trimmed, "\n") {
+		if lineStr == "" {
+			continue
+		}
+		var line jsonlLine
+		if err := json.Unmarshal([]byte(lineStr), &line); err != nil {
+			continue // skip malformed lines
+		}
+		lines = append(lines, line)
+	}
+
+	// Derive session ID from first line
+	var sessionID session.ID
+	for _, line := range lines {
+		if line.SessionID != "" {
+			sessionID = session.ID(line.SessionID)
+			break
+		}
+	}
+
+	return parseSession(sessionID, lines, mode)
+}
+
 // --- Parsing logic ---
 
 func readSessionsIndex(path string) (*sessionsIndexFile, error) {
@@ -273,10 +612,10 @@ func readJSONLFile(path string) ([]jsonlLine, error) {
 	return lines, scanner.Err()
 }
 
-func parseSession(sessionID domain.SessionID, lines []jsonlLine, mode domain.StorageMode) (*domain.Session, error) {
-	session := &domain.Session{
+func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageMode) (*session.Session, error) {
+	sess := &session.Session{
 		ID:          sessionID,
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       defaultAgent,
 		StorageMode: mode,
 		Version:     1,
@@ -285,10 +624,10 @@ func parseSession(sessionID domain.SessionID, lines []jsonlLine, mode domain.Sto
 	}
 
 	// Collect tool_use blocks to match with tool_results later
-	toolUses := make(map[string]*domain.ToolCall) // keyed by tool_use id
+	toolUses := make(map[string]*session.ToolCall) // keyed by tool_use id
 
 	// Track file changes from Write/Edit tool uses
-	fileChanges := make(map[string]domain.ChangeType)
+	fileChanges := make(map[string]session.ChangeType)
 
 	var (
 		totalInput  int
@@ -297,16 +636,16 @@ func parseSession(sessionID domain.SessionID, lines []jsonlLine, mode domain.Sto
 
 	for _, line := range lines {
 		// Extract metadata from first message
-		if session.Branch == "" && line.GitBranch != "" {
-			session.Branch = line.GitBranch
+		if sess.Branch == "" && line.GitBranch != "" {
+			sess.Branch = line.GitBranch
 		}
-		if session.ProjectPath == "" && line.Cwd != "" {
-			session.ProjectPath = line.Cwd
+		if sess.ProjectPath == "" && line.Cwd != "" {
+			sess.ProjectPath = line.Cwd
 		}
 
 		switch line.Type {
 		case "summary":
-			session.Summary = line.Summary
+			sess.Summary = line.Summary
 
 		case "user", "assistant":
 			if line.IsSidechain {
@@ -330,24 +669,24 @@ func parseSession(sessionID domain.SessionID, lines []jsonlLine, mode domain.Sto
 			}
 
 			// summary mode: only metadata, no messages
-			if mode == domain.StorageModeSummary {
+			if mode == session.StorageModeSummary {
 				// Still set CreatedAt from first message
-				if session.CreatedAt.IsZero() {
-					session.CreatedAt = ts
+				if sess.CreatedAt.IsZero() {
+					sess.CreatedAt = ts
 				}
 				continue
 			}
 
-			domainMsg := domain.Message{
+			domainMsg := session.Message{
 				ID:        line.UUID,
 				Timestamp: ts,
 				Model:     msg.Model,
 			}
 
 			if msg.Role == "user" {
-				domainMsg.Role = domain.RoleUser
+				domainMsg.Role = session.RoleUser
 			} else {
-				domainMsg.Role = domain.RoleAssistant
+				domainMsg.Role = session.RoleAssistant
 			}
 
 			// Parse content blocks
@@ -366,9 +705,9 @@ func parseSession(sessionID domain.SessionID, lines []jsonlLine, mode domain.Sto
 					if tc, ok := toolUses[tr.toolUseID]; ok {
 						tc.Output = tr.output
 						if tr.isError {
-							tc.State = domain.ToolStateError
+							tc.State = session.ToolStateError
 						} else {
-							tc.State = domain.ToolStateCompleted
+							tc.State = session.ToolStateCompleted
 						}
 					}
 				}
@@ -379,16 +718,16 @@ func parseSession(sessionID domain.SessionID, lines []jsonlLine, mode domain.Sto
 				}
 			}
 
-			session.Messages = append(session.Messages, domainMsg)
+			sess.Messages = append(sess.Messages, domainMsg)
 
-			if session.CreatedAt.IsZero() {
-				session.CreatedAt = ts
+			if sess.CreatedAt.IsZero() {
+				sess.CreatedAt = ts
 			}
 		}
 	}
 
 	// Set token usage
-	session.TokenUsage = domain.TokenUsage{
+	sess.TokenUsage = session.TokenUsage{
 		InputTokens:  totalInput,
 		OutputTokens: totalOutput,
 		TotalTokens:  totalInput + totalOutput,
@@ -396,19 +735,19 @@ func parseSession(sessionID domain.SessionID, lines []jsonlLine, mode domain.Sto
 
 	// Set file changes
 	for path, changeType := range fileChanges {
-		session.FileChanges = append(session.FileChanges, domain.FileChange{
+		sess.FileChanges = append(sess.FileChanges, session.FileChange{
 			FilePath:   path,
 			ChangeType: changeType,
 		})
 	}
 
-	return session, nil
+	return sess, nil
 }
 
 type parsedContent struct {
 	text        string
 	thinking    string
-	toolCalls   []domain.ToolCall
+	toolCalls   []session.ToolCall
 	toolResults []toolResultInfo
 	tokens      int
 }
@@ -419,7 +758,7 @@ type toolResultInfo struct {
 	isError   bool
 }
 
-func parseContentBlocks(raw json.RawMessage, role string, mode domain.StorageMode, toolUses map[string]*domain.ToolCall, fileChanges map[string]domain.ChangeType) parsedContent {
+func parseContentBlocks(raw json.RawMessage, role string, mode session.StorageMode, toolUses map[string]*session.ToolCall, fileChanges map[string]session.ChangeType) parsedContent {
 	result := parsedContent{}
 
 	// Content can be a string (simple user message) or an array of blocks
@@ -442,18 +781,18 @@ func parseContentBlocks(raw json.RawMessage, role string, mode domain.StorageMod
 			textParts = append(textParts, block.Text)
 
 		case "thinking":
-			if mode == domain.StorageModeFull {
+			if mode == session.StorageModeFull {
 				result.thinking = block.Thinking
 			}
 
 		case "tool_use":
-			if mode == domain.StorageModeFull || mode == domain.StorageModeCompact {
+			if mode == session.StorageModeFull || mode == session.StorageModeCompact {
 				inputStr := string(block.Input)
-				tc := domain.ToolCall{
+				tc := session.ToolCall{
 					ID:    block.ID,
 					Name:  block.Name,
 					Input: inputStr,
-					State: domain.ToolStatePending, // Will be updated when tool_result arrives
+					State: session.ToolStatePending, // Will be updated when tool_result arrives
 				}
 				result.toolCalls = append(result.toolCalls, tc)
 				toolUses[block.ID] = &result.toolCalls[len(result.toolCalls)-1]
@@ -505,7 +844,7 @@ func extractToolResultContent(raw json.RawMessage) string {
 }
 
 // trackFileChange infers file changes from tool calls.
-func trackFileChange(toolName string, rawInput json.RawMessage, changes map[string]domain.ChangeType) {
+func trackFileChange(toolName string, rawInput json.RawMessage, changes map[string]session.ChangeType) {
 	var input struct {
 		FilePath string `json:"file_path"`
 	}
@@ -517,15 +856,15 @@ func trackFileChange(toolName string, rawInput json.RawMessage, changes map[stri
 	case "Write":
 		// Write could be create or modify, default to modified
 		if _, exists := changes[input.FilePath]; !exists {
-			changes[input.FilePath] = domain.ChangeCreated
+			changes[input.FilePath] = session.ChangeCreated
 		} else {
-			changes[input.FilePath] = domain.ChangeModified
+			changes[input.FilePath] = session.ChangeModified
 		}
 	case "Edit":
-		changes[input.FilePath] = domain.ChangeModified
+		changes[input.FilePath] = session.ChangeModified
 	case "Read":
 		if _, exists := changes[input.FilePath]; !exists {
-			changes[input.FilePath] = domain.ChangeRead
+			changes[input.FilePath] = session.ChangeRead
 		}
 	}
 }

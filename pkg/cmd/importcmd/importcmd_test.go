@@ -9,57 +9,65 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
 type mockStore struct {
-	saved []*domain.Session
+	saved []*session.Session
 }
 
-func (m *mockStore) Save(s *domain.Session) error {
+func (m *mockStore) Save(s *session.Session) error {
 	m.saved = append(m.saved, s)
 	return nil
 }
-func (m *mockStore) Get(_ domain.SessionID) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) GetByBranch(_, _ string) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByBranch(_, _ string) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) {
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return nil, nil
 }
-func (m *mockStore) Delete(_ domain.SessionID) error                 { return nil }
-func (m *mockStore) AddLink(_ domain.SessionID, _ domain.Link) error { return nil }
-func (m *mockStore) GetByLink(_ domain.LinkType, _ string) ([]domain.SessionSummary, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) Delete(_ session.ID) error                  { return nil }
+func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
+func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) Close() error { return nil }
+func (m *mockStore) Close() error                                   { return nil }
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
+}
 
-func testSession() *domain.Session {
-	return &domain.Session{
+func testSession() *session.Session {
+	return &session.Session{
 		ID:          "import-test-001",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feat/import",
 		ProjectPath: "/tmp/test",
-		StorageMode: domain.StorageModeCompact,
+		StorageMode: session.StorageModeCompact,
 		Summary:     "Session for import test",
 		Version:     1,
 		ExportedAt:  time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC),
 		CreatedAt:   time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
-		Messages: []domain.Message{
+		Messages: []session.Message{
 			{
 				ID:        "msg-001",
-				Role:      domain.RoleUser,
+				Role:      session.RoleUser,
 				Content:   "Hello",
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
 			},
 			{
 				ID:        "msg-002",
-				Role:      domain.RoleAssistant,
+				Role:      session.RoleAssistant,
 				Content:   "Hi!",
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 5, 0, time.UTC),
 			},
@@ -76,24 +84,33 @@ func writeTestFile(t *testing.T, name string, data []byte) string {
 	return path
 }
 
+func importTestFactory(store storage.Store) *cmdutil.Factory {
+	return &cmdutil.Factory{
+		SessionServiceFunc: func() (*service.SessionService, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store: store,
+			}), nil
+		},
+		StoreFunc: func() (storage.Store, error) {
+			return store, nil
+		},
+	}
+}
+
 func TestImport_AisyncJSON(t *testing.T) {
 	ios := iostreams.Test()
 	store := &mockStore{}
 
-	session := testSession()
-	data, err := json.MarshalIndent(session, "", "  ")
+	sess := testSession()
+	data, err := json.MarshalIndent(sess, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	filePath := writeTestFile(t, "session.json", data)
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := importTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:       ios,
@@ -128,12 +145,8 @@ func TestImport_ClaudeJSONL(t *testing.T) {
 
 	filePath := writeTestFile(t, "session.jsonl", []byte(jsonl))
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := importTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:         ios,
@@ -153,7 +166,7 @@ func TestImport_ClaudeJSONL(t *testing.T) {
 	if store.saved[0].Summary != "Imported from Claude" {
 		t.Errorf("saved summary = %q, want 'Imported from Claude'", store.saved[0].Summary)
 	}
-	if store.saved[0].Provider != domain.ProviderClaudeCode {
+	if store.saved[0].Provider != session.ProviderClaudeCode {
 		t.Errorf("provider = %q, want claude-code", store.saved[0].Provider)
 	}
 }
@@ -164,12 +177,8 @@ func TestImport_EmptyFile(t *testing.T) {
 
 	filePath := writeTestFile(t, "empty.json", []byte{})
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := importTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:      ios,
@@ -189,12 +198,8 @@ func TestImport_NonexistentFile(t *testing.T) {
 	ios := iostreams.Test()
 	store := &mockStore{}
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := importTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:      ios,
@@ -213,12 +218,8 @@ func TestImport_UnknownFormat(t *testing.T) {
 
 	filePath := writeTestFile(t, "session.xml", []byte("<session/>"))
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := importTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:         ios,
@@ -239,16 +240,12 @@ func TestImport_UnknownTarget(t *testing.T) {
 	ios := iostreams.Test()
 	store := &mockStore{}
 
-	session := testSession()
-	data, _ := json.Marshal(session)
+	sess := testSession()
+	data, _ := json.Marshal(sess)
 	filePath := writeTestFile(t, "session.json", data)
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := importTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:       ios,

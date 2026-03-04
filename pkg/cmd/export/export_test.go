@@ -7,60 +7,68 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
 type mockStore struct {
-	sessions []*domain.Session
+	sessions []*session.Session
 }
 
-func (m *mockStore) Save(_ *domain.Session) error                    { return nil }
-func (m *mockStore) Delete(_ domain.SessionID) error                 { return nil }
-func (m *mockStore) AddLink(_ domain.SessionID, _ domain.Link) error { return nil }
-func (m *mockStore) GetByLink(_ domain.LinkType, _ string) ([]domain.SessionSummary, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) Save(_ *session.Session) error              { return nil }
+func (m *mockStore) Delete(_ session.ID) error                  { return nil }
+func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
+func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
+	return nil, session.ErrSessionNotFound
 }
 func (m *mockStore) Close() error { return nil }
-func (m *mockStore) GetByBranch(_, _ string) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByBranch(_, _ string) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) {
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return nil, nil
 }
 
-func (m *mockStore) Get(id domain.SessionID) (*domain.Session, error) {
+func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	for _, s := range m.sessions {
 		if s.ID == id {
 			return s, nil
 		}
 	}
-	return nil, domain.ErrSessionNotFound
+	return nil, session.ErrSessionNotFound
+}
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
 }
 
-func testSession() *domain.Session {
-	return &domain.Session{
+func testSession() *session.Session {
+	return &session.Session{
 		ID:          "test-export-001",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feat/test",
 		ProjectPath: "/tmp/test",
-		StorageMode: domain.StorageModeCompact,
+		StorageMode: session.StorageModeCompact,
 		Summary:     "Test session for export",
 		Version:     1,
 		ExportedAt:  time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC),
 		CreatedAt:   time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
-		Messages: []domain.Message{
+		Messages: []session.Message{
 			{
 				ID:        "msg-001",
-				Role:      domain.RoleUser,
+				Role:      session.RoleUser,
 				Content:   "Hello world",
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 0, 0, time.UTC),
 			},
 			{
 				ID:        "msg-002",
-				Role:      domain.RoleAssistant,
+				Role:      session.RoleAssistant,
 				Content:   "Hi there!",
 				Model:     "claude-sonnet",
 				Timestamp: time.Date(2026, 2, 17, 9, 0, 5, 0, time.UTC),
@@ -70,16 +78,25 @@ func testSession() *domain.Session {
 	}
 }
 
-func TestExport_AisyncFormat(t *testing.T) {
-	ios := iostreams.Test()
-	store := &mockStore{sessions: []*domain.Session{testSession()}}
-
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
+func exportTestFactory(store storage.Store) *cmdutil.Factory {
+	return &cmdutil.Factory{
+		SessionServiceFunc: func() (*service.SessionService, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store: store,
+			}), nil
+		},
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
 	}
+}
+
+func TestExport_AisyncFormat(t *testing.T) {
+	ios := iostreams.Test()
+	store := &mockStore{sessions: []*session.Session{testSession()}}
+
+	f := exportTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:          ios,
@@ -98,28 +115,24 @@ func TestExport_AisyncFormat(t *testing.T) {
 		t.Fatal("output is not valid JSON")
 	}
 
-	var session domain.Session
-	if jsonErr := json.Unmarshal([]byte(output), &session); jsonErr != nil {
+	var sess session.Session
+	if jsonErr := json.Unmarshal([]byte(output), &sess); jsonErr != nil {
 		t.Fatalf("unmarshal error: %v", jsonErr)
 	}
-	if session.ID != "test-export-001" {
-		t.Errorf("session ID = %q, want test-export-001", session.ID)
+	if sess.ID != "test-export-001" {
+		t.Errorf("session ID = %q, want test-export-001", sess.ID)
 	}
-	if len(session.Messages) != 2 {
-		t.Errorf("messages = %d, want 2", len(session.Messages))
+	if len(sess.Messages) != 2 {
+		t.Errorf("messages = %d, want 2", len(sess.Messages))
 	}
 }
 
 func TestExport_ClaudeFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*domain.Session{testSession()}}
+	store := &mockStore{sessions: []*session.Session{testSession()}}
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := exportTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:          ios,
@@ -149,14 +162,10 @@ func TestExport_ClaudeFormat(t *testing.T) {
 
 func TestExport_OpenCodeFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*domain.Session{testSession()}}
+	store := &mockStore{sessions: []*session.Session{testSession()}}
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := exportTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:          ios,
@@ -178,14 +187,10 @@ func TestExport_OpenCodeFormat(t *testing.T) {
 
 func TestExport_ContextMDFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*domain.Session{testSession()}}
+	store := &mockStore{sessions: []*session.Session{testSession()}}
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := exportTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:          ios,
@@ -210,14 +215,10 @@ func TestExport_ContextMDFormat(t *testing.T) {
 
 func TestExport_UnknownFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*domain.Session{testSession()}}
+	store := &mockStore{sessions: []*session.Session{testSession()}}
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := exportTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:          ios,
@@ -239,12 +240,8 @@ func TestExport_SessionNotFound(t *testing.T) {
 	ios := iostreams.Test()
 	store := &mockStore{sessions: nil}
 
-	f := &cmdutil.Factory{
-		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
-			return store, nil
-		},
-	}
+	f := exportTestFactory(store)
+	f.IOStreams = ios
 
 	opts := &Options{
 		IO:          ios,

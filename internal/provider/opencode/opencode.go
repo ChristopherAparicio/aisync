@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/google/uuid"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 	exportedByLabel = "aisync"
 )
 
-// Provider implements domain.Provider for OpenCode.
+// Provider implements session.Provider for OpenCode.
 type Provider struct {
 	// dataHome overrides the default data directory (for testing).
 	dataHome string
@@ -41,14 +42,14 @@ func New(dataHome string) *Provider {
 }
 
 // Name returns the provider identifier.
-func (p *Provider) Name() domain.ProviderName {
-	return domain.ProviderOpenCode
+func (p *Provider) Name() session.ProviderName {
+	return session.ProviderOpenCode
 }
 
 // Detect finds sessions matching the given project and branch.
 // OpenCode doesn't track branches natively, so we return all sessions
 // for the matching project and let the caller filter.
-func (p *Provider) Detect(projectPath string, _ string) ([]domain.SessionSummary, error) {
+func (p *Provider) Detect(projectPath string, _ string) ([]session.Summary, error) {
 	projectID, err := p.findProjectID(projectPath)
 	if err != nil {
 		return nil, err
@@ -63,7 +64,7 @@ func (p *Provider) Detect(projectPath string, _ string) ([]domain.SessionSummary
 		return nil, fmt.Errorf("reading sessions directory: %w", err)
 	}
 
-	var summaries []domain.SessionSummary
+	var summaries []session.Summary
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -90,9 +91,9 @@ func (p *Provider) Detect(projectPath string, _ string) ([]domain.SessionSummary
 		msgCount := countMessages(p.storagePath(), sess.ID)
 
 		agent := "coder" // default OpenCode agent
-		summaries = append(summaries, domain.SessionSummary{
-			ID:           domain.SessionID(sess.ID),
-			Provider:     domain.ProviderOpenCode,
+		summaries = append(summaries, session.Summary{
+			ID:           session.ID(sess.ID),
+			Provider:     session.ProviderOpenCode,
 			Agent:        agent,
 			Summary:      sess.Title,
 			MessageCount: msgCount,
@@ -109,15 +110,15 @@ func (p *Provider) Detect(projectPath string, _ string) ([]domain.SessionSummary
 }
 
 // Export reads a session and converts it to the unified Session model.
-func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (*domain.Session, error) {
+func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error) {
 	sess, err := p.readSession(sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	session := &domain.Session{
+	result := &session.Session{
 		ID:          sessionID,
-		Provider:    domain.ProviderOpenCode,
+		Provider:    session.ProviderOpenCode,
 		StorageMode: mode,
 		Summary:     sess.Title,
 		ProjectPath: sess.Directory,
@@ -136,18 +137,18 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 	// Set agent from the first message
 	for _, msg := range messages {
 		if msg.Agent != "" {
-			session.Agent = msg.Agent
+			result.Agent = msg.Agent
 			break
 		}
 	}
-	if session.Agent == "" {
-		session.Agent = "coder"
+	if result.Agent == "" {
+		result.Agent = "coder"
 	}
 
 	// Summary mode: no messages
-	if mode == domain.StorageModeSummary {
-		session.TokenUsage = sumTokens(messages)
-		return session, nil
+	if mode == session.StorageModeSummary {
+		result.TokenUsage = sumTokens(messages)
+		return result, nil
 	}
 
 	// Build domain messages from OpenCode messages + their parts
@@ -167,7 +168,7 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 			continue
 		}
 
-		domainMsg := domain.Message{
+		domainMsg := session.Message{
 			ID:        msg.ID,
 			Model:     msg.ModelID,
 			Timestamp: time.UnixMilli(msg.Time.Created),
@@ -175,11 +176,11 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 
 		switch msg.Role {
 		case "user":
-			domainMsg.Role = domain.RoleUser
+			domainMsg.Role = session.RoleUser
 		case "assistant":
-			domainMsg.Role = domain.RoleAssistant
+			domainMsg.Role = session.RoleAssistant
 		default:
-			domainMsg.Role = domain.RoleSystem
+			domainMsg.Role = session.RoleSystem
 		}
 
 		// Process parts
@@ -190,16 +191,16 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 				textParts = append(textParts, part.Text)
 
 			case "tool":
-				if mode == domain.StorageModeFull || mode == domain.StorageModeCompact {
+				if mode == session.StorageModeFull || mode == session.StorageModeCompact {
 					tc := convertToolPart(part)
 					domainMsg.ToolCalls = append(domainMsg.ToolCalls, tc)
 
 					// Track file changes
-					trackFileChange(part, session)
+					trackFileChange(part, result)
 				}
 
 			case "reasoning":
-				if mode == domain.StorageModeFull {
+				if mode == session.StorageModeFull {
 					domainMsg.Thinking = part.Text
 				}
 			}
@@ -214,10 +215,10 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 			domainMsg.Tokens = msg.Tokens.Input + msg.Tokens.Output
 		}
 
-		session.Messages = append(session.Messages, domainMsg)
+		result.Messages = append(result.Messages, domainMsg)
 	}
 
-	session.TokenUsage = domain.TokenUsage{
+	result.TokenUsage = session.TokenUsage{
 		InputTokens:  totalInput,
 		OutputTokens: totalOutput,
 		TotalTokens:  totalInput + totalOutput,
@@ -226,10 +227,10 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 	// Load child sessions (sub-agents)
 	children, err := p.findChildSessions(string(sessionID), mode)
 	if err == nil && len(children) > 0 {
-		session.Children = children
+		result.Children = children
 	}
 
-	return session, nil
+	return result, nil
 }
 
 // CanImport reports that OpenCode supports session import.
@@ -238,9 +239,536 @@ func (p *Provider) CanImport() bool {
 }
 
 // Import writes a session back to OpenCode's native format.
-func (p *Provider) Import(session *domain.Session) error {
-	// TODO: Implement in Milestone 1.6 (Export/Import)
-	return domain.ErrImportNotSupported
+// It creates the project, session, message, and part JSON files
+// in the appropriate subdirectories under storage/.
+func (p *Provider) Import(sess *session.Session) error {
+	if sess == nil {
+		return fmt.Errorf("session is nil")
+	}
+
+	projectPath := sess.ProjectPath
+	if projectPath == "" {
+		return fmt.Errorf("session has no project path")
+	}
+
+	// Generate IDs if missing
+	sessionID := string(sess.ID)
+	if sessionID == "" {
+		sessionID = "ses_" + uuid.New().String()[:8]
+		sess.ID = session.ID(sessionID)
+	}
+
+	// Step 1: Ensure or find the project
+	projectID, err := p.ensureProject(projectPath)
+	if err != nil {
+		return fmt.Errorf("ensuring project: %w", err)
+	}
+
+	// Step 2: Write session file
+	if err := p.writeSession(sess, projectID); err != nil {
+		return fmt.Errorf("writing session: %w", err)
+	}
+
+	// Step 3: Write messages and their parts
+	if err := p.writeMessages(sess); err != nil {
+		return fmt.Errorf("writing messages: %w", err)
+	}
+
+	// Step 4: Import child sessions
+	for i := range sess.Children {
+		child := &sess.Children[i]
+		child.ProjectPath = projectPath
+		if child.ParentID == "" {
+			child.ParentID = sess.ID
+		}
+		if err := p.Import(child); err != nil {
+			return fmt.Errorf("importing child session: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ensureProject finds or creates the project entry for the given path.
+// Returns the project ID.
+func (p *Provider) ensureProject(worktreePath string) (string, error) {
+	// Try to find existing project
+	existingID, err := p.findProjectID(worktreePath)
+	if err == nil {
+		return existingID, nil
+	}
+
+	// Create new project entry
+	projectID := uuid.New().String()[:12]
+	projectsPath := filepath.Join(p.storagePath(), projectDir)
+	if err := os.MkdirAll(projectsPath, 0o755); err != nil {
+		return "", fmt.Errorf("creating projects directory: %w", err)
+	}
+
+	proj := ocProject{
+		ID:       projectID,
+		Worktree: worktreePath,
+	}
+
+	data, err := json.MarshalIndent(proj, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshalling project: %w", err)
+	}
+
+	projPath := filepath.Join(projectsPath, projectID+".json")
+	if err := os.WriteFile(projPath, data, 0o644); err != nil {
+		return "", fmt.Errorf("writing project file: %w", err)
+	}
+
+	return projectID, nil
+}
+
+// writeSession writes the session JSON file.
+func (p *Provider) writeSession(sess *session.Session, projectID string) error {
+	sessDir := filepath.Join(p.storagePath(), sessionDir, projectID)
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		return fmt.Errorf("creating session directory: %w", err)
+	}
+
+	created := sess.CreatedAt.UnixMilli()
+	if sess.CreatedAt.IsZero() {
+		created = time.Now().UnixMilli()
+	}
+
+	ocSess := ocSession{
+		ID:        string(sess.ID),
+		ProjectID: projectID,
+		Directory: sess.ProjectPath,
+		ParentID:  string(sess.ParentID),
+		Title:     sess.Summary,
+		Time: ocTime{
+			Created: created,
+			Updated: time.Now().UnixMilli(),
+		},
+	}
+
+	data, err := json.MarshalIndent(ocSess, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling session: %w", err)
+	}
+
+	sessPath := filepath.Join(sessDir, string(sess.ID)+".json")
+	if err := os.WriteFile(sessPath, data, 0o644); err != nil {
+		return fmt.Errorf("writing session file: %w", err)
+	}
+
+	return nil
+}
+
+// writeMessages writes message and part JSON files for all messages.
+func (p *Provider) writeMessages(sess *session.Session) error {
+	sessionID := string(sess.ID)
+	msgDir := filepath.Join(p.storagePath(), messageDir, sessionID)
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		return fmt.Errorf("creating message directory: %w", err)
+	}
+
+	for _, msg := range sess.Messages {
+		msgID := msg.ID
+		if msgID == "" {
+			msgID = "msg_" + uuid.New().String()[:8]
+		}
+
+		created := msg.Timestamp.UnixMilli()
+		if msg.Timestamp.IsZero() {
+			created = time.Now().UnixMilli()
+		}
+
+		// Rough token split for input/output
+		inputTokens := msg.Tokens / 2
+		outputTokens := msg.Tokens - inputTokens
+
+		ocMsg := ocMessage{
+			ID:      msgID,
+			Role:    string(msg.Role),
+			Agent:   sess.Agent,
+			ModelID: msg.Model,
+			Model: ocModel{
+				ModelID: msg.Model,
+			},
+			Tokens: ocTokens{
+				Input:  inputTokens,
+				Output: outputTokens,
+			},
+			Time: ocMsgTime{
+				Created:   created,
+				Completed: created,
+			},
+		}
+
+		msgData, err := json.MarshalIndent(ocMsg, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshalling message: %w", err)
+		}
+
+		msgPath := filepath.Join(msgDir, msgID+".json")
+		if err := os.WriteFile(msgPath, msgData, 0o644); err != nil {
+			return fmt.Errorf("writing message file: %w", err)
+		}
+
+		// Write parts for this message
+		if err := p.writeParts(msgID, sessionID, msg); err != nil {
+			return fmt.Errorf("writing parts for message %s: %w", msgID, err)
+		}
+	}
+
+	return nil
+}
+
+// writeParts writes part JSON files for a message's content and tool calls.
+func (p *Provider) writeParts(msgID, sessionID string, msg session.Message) error {
+	partsDir := filepath.Join(p.storagePath(), partDir, msgID)
+	if err := os.MkdirAll(partsDir, 0o755); err != nil {
+		return fmt.Errorf("creating parts directory: %w", err)
+	}
+
+	partIndex := 0
+
+	// Text part
+	if msg.Content != "" {
+		partID := fmt.Sprintf("prt_%s_%03d", msgID, partIndex)
+		part := ocPart{
+			ID:        partID,
+			SessionID: sessionID,
+			MessageID: msgID,
+			Type:      "text",
+			Text:      msg.Content,
+		}
+
+		data, err := json.MarshalIndent(part, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(partsDir, partID+".json"), data, 0o644); err != nil {
+			return err
+		}
+		partIndex++
+	}
+
+	// Thinking/reasoning part
+	if msg.Thinking != "" {
+		partID := fmt.Sprintf("prt_%s_%03d", msgID, partIndex)
+		part := ocPart{
+			ID:        partID,
+			SessionID: sessionID,
+			MessageID: msgID,
+			Type:      "reasoning",
+			Text:      msg.Thinking,
+		}
+
+		data, err := json.MarshalIndent(part, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(partsDir, partID+".json"), data, 0o644); err != nil {
+			return err
+		}
+		partIndex++
+	}
+
+	// Tool call parts
+	for _, tc := range msg.ToolCalls {
+		partID := tc.ID
+		if partID == "" {
+			partID = fmt.Sprintf("prt_%s_%03d", msgID, partIndex)
+		}
+
+		var input interface{}
+		if tc.Input != "" && json.Valid([]byte(tc.Input)) {
+			_ = json.Unmarshal([]byte(tc.Input), &input)
+		}
+
+		status := string(tc.State)
+		if status == "" {
+			status = "completed"
+		}
+
+		part := ocPart{
+			ID:        partID,
+			SessionID: sessionID,
+			MessageID: msgID,
+			Type:      "tool",
+			CallID:    tc.ID,
+			Tool:      tc.Name,
+			State: ocToolState{
+				Input:  input,
+				Output: tc.Output,
+				Status: status,
+				Time: ocPartTime{
+					Start: msg.Timestamp.UnixMilli(),
+					End:   msg.Timestamp.UnixMilli() + int64(tc.DurationMs),
+				},
+			},
+		}
+
+		data, err := json.MarshalIndent(part, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(partsDir, partID+".json"), data, 0o644); err != nil {
+			return err
+		}
+		partIndex++
+	}
+
+	return nil
+}
+
+// --- Marshal / Unmarshal (pure, no I/O) ---
+
+// ExportBundle is a single-JSON representation of an OpenCode session.
+// It bundles session + messages + parts into one object, suitable for
+// cross-provider conversion or serialization. This is the canonical
+// marshaling format for OpenCode's native data.
+type ExportBundle struct {
+	Messages []ExportMsg   `json:"messages"`
+	Session  ExportSession `json:"session"`
+}
+
+// ExportSession is the session metadata in an ExportBundle.
+type ExportSession struct {
+	ID        string          `json:"id"`
+	ProjectID string          `json:"projectID"`
+	Directory string          `json:"directory"`
+	ParentID  string          `json:"parentID,omitempty"`
+	Title     string          `json:"title"`
+	Time      ExportTimestamp `json:"time"`
+}
+
+// ExportTimestamp holds created/updated millisecond timestamps.
+type ExportTimestamp struct {
+	Created int64 `json:"created"`
+	Updated int64 `json:"updated"`
+}
+
+// ExportMsg is a message in an ExportBundle.
+type ExportMsg struct {
+	ID      string        `json:"id"`
+	Role    string        `json:"role"`
+	Agent   string        `json:"agent,omitempty"`
+	ModelID string        `json:"modelID,omitempty"`
+	Content string        `json:"content,omitempty"`
+	Parts   []ExportPart  `json:"parts"`
+	Tokens  ExportTokens  `json:"tokens"`
+	Time    ExportMsgTime `json:"time"`
+}
+
+// ExportMsgTime holds message timing.
+type ExportMsgTime struct {
+	Created   int64 `json:"created"`
+	Completed int64 `json:"completed"`
+}
+
+// ExportPart is a message part in an ExportBundle.
+type ExportPart struct {
+	State *ExportState `json:"state,omitempty"`
+	ID    string       `json:"id"`
+	Type  string       `json:"type"`
+	Text  string       `json:"text,omitempty"`
+	Tool  string       `json:"tool,omitempty"`
+}
+
+// ExportState holds tool execution state.
+type ExportState struct {
+	Input  interface{} `json:"input,omitempty"`
+	Output string      `json:"output,omitempty"`
+	Status string      `json:"status"`
+}
+
+// ExportTokens holds token counts for a message.
+type ExportTokens struct {
+	Input  int `json:"input"`
+	Output int `json:"output"`
+}
+
+// MarshalJSON converts a unified Session to an OpenCode ExportBundle JSON.
+// This is a pure function with no I/O — it only serializes data.
+func MarshalJSON(sess *session.Session) ([]byte, error) {
+	export := ExportBundle{
+		Session: ExportSession{
+			ID:        string(sess.ID),
+			Directory: sess.ProjectPath,
+			Title:     sess.Summary,
+			Time: ExportTimestamp{
+				Created: sess.CreatedAt.UnixMilli(),
+				Updated: sess.ExportedAt.UnixMilli(),
+			},
+		},
+	}
+
+	if sess.ParentID != "" {
+		export.Session.ParentID = string(sess.ParentID)
+	}
+
+	for _, msg := range sess.Messages {
+		ocMsg := ExportMsg{
+			ID:      msg.ID,
+			Role:    string(msg.Role),
+			Agent:   sess.Agent,
+			ModelID: msg.Model,
+			Content: msg.Content,
+			Tokens: ExportTokens{
+				Input:  msg.Tokens / 2, // rough split
+				Output: msg.Tokens - msg.Tokens/2,
+			},
+			Time: ExportMsgTime{
+				Created:   msg.Timestamp.UnixMilli(),
+				Completed: msg.Timestamp.UnixMilli(),
+			},
+		}
+
+		// Text part
+		if msg.Content != "" {
+			ocMsg.Parts = append(ocMsg.Parts, ExportPart{
+				ID:   msg.ID + "-text",
+				Type: "text",
+				Text: msg.Content,
+			})
+		}
+
+		// Thinking part
+		if msg.Thinking != "" {
+			ocMsg.Parts = append(ocMsg.Parts, ExportPart{
+				ID:   msg.ID + "-reasoning",
+				Type: "reasoning",
+				Text: msg.Thinking,
+			})
+		}
+
+		// Tool call parts
+		for _, tc := range msg.ToolCalls {
+			var input interface{}
+			if tc.Input != "" && json.Valid([]byte(tc.Input)) {
+				_ = json.Unmarshal([]byte(tc.Input), &input)
+			}
+			status := string(tc.State)
+			ocMsg.Parts = append(ocMsg.Parts, ExportPart{
+				ID:   tc.ID,
+				Type: "tool",
+				Tool: tc.Name,
+				State: &ExportState{
+					Input:  input,
+					Output: tc.Output,
+					Status: status,
+				},
+			})
+		}
+
+		export.Messages = append(export.Messages, ocMsg)
+	}
+
+	return json.MarshalIndent(export, "", "  ")
+}
+
+// UnmarshalJSON parses an OpenCode ExportBundle JSON into a unified Session.
+// This is a pure function with no I/O — it only deserializes data.
+func UnmarshalJSON(data []byte) (*session.Session, error) {
+	var export ExportBundle
+	if err := json.Unmarshal(data, &export); err != nil {
+		return nil, fmt.Errorf("parsing OpenCode JSON: %w", err)
+	}
+
+	sess := &session.Session{
+		ID:          session.ID(export.Session.ID),
+		Provider:    session.ProviderOpenCode,
+		Agent:       "coder",
+		StorageMode: session.StorageModeFull,
+		Summary:     export.Session.Title,
+		ProjectPath: export.Session.Directory,
+		Version:     1,
+		ExportedBy:  "aisync-import",
+		ExportedAt:  time.Now(),
+		CreatedAt:   time.UnixMilli(export.Session.Time.Created),
+	}
+
+	if export.Session.ParentID != "" {
+		sess.ParentID = session.ID(export.Session.ParentID)
+	}
+
+	var totalInput, totalOutput int
+	for _, msg := range export.Messages {
+		if msg.Agent != "" {
+			sess.Agent = msg.Agent
+		}
+
+		domainMsg := session.Message{
+			ID:        msg.ID,
+			Model:     msg.ModelID,
+			Timestamp: time.UnixMilli(msg.Time.Created),
+		}
+
+		switch msg.Role {
+		case "user":
+			domainMsg.Role = session.RoleUser
+		case "assistant":
+			domainMsg.Role = session.RoleAssistant
+		default:
+			domainMsg.Role = session.RoleSystem
+		}
+
+		totalInput += msg.Tokens.Input
+		totalOutput += msg.Tokens.Output
+		domainMsg.Tokens = msg.Tokens.Input + msg.Tokens.Output
+
+		// Process parts
+		var textParts []string
+		for _, part := range msg.Parts {
+			switch part.Type {
+			case "text":
+				textParts = append(textParts, part.Text)
+			case "reasoning":
+				domainMsg.Thinking = part.Text
+			case "tool":
+				tc := session.ToolCall{
+					ID:   part.ID,
+					Name: part.Tool,
+				}
+				if part.State != nil {
+					tc.Output = part.State.Output
+					switch part.State.Status {
+					case "completed":
+						tc.State = session.ToolStateCompleted
+					case "error":
+						tc.State = session.ToolStateError
+					case "running":
+						tc.State = session.ToolStateRunning
+					default:
+						tc.State = session.ToolStatePending
+					}
+					if part.State.Input != nil {
+						inputBytes, _ := json.Marshal(part.State.Input)
+						tc.Input = string(inputBytes)
+					}
+				}
+				domainMsg.ToolCalls = append(domainMsg.ToolCalls, tc)
+			}
+		}
+
+		if msg.Content != "" && len(textParts) == 0 {
+			domainMsg.Content = msg.Content
+		} else {
+			domainMsg.Content = strings.Join(textParts, "\n")
+		}
+
+		sess.Messages = append(sess.Messages, domainMsg)
+	}
+
+	sess.TokenUsage = session.TokenUsage{
+		InputTokens:  totalInput,
+		OutputTokens: totalOutput,
+		TotalTokens:  totalInput + totalOutput,
+	}
+
+	if sess.ID == "" {
+		sess.ID = session.NewID()
+	}
+
+	return sess, nil
 }
 
 // --- Internal helpers ---
@@ -282,10 +810,10 @@ func (p *Provider) findProjectID(worktreePath string) (string, error) {
 		}
 	}
 
-	return "", domain.ErrSessionNotFound
+	return "", session.ErrSessionNotFound
 }
 
-func (p *Provider) readSession(sessionID domain.SessionID) (*ocSession, error) {
+func (p *Provider) readSession(sessionID session.ID) (*ocSession, error) {
 	// Find the session file across all project directories
 	sessionsRoot := filepath.Join(p.storagePath(), sessionDir)
 	projectDirs, err := os.ReadDir(sessionsRoot)
@@ -311,7 +839,7 @@ func (p *Provider) readSession(sessionID domain.SessionID) (*ocSession, error) {
 		return &sess, nil
 	}
 
-	return nil, domain.ErrSessionNotFound
+	return nil, session.ErrSessionNotFound
 }
 
 func (p *Provider) loadMessages(sessionID string) ([]ocMessage, error) {
@@ -376,7 +904,7 @@ func (p *Provider) loadParts(messageID string) ([]ocPart, error) {
 	return parts, nil
 }
 
-func (p *Provider) findChildSessions(parentID string, mode domain.StorageMode) ([]domain.Session, error) {
+func (p *Provider) findChildSessions(parentID string, mode session.StorageMode) ([]session.Session, error) {
 	// Search all project session directories for sessions with this parentID
 	sessionsRoot := filepath.Join(p.storagePath(), sessionDir)
 	projectDirs, err := os.ReadDir(sessionsRoot)
@@ -384,7 +912,7 @@ func (p *Provider) findChildSessions(parentID string, mode domain.StorageMode) (
 		return nil, err
 	}
 
-	var children []domain.Session
+	var children []session.Session
 	for _, dir := range projectDirs {
 		if !dir.IsDir() {
 			continue
@@ -412,11 +940,11 @@ func (p *Provider) findChildSessions(parentID string, mode domain.StorageMode) (
 
 			if sess.ParentID == parentID {
 				// Recursively export the child
-				child, exportErr := p.Export(domain.SessionID(sess.ID), mode)
+				child, exportErr := p.Export(session.ID(sess.ID), mode)
 				if exportErr != nil {
 					continue
 				}
-				child.ParentID = domain.SessionID(parentID)
+				child.ParentID = session.ID(parentID)
 				children = append(children, *child)
 			}
 		}
@@ -440,8 +968,8 @@ func countMessages(storagePath, sessionID string) int {
 	return count
 }
 
-func convertToolPart(part ocPart) domain.ToolCall {
-	tc := domain.ToolCall{
+func convertToolPart(part ocPart) session.ToolCall {
+	tc := session.ToolCall{
 		ID:   part.CallID,
 		Name: part.Tool,
 	}
@@ -457,13 +985,13 @@ func convertToolPart(part ocPart) domain.ToolCall {
 	// Map status to domain ToolState
 	switch part.State.Status {
 	case "completed":
-		tc.State = domain.ToolStateCompleted
+		tc.State = session.ToolStateCompleted
 	case "error":
-		tc.State = domain.ToolStateError
+		tc.State = session.ToolStateError
 	case "running":
-		tc.State = domain.ToolStateRunning
+		tc.State = session.ToolStateRunning
 	default:
-		tc.State = domain.ToolStatePending
+		tc.State = session.ToolStatePending
 	}
 
 	// Duration
@@ -474,7 +1002,7 @@ func convertToolPart(part ocPart) domain.ToolCall {
 	return tc
 }
 
-func trackFileChange(part ocPart, session *domain.Session) {
+func trackFileChange(part ocPart, sess *session.Session) {
 	if part.Type != "tool" {
 		return
 	}
@@ -492,34 +1020,34 @@ func trackFileChange(part ocPart, session *domain.Session) {
 		return
 	}
 
-	changeType := domain.ChangeRead
+	changeType := session.ChangeRead
 	switch strings.ToLower(part.Tool) {
 	case "write":
-		changeType = domain.ChangeCreated
+		changeType = session.ChangeCreated
 	case "edit":
-		changeType = domain.ChangeModified
+		changeType = session.ChangeModified
 	}
 
 	// Avoid duplicates
-	for _, fc := range session.FileChanges {
+	for _, fc := range sess.FileChanges {
 		if fc.FilePath == input.FilePath {
 			return
 		}
 	}
 
-	session.FileChanges = append(session.FileChanges, domain.FileChange{
+	sess.FileChanges = append(sess.FileChanges, session.FileChange{
 		FilePath:   input.FilePath,
 		ChangeType: changeType,
 	})
 }
 
-func sumTokens(messages []ocMessage) domain.TokenUsage {
+func sumTokens(messages []ocMessage) session.TokenUsage {
 	var input, output int
 	for _, msg := range messages {
 		input += msg.Tokens.Input + msg.Tokens.Cache.Read + msg.Tokens.Cache.Write
 		output += msg.Tokens.Output
 	}
-	return domain.TokenUsage{
+	return session.TokenUsage{
 		InputTokens:  input,
 		OutputTokens: output,
 		TotalTokens:  input + output,

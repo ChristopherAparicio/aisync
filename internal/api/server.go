@@ -1,0 +1,105 @@
+// Package api implements the HTTP API server for aisync.
+// It exposes SessionService and SyncService operations as JSON endpoints
+// using Go's stdlib net/http with Go 1.22+ ServeMux method-based routing.
+package api
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/ChristopherAparicio/aisync/internal/service"
+)
+
+// Server is the aisync HTTP API server.
+type Server struct {
+	sessionSvc *service.SessionService
+	syncSvc    *service.SyncService // optional — nil when git sync is unavailable
+	httpServer *http.Server
+	logger     *log.Logger
+}
+
+// Config holds the configuration for creating a new Server.
+type Config struct {
+	SessionService *service.SessionService
+	SyncService    *service.SyncService // optional
+	Addr           string               // e.g. ":8371" or "127.0.0.1:8371"
+	Logger         *log.Logger          // optional — defaults to stderr
+}
+
+// New creates a Server with the given configuration.
+func New(cfg Config) *Server {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = log.New(os.Stderr, "[aisync-api] ", log.LstdFlags)
+	}
+
+	s := &Server{
+		sessionSvc: cfg.SessionService,
+		syncSvc:    cfg.SyncService,
+		logger:     logger,
+	}
+
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+
+	s.httpServer = &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           s.withMiddleware(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	return s
+}
+
+// ListenAndServe starts the HTTP server and blocks until it's shut down.
+// It listens for SIGINT/SIGTERM to initiate graceful shutdown.
+func (s *Server) ListenAndServe() error {
+	ln, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", s.httpServer.Addr, err)
+	}
+
+	s.logger.Printf("listening on %s", ln.Addr())
+
+	// Graceful shutdown on signal
+	errCh := make(chan error, 1)
+	go func() {
+		if serveErr := s.httpServer.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
+			errCh <- serveErr
+		}
+		close(errCh)
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case sig := <-sigCh:
+		s.logger.Printf("received %s, shutting down...", sig)
+	case err := <-errCh:
+		return err
+	}
+
+	return s.Shutdown()
+}
+
+// Shutdown gracefully stops the server with a 10-second deadline.
+func (s *Server) Shutdown() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.httpServer.Shutdown(ctx)
+}
+
+// Handler returns the underlying http.Handler for testing purposes.
+func (s *Server) Handler() http.Handler {
+	return s.httpServer.Handler
+}

@@ -4,11 +4,11 @@ package linkcmd
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -71,72 +71,40 @@ func runLink(opts *Options) error {
 		return fmt.Errorf("could not determine repository root: %w", err)
 	}
 
-	// Get dependencies
-	store, err := opts.Factory.Store()
-	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
-	}
-
-	// Find the session to link
-	var sessionID domain.SessionID
+	// Parse session ID
+	var sessionID session.ID
 	if opts.SessionFlag != "" {
-		parsed, parseErr := domain.ParseSessionID(opts.SessionFlag)
+		parsed, parseErr := session.ParseID(opts.SessionFlag)
 		if parseErr != nil {
 			return parseErr
 		}
 		sessionID = parsed
-	} else {
-		// Find session for current branch
-		session, lookupErr := store.GetByBranch(topLevel, branch)
-		if lookupErr != nil {
-			return fmt.Errorf("no session found for branch %q: %w", branch, lookupErr)
-		}
-		sessionID = session.ID
 	}
 
-	// Auto-detect PR from current branch if requested
-	if opts.AutoDetect && opts.PRFlag == 0 {
-		plat, platErr := opts.Factory.Platform()
-		if platErr != nil {
-			return fmt.Errorf("platform not available: %w", platErr)
-		}
-		pr, prErr := plat.GetPRForBranch(branch)
-		if prErr != nil {
-			return fmt.Errorf("no open PR found for branch %q: %w", branch, prErr)
-		}
-		opts.PRFlag = pr.Number
-		fmt.Fprintf(out, "Auto-detected PR #%d: %s\n", pr.Number, pr.Title)
+	// Get service
+	svc, err := opts.Factory.SessionService()
+	if err != nil {
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	// Add links
-	var linked int
-
-	if opts.PRFlag > 0 {
-		link := domain.Link{
-			LinkType: domain.LinkPR,
-			Ref:      strconv.Itoa(opts.PRFlag),
-		}
-		if linkErr := store.AddLink(sessionID, link); linkErr != nil {
-			return fmt.Errorf("linking to PR #%d: %w", opts.PRFlag, linkErr)
-		}
-		fmt.Fprintf(out, "Linked session %s to PR #%d\n", sessionID, opts.PRFlag)
-		linked++
+	// Link
+	result, err := svc.Link(service.LinkRequest{
+		SessionID:   sessionID,
+		ProjectPath: topLevel,
+		Branch:      branch,
+		PRNumber:    opts.PRFlag,
+		CommitSHA:   opts.CommitFlag,
+		AutoDetect:  opts.AutoDetect,
+	})
+	if err != nil {
+		return err
 	}
 
-	if opts.CommitFlag != "" {
-		link := domain.Link{
-			LinkType: domain.LinkCommit,
-			Ref:      opts.CommitFlag,
-		}
-		if linkErr := store.AddLink(sessionID, link); linkErr != nil {
-			return fmt.Errorf("linking to commit %s: %w", opts.CommitFlag, linkErr)
-		}
-		fmt.Fprintf(out, "Linked session %s to commit %s\n", sessionID, opts.CommitFlag)
-		linked++
+	if result.PRNumber > 0 {
+		fmt.Fprintf(out, "Linked session %s to PR #%d\n", result.SessionID, result.PRNumber)
 	}
-
-	if linked == 0 {
-		return fmt.Errorf("no links were added")
+	if result.CommitSHA != "" {
+		fmt.Fprintf(out, "Linked session %s to commit %s\n", result.SessionID, result.CommitSHA)
 	}
 
 	return nil

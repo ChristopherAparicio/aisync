@@ -3,14 +3,12 @@
 package importcmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/converter"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -60,119 +58,31 @@ func runImport(opts *Options, filePath string) error {
 		return fmt.Errorf("file %s is empty", filePath)
 	}
 
-	// Determine source format
-	var sourceFormat domain.ProviderName
-	if opts.FormatFlag != "" {
-		switch opts.FormatFlag {
-		case "aisync":
-			sourceFormat = "" // unified
-		case "claude", "claude-code":
-			sourceFormat = domain.ProviderClaudeCode
-		case "opencode":
-			sourceFormat = domain.ProviderOpenCode
-		default:
-			return fmt.Errorf("unknown format %q: valid values are [aisync, claude, opencode]", opts.FormatFlag)
-		}
-	} else {
-		sourceFormat = converter.DetectFormat(data)
+	// Get service
+	svc, err := opts.Factory.SessionService()
+	if err != nil {
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	// Parse into unified session
-	var session *domain.Session
-	conv := converter.New()
-
-	if sourceFormat == "" {
-		// Unified aisync JSON
-		session = &domain.Session{}
-		if jsonErr := json.Unmarshal(data, session); jsonErr != nil {
-			return fmt.Errorf("parsing aisync JSON: %w", jsonErr)
-		}
-		fmt.Fprintf(out, "Detected format: aisync (unified JSON)\n")
-	} else {
-		session, err = conv.FromNative(data, sourceFormat)
-		if err != nil {
-			return fmt.Errorf("parsing %s format: %w", sourceFormat, err)
-		}
-		fmt.Fprintf(out, "Detected format: %s\n", sourceFormat)
+	// Import
+	result, err := svc.Import(service.ImportRequest{
+		Data:         data,
+		SourceFormat: opts.FormatFlag,
+		IntoTarget:   opts.IntoFlag,
+	})
+	if err != nil {
+		return err
 	}
 
-	// Scan for secrets if scanner is available
-	scanner := opts.Factory.Scanner()
-	if scanner != nil && scanner.Mode() == domain.SecretModeMask {
-		matches := scanner.Scan(sessionText(session))
-		if len(matches) > 0 {
-			for i := range session.Messages {
-				session.Messages[i].Content = scanner.Mask(session.Messages[i].Content)
-				for j := range session.Messages[i].ToolCalls {
-					session.Messages[i].ToolCalls[j].Output = scanner.Mask(session.Messages[i].ToolCalls[j].Output)
-				}
-			}
-			fmt.Fprintf(out, "Masked %d secret(s) before storing.\n", len(matches))
-		}
-	}
+	fmt.Fprintf(out, "Detected format: %s\n", result.SourceFormat)
 
-	// Determine target
-	switch opts.IntoFlag {
-	case "aisync", "":
-		// Store in local SQLite only
-		store, storeErr := opts.Factory.Store()
-		if storeErr != nil {
-			return fmt.Errorf("opening store: %w", storeErr)
-		}
-		if session.ID == "" {
-			session.ID = domain.NewSessionID()
-		}
-		if saveErr := store.Save(session); saveErr != nil {
-			return fmt.Errorf("storing session: %w", saveErr)
-		}
-		fmt.Fprintf(out, "Stored session %s locally.\n", session.ID)
-		fmt.Fprintf(out, "Use 'aisync restore --session %s' to load into your agent.\n", session.ID)
-
-	case "claude", "claude-code":
-		// Convert to Claude and inject via provider
-		registry := opts.Factory.Registry()
-		prov, provErr := registry.Get(domain.ProviderClaudeCode)
-		if provErr != nil {
-			return fmt.Errorf("claude-code provider: %w", provErr)
-		}
-		if !prov.CanImport() {
-			return fmt.Errorf("claude-code provider does not support import")
-		}
-		if importErr := prov.Import(session); importErr != nil {
-			return fmt.Errorf("importing into claude-code: %w", importErr)
-		}
-		fmt.Fprintf(out, "Imported session %s into claude-code.\n", session.ID)
-
-	case "opencode":
-		// Convert to OpenCode and inject via provider
-		registry := opts.Factory.Registry()
-		prov, provErr := registry.Get(domain.ProviderOpenCode)
-		if provErr != nil {
-			return fmt.Errorf("opencode provider: %w", provErr)
-		}
-		if !prov.CanImport() {
-			return fmt.Errorf("opencode provider does not support import")
-		}
-		if importErr := prov.Import(session); importErr != nil {
-			return fmt.Errorf("importing into opencode: %w", importErr)
-		}
-		fmt.Fprintf(out, "Imported session %s into opencode.\n", session.ID)
-
+	switch result.Target {
+	case "aisync":
+		fmt.Fprintf(out, "Stored session %s locally.\n", result.SessionID)
+		fmt.Fprintf(out, "Use 'aisync restore --session %s' to load into your agent.\n", result.SessionID)
 	default:
-		return fmt.Errorf("unknown target %q: valid values are [aisync, claude-code, opencode]", opts.IntoFlag)
+		fmt.Fprintf(out, "Imported session %s into %s.\n", result.SessionID, result.Target)
 	}
 
 	return nil
-}
-
-// sessionText concatenates all scannable text from a session.
-func sessionText(session *domain.Session) string {
-	var text string
-	for _, msg := range session.Messages {
-		text += msg.Content + "\n"
-		for _, tc := range msg.ToolCalls {
-			text += tc.Output + "\n"
-		}
-	}
-	return text
 }

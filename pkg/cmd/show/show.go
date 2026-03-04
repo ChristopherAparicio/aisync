@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -29,10 +29,14 @@ func NewCmdShow(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "show [session-id]",
+		Use:   "show [session-id | commit-sha]",
 		Short: "Show details of a session",
-		Long:  "Shows detailed information about a captured session.",
-		Args:  cobra.ExactArgs(1),
+		Long: `Shows detailed information about a captured session.
+
+Accepts either a session ID or a git commit SHA. When a commit SHA is given,
+aisync parses the AI-Session trailer from the commit message to find the
+associated session.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runShow(opts, args[0])
 		},
@@ -47,72 +51,68 @@ func NewCmdShow(f *cmdutil.Factory) *cobra.Command {
 func runShow(opts *Options, idArg string) error {
 	out := opts.IO.Out
 
-	store, err := opts.Factory.Store()
+	// Get service
+	svc, err := opts.Factory.SessionService()
 	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	// Try as session ID first
-	sessionID, parseErr := domain.ParseSessionID(idArg)
-	if parseErr != nil {
-		return parseErr
-	}
-
-	session, err := store.Get(sessionID)
+	// Resolve the argument: could be a session ID or a commit SHA
+	sess, err := svc.Get(idArg)
 	if err != nil {
 		return fmt.Errorf("session %q not found: %w", idArg, err)
 	}
 
 	// Basic info
-	fmt.Fprintf(out, "Session:  %s\n", session.ID)
-	fmt.Fprintf(out, "Provider: %s\n", session.Provider)
-	fmt.Fprintf(out, "Agent:    %s\n", session.Agent)
-	if session.Branch != "" {
-		fmt.Fprintf(out, "Branch:   %s\n", session.Branch)
+	fmt.Fprintf(out, "Session:  %s\n", sess.ID)
+	fmt.Fprintf(out, "Provider: %s\n", sess.Provider)
+	fmt.Fprintf(out, "Agent:    %s\n", sess.Agent)
+	if sess.Branch != "" {
+		fmt.Fprintf(out, "Branch:   %s\n", sess.Branch)
 	}
-	if !session.CreatedAt.IsZero() {
-		fmt.Fprintf(out, "Captured: %s\n", session.CreatedAt.Format("2006-01-02 15:04:05"))
+	if !sess.CreatedAt.IsZero() {
+		fmt.Fprintf(out, "Captured: %s\n", sess.CreatedAt.Format("2006-01-02 15:04:05"))
 	}
-	fmt.Fprintf(out, "Mode:     %s\n", session.StorageMode)
+	fmt.Fprintf(out, "Mode:     %s\n", sess.StorageMode)
 
 	// Message count by role
 	var userCount, assistantCount int
-	for _, msg := range session.Messages {
+	for _, msg := range sess.Messages {
 		switch msg.Role {
-		case domain.RoleUser:
+		case session.RoleUser:
 			userCount++
-		case domain.RoleAssistant:
+		case session.RoleAssistant:
 			assistantCount++
 		}
 	}
 	fmt.Fprintf(out, "Messages: %d (%d user, %d assistant)\n",
-		len(session.Messages), userCount, assistantCount)
+		len(sess.Messages), userCount, assistantCount)
 
 	// Tokens
-	if session.TokenUsage.TotalTokens > 0 || opts.ShowTokens {
+	if sess.TokenUsage.TotalTokens > 0 || opts.ShowTokens {
 		fmt.Fprintf(out, "Tokens:   %s in / %s out / %s total\n",
-			formatNumber(session.TokenUsage.InputTokens),
-			formatNumber(session.TokenUsage.OutputTokens),
-			formatNumber(session.TokenUsage.TotalTokens))
+			formatNumber(sess.TokenUsage.InputTokens),
+			formatNumber(sess.TokenUsage.OutputTokens),
+			formatNumber(sess.TokenUsage.TotalTokens))
 	}
 
 	// Summary
-	if session.Summary != "" {
-		fmt.Fprintf(out, "Summary:  %s\n", session.Summary)
+	if sess.Summary != "" {
+		fmt.Fprintf(out, "Summary:  %s\n", sess.Summary)
 	}
 
 	// Files
-	if len(session.FileChanges) > 0 && (opts.ShowFiles || true) {
+	if len(sess.FileChanges) > 0 && (opts.ShowFiles || true) {
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "Files changed:")
-		for _, fc := range session.FileChanges {
+		for _, fc := range sess.FileChanges {
 			prefix := "~"
 			switch fc.ChangeType {
-			case domain.ChangeCreated:
+			case session.ChangeCreated:
 				prefix = "+"
-			case domain.ChangeDeleted:
+			case session.ChangeDeleted:
 				prefix = "-"
-			case domain.ChangeRead:
+			case session.ChangeRead:
 				prefix = "?"
 			}
 			fmt.Fprintf(out, "  %s %s  (%s)\n", prefix, fc.FilePath, fc.ChangeType)
@@ -120,19 +120,19 @@ func runShow(opts *Options, idArg string) error {
 	}
 
 	// Links
-	if len(session.Links) > 0 {
+	if len(sess.Links) > 0 {
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "Linked to:")
-		for _, link := range session.Links {
+		for _, link := range sess.Links {
 			fmt.Fprintf(out, "  %s: %s\n", link.LinkType, link.Ref)
 		}
 	}
 
 	// Children
-	if len(session.Children) > 0 {
+	if len(sess.Children) > 0 {
 		fmt.Fprintln(out)
-		fmt.Fprintf(out, "Children: %d sub-agent sessions\n", len(session.Children))
-		for _, child := range session.Children {
+		fmt.Fprintf(out, "Children: %d sub-agent sessions\n", len(sess.Children))
+		for _, child := range sess.Children {
 			fmt.Fprintf(out, "  - %s (agent: %s, %d messages)\n",
 				child.ID, child.Agent, len(child.Messages))
 		}

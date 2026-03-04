@@ -4,42 +4,42 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 // mockProvider is a simple mock for testing the registry.
 type mockProvider struct {
 	detectErr error
-	name      domain.ProviderName
-	sessions  []domain.SessionSummary
+	name      session.ProviderName
+	sessions  []session.Summary
 }
 
-func (m *mockProvider) Name() domain.ProviderName { return m.name }
-func (m *mockProvider) Detect(_ string, _ string) ([]domain.SessionSummary, error) {
+func (m *mockProvider) Name() session.ProviderName { return m.name }
+func (m *mockProvider) Detect(_ string, _ string) ([]session.Summary, error) {
 	return m.sessions, m.detectErr
 }
-func (m *mockProvider) Export(_ domain.SessionID, _ domain.StorageMode) (*domain.Session, error) {
+func (m *mockProvider) Export(_ session.ID, _ session.StorageMode) (*session.Session, error) {
 	return nil, nil
 }
-func (m *mockProvider) CanImport() bool                { return false }
-func (m *mockProvider) Import(_ *domain.Session) error { return nil }
+func (m *mockProvider) CanImport() bool                 { return false }
+func (m *mockProvider) Import(_ *session.Session) error { return nil }
 
 func TestRegistry_Get(t *testing.T) {
-	p := &mockProvider{name: domain.ProviderClaudeCode}
+	p := &mockProvider{name: session.ProviderClaudeCode}
 	r := NewRegistry(p)
 
 	t.Run("found", func(t *testing.T) {
-		got, err := r.Get(domain.ProviderClaudeCode)
+		got, err := r.Get(session.ProviderClaudeCode)
 		if err != nil {
 			t.Fatalf("Get() error: %v", err)
 		}
-		if got.Name() != domain.ProviderClaudeCode {
-			t.Errorf("Name() = %q, want %q", got.Name(), domain.ProviderClaudeCode)
+		if got.Name() != session.ProviderClaudeCode {
+			t.Errorf("Name() = %q, want %q", got.Name(), session.ProviderClaudeCode)
 		}
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := r.Get(domain.ProviderOpenCode)
+		_, err := r.Get(session.ProviderOpenCode)
 		if err == nil {
 			t.Error("Get() should return error for unregistered provider")
 		}
@@ -50,15 +50,15 @@ func TestRegistry_DetectAll(t *testing.T) {
 	now := time.Now()
 
 	claude := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "s1", Provider: domain.ProviderClaudeCode, CreatedAt: now},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "s1", Provider: session.ProviderClaudeCode, CreatedAt: now},
 		},
 	}
 	opencode := &mockProvider{
-		name: domain.ProviderOpenCode,
-		sessions: []domain.SessionSummary{
-			{ID: "s2", Provider: domain.ProviderOpenCode, CreatedAt: now.Add(-time.Hour)},
+		name: session.ProviderOpenCode,
+		sessions: []session.Summary{
+			{ID: "s2", Provider: session.ProviderOpenCode, CreatedAt: now.Add(-time.Hour)},
 		},
 	}
 
@@ -75,14 +75,14 @@ func TestRegistry_DetectAll(t *testing.T) {
 
 func TestRegistry_DetectAll_skipsErrors(t *testing.T) {
 	working := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "s1", Provider: domain.ProviderClaudeCode},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "s1", Provider: session.ProviderClaudeCode},
 		},
 	}
 	broken := &mockProvider{
-		name:      domain.ProviderOpenCode,
-		detectErr: domain.ErrProviderNotDetected,
+		name:      session.ProviderOpenCode,
+		detectErr: session.ErrProviderNotDetected,
 	}
 
 	r := NewRegistry(working, broken)
@@ -100,15 +100,15 @@ func TestRegistry_DetectBest(t *testing.T) {
 	now := time.Now()
 
 	older := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "old", Provider: domain.ProviderClaudeCode, CreatedAt: now.Add(-time.Hour)},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "old", Provider: session.ProviderClaudeCode, CreatedAt: now.Add(-time.Hour)},
 		},
 	}
 	newer := &mockProvider{
-		name: domain.ProviderOpenCode,
-		sessions: []domain.SessionSummary{
-			{ID: "new", Provider: domain.ProviderOpenCode, CreatedAt: now},
+		name: session.ProviderOpenCode,
+		sessions: []session.Summary{
+			{ID: "new", Provider: session.ProviderOpenCode, CreatedAt: now},
 		},
 	}
 
@@ -121,28 +121,28 @@ func TestRegistry_DetectBest(t *testing.T) {
 	if summary.ID != "new" {
 		t.Errorf("DetectBest() ID = %q, want %q", summary.ID, "new")
 	}
-	if provider.Name() != domain.ProviderOpenCode {
-		t.Errorf("DetectBest() provider = %q, want %q", provider.Name(), domain.ProviderOpenCode)
+	if provider.Name() != session.ProviderOpenCode {
+		t.Errorf("DetectBest() provider = %q, want %q", provider.Name(), session.ProviderOpenCode)
 	}
 }
 
 func TestRegistry_DetectBest_noSessions(t *testing.T) {
 	empty := &mockProvider{
-		name:     domain.ProviderClaudeCode,
+		name:     session.ProviderClaudeCode,
 		sessions: nil,
 	}
 
 	r := NewRegistry(empty)
 
 	_, _, err := r.DetectBest("/project", "main")
-	if err != domain.ErrProviderNotDetected {
+	if err != session.ErrProviderNotDetected {
 		t.Errorf("DetectBest() error = %v, want ErrProviderNotDetected", err)
 	}
 }
 
 func TestRegistry_Names(t *testing.T) {
-	p1 := &mockProvider{name: domain.ProviderClaudeCode}
-	p2 := &mockProvider{name: domain.ProviderOpenCode}
+	p1 := &mockProvider{name: session.ProviderClaudeCode}
+	p2 := &mockProvider{name: session.ProviderOpenCode}
 	r := NewRegistry(p1, p2)
 
 	names := r.Names()

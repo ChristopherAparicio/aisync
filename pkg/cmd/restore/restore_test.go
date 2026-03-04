@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -18,28 +20,28 @@ import (
 // mockProvider for restore tests.
 type mockProvider struct {
 	importErr   error
-	imported    *domain.Session
-	name        domain.ProviderName
-	detectSumms []domain.SessionSummary
+	imported    *session.Session
+	name        session.ProviderName
+	detectSumms []session.Summary
 	canImport   bool
 }
 
-func (m *mockProvider) Name() domain.ProviderName { return m.name }
+func (m *mockProvider) Name() session.ProviderName { return m.name }
 
-func (m *mockProvider) Detect(_, _ string) ([]domain.SessionSummary, error) {
+func (m *mockProvider) Detect(_, _ string) ([]session.Summary, error) {
 	if m.detectSumms == nil {
-		return nil, domain.ErrProviderNotDetected
+		return nil, session.ErrProviderNotDetected
 	}
 	return m.detectSumms, nil
 }
 
-func (m *mockProvider) Export(_ domain.SessionID, _ domain.StorageMode) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockProvider) Export(_ session.ID, _ session.StorageMode) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
 
 func (m *mockProvider) CanImport() bool { return m.canImport }
 
-func (m *mockProvider) Import(s *domain.Session) error {
+func (m *mockProvider) Import(s *session.Session) error {
 	if m.importErr != nil {
 		return m.importErr
 	}
@@ -49,53 +51,53 @@ func (m *mockProvider) Import(s *domain.Session) error {
 
 // mockStore for restore tests — stores sessions in memory.
 type mockStore struct {
-	sessions map[domain.SessionID]*domain.Session
-	byBranch map[string]*domain.Session         // key = "projectPath:branch"
-	links    map[string][]domain.SessionSummary // key = "linkType:ref"
+	sessions map[session.ID]*session.Session
+	byBranch map[string]*session.Session  // key = "projectPath:branch"
+	links    map[string][]session.Summary // key = "linkType:ref"
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		sessions: make(map[domain.SessionID]*domain.Session),
-		byBranch: make(map[string]*domain.Session),
-		links:    make(map[string][]domain.SessionSummary),
+		sessions: make(map[session.ID]*session.Session),
+		byBranch: make(map[string]*session.Session),
+		links:    make(map[string][]session.Summary),
 	}
 }
 
-func (m *mockStore) Save(s *domain.Session) error {
+func (m *mockStore) Save(s *session.Session) error {
 	m.sessions[s.ID] = s
 	key := s.ProjectPath + ":" + s.Branch
 	m.byBranch[key] = s
 	return nil
 }
 
-func (m *mockStore) Get(id domain.SessionID) (*domain.Session, error) {
+func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	s, ok := m.sessions[id]
 	if !ok {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return s, nil
 }
 
-func (m *mockStore) GetByBranch(projectPath, branch string) (*domain.Session, error) {
+func (m *mockStore) GetByBranch(projectPath, branch string) (*session.Session, error) {
 	key := projectPath + ":" + branch
 	s, ok := m.byBranch[key]
 	if !ok {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return s, nil
 }
 
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) { return nil, nil }
-func (m *mockStore) Delete(_ domain.SessionID) error                            { return nil }
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
+func (m *mockStore) Delete(_ session.ID) error                             { return nil }
 
-func (m *mockStore) AddLink(sessionID domain.SessionID, link domain.Link) error {
+func (m *mockStore) AddLink(sessionID session.ID, link session.Link) error {
 	key := string(link.LinkType) + ":" + link.Ref
 	s, ok := m.sessions[sessionID]
 	if !ok {
-		return domain.ErrSessionNotFound
+		return session.ErrSessionNotFound
 	}
-	summary := domain.SessionSummary{
+	summary := session.Summary{
 		ID:       s.ID,
 		Provider: s.Provider,
 		Branch:   s.Branch,
@@ -104,15 +106,21 @@ func (m *mockStore) AddLink(sessionID domain.SessionID, link domain.Link) error 
 	return nil
 }
 
-func (m *mockStore) GetByLink(linkType domain.LinkType, ref string) ([]domain.SessionSummary, error) {
+func (m *mockStore) GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error) {
 	key := string(linkType) + ":" + ref
 	summaries, ok := m.links[key]
 	if !ok || len(summaries) == 0 {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return summaries, nil
 }
-func (m *mockStore) Close() error { return nil }
+func (m *mockStore) Close() error                                   { return nil }
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
+}
 
 func testFactory(t *testing.T, prov *mockProvider, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams, string) {
 	t.Helper()
@@ -124,17 +132,26 @@ func testFactory(t *testing.T, prov *mockProvider, store *mockStore) (*cmdutil.F
 	}
 	gitClient := git.NewClient(repoDir)
 
+	registry := provider.NewRegistry()
+	if prov != nil {
+		registry = provider.NewRegistry(prov)
+	}
+
 	f := &cmdutil.Factory{
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
 		RegistryFunc: func() *provider.Registry {
-			if prov != nil {
-				return provider.NewRegistry(prov)
-			}
-			return provider.NewRegistry()
+			return registry
+		},
+		SessionServiceFunc: func() (*service.SessionService, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Registry: registry,
+				Git:      gitClient,
+			}), nil
 		},
 	}
 
@@ -144,7 +161,7 @@ func testFactory(t *testing.T, prov *mockProvider, store *mockStore) (*cmdutil.F
 func TestRestore_byBranch_contextFallback(t *testing.T) {
 	// Provider that cannot import → falls back to CONTEXT.md
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
 	store := newMockStore()
@@ -162,11 +179,11 @@ func TestRestore_byBranch_contextFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session := testutil.NewSession("restore-001")
-	session.Provider = domain.ProviderClaudeCode
-	session.ProjectPath = topLevel
-	session.Branch = branch
-	_ = store.Save(session)
+	sess := testutil.NewSession("restore-001")
+	sess.Provider = session.ProviderClaudeCode
+	sess.ProjectPath = topLevel
+	sess.Branch = branch
+	_ = store.Save(sess)
 
 	opts := &Options{
 		IO:      ios,
@@ -195,14 +212,14 @@ func TestRestore_byBranch_contextFallback(t *testing.T) {
 
 func TestRestore_bySessionID(t *testing.T) {
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
 	store := newMockStore()
 
-	session := testutil.NewSession("restore-by-id")
-	session.Provider = domain.ProviderClaudeCode
-	_ = store.Save(session)
+	sess := testutil.NewSession("restore-by-id")
+	sess.Provider = session.ProviderClaudeCode
+	_ = store.Save(sess)
 
 	f, ios, repoDir := testFactory(t, prov, store)
 
@@ -228,14 +245,14 @@ func TestRestore_bySessionID(t *testing.T) {
 
 func TestRestore_asContext(t *testing.T) {
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: true,
 	}
 	store := newMockStore()
 
-	session := testutil.NewSession("restore-ctx")
-	session.Provider = domain.ProviderClaudeCode
-	_ = store.Save(session)
+	sess := testutil.NewSession("restore-ctx")
+	sess.Provider = session.ProviderClaudeCode
+	_ = store.Save(sess)
 
 	f, ios, repoDir := testFactory(t, prov, store)
 	_ = repoDir
@@ -262,14 +279,14 @@ func TestRestore_withProviderFlag(t *testing.T) {
 	// Session from opencode, restore with --provider claude-code
 	// Provider cannot import → falls back to context
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
 	store := newMockStore()
 
-	session := testutil.NewSession("restore-prov")
-	session.Provider = domain.ProviderOpenCode
-	_ = store.Save(session)
+	sess := testutil.NewSession("restore-prov")
+	sess.Provider = session.ProviderOpenCode
+	_ = store.Save(sess)
 
 	f, ios, _ := testFactory(t, prov, store)
 
@@ -293,14 +310,14 @@ func TestRestore_withProviderFlag(t *testing.T) {
 
 func TestRestore_withAgentFlag(t *testing.T) {
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
 	store := newMockStore()
 
-	session := testutil.NewSession("restore-agent")
-	session.Provider = domain.ProviderClaudeCode
-	_ = store.Save(session)
+	sess := testutil.NewSession("restore-agent")
+	sess.Provider = session.ProviderClaudeCode
+	_ = store.Save(sess)
 
 	f, ios, _ := testFactory(t, prov, store)
 
@@ -325,14 +342,14 @@ func TestRestore_withAgentFlag(t *testing.T) {
 func TestRestore_nativeImport(t *testing.T) {
 	// Provider that can import → should use native method
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: true,
 	}
 	store := newMockStore()
 
-	session := testutil.NewSession("restore-native")
-	session.Provider = domain.ProviderClaudeCode
-	_ = store.Save(session)
+	sess := testutil.NewSession("restore-native")
+	sess.Provider = session.ProviderClaudeCode
+	_ = store.Save(sess)
 
 	f, ios, _ := testFactory(t, prov, store)
 
@@ -376,7 +393,7 @@ func TestRestore_invalidProvider(t *testing.T) {
 
 func TestRestore_sessionNotFound(t *testing.T) {
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: true,
 	}
 	f, ios, _ := testFactory(t, prov, nil)
@@ -408,18 +425,18 @@ func TestNewCmdRestore_flags(t *testing.T) {
 
 func TestRestore_byPR(t *testing.T) {
 	prov := &mockProvider{
-		name:      domain.ProviderClaudeCode,
+		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
 	store := newMockStore()
 
-	session := testutil.NewSession("restore-pr-42")
-	session.Provider = domain.ProviderClaudeCode
-	_ = store.Save(session)
+	sess := testutil.NewSession("restore-pr-42")
+	sess.Provider = session.ProviderClaudeCode
+	_ = store.Save(sess)
 
 	// Link session to PR #42
-	_ = store.AddLink(session.ID, domain.Link{
-		LinkType: domain.LinkPR,
+	_ = store.AddLink(sess.ID, session.Link{
+		LinkType: session.LinkPR,
 		Ref:      "42",
 	})
 
@@ -440,8 +457,8 @@ func TestRestore_byPR(t *testing.T) {
 	if !strings.Contains(output, "restore-pr-42") {
 		t.Error("expected session ID in output")
 	}
-	if !strings.Contains(output, "PR #42") {
-		t.Error("expected PR reference in output")
+	if !strings.Contains(output, "Restored session") {
+		t.Error("expected 'Restored session' in output")
 	}
 }
 

@@ -4,11 +4,11 @@ package statscmd
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -46,13 +46,6 @@ func NewCmdStats(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
-// branchStats holds aggregated stats per branch.
-type branchStats struct {
-	branch       string
-	totalTokens  int
-	sessionCount int
-}
-
 func runStats(opts *Options) error {
 	out := opts.IO.Out
 
@@ -67,126 +60,65 @@ func runStats(opts *Options) error {
 		return fmt.Errorf("could not determine repository root: %w", err)
 	}
 
-	// Get store
-	store, err := opts.Factory.Store()
-	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
-	}
-
-	// List all sessions for this project
-	listOpts := domain.ListOptions{
-		ProjectPath: topLevel,
-		All:         true,
-	}
-
-	// Filter by branch if specified
-	if opts.BranchFlag != "" {
-		listOpts.Branch = opts.BranchFlag
-		listOpts.All = false
-	}
-
-	// Filter by provider if specified
+	// Parse provider
+	var providerName session.ProviderName
 	if opts.ProviderFlag != "" {
-		parsed, parseErr := domain.ParseProviderName(opts.ProviderFlag)
+		parsed, parseErr := session.ParseProviderName(opts.ProviderFlag)
 		if parseErr != nil {
 			return parseErr
 		}
-		listOpts.Provider = parsed
+		providerName = parsed
 	}
 
-	summaries, err := store.List(listOpts)
+	// Get service
+	svc, err := opts.Factory.SessionService()
 	if err != nil {
-		return fmt.Errorf("listing sessions: %w", err)
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	if len(summaries) == 0 {
+	// Stats
+	result, err := svc.Stats(service.StatsRequest{
+		ProjectPath: topLevel,
+		Branch:      opts.BranchFlag,
+		Provider:    providerName,
+		All:         opts.All,
+	})
+	if err != nil {
+		return err
+	}
+
+	if result.TotalSessions == 0 {
 		fmt.Fprintln(out, "No sessions found.")
 		return nil
 	}
 
-	// Aggregate stats
-	var totalTokens, totalMessages, totalSessions int
-	perBranch := make(map[string]*branchStats)
-	perProvider := make(map[domain.ProviderName]int)
-	fileCounts := make(map[string]int)
-
-	for _, s := range summaries {
-		totalSessions++
-		totalTokens += s.TotalTokens
-		totalMessages += s.MessageCount
-
-		// Per-branch stats
-		bs, ok := perBranch[s.Branch]
-		if !ok {
-			bs = &branchStats{branch: s.Branch}
-			perBranch[s.Branch] = bs
-		}
-		bs.sessionCount++
-		bs.totalTokens += s.TotalTokens
-
-		// Per-provider counts
-		perProvider[s.Provider]++
-
-		// Load full session for file changes
-		full, getErr := store.Get(s.ID)
-		if getErr == nil {
-			for _, fc := range full.FileChanges {
-				fileCounts[fc.FilePath]++
-			}
-		}
-	}
-
 	// Print overall stats
 	fmt.Fprintln(out, "=== Overall Statistics ===")
-	fmt.Fprintf(out, "  Sessions:  %d\n", totalSessions)
-	fmt.Fprintf(out, "  Messages:  %d\n", totalMessages)
-	fmt.Fprintf(out, "  Tokens:    %s\n", formatTokens(totalTokens))
+	fmt.Fprintf(out, "  Sessions:  %d\n", result.TotalSessions)
+	fmt.Fprintf(out, "  Messages:  %d\n", result.TotalMessages)
+	fmt.Fprintf(out, "  Tokens:    %s\n", formatTokens(result.TotalTokens))
 	fmt.Fprintln(out)
 
 	// Print per-provider stats
 	fmt.Fprintln(out, "=== By Provider ===")
-	for prov, count := range perProvider {
+	for prov, count := range result.PerProvider {
 		fmt.Fprintf(out, "  %-14s %d sessions\n", prov, count)
 	}
 	fmt.Fprintln(out)
 
-	// Print per-branch stats (sorted by token count descending)
-	branchList := make([]*branchStats, 0, len(perBranch))
-	for _, bs := range perBranch {
-		branchList = append(branchList, bs)
-	}
-	sort.Slice(branchList, func(i, j int) bool {
-		return branchList[i].totalTokens > branchList[j].totalTokens
-	})
-
+	// Print per-branch stats
 	fmt.Fprintln(out, "=== By Branch ===")
 	fmt.Fprintf(out, "  %-30s  %8s  %8s\n", "BRANCH", "SESSIONS", "TOKENS")
-	for _, bs := range branchList {
-		fmt.Fprintf(out, "  %-30s  %8d  %8s\n", truncate(bs.branch, 30), bs.sessionCount, formatTokens(bs.totalTokens))
+	for _, bs := range result.PerBranch {
+		fmt.Fprintf(out, "  %-30s  %8d  %8s\n", truncate(bs.Branch, 30), bs.SessionCount, formatTokens(bs.TotalTokens))
 	}
 	fmt.Fprintln(out)
 
-	// Print top files (up to 10)
-	if len(fileCounts) > 0 {
-		type fileEntry struct {
-			path  string
-			count int
-		}
-		files := make([]fileEntry, 0, len(fileCounts))
-		for path, count := range fileCounts {
-			files = append(files, fileEntry{path: path, count: count})
-		}
-		sort.Slice(files, func(i, j int) bool {
-			return files[i].count > files[j].count
-		})
-
+	// Print top files
+	if len(result.TopFiles) > 0 {
 		fmt.Fprintln(out, "=== Most Touched Files ===")
-		limit := len(files)
-		if limit > 10 {
-			limit = 10
-		}
-		for _, f := range files[:limit] {
-			fmt.Fprintf(out, "  %4d  %s\n", f.count, f.path)
+		for _, f := range result.TopFiles {
+			fmt.Fprintf(out, "  %4d  %s\n", f.Count, f.Path)
 		}
 	}
 

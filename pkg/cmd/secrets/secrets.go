@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
 	secretslib "github.com/ChristopherAparicio/aisync/internal/secrets"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -73,7 +73,7 @@ func runAddPattern(opts *AddPatternOptions, name string, pattern string) error {
 		return fmt.Errorf("loading config: %w", cfgErr)
 	}
 
-	// Config returns domain.Config interface; we need the concrete type
+	// Config returns session.Config interface; we need the concrete type
 	// to call AddCustomPattern. Use the Set method with a custom key approach.
 	// Store as "NAME REGEX" in the custom_patterns list.
 	entry := name + " " + pattern
@@ -121,7 +121,7 @@ func runScan(opts *ScanOptions) error {
 
 	// Get secrets mode from config (defaults to mask)
 	cfg, cfgErr := opts.Factory.Config()
-	mode := domain.SecretModeMask
+	mode := session.SecretModeMask
 	if cfgErr == nil {
 		mode = cfg.GetSecretsMode()
 	}
@@ -129,21 +129,21 @@ func runScan(opts *ScanOptions) error {
 	scanner := secretslib.NewScanner(mode, nil)
 
 	// Determine which sessions to scan
-	var sessions []*domain.Session
+	var sessions []*session.Session
 	if opts.SessionFlag != "" {
 		// Scan a specific session
-		sessionID, parseErr := domain.ParseSessionID(opts.SessionFlag)
+		sessionID, parseErr := session.ParseID(opts.SessionFlag)
 		if parseErr != nil {
 			return parseErr
 		}
-		session, getErr := store.Get(sessionID)
+		sess, getErr := store.Get(sessionID)
 		if getErr != nil {
 			return fmt.Errorf("session %q not found: %w", opts.SessionFlag, getErr)
 		}
-		sessions = append(sessions, session)
+		sessions = append(sessions, sess)
 	} else {
 		// Scan all sessions
-		summaries, listErr := store.List(domain.ListOptions{All: true})
+		summaries, listErr := store.List(session.ListOptions{All: true})
 		if listErr != nil {
 			return fmt.Errorf("listing sessions: %w", listErr)
 		}
@@ -152,25 +152,25 @@ func runScan(opts *ScanOptions) error {
 			return nil
 		}
 		for _, s := range summaries {
-			session, getErr := store.Get(s.ID)
+			sess, getErr := store.Get(s.ID)
 			if getErr != nil {
 				continue // skip sessions that can't be loaded
 			}
-			sessions = append(sessions, session)
+			sessions = append(sessions, sess)
 		}
 	}
 
 	fmt.Fprintf(out, "Scanning %d session(s)...\n", len(sessions))
 
 	var totalSecrets int
-	for _, session := range sessions {
-		matches := scanner.ScanSession(session)
+	for _, sess := range sessions {
+		matches := scanner.ScanSession(sess)
 		if len(matches) > 0 {
 			totalSecrets += len(matches)
-			fmt.Fprintf(out, "!! Session %s: %d secret(s) found\n", session.ID, len(matches))
+			fmt.Fprintf(out, "!! Session %s: %d secret(s) found\n", sess.ID, len(matches))
 			fmt.Fprintf(out, "   %s\n", secretslib.FormatMatches(matches))
 		} else {
-			fmt.Fprintf(out, "ok Session %s: clean\n", session.ID)
+			fmt.Fprintf(out, "ok Session %s: clean\n", sess.ID)
 		}
 	}
 

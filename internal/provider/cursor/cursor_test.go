@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 
 	_ "modernc.org/sqlite" // SQLite driver registration
 )
@@ -159,8 +159,8 @@ func createGlobalDB(t *testing.T, dbPath string) {
 
 func TestName(t *testing.T) {
 	p := New("")
-	if p.Name() != domain.ProviderCursor {
-		t.Errorf("Name() = %q, want %q", p.Name(), domain.ProviderCursor)
+	if p.Name() != session.ProviderCursor {
+		t.Errorf("Name() = %q, want %q", p.Name(), session.ProviderCursor)
 	}
 }
 
@@ -173,8 +173,8 @@ func TestCanImport(t *testing.T) {
 
 func TestImport_returnsError(t *testing.T) {
 	p := New("")
-	err := p.Import(&domain.Session{})
-	if err != domain.ErrImportNotSupported {
+	err := p.Import(&session.Session{})
+	if err != session.ErrImportNotSupported {
 		t.Errorf("Import() error = %v, want ErrImportNotSupported", err)
 	}
 }
@@ -242,8 +242,8 @@ func TestDetect_providerInfo(t *testing.T) {
 	}
 
 	s := summaries[0]
-	if s.Provider != domain.ProviderCursor {
-		t.Errorf("Provider = %q, want %q", s.Provider, domain.ProviderCursor)
+	if s.Provider != session.ProviderCursor {
+		t.Errorf("Provider = %q, want %q", s.Provider, session.ProviderCursor)
 	}
 	if s.Agent != "cursor-chat" {
 		t.Errorf("Agent = %q, want cursor-chat", s.Agent)
@@ -257,28 +257,28 @@ func TestExport(t *testing.T) {
 	dir := setupTestEnv(t)
 	p := New(dir)
 
-	session, err := p.Export("comp-001", domain.StorageModeCompact)
+	sess, err := p.Export("comp-001", session.StorageModeCompact)
 	if err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
 
-	if session.ID != "comp-001" {
-		t.Errorf("ID = %q, want comp-001", session.ID)
+	if sess.ID != "comp-001" {
+		t.Errorf("ID = %q, want comp-001", sess.ID)
 	}
-	if session.Provider != domain.ProviderCursor {
-		t.Errorf("Provider = %q, want %q", session.Provider, domain.ProviderCursor)
+	if sess.Provider != session.ProviderCursor {
+		t.Errorf("Provider = %q, want %q", sess.Provider, session.ProviderCursor)
 	}
-	if session.Agent != "cursor-agent" {
-		t.Errorf("Agent = %q, want cursor-agent", session.Agent)
+	if sess.Agent != "cursor-agent" {
+		t.Errorf("Agent = %q, want cursor-agent", sess.Agent)
 	}
-	if session.Branch != "feature/auth" {
-		t.Errorf("Branch = %q, want feature/auth", session.Branch)
+	if sess.Branch != "feature/auth" {
+		t.Errorf("Branch = %q, want feature/auth", sess.Branch)
 	}
-	if session.Summary != "Implement OAuth2" {
-		t.Errorf("Summary = %q, want 'Implement OAuth2'", session.Summary)
+	if sess.Summary != "Implement OAuth2" {
+		t.Errorf("Summary = %q, want 'Implement OAuth2'", sess.Summary)
 	}
-	if session.TokenUsage.TotalTokens != 50000 {
-		t.Errorf("TotalTokens = %d, want 50000", session.TokenUsage.TotalTokens)
+	if sess.TokenUsage.TotalTokens != 50000 {
+		t.Errorf("TotalTokens = %d, want 50000", sess.TokenUsage.TotalTokens)
 	}
 }
 
@@ -286,28 +286,28 @@ func TestExport_messages(t *testing.T) {
 	dir := setupTestEnv(t)
 	p := New(dir)
 
-	session, err := p.Export("comp-001", domain.StorageModeCompact)
+	sess, err := p.Export("comp-001", session.StorageModeCompact)
 	if err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
 
-	if len(session.Messages) != 4 {
-		t.Fatalf("len(Messages) = %d, want 4", len(session.Messages))
+	if len(sess.Messages) != 4 {
+		t.Fatalf("len(Messages) = %d, want 4", len(sess.Messages))
 	}
 
 	// Check roles alternate: user, assistant, user, assistant
-	expectedRoles := []domain.MessageRole{
-		domain.RoleUser, domain.RoleAssistant, domain.RoleUser, domain.RoleAssistant,
+	expectedRoles := []session.MessageRole{
+		session.RoleUser, session.RoleAssistant, session.RoleUser, session.RoleAssistant,
 	}
-	for i, msg := range session.Messages {
+	for i, msg := range sess.Messages {
 		if msg.Role != expectedRoles[i] {
 			t.Errorf("Messages[%d].Role = %q, want %q", i, msg.Role, expectedRoles[i])
 		}
 	}
 
 	// Assistant messages should have model info
-	if session.Messages[1].Model != "claude-sonnet-4-20250514" {
-		t.Errorf("Messages[1].Model = %q, want claude-sonnet-4-20250514", session.Messages[1].Model)
+	if sess.Messages[1].Model != "claude-sonnet-4-20250514" {
+		t.Errorf("Messages[1].Model = %q, want claude-sonnet-4-20250514", sess.Messages[1].Model)
 	}
 }
 
@@ -315,14 +315,14 @@ func TestExport_summaryMode(t *testing.T) {
 	dir := setupTestEnv(t)
 	p := New(dir)
 
-	session, err := p.Export("comp-001", domain.StorageModeSummary)
+	sess, err := p.Export("comp-001", session.StorageModeSummary)
 	if err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
 
 	// Summary mode should not include messages
-	if len(session.Messages) != 0 {
-		t.Errorf("len(Messages) = %d, want 0 in summary mode", len(session.Messages))
+	if len(sess.Messages) != 0 {
+		t.Errorf("len(Messages) = %d, want 0 in summary mode", len(sess.Messages))
 	}
 }
 
@@ -330,17 +330,17 @@ func TestExport_fileChanges(t *testing.T) {
 	dir := setupTestEnv(t)
 	p := New(dir)
 
-	session, err := p.Export("comp-001", domain.StorageModeCompact)
+	sess, err := p.Export("comp-001", session.StorageModeCompact)
 	if err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
 
-	if len(session.FileChanges) != 3 {
-		t.Fatalf("len(FileChanges) = %d, want 3", len(session.FileChanges))
+	if len(sess.FileChanges) != 3 {
+		t.Fatalf("len(FileChanges) = %d, want 3", len(sess.FileChanges))
 	}
 
 	expectedFiles := []string{"auth.go", "handler.go", "auth_test.go"}
-	for i, fc := range session.FileChanges {
+	for i, fc := range sess.FileChanges {
 		if fc.FilePath != expectedFiles[i] {
 			t.Errorf("FileChanges[%d].FilePath = %q, want %q", i, fc.FilePath, expectedFiles[i])
 		}
@@ -351,7 +351,7 @@ func TestExport_notFound(t *testing.T) {
 	dir := setupTestEnv(t)
 	p := New(dir)
 
-	_, err := p.Export("nonexistent", domain.StorageModeCompact)
+	_, err := p.Export("nonexistent", session.StorageModeCompact)
 	if err == nil {
 		t.Fatal("Export() expected error for nonexistent composer")
 	}

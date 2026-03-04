@@ -1,4 +1,4 @@
-package domain
+package session
 
 import (
 	"testing"
@@ -221,41 +221,41 @@ func TestParseToolState(t *testing.T) {
 	}
 }
 
-func TestParseSessionID(t *testing.T) {
+func TestParseID(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		want    SessionID
+		want    ID
 		wantErr bool
 	}{
-		{name: "valid uuid", input: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", want: SessionID("a1b2c3d4-e5f6-7890-abcd-ef1234567890"), wantErr: false},
-		{name: "any non-empty string", input: "my-session", want: SessionID("my-session"), wantErr: false},
+		{name: "valid uuid", input: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", want: ID("a1b2c3d4-e5f6-7890-abcd-ef1234567890"), wantErr: false},
+		{name: "any non-empty string", input: "my-session", want: ID("my-session"), wantErr: false},
 		{name: "empty is invalid", input: "", want: "", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseSessionID(tt.input)
+			got, err := ParseID(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseSessionID(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				t.Errorf("ParseID(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 				return
 			}
 			if got != tt.want {
-				t.Errorf("ParseSessionID(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("ParseID(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestNewSessionID(t *testing.T) {
-	id1 := NewSessionID()
-	id2 := NewSessionID()
+func TestNewID(t *testing.T) {
+	id1 := NewID()
+	id2 := NewID()
 
 	if id1 == "" {
-		t.Error("NewSessionID() returned empty string")
+		t.Error("NewID() returned empty string")
 	}
 	if id1 == id2 {
-		t.Error("NewSessionID() returned same ID twice")
+		t.Error("NewID() returned same ID twice")
 	}
 }
 

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -49,28 +51,28 @@ func mustOpenStore(t *testing.T) *sqlite.Store {
 	return store
 }
 
-func testSession(id string) *domain.Session {
+func testSession(id string) *session.Session {
 	now := time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC)
-	return &domain.Session{
-		ID:          domain.SessionID(id),
+	return &session.Session{
+		ID:          session.ID(id),
 		Version:     1,
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feature/sync",
 		ProjectPath: "/tmp/test-project",
 		CreatedAt:   now,
 		ExportedAt:  now,
 		Summary:     "Test session " + id,
-		StorageMode: domain.StorageModeCompact,
-		Messages: []domain.Message{
+		StorageMode: session.StorageModeCompact,
+		Messages: []session.Message{
 			{
 				ID:        "msg-001",
-				Role:      domain.RoleUser,
+				Role:      session.RoleUser,
 				Content:   "Hello",
 				Timestamp: now,
 			},
 		},
-		TokenUsage: domain.TokenUsage{
+		TokenUsage: session.TokenUsage{
 			InputTokens:  100,
 			OutputTokens: 200,
 			TotalTokens:  300,
@@ -90,8 +92,11 @@ func testFactory(t *testing.T) (*cmdutil.Factory, *iostreams.IOStreams, *sqlite.
 		GitFunc: func() (*git.Client, error) {
 			return gitClient, nil
 		},
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
+		},
+		SyncServiceFunc: func() (*service.SyncService, error) {
+			return service.NewSyncService(gitClient, store), nil
 		},
 	}
 
@@ -121,8 +126,8 @@ func TestPushCmd_nothingToPush(t *testing.T) {
 func TestPushCmd_oneSession(t *testing.T) {
 	f, ios, store, _ := testFactory(t)
 
-	session := testSession("sess-cmd-push-1")
-	if err := store.Save(session); err != nil {
+	sess := testSession("sess-cmd-push-1")
+	if err := store.Save(sess); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,8 +176,8 @@ func TestPullCmd_afterPush(t *testing.T) {
 	ios := iostreams.Test()
 
 	storeA := mustOpenStore(t)
-	session := testSession("sess-cmd-pull-1")
-	if err := storeA.Save(session); err != nil {
+	sess := testSession("sess-cmd-pull-1")
+	if err := storeA.Save(sess); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,8 +185,11 @@ func TestPullCmd_afterPush(t *testing.T) {
 	fA := &cmdutil.Factory{
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return storeA, nil
+		},
+		SyncServiceFunc: func() (*service.SyncService, error) {
+			return service.NewSyncService(gitClient, storeA), nil
 		},
 	}
 	pushOpts := &PushOptions{IO: ios, Factory: fA, NoRemote: true}
@@ -197,8 +205,11 @@ func TestPullCmd_afterPush(t *testing.T) {
 	fB := &cmdutil.Factory{
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return storeB, nil
+		},
+		SyncServiceFunc: func() (*service.SyncService, error) {
+			return service.NewSyncService(gitClient, storeB), nil
 		},
 	}
 	pullOpts := &PullOptions{IO: ios, Factory: fB, NoRemote: true}
@@ -239,16 +250,19 @@ func TestSyncCmd_pushAndPull(t *testing.T) {
 	ios := iostreams.Test()
 
 	store := mustOpenStore(t)
-	session := testSession("sess-cmd-sync-1")
-	if err := store.Save(session); err != nil {
+	sess := testSession("sess-cmd-sync-1")
+	if err := store.Save(sess); err != nil {
 		t.Fatal(err)
 	}
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
+		},
+		SyncServiceFunc: func() (*service.SyncService, error) {
+			return service.NewSyncService(gitClient, store), nil
 		},
 	}
 

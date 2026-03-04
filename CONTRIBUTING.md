@@ -22,35 +22,39 @@ make install      # Install to $GOPATH/bin
 
 ## Project Structure
 
-We follow the **gh (GitHub CLI) patterns** with DDD-inspired domain separation.
+We follow the **gh (GitHub CLI) patterns** with an idiomatic Go CLI architecture.
 
 ```
 aisync/
-  cmd/aisync/main.go              # Entry point (tiny, just calls root command)
+  cmd/aisync/main.go              # Entry point (trivial, just calls root command)
 
   internal/                        # Private packages (Go compiler-enforced)
-    domain/                        # DOMAIN LAYER — pure types & interfaces
-    config/                        # Config implementation
-    provider/                      # Provider implementations (claude/, opencode/)
-    storage/                       # Storage implementations (sqlite/)
-    capture/                       # Capture service (orchestration)
-    restore/                       # Restore service (orchestration)
-    secrets/                       # Secret detection & masking
+    session/                       # SHARED TYPES — structs, enums, errors (no interfaces)
+    config/                        # Config (concrete struct)
+    provider/                      # Provider interface + implementations (claude/, opencode/, cursor/)
+    storage/                       # Store interface + implementations (sqlite/)
+    capture/                       # Capture orchestration service
+    restore/                       # Restore orchestration service
+    gitsync/                       # Git branch-based session sync
+    converter/                     # Cross-provider format conversion (concrete)
+    secrets/                       # Secret detection & masking (concrete)
+    platform/                      # Code hosting platform integration
     hooks/                         # Git hooks management
+    tui/                           # Terminal UI
 
-  pkg/                             # Shared packages (commands, utilities)
+  pkg/                             # Semi-public packages (CLI layer)
     cmd/                           # CLI commands (1 subpackage per command)
     cmdutil/                       # Factory struct, shared command utilities
     iostreams/                     # I/O abstraction (stdout, stderr, colors)
 
-  git/                             # Git operations abstraction
+  git/                             # Git CLI wrapper
 ```
 
 ### Key Principles
 
-1. **`internal/domain/`** is the heart. It contains **only** interfaces and value types. It has **zero** external dependencies. Everything depends on domain; domain depends on nothing.
+1. **`internal/session/`** is the shared vocabulary. It contains only types, enums, and errors — **no interfaces, no business logic**. Every other package imports it.
 
-2. **Accept interfaces, return structs.** Define interfaces where they are consumed. The `domain` package is the shared contracts exception.
+2. **Interfaces where they earn their keep.** Only 2 interfaces exist: `Provider` (in `provider/`, 3 implementations) and `Store` (in `storage/`, extensibility point). Everything else is concrete.
 
 3. **One subpackage per CLI command.** Each command in `pkg/cmd/` gets its own package with its own `NewCmd*()` function and `*Options` struct.
 
@@ -66,7 +70,7 @@ We apply **KISS** (Keep It Simple, Stupid) and **SOLID** rigorously. When in dou
 
 | Rule | In practice | Anti-pattern to avoid |
 |------|------------|----------------------|
-| **No premature abstraction** | Don't create an interface until you have 2+ implementations. Exception: `internal/domain/` interfaces which define contracts upfront. | Creating `SessionRepository`, `SessionRepositoryImpl`, `SessionRepositoryFactory` when you only have SQLite |
+| **No premature abstraction** | Don't create an interface until you have 2+ implementations. | Creating `SessionRepository`, `SessionRepositoryImpl`, `SessionRepositoryFactory` when you only have SQLite |
 | **Flat is better than nested** | A function with 3 clear steps beats a chain of 5 helper functions | `captureSession()` calling `prepareCaptureContext()` calling `buildCaptureRequest()` calling `validateCaptureInput()` |
 | **One file, one responsibility** | If a file grows past ~300 lines, split it. But don't split a 50-line file into 3. | 15 files with 20 lines each in the same package |
 | **Obvious code > clever code** | A simple `for` loop beats a generic functional pipeline | `Map(Filter(sessions, isActive), toSummary)` when a for loop is 5 lines |
@@ -91,10 +95,10 @@ A function does ONE thing:
 
 ```go
 // GOOD: one clear job
-func (s *Store) Save(session *domain.Session) error { ... }
+func (s *Store) Save(sess *session.Session) error { ... }
 
 // BAD: doing too much
-func (s *Store) SaveAndNotifyAndSync(session *domain.Session) error { ... }
+func (s *Store) SaveAndNotifyAndSync(sess *session.Session) error { ... }
 ```
 
 **O — Open/Closed**
@@ -106,8 +110,8 @@ Adding a new provider never modifies existing providers or the capture service:
 // Adding OpenCode doesn't touch claude/ or capture/.
 type Provider interface {
     Name() ProviderName
-    Detect(projectPath string, branch string) ([]SessionSummary, error)
-    Export(sessionID SessionID, mode StorageMode) (*Session, error)
+    Detect(projectPath string, branch string) ([]Summary, error)
+    Export(sessionID ID, mode StorageMode) (*Session, error)
     CanImport() bool
     Import(session *Session) error
 }
@@ -120,12 +124,12 @@ Every `Provider` implementation must be interchangeable. If Cursor can't import,
 ```go
 // DO: respect the contract
 func (c *CursorProvider) CanImport() bool { return false }
-func (c *CursorProvider) Import(session *domain.Session) error {
+func (c *CursorProvider) Import(sess *session.Session) error {
     return fmt.Errorf("cursor does not support session import")
 }
 
 // DON'T: panic or silently no-op
-func (c *CursorProvider) Import(session *domain.Session) error {
+func (c *CursorProvider) Import(sess *session.Session) error {
     return nil  // BAD — caller thinks it worked
 }
 ```
@@ -138,8 +142,8 @@ Keep interfaces small. If a consumer only needs read access, don't force it to d
 // Full provider (Claude Code, OpenCode)
 type Provider interface {
     Name() ProviderName
-    Detect(projectPath string, branch string) ([]SessionSummary, error)
-    Export(sessionID SessionID, mode StorageMode) (*Session, error)
+    Detect(projectPath string, branch string) ([]Summary, error)
+    Export(sessionID ID, mode StorageMode) (*Session, error)
     CanImport() bool
     Import(session *Session) error
 }
@@ -147,20 +151,22 @@ type Provider interface {
 // Read-only consumer only needs this subset
 type ReadOnlyProvider interface {
     Name() ProviderName
-    Detect(projectPath string, branch string) ([]SessionSummary, error)
-    Export(sessionID SessionID, mode StorageMode) (*Session, error)
+    Detect(projectPath string, branch string) ([]Summary, error)
+    Export(sessionID ID, mode StorageMode) (*Session, error)
 }
 ```
 
 **D — Dependency Inversion**
 
-High-level modules (capture service) depend on abstractions (domain interfaces), not on low-level modules (SQLite, Claude JSONL parser):
+High-level modules depend on abstractions **where warranted**, and on concrete types where there's only one implementation:
 
 ```go
-// capture/service.go depends on domain.Store — NOT on sqlite.Store
-type CaptureService struct {
-    store   domain.Store          // abstraction
-    scanner domain.SecretScanner  // abstraction
+// capture/service.go depends on storage.Store (interface — multiple impls possible)
+// but uses *secrets.Scanner directly (concrete — only one implementation).
+type Service struct {
+    registry *provider.Registry
+    store    storage.Store       // interface — abstracts SQLite, future backends
+    scanner  *secrets.Scanner    // concrete — no need for abstraction
 }
 
 // Wiring happens in the factory (composition root), nowhere else.
@@ -180,9 +186,9 @@ Before writing code, ask yourself:
 
 ---
 
-## Domain Types — Avoiding Primitive Obsession
+## Session Types — Avoiding Primitive Obsession
 
-The `internal/domain/` package uses **typed constants with validation** (Level 2 pattern) instead of raw strings/ints. This catches bugs at boundaries (CLI input, JSON deserialization, DB reads) rather than deep in business logic.
+The `internal/session/` package uses **typed constants with validation** (Level 2 pattern) instead of raw strings/ints. This catches bugs at boundaries (CLI input, JSON deserialization, DB reads) rather than deep in business logic.
 
 ### Pattern: String-Based Enum with Parse/Validate
 
@@ -327,21 +333,21 @@ const (
 
 // ── Session ID (wrapped for type safety) ──
 
-type SessionID string
+type ID string
 
-func NewSessionID() SessionID {
-    return SessionID(uuid.New().String())
+func NewID() ID {
+    return ID(uuid.New().String())
 }
 
-func ParseSessionID(s string) (SessionID, error) {
+func ParseID(s string) (ID, error) {
     if s == "" {
         return "", fmt.Errorf("session ID cannot be empty")
     }
     // Accept any non-empty string (UUIDs, provider-native IDs, etc.)
-    return SessionID(s), nil
+    return ID(s), nil
 }
 
-func (id SessionID) String() string {
+func (id ID) String() string {
     return string(id)
 }
 ```
@@ -352,7 +358,7 @@ The string-based types marshal/unmarshal to JSON naturally:
 
 ```go
 type Session struct {
-    ID          SessionID    `json:"id"`
+    ID          ID           `json:"id"`
     Provider    ProviderName `json:"provider"`
     StorageMode StorageMode  `json:"storage_mode"`
     // ...
@@ -376,32 +382,32 @@ SELECT * FROM sessions WHERE provider = 'claude-code';
 **CLI flags** (in `pkg/cmd/`):
 ```go
 func runCapture(opts *CaptureOptions) error {
-    mode, err := domain.ParseStorageMode(opts.ModeFlag)
+    mode, err := session.ParseStorageMode(opts.ModeFlag)
     if err != nil {
         return err  // "unknown storage mode "foo": valid values are [full compact summary]"
     }
     // From here on, mode is guaranteed valid
-    session, err := captureService.Capture(mode)
+    sess, err := captureService.Capture(mode)
     // ...
 }
 ```
 
 **JSON deserialization** (in providers):
 ```go
-func (p *ClaudeProvider) Export(sessionID string, mode domain.StorageMode) (*domain.Session, error) {
+func (p *ClaudeProvider) Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error) {
     var raw rawClaudeSession
     if err := json.Unmarshal(data, &raw); err != nil {
         return nil, err
     }
 
     // Validate at the boundary
-    provider, err := domain.ParseProviderName(raw.Provider)
+    prov, err := session.ParseProviderName(raw.Provider)
     if err != nil {
         return nil, fmt.Errorf("invalid session data: %w", err)
     }
 
-    return &domain.Session{
-        Provider: provider,  // Safe from here
+    return &session.Session{
+        Provider: prov,  // Safe from here
         // ...
     }, nil
 }
@@ -409,23 +415,23 @@ func (p *ClaudeProvider) Export(sessionID string, mode domain.StorageMode) (*dom
 
 **Database reads** (in `storage/sqlite/`):
 ```go
-func (s *Store) Get(id string) (*domain.Session, error) {
+func (s *Store) Get(id session.ID) (*session.Session, error) {
     row := s.db.QueryRow("SELECT provider, storage_mode, ... FROM sessions WHERE id = ?", id)
 
     var providerStr, modeStr string
     row.Scan(&providerStr, &modeStr)
 
-    provider, err := domain.ParseProviderName(providerStr)
+    prov, err := session.ParseProviderName(providerStr)
     if err != nil {
         return nil, fmt.Errorf("corrupt data for session %s: %w", id, err)
     }
 
-    mode, err := domain.ParseStorageMode(modeStr)
+    mode, err := session.ParseStorageMode(modeStr)
     if err != nil {
         return nil, fmt.Errorf("corrupt data for session %s: %w", id, err)
     }
 
-    return &domain.Session{Provider: provider, StorageMode: mode}, nil
+    return &session.Session{Provider: prov, StorageMode: mode}, nil
 }
 ```
 
@@ -464,7 +470,7 @@ We follow the standard Go conventions:
 | What | Convention | Example |
 |------|-----------|---------|
 | Packages | Short, lowercase, no underscores | `provider`, `claude`, `sqlite` |
-| Interfaces | Descriptive noun or `-er` suffix | `Provider`, `Store`, `SecretScanner` |
+| Interfaces | Descriptive noun or `-er` suffix | `Provider`, `Store`, `Platform` |
 | Structs | Descriptive noun | `Session`, `CaptureService`, `SQLiteStore` |
 | Constructors | `New` + type name | `NewCaptureService()`, `NewSQLiteStore()` |
 | Test files | `*_test.go` in same package | `claude_test.go` |
@@ -495,38 +501,46 @@ _ = file.Close()  // BAD — log or handle the error
 
 ```go
 // DO: Keep interfaces small (3-5 methods)
-// DO: Use domain types, not primitives (ProviderName, SessionID, StorageMode...)
+// DO: Use session types, not primitives (ProviderName, ID, StorageMode...)
 type Provider interface {
-    Name() ProviderName
-    Detect(projectPath string, branch string) ([]SessionSummary, error)
-    Export(sessionID SessionID, mode StorageMode) (*Session, error)
+    Name() session.ProviderName
+    Detect(projectPath string, branch string) ([]session.Summary, error)
+    Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error)
     CanImport() bool
-    Import(session *Session) error
+    Import(session *session.Session) error
 }
 
-// DO: Define interfaces in the domain package
-// DON'T: Define interfaces next to implementations
+// DO: Define interfaces in the package that owns the abstraction
+//     Provider → internal/provider/    Store → internal/storage/    Platform → internal/platform/
+// DON'T: Define interfaces in a central "domain" package
 
 // DO: Use interface composition for read-only providers (e.g. Cursor)
 type ReadOnlyProvider interface {
-    Name() ProviderName
-    Detect(projectPath string, branch string) ([]SessionSummary, error)
-    Export(sessionID SessionID, mode StorageMode) (*Session, error)
+    Name() session.ProviderName
+    Detect(projectPath string, branch string) ([]session.Summary, error)
+    Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error)
 }
 ```
 
 ### Dependency Injection
 
+We use **interfaces where they earn their keep** and **concrete types everywhere else**:
+
 ```go
-// DO: Accept interfaces in constructors
-func NewCaptureService(store domain.Store, scanner domain.SecretScanner) *CaptureService {
-    return &CaptureService{store: store, scanner: scanner}
+// DO: Accept interfaces for things with multiple implementations
+func NewService(registry *provider.Registry, store storage.Store) *Service {
+    return &Service{registry: registry, store: store}
+}
+
+// DO: Accept concrete types when there's only one implementation
+func NewServiceWithScanner(registry *provider.Registry, store storage.Store, scanner *secrets.Scanner) *Service {
+    return &Service{registry: registry, store: store, scanner: scanner}
 }
 
 // DON'T: Create dependencies inside constructors
-func NewCaptureService() *CaptureService {
+func NewService() *Service {
     store := sqlite.NewStore("~/.aisync/sessions.db")  // BAD
-    return &CaptureService{store: store}
+    return &Service{store: store}
 }
 ```
 
@@ -642,23 +656,23 @@ internal/provider/opencode/testdata/
 
 ### Mocks
 
-For interfaces defined in `internal/domain/`, create manual mocks:
+For the 3 interfaces (`Store`, `Provider`, `Platform`), create manual mocks in the test file or a shared mock package:
 
 ```go
-// internal/domain/mock/store.go
+// mock store — defined in test files or a shared mock package
 type MockStore struct {
-    SaveFunc   func(session *domain.Session) error
-    GetFunc    func(id string) (*domain.Session, error)
-    ListFunc   func(opts domain.ListOptions) ([]*domain.Session, error)
+    SaveFunc   func(sess *session.Session) error
+    GetFunc    func(id session.ID) (*session.Session, error)
+    ListFunc   func(opts session.ListOptions) ([]*session.Session, error)
 }
 
-func (m *MockStore) Save(session *domain.Session) error {
-    return m.SaveFunc(session)
+func (m *MockStore) Save(sess *session.Session) error {
+    return m.SaveFunc(sess)
 }
 
 // Usage in tests:
-store := &mock.MockStore{
-    SaveFunc: func(session *domain.Session) error {
+store := &MockStore{
+    SaveFunc: func(sess *session.Session) error {
         return nil
     },
 }
@@ -728,7 +742,7 @@ import (
 // CaptureOptions holds all inputs for the capture command.
 type CaptureOptions struct {
     IO       *iostreams.IOStreams
-    Store    domain.Store
+    Store    storage.Store
     Registry *provider.Registry
 
     // Raw flag values (strings — validated in RunE before calling runCapture)
@@ -767,18 +781,18 @@ func NewCmdCapture(f *cmdutil.Factory) *cobra.Command {
 // At this point, all inputs are validated domain types.
 func runCapture(opts *CaptureOptions) error {
     // Parse & validate flags at the boundary
-    var providerFilter *domain.ProviderName
+    var providerFilter *session.ProviderName
     if opts.ProviderFlag != "" {
-        p, err := domain.ParseProviderName(opts.ProviderFlag)
+        p, err := session.ParseProviderName(opts.ProviderFlag)
         if err != nil {
             return err  // Clear error: "unknown provider "foo": valid values are [...]"
         }
         providerFilter = &p
     }
 
-    mode := opts.Store // ... get default from config
+    mode := session.StorageModeFull // ... get default from config
     if opts.ModeFlag != "" {
-        m, err := domain.ParseStorageMode(opts.ModeFlag)
+        m, err := session.ParseStorageMode(opts.ModeFlag)
         if err != nil {
             return err
         }
@@ -955,7 +969,7 @@ release-dry   # GoReleaser dry run (no publish)
 ## Adding a New Provider
 
 1. Create `internal/provider/<name>/<name>.go`
-2. Implement the `domain.Provider` interface
+2. Implement the `provider.Provider` interface (defined in `internal/provider/provider.go`)
 3. Add test fixtures in `internal/provider/<name>/testdata/`
 4. Write table-driven tests in `internal/provider/<name>/<name>_test.go`
 5. Register the provider in `internal/provider/registry.go`
@@ -970,9 +984,14 @@ release-dry   # GoReleaser dry run (no publish)
 5. Wire the command in `pkg/cmd/root/root.go`
 6. Add tests in `pkg/cmd/<name>/<name>_test.go`
 
-## Adding a New Domain Interface
+## Adding a New Interface
 
-1. Define the interface in `internal/domain/`
-2. Create a mock in `internal/domain/mock/`
-3. Implement in the appropriate `internal/` subpackage
-4. Wire via the Factory in `pkg/cmd/factory/default.go`
+Before adding a new interface, ask: **do I have 2+ implementations, or a clear extensibility need?** If not, use a concrete type.
+
+If you do need an interface:
+
+1. Define the interface **in the package that owns the abstraction** (e.g., `internal/storage/store.go`, NOT in `internal/session/`)
+2. Keep it small (3-5 methods max) — follow the Interface Segregation principle
+3. Create a manual mock in test files for consumers that depend on it
+4. Implement in the appropriate `internal/` subpackage
+5. Wire via the Factory in `pkg/cmd/factory/default.go`

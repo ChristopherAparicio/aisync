@@ -10,7 +10,7 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/config"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/hooks"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -147,6 +147,7 @@ func testFactory(t *testing.T, repoDir string) *cmdutil.Factory {
 	t.Helper()
 
 	globalDir := filepath.Join(t.TempDir(), ".aisync")
+	gitClient := git.NewClient(repoDir)
 
 	f := &cmdutil.Factory{
 		IOStreams: &iostreams.IOStreams{
@@ -156,11 +157,19 @@ func testFactory(t *testing.T, repoDir string) *cmdutil.Factory {
 	}
 
 	f.GitFunc = func() (*git.Client, error) {
-		return git.NewClient(repoDir), nil
+		return gitClient, nil
 	}
 
-	f.ConfigFunc = func() (domain.Config, error) {
+	f.ConfigFunc = func() (*config.Config, error) {
 		return config.New(globalDir, filepath.Join(repoDir, ".aisync"))
+	}
+
+	f.HooksManagerFunc = func() (*hooks.Manager, error) {
+		hooksDir, err := gitClient.HooksPath()
+		if err != nil {
+			return nil, err
+		}
+		return hooks.NewManager(hooksDir), nil
 	}
 
 	return f

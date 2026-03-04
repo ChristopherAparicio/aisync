@@ -112,6 +112,34 @@ func (c *Client) HeadCommitSHA() (string, error) {
 	return out, nil
 }
 
+// CommitMessage returns the full commit message for a given commit SHA.
+func (c *Client) CommitMessage(commitSHA string) (string, error) {
+	out, err := c.run("log", "-1", "--format=%B", commitSHA)
+	if err != nil {
+		return "", fmt.Errorf("getting commit message for %s: %w", commitSHA, err)
+	}
+	return out, nil
+}
+
+// IsValidCommit returns true if the given string is a valid commit reference.
+func (c *Client) IsValidCommit(ref string) bool {
+	_, err := c.run("rev-parse", "--verify", ref+"^{commit}")
+	return err == nil
+}
+
+// ParseSessionTrailer extracts the AI-Session trailer value from a commit message.
+// Returns empty string if no trailer is found.
+func ParseSessionTrailer(commitMessage string) string {
+	const trailerPrefix = "AI-Session:"
+	for _, line := range strings.Split(commitMessage, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, trailerPrefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, trailerPrefix))
+		}
+	}
+	return ""
+}
+
 // --- Sync branch operations ---
 // These methods use git plumbing to read/write files on the aisync/sessions
 // branch without touching the working directory.
@@ -274,6 +302,26 @@ func (c *Client) PullSyncBranch(remote string) error {
 func (c *Client) HasRemote(name string) bool {
 	_, err := c.run("remote", "get-url", name)
 	return err == nil
+}
+
+// UserName returns the git user.name config value.
+// Returns empty string if not configured.
+func (c *Client) UserName() string {
+	name, err := c.run("config", "user.name")
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// UserEmail returns the git user.email config value.
+// Returns empty string if not configured.
+func (c *Client) UserEmail() string {
+	email, err := c.run("config", "user.email")
+	if err != nil {
+		return ""
+	}
+	return email
 }
 
 // RemoteURL returns the URL of a named remote.

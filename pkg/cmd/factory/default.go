@@ -10,7 +10,8 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/config"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/converter"
+	"github.com/ChristopherAparicio/aisync/internal/hooks"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
 	ghplatform "github.com/ChristopherAparicio/aisync/internal/platform/github"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
@@ -18,6 +19,9 @@ import (
 	cursorprov "github.com/ChristopherAparicio/aisync/internal/provider/cursor"
 	"github.com/ChristopherAparicio/aisync/internal/provider/opencode"
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -37,11 +41,11 @@ func New() *cmdutil.Factory {
 
 	// Lazy singletons
 	var (
-		cachedConfig domain.Config
+		cachedConfig *config.Config
 		configOnce   sync.Once
 		configErr    error
 
-		cachedStore domain.Store
+		cachedStore storage.Store
 		storeOnce   sync.Once
 		storeErr    error
 
@@ -52,15 +56,30 @@ func New() *cmdutil.Factory {
 		cachedRegistry *provider.Registry
 		registryOnce   sync.Once
 
-		cachedScanner domain.SecretScanner
+		cachedScanner *secrets.Scanner
 		scannerOnce   sync.Once
 
-		cachedPlatform domain.Platform
+		cachedPlatform platform.Platform
 		platformOnce   sync.Once
 		platformErr    error
+
+		cachedConverter *converter.Converter
+		converterOnce   sync.Once
+
+		cachedHooksMgr *hooks.Manager
+		hooksMgrOnce   sync.Once
+		hooksMgrErr    error
+
+		cachedSessionSvc *service.SessionService
+		sessionSvcOnce   sync.Once
+		sessionSvcErr    error
+
+		cachedSyncSvc *service.SyncService
+		syncSvcOnce   sync.Once
+		syncSvcErr    error
 	)
 
-	f.ConfigFunc = func() (domain.Config, error) {
+	f.ConfigFunc = func() (*config.Config, error) {
 		configOnce.Do(func() {
 			globalDir := globalConfigDir()
 			repoDir := repoConfigDir()
@@ -69,7 +88,7 @@ func New() *cmdutil.Factory {
 		return cachedConfig, configErr
 	}
 
-	f.StoreFunc = func() (domain.Store, error) {
+	f.StoreFunc = func() (storage.Store, error) {
 		storeOnce.Do(func() {
 			dir := globalConfigDir()
 			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
@@ -91,7 +110,7 @@ func New() *cmdutil.Factory {
 			}
 			cachedGit = git.NewClient(wd)
 			if !cachedGit.IsRepo() {
-				gitErr = domain.ErrConfigNotFound
+				gitErr = session.ErrConfigNotFound
 				cachedGit = nil
 			}
 		})
@@ -109,10 +128,10 @@ func New() *cmdutil.Factory {
 		return cachedRegistry
 	}
 
-	f.ScannerFunc = func() domain.SecretScanner {
+	f.ScannerFunc = func() *secrets.Scanner {
 		scannerOnce.Do(func() {
 			// Determine secret mode from config
-			mode := domain.SecretModeMask
+			mode := session.SecretModeMask // default to mask mode
 			cfg, cfgErr := f.Config()
 			if cfgErr == nil {
 				mode = cfg.GetSecretsMode()
@@ -122,16 +141,16 @@ func New() *cmdutil.Factory {
 		return cachedScanner
 	}
 
-	f.PlatformFunc = func() (domain.Platform, error) {
+	f.PlatformFunc = func() (platform.Platform, error) {
 		platformOnce.Do(func() {
 			gitClient, gitClientErr := f.Git()
 			if gitClientErr != nil {
-				platformErr = domain.ErrPlatformNotDetected
+				platformErr = session.ErrPlatformNotDetected
 				return
 			}
 			remoteURL := gitClient.RemoteURL("origin")
 			if remoteURL == "" {
-				platformErr = domain.ErrPlatformNotDetected
+				platformErr = session.ErrPlatformNotDetected
 				return
 			}
 			platformName, detectErr := platform.DetectFromRemoteURL(remoteURL)
@@ -145,13 +164,82 @@ func New() *cmdutil.Factory {
 				return
 			}
 			switch platformName {
-			case domain.PlatformGitHub:
+			case session.PlatformGitHub:
 				cachedPlatform = ghplatform.New(topLevel)
 			default:
 				platformErr = fmt.Errorf("platform %q detected but not yet supported", platformName)
 			}
 		})
 		return cachedPlatform, platformErr
+	}
+
+	f.ConverterFunc = func() *converter.Converter {
+		converterOnce.Do(func() {
+			cachedConverter = converter.New()
+		})
+		return cachedConverter
+	}
+
+	f.HooksManagerFunc = func() (*hooks.Manager, error) {
+		hooksMgrOnce.Do(func() {
+			gitClient, gitClientErr := f.Git()
+			if gitClientErr != nil {
+				hooksMgrErr = gitClientErr
+				return
+			}
+			hooksDir, hooksErr := gitClient.HooksPath()
+			if hooksErr != nil {
+				hooksMgrErr = hooksErr
+				return
+			}
+			cachedHooksMgr = hooks.NewManager(hooksDir)
+		})
+		return cachedHooksMgr, hooksMgrErr
+	}
+
+	f.SessionServiceFunc = func() (*service.SessionService, error) {
+		sessionSvcOnce.Do(func() {
+			store, stErr := f.Store()
+			if stErr != nil {
+				sessionSvcErr = stErr
+				return
+			}
+
+			registry := f.Registry()
+			scanner := f.Scanner()
+			conv := f.Converter()
+
+			// Git and platform are optional — service works without them
+			gitClient, _ := f.Git()
+			plat, _ := f.Platform()
+
+			cachedSessionSvc = service.NewSessionService(service.SessionServiceConfig{
+				Store:     store,
+				Registry:  registry,
+				Scanner:   scanner,
+				Converter: conv,
+				Git:       gitClient,
+				Platform:  plat,
+			})
+		})
+		return cachedSessionSvc, sessionSvcErr
+	}
+
+	f.SyncServiceFunc = func() (*service.SyncService, error) {
+		syncSvcOnce.Do(func() {
+			gitClient, gitClientErr := f.Git()
+			if gitClientErr != nil {
+				syncSvcErr = gitClientErr
+				return
+			}
+			store, stErr := f.Store()
+			if stErr != nil {
+				syncSvcErr = stErr
+				return
+			}
+			cachedSyncSvc = service.NewSyncService(gitClient, store)
+		})
+		return cachedSyncSvc, syncSvcErr
 	}
 
 	f.CloseFunc = func() error {

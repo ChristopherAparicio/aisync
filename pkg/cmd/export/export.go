@@ -2,14 +2,13 @@
 package export
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/converter"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -48,88 +47,50 @@ func NewCmdExport(f *cmdutil.Factory) *cobra.Command {
 }
 
 func runExport(opts *Options) error {
-	store, err := opts.Factory.Store()
-	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
+	// Git info (for branch-based resolution)
+	var projectPath, branch string
+	gitClient, gitErr := opts.Factory.Git()
+	if gitErr == nil {
+		branch, _ = gitClient.CurrentBranch()
+		projectPath, _ = gitClient.TopLevel()
 	}
 
-	// Resolve session
-	var session *domain.Session
+	// Parse session ID
+	var sessionID session.ID
 	if opts.SessionFlag != "" {
-		sessionID, parseErr := domain.ParseSessionID(opts.SessionFlag)
+		parsed, parseErr := session.ParseID(opts.SessionFlag)
 		if parseErr != nil {
 			return parseErr
 		}
-		session, err = store.Get(sessionID)
-		if err != nil {
-			return fmt.Errorf("session %q not found: %w", opts.SessionFlag, err)
-		}
-	} else {
-		// Use current branch
-		gitClient, gitErr := opts.Factory.Git()
-		if gitErr != nil {
-			return fmt.Errorf("not a git repository: %w", gitErr)
-		}
-		branch, branchErr := gitClient.CurrentBranch()
-		if branchErr != nil {
-			return fmt.Errorf("could not determine current branch: %w", branchErr)
-		}
-		topLevel, topErr := gitClient.TopLevel()
-		if topErr != nil {
-			return fmt.Errorf("could not determine repository root: %w", topErr)
-		}
-		session, err = store.GetByBranch(topLevel, branch)
-		if err != nil {
-			return fmt.Errorf("no session found for current branch: %w", err)
-		}
+		sessionID = parsed
 	}
 
-	// Convert to the requested format
-	var output []byte
-	formatLabel := opts.FormatFlag
+	// Get service
+	svc, err := opts.Factory.SessionService()
+	if err != nil {
+		return fmt.Errorf("initializing service: %w", err)
+	}
 
-	switch opts.FormatFlag {
-	case "aisync", "":
-		output, err = json.MarshalIndent(session, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshaling session: %w", err)
-		}
-		output = append(output, '\n')
-		formatLabel = "aisync"
-
-	case "claude", "claude-code":
-		conv := converter.New()
-		output, err = conv.ToNative(session, domain.ProviderClaudeCode)
-		if err != nil {
-			return fmt.Errorf("converting to Claude format: %w", err)
-		}
-		formatLabel = "claude"
-
-	case "opencode":
-		conv := converter.New()
-		output, err = conv.ToNative(session, domain.ProviderOpenCode)
-		if err != nil {
-			return fmt.Errorf("converting to OpenCode format: %w", err)
-		}
-
-	case "context", "context.md":
-		output = converter.ToContextMD(session)
-		formatLabel = "context.md"
-
-	default:
-		return fmt.Errorf("unknown format %q: valid values are [aisync, claude, opencode, context]", opts.FormatFlag)
+	// Export
+	result, err := svc.Export(service.ExportRequest{
+		SessionID:   sessionID,
+		ProjectPath: projectPath,
+		Branch:      branch,
+		Format:      opts.FormatFlag,
+	})
+	if err != nil {
+		return err
 	}
 
 	// Write output
 	if opts.OutputFlag != "" {
-		if writeErr := os.WriteFile(opts.OutputFlag, output, 0o644); writeErr != nil {
+		if writeErr := os.WriteFile(opts.OutputFlag, result.Data, 0o644); writeErr != nil {
 			return fmt.Errorf("writing file: %w", writeErr)
 		}
 		fmt.Fprintf(opts.IO.ErrOut, "Exported session %s (%s format, %s) -> %s\n",
-			session.ID, formatLabel, formatSize(len(output)), opts.OutputFlag)
+			result.SessionID, result.Format, formatSize(len(result.Data)), opts.OutputFlag)
 	} else {
-		// Write to stdout
-		_, _ = opts.IO.Out.Write(output)
+		_, _ = opts.IO.Out.Write(result.Data)
 	}
 
 	return nil

@@ -4,67 +4,67 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestDetectFromRemoteURL(t *testing.T) {
 	tests := []struct {
 		name    string
 		url     string
-		want    domain.PlatformName
+		want    session.PlatformName
 		wantErr bool
 	}{
 		// GitHub
 		{
 			name: "github SSH",
 			url:  "git@github.com:org/repo.git",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 		{
 			name: "github HTTPS",
 			url:  "https://github.com/org/repo.git",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 		{
 			name: "github HTTPS no .git",
 			url:  "https://github.com/org/repo",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 		{
 			name: "github SSH protocol",
 			url:  "ssh://git@github.com/org/repo.git",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 
 		// GitLab
 		{
 			name: "gitlab SSH",
 			url:  "git@gitlab.com:org/repo.git",
-			want: domain.PlatformGitLab,
+			want: session.PlatformGitLab,
 		},
 		{
 			name: "gitlab HTTPS",
 			url:  "https://gitlab.com/org/repo.git",
-			want: domain.PlatformGitLab,
+			want: session.PlatformGitLab,
 		},
 
 		// Bitbucket
 		{
 			name: "bitbucket SSH",
 			url:  "git@bitbucket.org:org/repo.git",
-			want: domain.PlatformBitbucket,
+			want: session.PlatformBitbucket,
 		},
 		{
 			name: "bitbucket HTTPS",
 			url:  "https://bitbucket.org/org/repo.git",
-			want: domain.PlatformBitbucket,
+			want: session.PlatformBitbucket,
 		},
 
 		// Case insensitive
 		{
 			name: "github uppercase",
 			url:  "git@GitHub.com:org/repo.git",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 
 		// Unknown / unsupported
@@ -88,21 +88,21 @@ func TestDetectFromRemoteURL(t *testing.T) {
 		{
 			name: "whitespace trimmed",
 			url:  "  git@github.com:org/repo.git  ",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 
 		// HTTPS with port
 		{
 			name: "HTTPS with port",
 			url:  "https://github.com:443/org/repo.git",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 
 		// HTTP (unusual but valid)
 		{
 			name: "HTTP github",
 			url:  "http://github.com/org/repo.git",
-			want: domain.PlatformGitHub,
+			want: session.PlatformGitHub,
 		},
 	}
 
@@ -113,7 +113,7 @@ func TestDetectFromRemoteURL(t *testing.T) {
 				if err == nil {
 					t.Errorf("DetectFromRemoteURL(%q) error = nil, want error", tt.url)
 				}
-				if !errors.Is(err, domain.ErrPlatformNotDetected) {
+				if !errors.Is(err, session.ErrPlatformNotDetected) {
 					t.Errorf("error = %v, want ErrPlatformNotDetected", err)
 				}
 				return

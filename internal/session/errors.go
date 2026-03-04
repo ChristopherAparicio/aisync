@@ -1,8 +1,8 @@
-package domain
+package session
 
 import "errors"
 
-// Sentinel errors for expected domain-level failures.
+// Sentinel errors for expected failures.
 var (
 	// ErrSessionNotFound is returned when a session lookup yields no results.
 	ErrSessionNotFound = errors.New("session not found")

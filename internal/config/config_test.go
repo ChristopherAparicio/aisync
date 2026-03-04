@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestNew_DefaultValues(t *testing.T) {
@@ -19,22 +19,22 @@ func TestNew_DefaultValues(t *testing.T) {
 	}
 
 	// Check defaults
-	if got := cfg.GetStorageMode(); got != domain.StorageModeCompact {
-		t.Errorf("GetStorageMode() = %q, want %q", got, domain.StorageModeCompact)
+	if got := cfg.GetStorageMode(); got != session.StorageModeCompact {
+		t.Errorf("GetStorageMode() = %q, want %q", got, session.StorageModeCompact)
 	}
-	if got := cfg.GetSecretsMode(); got != domain.SecretModeMask {
-		t.Errorf("GetSecretsMode() = %q, want %q", got, domain.SecretModeMask)
+	if got := cfg.GetSecretsMode(); got != session.SecretModeMask {
+		t.Errorf("GetSecretsMode() = %q, want %q", got, session.SecretModeMask)
 	}
 
 	providers := cfg.GetProviders()
 	if len(providers) != 2 {
 		t.Fatalf("GetProviders() count = %d, want 2", len(providers))
 	}
-	if providers[0] != domain.ProviderClaudeCode {
-		t.Errorf("GetProviders()[0] = %q, want %q", providers[0], domain.ProviderClaudeCode)
+	if providers[0] != session.ProviderClaudeCode {
+		t.Errorf("GetProviders()[0] = %q, want %q", providers[0], session.ProviderClaudeCode)
 	}
-	if providers[1] != domain.ProviderOpenCode {
-		t.Errorf("GetProviders()[1] = %q, want %q", providers[1], domain.ProviderOpenCode)
+	if providers[1] != session.ProviderOpenCode {
+		t.Errorf("GetProviders()[1] = %q, want %q", providers[1], session.ProviderOpenCode)
 	}
 }
 
@@ -80,8 +80,8 @@ func TestSetStorageMode_UpdatesGetStorageMode(t *testing.T) {
 	if err := cfg.Set("storage_mode", "full"); err != nil {
 		t.Fatalf("Set() error = %v", err)
 	}
-	if got := cfg.GetStorageMode(); got != domain.StorageModeFull {
-		t.Errorf("GetStorageMode() = %q, want %q", got, domain.StorageModeFull)
+	if got := cfg.GetStorageMode(); got != session.StorageModeFull {
+		t.Errorf("GetStorageMode() = %q, want %q", got, session.StorageModeFull)
 	}
 }
 
@@ -97,8 +97,8 @@ func TestSaveAndReload(t *testing.T) {
 
 	// Reload from disk
 	cfg2 := mustNewConfig(t, globalDir, repoDir)
-	if got := cfg2.GetStorageMode(); got != domain.StorageModeSummary {
-		t.Errorf("After reload: GetStorageMode() = %q, want %q", got, domain.StorageModeSummary)
+	if got := cfg2.GetStorageMode(); got != session.StorageModeSummary {
+		t.Errorf("After reload: GetStorageMode() = %q, want %q", got, session.StorageModeSummary)
 	}
 }
 
@@ -120,8 +120,8 @@ func TestRepoOverridesGlobal(t *testing.T) {
 
 	// Load merged: repo should override global
 	merged := mustNewConfig(t, globalDir, repoDir)
-	if got := merged.GetStorageMode(); got != domain.StorageModeSummary {
-		t.Errorf("Merged GetStorageMode() = %q, want %q (repo should override global)", got, domain.StorageModeSummary)
+	if got := merged.GetStorageMode(); got != session.StorageModeSummary {
+		t.Errorf("Merged GetStorageMode() = %q, want %q (repo should override global)", got, session.StorageModeSummary)
 	}
 }
 

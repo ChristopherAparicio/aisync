@@ -6,21 +6,21 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
 	pb "github.com/ChristopherAparicio/aisync/internal/secrets/scanplugin/proto"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
-// GRPCAdapter wraps a HashiCorp go-plugin scanner into a domain.SecretScanner.
+// GRPCAdapter wraps a HashiCorp go-plugin scanner into a SecretScanner.
 type GRPCAdapter struct {
 	client *goplugin.Client
 	raw    ScannerPlugin
-	mode   domain.SecretMode
+	mode   session.SecretMode
 }
 
 // LoadGRPCPlugin loads an external scanner plugin from a binary path.
 // The plugin binary must implement the aisync scanner gRPC service.
 // The returned adapter must be closed when done (call Close()).
-func LoadGRPCPlugin(binaryPath string, mode domain.SecretMode) (*GRPCAdapter, error) {
+func LoadGRPCPlugin(binaryPath string, mode session.SecretMode) (*GRPCAdapter, error) {
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins:         PluginMap,
@@ -55,8 +55,8 @@ func LoadGRPCPlugin(binaryPath string, mode domain.SecretMode) (*GRPCAdapter, er
 	}, nil
 }
 
-// Scan implements domain.SecretScanner.
-func (a *GRPCAdapter) Scan(content string) []domain.SecretMatch {
+// Scan implements SecretScanner.
+func (a *GRPCAdapter) Scan(content string) []session.SecretMatch {
 	pbMatches, err := a.raw.Scan(content)
 	if err != nil {
 		return nil // plugin errors are silently ignored in scanning
@@ -64,7 +64,7 @@ func (a *GRPCAdapter) Scan(content string) []domain.SecretMatch {
 	return pbToDomain(pbMatches)
 }
 
-// Mask implements domain.SecretScanner.
+// Mask implements SecretScanner.
 func (a *GRPCAdapter) Mask(content string) string {
 	masked, err := a.raw.Mask(content)
 	if err != nil {
@@ -73,8 +73,8 @@ func (a *GRPCAdapter) Mask(content string) string {
 	return masked
 }
 
-// Mode implements domain.SecretScanner.
-func (a *GRPCAdapter) Mode() domain.SecretMode {
+// Mode implements SecretScanner.
+func (a *GRPCAdapter) Mode() session.SecretMode {
 	return a.mode
 }
 
@@ -85,11 +85,11 @@ func (a *GRPCAdapter) Close() {
 	}
 }
 
-// pbToDomain converts protobuf matches to domain matches.
-func pbToDomain(pbMatches []*pb.SecretMatch) []domain.SecretMatch {
-	matches := make([]domain.SecretMatch, 0, len(pbMatches))
+// pbToDomain converts protobuf matches to session matches.
+func pbToDomain(pbMatches []*pb.SecretMatch) []session.SecretMatch {
+	matches := make([]session.SecretMatch, 0, len(pbMatches))
 	for _, m := range pbMatches {
-		matches = append(matches, domain.SecretMatch{
+		matches = append(matches, session.SecretMatch{
 			Type:     m.Type,
 			Value:    m.Value,
 			StartPos: int(m.StartPos),

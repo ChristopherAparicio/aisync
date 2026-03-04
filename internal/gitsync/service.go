@@ -10,18 +10,19 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
 // IndexEntry is a lightweight entry in the sync index for fast lookup.
 type IndexEntry struct {
-	CreatedAt    time.Time           `json:"created_at"`
-	ID           domain.SessionID    `json:"id"`
-	Provider     domain.ProviderName `json:"provider"`
-	Agent        string              `json:"agent"`
-	Branch       string              `json:"branch,omitempty"`
-	Summary      string              `json:"summary,omitempty"`
-	MessageCount int                 `json:"message_count"`
+	CreatedAt    time.Time            `json:"created_at"`
+	ID           session.ID           `json:"id"`
+	Provider     session.ProviderName `json:"provider"`
+	Agent        string               `json:"agent"`
+	Branch       string               `json:"branch,omitempty"`
+	Summary      string               `json:"summary,omitempty"`
+	MessageCount int                  `json:"message_count"`
 }
 
 // Index holds the lightweight session index for the sync branch.
@@ -45,11 +46,11 @@ type PullResult struct {
 // Service orchestrates session sync via the git branch.
 type Service struct {
 	gitClient *git.Client
-	store     domain.Store
+	store     storage.Store
 }
 
 // NewService creates a sync service.
-func NewService(gitClient *git.Client, store domain.Store) *Service {
+func NewService(gitClient *git.Client, store storage.Store) *Service {
 	return &Service{
 		gitClient: gitClient,
 		store:     store,
@@ -67,7 +68,7 @@ func (s *Service) Push(pushRemote bool) (*PushResult, error) {
 	}
 
 	// List all sessions
-	summaries, err := s.store.List(domain.ListOptions{All: true})
+	summaries, err := s.store.List(session.ListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
@@ -78,7 +79,7 @@ func (s *Service) Push(pushRemote bool) (*PushResult, error) {
 
 	// Read existing index to determine what's already synced
 	existingIndex, _ := s.readIndex()
-	existingIDs := make(map[domain.SessionID]bool)
+	existingIDs := make(map[session.ID]bool)
 	if existingIndex != nil {
 		for _, e := range existingIndex.Entries {
 			existingIDs[e.ID] = true
@@ -97,35 +98,35 @@ func (s *Service) Push(pushRemote bool) (*PushResult, error) {
 
 	for _, summary := range summaries {
 		// Load the full session
-		session, getErr := s.store.Get(summary.ID)
+		sess, getErr := s.store.Get(summary.ID)
 		if getErr != nil {
 			continue
 		}
 
 		// Check if already synced
-		if existingIDs[session.ID] {
+		if existingIDs[sess.ID] {
 			continue
 		}
 
 		// Serialize to JSON
-		data, marshalErr := json.MarshalIndent(session, "", "  ")
+		data, marshalErr := json.MarshalIndent(sess, "", "  ")
 		if marshalErr != nil {
 			continue
 		}
 
-		fileName := string(session.ID) + ".json"
+		fileName := string(sess.ID) + ".json"
 		files[fileName] = data
 		pushed++
 
 		// Add index entry
 		indexEntries = append(indexEntries, IndexEntry{
-			ID:           session.ID,
-			Provider:     session.Provider,
-			Agent:        session.Agent,
-			Branch:       session.Branch,
-			Summary:      session.Summary,
-			MessageCount: len(session.Messages),
-			CreatedAt:    session.CreatedAt,
+			ID:           sess.ID,
+			Provider:     sess.Provider,
+			Agent:        sess.Agent,
+			Branch:       sess.Branch,
+			Summary:      sess.Summary,
+			MessageCount: len(sess.Messages),
+			CreatedAt:    sess.CreatedAt,
 		})
 	}
 
@@ -203,12 +204,12 @@ func (s *Service) Pull(pullRemote bool) (*PullResult, error) {
 			continue
 		}
 
-		var session domain.Session
-		if unmarshalErr := json.Unmarshal(data, &session); unmarshalErr != nil {
+		var sess session.Session
+		if unmarshalErr := json.Unmarshal(data, &sess); unmarshalErr != nil {
 			continue
 		}
 
-		if saveErr := s.store.Save(&session); saveErr != nil {
+		if saveErr := s.store.Save(&sess); saveErr != nil {
 			continue
 		}
 		pulled++

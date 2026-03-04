@@ -4,18 +4,14 @@ package commentcmd
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
-
-// aisyncMarker is the HTML comment used to identify aisync PR comments for idempotent updates.
-const aisyncMarker = "<!-- aisync -->"
 
 // Options holds all inputs for the comment command.
 type Options struct {
@@ -48,6 +44,14 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
+// aisyncMarker is re-exported from the service layer for tests.
+const aisyncMarker = service.AisyncMarker
+
+// buildCommentBody wraps the service-layer function for backward compatibility.
+func buildCommentBody(sess *session.Session) string {
+	return service.BuildCommentBody(sess)
+}
+
 func runComment(opts *Options) error {
 	out := opts.IO.Out
 
@@ -67,125 +71,38 @@ func runComment(opts *Options) error {
 		return fmt.Errorf("could not determine repository root: %w", err)
 	}
 
-	// Get platform
-	plat, err := opts.Factory.Platform()
-	if err != nil {
-		return fmt.Errorf("platform not available: %w", err)
-	}
-
-	// Determine PR number
-	prNumber := opts.PRFlag
-	if prNumber == 0 {
-		pr, prErr := plat.GetPRForBranch(branch)
-		if prErr != nil {
-			return fmt.Errorf("no open PR found for branch %q (use --pr to specify): %w", branch, prErr)
-		}
-		prNumber = pr.Number
-		fmt.Fprintf(out, "Auto-detected PR #%d\n", prNumber)
-	}
-
-	// Get store
-	store, err := opts.Factory.Store()
-	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
-	}
-
-	// Find session
-	var session *domain.Session
+	// Parse session ID
+	var sessionID session.ID
 	if opts.SessionFlag != "" {
-		sid, parseErr := domain.ParseSessionID(opts.SessionFlag)
+		parsed, parseErr := session.ParseID(opts.SessionFlag)
 		if parseErr != nil {
 			return parseErr
 		}
-		session, err = store.Get(sid)
-		if err != nil {
-			return fmt.Errorf("session not found: %w", err)
-		}
-	} else {
-		// Try to find session linked to this PR first
-		summaries, lookupErr := store.GetByLink(domain.LinkPR, strconv.Itoa(prNumber))
-		if lookupErr == nil && len(summaries) > 0 {
-			session, err = store.Get(summaries[0].ID)
-			if err != nil {
-				return fmt.Errorf("loading session: %w", err)
-			}
-		} else {
-			// Fall back to branch session
-			session, err = store.GetByBranch(topLevel, branch)
-			if err != nil {
-				return fmt.Errorf("no session found for branch %q: %w", branch, err)
-			}
-		}
+		sessionID = parsed
 	}
 
-	// Build comment body
-	body := buildCommentBody(session)
-
-	// Check for existing aisync comment (idempotent update)
-	comments, err := plat.ListComments(prNumber)
+	// Get service
+	svc, err := opts.Factory.SessionService()
 	if err != nil {
-		return fmt.Errorf("listing PR comments: %w", err)
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	var existingID int64
-	for _, c := range comments {
-		if strings.Contains(c.Body, aisyncMarker) {
-			existingID = c.ID
-			break
-		}
+	// Comment
+	result, err := svc.Comment(service.CommentRequest{
+		SessionID:   sessionID,
+		ProjectPath: topLevel,
+		Branch:      branch,
+		PRNumber:    opts.PRFlag,
+	})
+	if err != nil {
+		return err
 	}
 
-	if existingID > 0 {
-		if updateErr := plat.UpdateComment(existingID, body); updateErr != nil {
-			return fmt.Errorf("updating comment: %w", updateErr)
-		}
-		fmt.Fprintf(out, "Updated aisync comment on PR #%d\n", prNumber)
+	if result.Updated {
+		fmt.Fprintf(out, "Updated aisync comment on PR #%d\n", result.PRNumber)
 	} else {
-		if addErr := plat.AddComment(prNumber, body); addErr != nil {
-			return fmt.Errorf("adding comment: %w", addErr)
-		}
-		fmt.Fprintf(out, "Posted aisync comment on PR #%d\n", prNumber)
+		fmt.Fprintf(out, "Posted aisync comment on PR #%d\n", result.PRNumber)
 	}
 
 	return nil
-}
-
-// buildCommentBody creates the Markdown comment body from a session.
-func buildCommentBody(s *domain.Session) string {
-	var b strings.Builder
-
-	b.WriteString(aisyncMarker)
-	b.WriteString("\n## 🤖 AI Session Summary\n\n")
-	b.WriteString(fmt.Sprintf("**Session:** `%s`\n", s.ID))
-	b.WriteString(fmt.Sprintf("**Provider:** %s\n", s.Provider))
-	b.WriteString(fmt.Sprintf("**Branch:** %s\n", s.Branch))
-
-	if s.Summary != "" {
-		b.WriteString(fmt.Sprintf("\n### Summary\n\n%s\n", s.Summary))
-	}
-
-	// Token usage
-	if s.TokenUsage.TotalTokens > 0 {
-		b.WriteString("\n### Token Usage\n\n")
-		b.WriteString("| Metric | Count |\n")
-		b.WriteString("|--------|-------|\n")
-		b.WriteString(fmt.Sprintf("| Input  | %d |\n", s.TokenUsage.InputTokens))
-		b.WriteString(fmt.Sprintf("| Output | %d |\n", s.TokenUsage.OutputTokens))
-		b.WriteString(fmt.Sprintf("| Total  | %d |\n", s.TokenUsage.TotalTokens))
-	}
-
-	// Messages stats
-	b.WriteString(fmt.Sprintf("\n**Messages:** %d\n", len(s.Messages)))
-
-	// File changes
-	if len(s.FileChanges) > 0 {
-		b.WriteString("\n### Files Changed\n\n")
-		for _, fc := range s.FileChanges {
-			b.WriteString(fmt.Sprintf("- `%s` (%s)\n", fc.FilePath, fc.ChangeType))
-		}
-	}
-
-	b.WriteString("\n---\n*Posted by [aisync](https://github.com/ChristopherAparicio/aisync)*\n")
-
-	return b.String()
 }

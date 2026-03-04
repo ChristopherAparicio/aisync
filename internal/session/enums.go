@@ -1,4 +1,4 @@
-package domain
+package session
 
 import (
 	"fmt"
@@ -347,25 +347,25 @@ func (p PlatformName) String() string {
 	return string(p)
 }
 
-// ── SessionID ──
+// ── ID ──
 
-// SessionID is a unique identifier for a session.
-type SessionID string
+// ID is a unique identifier for a session.
+type ID string
 
-// NewSessionID generates a new random session ID.
-func NewSessionID() SessionID {
-	return SessionID(uuid.New().String())
+// NewID generates a new random session ID.
+func NewID() ID {
+	return ID(uuid.New().String())
 }
 
-// ParseSessionID validates and returns a SessionID from a raw string.
-func ParseSessionID(s string) (SessionID, error) {
+// ParseID validates and returns an ID from a raw string.
+func ParseID(s string) (ID, error) {
 	if s == "" {
 		return "", fmt.Errorf("session ID cannot be empty")
 	}
-	return SessionID(s), nil
+	return ID(s), nil
 }
 
 // String returns the string representation.
-func (id SessionID) String() string {
+func (id ID) String() string {
 	return string(id)
 }

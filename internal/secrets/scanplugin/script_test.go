@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestScriptAdapter_Scan(t *testing.T) {
@@ -26,7 +26,7 @@ fi
 		t.Fatal(writeErr)
 	}
 
-	adapter := NewScriptAdapter(script, nil, domain.SecretModeMask)
+	adapter := NewScriptAdapter(script, nil, session.SecretModeMask)
 
 	// Test with matching content
 	matches := adapter.Scan("here secret123 there")
@@ -51,7 +51,7 @@ echo '[]'
 		t.Fatal(writeErr)
 	}
 
-	adapter := NewScriptAdapter(script, nil, domain.SecretModeMask)
+	adapter := NewScriptAdapter(script, nil, session.SecretModeMask)
 	matches := adapter.Scan("clean content")
 	if len(matches) != 0 {
 		t.Errorf("Scan() returned %d matches, want 0", len(matches))
@@ -68,7 +68,7 @@ exit 1
 		t.Fatal(writeErr)
 	}
 
-	adapter := NewScriptAdapter(script, nil, domain.SecretModeMask)
+	adapter := NewScriptAdapter(script, nil, session.SecretModeMask)
 	matches := adapter.Scan("content")
 	if matches != nil {
 		t.Errorf("Scan() should return nil on script failure, got %v", matches)
@@ -76,7 +76,7 @@ exit 1
 }
 
 func TestScriptAdapter_Scan_scriptNotFound(t *testing.T) {
-	adapter := NewScriptAdapter("/nonexistent/script", nil, domain.SecretModeMask)
+	adapter := NewScriptAdapter("/nonexistent/script", nil, session.SecretModeMask)
 	matches := adapter.Scan("content")
 	if matches != nil {
 		t.Errorf("Scan() should return nil when script not found, got %v", matches)
@@ -92,7 +92,7 @@ func TestScriptAdapter_Mask(t *testing.T) {
 		t.Fatal(writeErr)
 	}
 
-	adapter := NewScriptAdapter(script, nil, domain.SecretModeMask)
+	adapter := NewScriptAdapter(script, nil, session.SecretModeMask)
 
 	// First verify Scan returns matches
 	matches := adapter.Scan("key=sk-abc!")
@@ -108,9 +108,9 @@ func TestScriptAdapter_Mask(t *testing.T) {
 }
 
 func TestScriptAdapter_Mode(t *testing.T) {
-	adapter := NewScriptAdapter("echo", nil, domain.SecretModeWarn)
-	if adapter.Mode() != domain.SecretModeWarn {
-		t.Errorf("Mode() = %q, want %q", adapter.Mode(), domain.SecretModeWarn)
+	adapter := NewScriptAdapter("echo", nil, session.SecretModeWarn)
+	if adapter.Mode() != session.SecretModeWarn {
+		t.Errorf("Mode() = %q, want %q", adapter.Mode(), session.SecretModeWarn)
 	}
 }
 
@@ -126,7 +126,7 @@ echo '[]'
 		t.Fatal(writeErr)
 	}
 
-	adapter := NewScriptAdapter(script, []string{"--extra-arg"}, domain.SecretModeMask)
+	adapter := NewScriptAdapter(script, []string{"--extra-arg"}, session.SecretModeMask)
 	matches := adapter.Scan("content")
 	if matches != nil {
 		t.Errorf("Scan() returned %v, want nil", matches)

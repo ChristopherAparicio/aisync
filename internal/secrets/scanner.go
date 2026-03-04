@@ -8,19 +8,19 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 // Scanner detects secrets in text using regex patterns.
-// It implements domain.SecretScanner.
+// It implements session.SecretScanner.
 type Scanner struct {
-	mode     domain.SecretMode
+	mode     session.SecretMode
 	patterns []Pattern
 }
 
 // NewScanner creates a scanner with the given mode and patterns.
 // If patterns is nil, the built-in defaults are used.
-func NewScanner(mode domain.SecretMode, patterns []Pattern) *Scanner {
+func NewScanner(mode session.SecretMode, patterns []Pattern) *Scanner {
 	if patterns == nil {
 		patterns = DefaultPatterns()
 	}
@@ -31,13 +31,13 @@ func NewScanner(mode domain.SecretMode, patterns []Pattern) *Scanner {
 }
 
 // Scan checks content for secrets and returns all matches.
-func (s *Scanner) Scan(content string) []domain.SecretMatch {
-	var matches []domain.SecretMatch
+func (s *Scanner) Scan(content string) []session.SecretMatch {
+	var matches []session.SecretMatch
 
 	for _, p := range s.patterns {
 		locs := p.Regex.FindAllStringIndex(content, -1)
 		for _, loc := range locs {
-			matches = append(matches, domain.SecretMatch{
+			matches = append(matches, session.SecretMatch{
 				Type:     p.Name,
 				Value:    content[loc[0]:loc[1]],
 				StartPos: loc[0],
@@ -74,16 +74,16 @@ func (s *Scanner) Mask(content string) string {
 }
 
 // Mode returns the current secret handling mode.
-func (s *Scanner) Mode() domain.SecretMode {
+func (s *Scanner) Mode() session.SecretMode {
 	return s.mode
 }
 
 // ScanSession checks all text content in a session for secrets.
 // This scans message content, tool call outputs, and (optionally) tool call inputs.
-func (s *Scanner) ScanSession(session *domain.Session) []domain.SecretMatch {
-	var allMatches []domain.SecretMatch
+func (s *Scanner) ScanSession(sess *session.Session) []session.SecretMatch {
+	var allMatches []session.SecretMatch
 
-	for _, msg := range session.Messages {
+	for _, msg := range sess.Messages {
 		allMatches = append(allMatches, s.Scan(msg.Content)...)
 		for _, tc := range msg.ToolCalls {
 			allMatches = append(allMatches, s.Scan(tc.Output)...)
@@ -95,11 +95,11 @@ func (s *Scanner) ScanSession(session *domain.Session) []domain.SecretMatch {
 
 // MaskSession applies masking to all text content in a session.
 // Modifies the session in place.
-func (s *Scanner) MaskSession(session *domain.Session) {
-	for i := range session.Messages {
-		session.Messages[i].Content = s.Mask(session.Messages[i].Content)
-		for j := range session.Messages[i].ToolCalls {
-			session.Messages[i].ToolCalls[j].Output = s.Mask(session.Messages[i].ToolCalls[j].Output)
+func (s *Scanner) MaskSession(sess *session.Session) {
+	for i := range sess.Messages {
+		sess.Messages[i].Content = s.Mask(sess.Messages[i].Content)
+		for j := range sess.Messages[i].ToolCalls {
+			sess.Messages[i].ToolCalls[j].Output = s.Mask(sess.Messages[i].ToolCalls[j].Output)
 		}
 	}
 }
@@ -115,7 +115,7 @@ func (s *Scanner) PatternCount() int {
 }
 
 // FormatMatches returns a human-readable summary of secret matches.
-func FormatMatches(matches []domain.SecretMatch) string {
+func FormatMatches(matches []session.SecretMatch) string {
 	if len(matches) == 0 {
 		return "no secrets found"
 	}

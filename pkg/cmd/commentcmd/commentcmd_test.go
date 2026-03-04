@@ -6,7 +6,11 @@ import (
 	"testing"
 
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/platform"
+	"github.com/ChristopherAparicio/aisync/internal/provider"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -14,54 +18,54 @@ import (
 
 // mockStore for comment tests.
 type mockStore struct {
-	sessions map[domain.SessionID]*domain.Session
-	byBranch map[string]*domain.Session
-	links    map[string][]domain.SessionSummary
+	sessions map[session.ID]*session.Session
+	byBranch map[string]*session.Session
+	links    map[string][]session.Summary
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		sessions: make(map[domain.SessionID]*domain.Session),
-		byBranch: make(map[string]*domain.Session),
-		links:    make(map[string][]domain.SessionSummary),
+		sessions: make(map[session.ID]*session.Session),
+		byBranch: make(map[string]*session.Session),
+		links:    make(map[string][]session.Summary),
 	}
 }
 
-func (m *mockStore) Save(s *domain.Session) error {
+func (m *mockStore) Save(s *session.Session) error {
 	m.sessions[s.ID] = s
 	key := s.ProjectPath + ":" + s.Branch
 	m.byBranch[key] = s
 	return nil
 }
 
-func (m *mockStore) Get(id domain.SessionID) (*domain.Session, error) {
+func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	s, ok := m.sessions[id]
 	if !ok {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return s, nil
 }
 
-func (m *mockStore) GetByBranch(projectPath, branch string) (*domain.Session, error) {
+func (m *mockStore) GetByBranch(projectPath, branch string) (*session.Session, error) {
 	key := projectPath + ":" + branch
 	s, ok := m.byBranch[key]
 	if !ok {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return s, nil
 }
 
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) { return nil, nil }
-func (m *mockStore) Delete(_ domain.SessionID) error                            { return nil }
-func (m *mockStore) Close() error                                               { return nil }
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
+func (m *mockStore) Delete(_ session.ID) error                             { return nil }
+func (m *mockStore) Close() error                                          { return nil }
 
-func (m *mockStore) AddLink(sessionID domain.SessionID, link domain.Link) error {
+func (m *mockStore) AddLink(sessionID session.ID, link session.Link) error {
 	key := string(link.LinkType) + ":" + link.Ref
 	s, ok := m.sessions[sessionID]
 	if !ok {
-		return domain.ErrSessionNotFound
+		return session.ErrSessionNotFound
 	}
-	summary := domain.SessionSummary{
+	summary := session.Summary{
 		ID:       s.ID,
 		Provider: s.Provider,
 		Branch:   s.Branch,
@@ -70,20 +74,26 @@ func (m *mockStore) AddLink(sessionID domain.SessionID, link domain.Link) error 
 	return nil
 }
 
-func (m *mockStore) GetByLink(linkType domain.LinkType, ref string) ([]domain.SessionSummary, error) {
+func (m *mockStore) GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error) {
 	key := string(linkType) + ":" + ref
 	summaries, ok := m.links[key]
 	if !ok || len(summaries) == 0 {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return summaries, nil
+}
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
 }
 
 // mockPlatform for comment tests.
 type mockPlatform struct {
-	name       domain.PlatformName
-	prByBranch map[string]*domain.PullRequest
-	comments   map[int][]domain.PRComment
+	name       session.PlatformName
+	prByBranch map[string]*session.PullRequest
+	comments   map[int][]session.PRComment
 	added      []addedComment
 	updated    []updatedComment
 }
@@ -100,32 +110,32 @@ type updatedComment struct {
 
 func newMockPlatform() *mockPlatform {
 	return &mockPlatform{
-		name:       domain.PlatformGitHub,
-		prByBranch: make(map[string]*domain.PullRequest),
-		comments:   make(map[int][]domain.PRComment),
+		name:       session.PlatformGitHub,
+		prByBranch: make(map[string]*session.PullRequest),
+		comments:   make(map[int][]session.PRComment),
 	}
 }
 
-func (m *mockPlatform) Name() domain.PlatformName { return m.name }
+func (m *mockPlatform) Name() session.PlatformName { return m.name }
 
-func (m *mockPlatform) GetPRForBranch(branch string) (*domain.PullRequest, error) {
+func (m *mockPlatform) GetPRForBranch(branch string) (*session.PullRequest, error) {
 	pr, ok := m.prByBranch[branch]
 	if !ok {
-		return nil, domain.ErrPRNotFound
+		return nil, session.ErrPRNotFound
 	}
 	return pr, nil
 }
 
-func (m *mockPlatform) GetPR(number int) (*domain.PullRequest, error) {
+func (m *mockPlatform) GetPR(number int) (*session.PullRequest, error) {
 	for _, pr := range m.prByBranch {
 		if pr.Number == number {
 			return pr, nil
 		}
 	}
-	return nil, domain.ErrPRNotFound
+	return nil, session.ErrPRNotFound
 }
 
-func (m *mockPlatform) ListPRsForBranch(_ string) ([]domain.PullRequest, error) {
+func (m *mockPlatform) ListPRsForBranch(_ string) ([]session.PullRequest, error) {
 	return nil, nil
 }
 
@@ -139,7 +149,7 @@ func (m *mockPlatform) UpdateComment(commentID int64, body string) error {
 	return nil
 }
 
-func (m *mockPlatform) ListComments(prNumber int) ([]domain.PRComment, error) {
+func (m *mockPlatform) ListComments(prNumber int) ([]session.PRComment, error) {
 	return m.comments[prNumber], nil
 }
 
@@ -153,11 +163,21 @@ func commentTestFactory(t *testing.T, store *mockStore, plat *mockPlatform) (*cm
 	}
 	gitClient := git.NewClient(repoDir)
 
+	registry := provider.NewRegistry()
+
 	f := &cmdutil.Factory{
 		IOStreams:    ios,
 		GitFunc:      func() (*git.Client, error) { return gitClient, nil },
-		StoreFunc:    func() (domain.Store, error) { return store, nil },
-		PlatformFunc: func() (domain.Platform, error) { return plat, nil },
+		StoreFunc:    func() (storage.Store, error) { return store, nil },
+		PlatformFunc: func() (platform.Platform, error) { return plat, nil },
+		SessionServiceFunc: func() (*service.SessionService, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Registry: registry,
+				Git:      gitClient,
+				Platform: plat,
+			}), nil
+		},
 	}
 
 	return f, ios, repoDir
@@ -188,21 +208,21 @@ func TestComment_newComment(t *testing.T) {
 	branchName, _ := gitClient.CurrentBranch()
 
 	// Set up PR matching actual branch name
-	plat.prByBranch[branchName] = &domain.PullRequest{
+	plat.prByBranch[branchName] = &session.PullRequest{
 		Number: 10,
 		Title:  "Test PR",
 		Branch: branchName,
 	}
 
-	session := testutil.NewSession("comment-test-1")
-	session.Provider = domain.ProviderClaudeCode
-	session.ProjectPath = topLevel
-	session.Branch = branchName
-	session.Summary = "Added new feature"
-	session.FileChanges = []domain.FileChange{
-		{FilePath: "main.go", ChangeType: domain.ChangeModified},
+	sess := testutil.NewSession("comment-test-1")
+	sess.Provider = session.ProviderClaudeCode
+	sess.ProjectPath = topLevel
+	sess.Branch = branchName
+	sess.Summary = "Added new feature"
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "main.go", ChangeType: session.ChangeModified},
 	}
-	_ = store.Save(session)
+	_ = store.Save(sess)
 
 	opts := &Options{
 		IO:      ios,
@@ -244,14 +264,14 @@ func TestComment_updateExisting(t *testing.T) {
 	topLevel, _ := gitClient.TopLevel()
 	branchName, _ := gitClient.CurrentBranch()
 
-	session := testutil.NewSession("comment-update-1")
-	session.Provider = domain.ProviderClaudeCode
-	session.ProjectPath = topLevel
-	session.Branch = branchName
-	_ = store.Save(session)
+	sess := testutil.NewSession("comment-update-1")
+	sess.Provider = session.ProviderClaudeCode
+	sess.ProjectPath = topLevel
+	sess.Branch = branchName
+	_ = store.Save(sess)
 
 	// Pre-existing aisync comment
-	plat.comments[5] = []domain.PRComment{
+	plat.comments[5] = []session.PRComment{
 		{
 			ID:   123,
 			Body: aisyncMarker + "\nOld comment",
@@ -290,10 +310,10 @@ func TestComment_withSessionFlag(t *testing.T) {
 	store := newMockStore()
 	plat := newMockPlatform()
 
-	session := testutil.NewSession("explicit-session")
-	session.Provider = domain.ProviderOpenCode
-	session.Summary = "Explicit session"
-	_ = store.Save(session)
+	sess := testutil.NewSession("explicit-session")
+	sess.Provider = session.ProviderOpenCode
+	sess.Summary = "Explicit session"
+	_ = store.Save(sess)
 
 	f, ios, _ := commentTestFactory(t, store, plat)
 
@@ -344,24 +364,24 @@ func TestComment_noPR(t *testing.T) {
 }
 
 func TestBuildCommentBody(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:       "test-session-123",
-		Provider: domain.ProviderClaudeCode,
+		Provider: session.ProviderClaudeCode,
 		Branch:   "feature-branch",
 		Summary:  "Implemented auth module",
-		TokenUsage: domain.TokenUsage{
+		TokenUsage: session.TokenUsage{
 			InputTokens:  1000,
 			OutputTokens: 500,
 			TotalTokens:  1500,
 		},
-		Messages: make([]domain.Message, 5),
-		FileChanges: []domain.FileChange{
-			{FilePath: "auth.go", ChangeType: domain.ChangeCreated},
-			{FilePath: "main.go", ChangeType: domain.ChangeModified},
+		Messages: make([]session.Message, 5),
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go", ChangeType: session.ChangeCreated},
+			{FilePath: "main.go", ChangeType: session.ChangeModified},
 		},
 	}
 
-	body := buildCommentBody(session)
+	body := buildCommentBody(sess)
 
 	checks := []struct {
 		name     string
@@ -389,13 +409,13 @@ func TestBuildCommentBody(t *testing.T) {
 }
 
 func TestBuildCommentBody_minimal(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:       "minimal-session",
-		Provider: domain.ProviderOpenCode,
+		Provider: session.ProviderOpenCode,
 		Branch:   "main",
 	}
 
-	body := buildCommentBody(session)
+	body := buildCommentBody(sess)
 
 	if !strings.Contains(body, aisyncMarker) {
 		t.Error("expected aisync marker")

@@ -6,61 +6,68 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
-// mockStore implements domain.Store for testing.
+// mockStore implements session.Store for testing.
 type mockStore struct {
-	sessions []*domain.Session
+	sessions []*session.Session
 }
 
-func (m *mockStore) Save(_ *domain.Session) error                    { return nil }
-func (m *mockStore) Delete(_ domain.SessionID) error                 { return nil }
-func (m *mockStore) AddLink(_ domain.SessionID, _ domain.Link) error { return nil }
-func (m *mockStore) GetByLink(_ domain.LinkType, _ string) ([]domain.SessionSummary, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) Save(_ *session.Session) error              { return nil }
+func (m *mockStore) Delete(_ session.ID) error                  { return nil }
+func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
+func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
+	return nil, session.ErrSessionNotFound
 }
 func (m *mockStore) Close() error { return nil }
 
-func (m *mockStore) Get(id domain.SessionID) (*domain.Session, error) {
+func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	for _, s := range m.sessions {
 		if s.ID == id {
 			return s, nil
 		}
 	}
-	return nil, domain.ErrSessionNotFound
+	return nil, session.ErrSessionNotFound
 }
 
-func (m *mockStore) GetByBranch(_, _ string) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByBranch(_, _ string) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
 
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) {
-	summaries := make([]domain.SessionSummary, 0, len(m.sessions))
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
+	summaries := make([]session.Summary, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		summaries = append(summaries, domain.SessionSummary{
+		summaries = append(summaries, session.Summary{
 			ID:       s.ID,
 			Provider: s.Provider,
 		})
 	}
 	return summaries, nil
 }
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
+}
 
 func TestSecretsScan_cleanSession(t *testing.T) {
 	ios := iostreams.Test()
 
 	store := &mockStore{
-		sessions: []*domain.Session{
+		sessions: []*session.Session{
 			{
 				ID:          "sess-1",
-				Provider:    domain.ProviderClaudeCode,
+				Provider:    session.ProviderClaudeCode,
 				CreatedAt:   time.Now(),
-				StorageMode: domain.StorageModeCompact,
-				Messages: []domain.Message{
-					{Role: domain.RoleUser, Content: "Hello, help me with Go code"},
-					{Role: domain.RoleAssistant, Content: "Sure, I can help!"},
+				StorageMode: session.StorageModeCompact,
+				Messages: []session.Message{
+					{Role: session.RoleUser, Content: "Hello, help me with Go code"},
+					{Role: session.RoleAssistant, Content: "Sure, I can help!"},
 				},
 			},
 		},
@@ -68,7 +75,7 @@ func TestSecretsScan_cleanSession(t *testing.T) {
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
 	}
@@ -96,15 +103,15 @@ func TestSecretsScan_sessionWithSecrets(t *testing.T) {
 	ios := iostreams.Test()
 
 	store := &mockStore{
-		sessions: []*domain.Session{
+		sessions: []*session.Session{
 			{
 				ID:          "sess-2",
-				Provider:    domain.ProviderClaudeCode,
+				Provider:    session.ProviderClaudeCode,
 				CreatedAt:   time.Now(),
-				StorageMode: domain.StorageModeCompact,
-				Messages: []domain.Message{
-					{Role: domain.RoleUser, Content: "Use this key AKIAIOSFODNN7EXAMPLE"},
-					{Role: domain.RoleAssistant, Content: "I'll use the ghp_ABCDEFghijklmnop1234567890abcdef token"},
+				StorageMode: session.StorageModeCompact,
+				Messages: []session.Message{
+					{Role: session.RoleUser, Content: "Use this key AKIAIOSFODNN7EXAMPLE"},
+					{Role: session.RoleAssistant, Content: "I'll use the ghp_ABCDEFghijklmnop1234567890abcdef token"},
 				},
 			},
 		},
@@ -112,7 +119,7 @@ func TestSecretsScan_sessionWithSecrets(t *testing.T) {
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
 	}
@@ -137,14 +144,14 @@ func TestSecretsScan_specificSession(t *testing.T) {
 	ios := iostreams.Test()
 
 	store := &mockStore{
-		sessions: []*domain.Session{
+		sessions: []*session.Session{
 			{
 				ID:          "sess-3",
-				Provider:    domain.ProviderOpenCode,
+				Provider:    session.ProviderOpenCode,
 				CreatedAt:   time.Now(),
-				StorageMode: domain.StorageModeCompact,
-				Messages: []domain.Message{
-					{Role: domain.RoleUser, Content: "Just regular text"},
+				StorageMode: session.StorageModeCompact,
+				Messages: []session.Message{
+					{Role: session.RoleUser, Content: "Just regular text"},
 				},
 			},
 		},
@@ -152,7 +159,7 @@ func TestSecretsScan_specificSession(t *testing.T) {
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
 	}
@@ -184,7 +191,7 @@ func TestSecretsScan_noSessions(t *testing.T) {
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
 	}
@@ -212,7 +219,7 @@ func TestSecretsScan_sessionNotFound(t *testing.T) {
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
-		StoreFunc: func() (domain.Store, error) {
+		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
 	}

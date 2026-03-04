@@ -3,12 +3,12 @@ package listcmd
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -65,34 +65,21 @@ func runList(opts *Options) error {
 		return fmt.Errorf("could not determine repository root: %w", err)
 	}
 
-	// Get store
-	store, err := opts.Factory.Store()
+	// Get service
+	svc, err := opts.Factory.SessionService()
 	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
+		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	// List sessions — either by PR link or by branch/project
-	var summaries []domain.SessionSummary
-	if opts.PRFlag > 0 {
-		prSummaries, lookupErr := store.GetByLink(domain.LinkPR, strconv.Itoa(opts.PRFlag))
-		if lookupErr != nil {
-			return fmt.Errorf("no sessions linked to PR #%d: %w", opts.PRFlag, lookupErr)
-		}
-		summaries = prSummaries
-	} else {
-		listOpts := domain.ListOptions{
-			ProjectPath: topLevel,
-			All:         opts.All,
-		}
-		if !opts.All {
-			listOpts.Branch = branch
-		}
-
-		listed, listErr := store.List(listOpts)
-		if listErr != nil {
-			return fmt.Errorf("listing sessions: %w", listErr)
-		}
-		summaries = listed
+	// List sessions
+	summaries, err := svc.List(service.ListRequest{
+		ProjectPath: topLevel,
+		Branch:      branch,
+		PRNumber:    opts.PRFlag,
+		All:         opts.All,
+	})
+	if err != nil {
+		return err
 	}
 
 	if len(summaries) == 0 {
@@ -172,3 +159,8 @@ func timeAgo(t time.Time) string {
 		return fmt.Sprintf("%d days ago", days)
 	}
 }
+
+// ── Aliases for session types used in display ──
+
+// Summary aliases session.Summary for test accessibility within this package.
+type Summary = session.Summary

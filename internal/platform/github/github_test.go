@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestClient_Name(t *testing.T) {
 	c := New("/tmp/test")
-	if c.Name() != domain.PlatformGitHub {
-		t.Errorf("Name() = %q, want %q", c.Name(), domain.PlatformGitHub)
+	if c.Name() != session.PlatformGitHub {
+		t.Errorf("Name() = %q, want %q", c.Name(), session.PlatformGitHub)
 	}
 }
 
@@ -142,5 +142,5 @@ func TestJsonEscape(t *testing.T) {
 	}
 }
 
-// Verify Client implements domain.Platform at compile time.
-var _ domain.Platform = (*Client)(nil)
+// Client is a concrete type that implements the Platform operations for GitHub.
+// No compile-time interface check — there is no central Platform interface.

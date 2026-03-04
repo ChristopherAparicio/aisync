@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/hooks"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -97,12 +96,11 @@ func runInit(opts *InitOptions) error {
 	if opts.NoHooks {
 		fmt.Fprintln(out, "  Hooks: skipped (--no-hooks)")
 	} else {
-		hooksDir, hooksErr := gitClient.HooksPath()
+		mgr, hooksErr := opts.Factory.HooksManager()
 		if hooksErr != nil {
 			fmt.Fprintf(out, "  Hooks: could not determine hooks directory: %v\n", hooksErr)
 			return nil
 		}
-		mgr := hooks.NewManager(hooksDir)
 		if installErr := mgr.Install(); installErr != nil {
 			fmt.Fprintf(out, "  Hooks: installation failed: %v\n", installErr)
 			return nil

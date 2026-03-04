@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 
 	_ "modernc.org/sqlite" // SQLite driver registration
 )
@@ -51,7 +51,7 @@ const (
 	exportedByLabel = "aisync"
 )
 
-// Provider implements domain.Provider for Cursor (export only).
+// Provider implements session.Provider for Cursor (export only).
 type Provider struct {
 	// cursorUserDir overrides the default Cursor User directory (for testing).
 	cursorUserDir string
@@ -67,8 +67,8 @@ func New(cursorUserDir string) *Provider {
 }
 
 // Name returns the provider identifier.
-func (p *Provider) Name() domain.ProviderName {
-	return domain.ProviderCursor
+func (p *Provider) Name() session.ProviderName {
+	return session.ProviderCursor
 }
 
 // CanImport reports that Cursor does not support session import.
@@ -77,14 +77,14 @@ func (p *Provider) CanImport() bool {
 }
 
 // Import returns ErrImportNotSupported since Cursor is export-only.
-func (p *Provider) Import(_ *domain.Session) error {
-	return domain.ErrImportNotSupported
+func (p *Provider) Import(_ *session.Session) error {
+	return session.ErrImportNotSupported
 }
 
 // Detect finds sessions matching the given project and branch.
 // It reads workspace metadata from the workspace state.vscdb, then enriches
 // with data from the global state.vscdb.
-func (p *Provider) Detect(projectPath string, branch string) ([]domain.SessionSummary, error) {
+func (p *Provider) Detect(projectPath string, branch string) ([]session.Summary, error) {
 	// Find the workspace hash for this project
 	wsHash, findErr := p.findWorkspaceHash(projectPath)
 	if findErr != nil {
@@ -108,11 +108,11 @@ func (p *Provider) Detect(projectPath string, branch string) ([]domain.SessionSu
 	}
 
 	// Convert to session summaries
-	summaries := make([]domain.SessionSummary, 0, len(matches))
+	summaries := make([]session.Summary, 0, len(matches))
 	for _, c := range matches {
-		summaries = append(summaries, domain.SessionSummary{
-			ID:           domain.SessionID(c.ComposerID),
-			Provider:     domain.ProviderCursor,
+		summaries = append(summaries, session.Summary{
+			ID:           session.ID(c.ComposerID),
+			Provider:     session.ProviderCursor,
 			Agent:        agentFromMode(c.UnifiedMode),
 			Branch:       c.activeBranch(),
 			Summary:      c.Name,
@@ -130,7 +130,7 @@ func (p *Provider) Detect(projectPath string, branch string) ([]domain.SessionSu
 }
 
 // Export reads a session by ID and converts it to the unified format.
-func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (*domain.Session, error) {
+func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error) {
 	// Read full composer data from the global state.vscdb
 	globalDBPath := filepath.Join(p.cursorUserDir, globalStatePath)
 	cd, readErr := readComposerData(globalDBPath, string(sessionID))
@@ -138,10 +138,10 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 		return nil, fmt.Errorf("reading composer data: %w", readErr)
 	}
 
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          sessionID,
 		Version:     1,
-		Provider:    domain.ProviderCursor,
+		Provider:    session.ProviderCursor,
 		Agent:       agentFromMode(cd.UnifiedMode),
 		Branch:      cd.activeBranch(),
 		ProjectPath: "", // filled by caller if needed
@@ -150,22 +150,22 @@ func (p *Provider) Export(sessionID domain.SessionID, mode domain.StorageMode) (
 		CreatedAt:   cd.createdTime(),
 		Summary:     cd.Name,
 		StorageMode: mode,
-		TokenUsage: domain.TokenUsage{
+		TokenUsage: session.TokenUsage{
 			TotalTokens: cd.ContextTokensUsed,
 		},
 	}
 
 	// Extract messages from conversation headers
-	if mode != domain.StorageModeSummary {
-		session.Messages = cd.extractMessages()
+	if mode != session.StorageModeSummary {
+		sess.Messages = cd.extractMessages()
 	}
 
 	// Extract file changes from subtitle
 	if cd.FilesChangedCount > 0 && cd.Subtitle != "" {
-		session.FileChanges = extractFileChanges(cd.Subtitle)
+		sess.FileChanges = extractFileChanges(cd.Subtitle)
 	}
 
-	return session, nil
+	return sess, nil
 }
 
 // --- Internal types ---
@@ -251,22 +251,22 @@ func (cd *composerData) activeBranch() string {
 	return cd.CreatedOnBranch
 }
 
-func (cd *composerData) extractMessages() []domain.Message {
-	messages := make([]domain.Message, 0, len(cd.FullConversationHeadersOnly))
+func (cd *composerData) extractMessages() []session.Message {
+	messages := make([]session.Message, 0, len(cd.FullConversationHeadersOnly))
 	for _, b := range cd.FullConversationHeadersOnly {
-		role := domain.RoleUser
+		role := session.RoleUser
 		if b.Type == bubbleTypeAssistant {
-			role = domain.RoleAssistant
+			role = session.RoleAssistant
 		}
 
-		msg := domain.Message{
+		msg := session.Message{
 			ID:   b.bubbleID(),
 			Role: role,
 			// Cursor stores message text server-side; only IDs are available locally.
 			Content: "",
 		}
 
-		if role == domain.RoleAssistant && cd.ModelConfig != nil {
+		if role == session.RoleAssistant && cd.ModelConfig != nil {
 			msg.Model = cd.ModelConfig.ModelName
 		}
 
@@ -310,7 +310,7 @@ func (p *Provider) findWorkspaceHash(projectPath string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no Cursor workspace found for %s: %w", projectPath, domain.ErrProviderNotDetected)
+	return "", fmt.Errorf("no Cursor workspace found for %s: %w", projectPath, session.ErrProviderNotDetected)
 }
 
 type workspaceJSON struct {
@@ -428,21 +428,21 @@ func normalizePath(p string) string {
 
 // extractFileChanges parses Cursor's subtitle field which lists changed files.
 // The format is: "Edited file1.go, file2.go, file3.go"
-func extractFileChanges(subtitle string) []domain.FileChange {
+func extractFileChanges(subtitle string) []session.FileChange {
 	subtitle = strings.TrimPrefix(subtitle, "Edited ")
 	subtitle = strings.TrimPrefix(subtitle, "Created ")
 	subtitle = strings.TrimPrefix(subtitle, "Deleted ")
 
 	parts := strings.Split(subtitle, ", ")
-	changes := make([]domain.FileChange, 0, len(parts))
+	changes := make([]session.FileChange, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		changes = append(changes, domain.FileChange{
+		changes = append(changes, session.FileChange{
 			FilePath:   part,
-			ChangeType: domain.ChangeModified,
+			ChangeType: session.ChangeModified,
 		})
 	}
 	return changes

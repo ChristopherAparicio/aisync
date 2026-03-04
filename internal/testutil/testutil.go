@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
 )
 
@@ -50,14 +50,14 @@ func MustOpenStore(t *testing.T) *sqlite.Store {
 	return store
 }
 
-// NewSession creates a domain.Session with the given ID and reasonable defaults.
+// NewSession creates a session.Session with the given ID and reasonable defaults.
 // All fields are populated for comprehensive testing.
-func NewSession(id string) *domain.Session {
+func NewSession(id string) *session.Session {
 	now := time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC)
-	return &domain.Session{
-		ID:          domain.SessionID(id),
+	return &session.Session{
+		ID:          session.ID(id),
 		Version:     1,
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feature/test",
 		CommitSHA:   "abc1234",
@@ -66,33 +66,33 @@ func NewSession(id string) *domain.Session {
 		ExportedAt:  now,
 		CreatedAt:   now,
 		Summary:     "Test session " + id,
-		StorageMode: domain.StorageModeCompact,
-		Messages: []domain.Message{
+		StorageMode: session.StorageModeCompact,
+		Messages: []session.Message{
 			{
 				ID:        "msg-001",
-				Role:      domain.RoleUser,
+				Role:      session.RoleUser,
 				Content:   "Hello from " + id,
 				Timestamp: now,
 			},
 			{
 				ID:        "msg-002",
-				Role:      domain.RoleAssistant,
+				Role:      session.RoleAssistant,
 				Content:   "Response for " + id,
 				Model:     "claude-sonnet",
 				Timestamp: now,
 				Tokens:    100,
 			},
 		},
-		FileChanges: []domain.FileChange{
-			{FilePath: "src/main.go", ChangeType: domain.ChangeModified},
+		FileChanges: []session.FileChange{
+			{FilePath: "src/main.go", ChangeType: session.ChangeModified},
 		},
-		TokenUsage: domain.TokenUsage{
+		TokenUsage: session.TokenUsage{
 			InputTokens:  100,
 			OutputTokens: 200,
 			TotalTokens:  300,
 		},
-		Links: []domain.Link{
-			{LinkType: domain.LinkBranch, Ref: "feature/test"},
+		Links: []session.Link{
+			{LinkType: session.LinkBranch, Ref: "feature/test"},
 		},
 	}
 }

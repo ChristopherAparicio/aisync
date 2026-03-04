@@ -7,17 +7,17 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
 
 // sessionListMsg carries loaded session list data.
-type sessionListMsg []domain.SessionSummary
+type sessionListMsg []session.Summary
 
 // listModel holds the state for the session list view.
 type listModel struct {
 	factory  *cmdutil.Factory
-	sessions []domain.SessionSummary
+	sessions []session.Summary
 	width    int
 	height   int
 	cursor   int
@@ -62,7 +62,7 @@ func (m listModel) loadSessions() tea.Cmd {
 		topLevel, _ := gitClient.TopLevel()
 		branch, _ := gitClient.CurrentBranch()
 
-		opts := domain.ListOptions{
+		opts := session.ListOptions{
 			ProjectPath: topLevel,
 			All:         all,
 		}
@@ -79,7 +79,7 @@ func (m listModel) loadSessions() tea.Cmd {
 	}
 }
 
-func (m listModel) selectedID() domain.SessionID {
+func (m listModel) selectedID() session.ID {
 	if len(m.sessions) == 0 {
 		return ""
 	}
@@ -156,7 +156,7 @@ func (m *listModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m listModel) deleteSession(sid domain.SessionID) tea.Cmd {
+func (m listModel) deleteSession(sid session.ID) tea.Cmd {
 	f := m.factory
 	return func() tea.Msg {
 		store, err := f.Store()

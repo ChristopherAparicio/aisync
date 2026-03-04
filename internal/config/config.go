@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 const configFileName = "config.json"
@@ -43,7 +43,7 @@ func defaultConfig() configData {
 	}
 }
 
-// Config implements domain.Config using JSON files.
+// Config implements session.Config using JSON files.
 type Config struct {
 	globalDir string
 	repoDir   string
@@ -132,12 +132,12 @@ func (c *Config) Get(key string) (string, error) {
 func (c *Config) Set(key string, value string) error {
 	switch key {
 	case "storage_mode":
-		if _, err := domain.ParseStorageMode(value); err != nil {
+		if _, err := session.ParseStorageMode(value); err != nil {
 			return err
 		}
 		c.data.StorageMode = value
 	case "secrets.mode":
-		if _, err := domain.ParseSecretMode(value); err != nil {
+		if _, err := session.ParseSecretMode(value); err != nil {
 			return err
 		}
 		c.data.Secrets.Mode = value
@@ -152,10 +152,10 @@ func (c *Config) Set(key string, value string) error {
 }
 
 // GetProviders returns the list of enabled provider names.
-func (c *Config) GetProviders() []domain.ProviderName {
-	result := make([]domain.ProviderName, 0, len(c.data.Providers))
+func (c *Config) GetProviders() []session.ProviderName {
+	result := make([]session.ProviderName, 0, len(c.data.Providers))
 	for _, p := range c.data.Providers {
-		name, err := domain.ParseProviderName(p)
+		name, err := session.ParseProviderName(p)
 		if err == nil {
 			result = append(result, name)
 		}
@@ -164,19 +164,19 @@ func (c *Config) GetProviders() []domain.ProviderName {
 }
 
 // GetStorageMode returns the default storage mode.
-func (c *Config) GetStorageMode() domain.StorageMode {
-	mode, err := domain.ParseStorageMode(c.data.StorageMode)
+func (c *Config) GetStorageMode() session.StorageMode {
+	mode, err := session.ParseStorageMode(c.data.StorageMode)
 	if err != nil {
-		return domain.StorageModeCompact // safe default
+		return session.StorageModeCompact // safe default
 	}
 	return mode
 }
 
 // GetSecretsMode returns the secret detection mode.
-func (c *Config) GetSecretsMode() domain.SecretMode {
-	mode, err := domain.ParseSecretMode(c.data.Secrets.Mode)
+func (c *Config) GetSecretsMode() session.SecretMode {
+	mode, err := session.ParseSecretMode(c.data.Secrets.Mode)
 	if err != nil {
-		return domain.SecretModeMask // safe default
+		return session.SecretModeMask // safe default
 	}
 	return mode
 }

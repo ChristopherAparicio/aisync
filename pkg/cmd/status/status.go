@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/hooks"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -85,9 +84,8 @@ func runStatus(opts *Options) error {
 	}
 
 	// Hooks info
-	hooksDir, hooksErr := gitClient.HooksPath()
+	mgr, hooksErr := opts.Factory.HooksManager()
 	if hooksErr == nil {
-		mgr := hooks.NewManager(hooksDir)
 		fmt.Fprint(out, "Hooks:     ")
 		for i, s := range mgr.Statuses() {
 			if i > 0 {

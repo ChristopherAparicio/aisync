@@ -6,23 +6,24 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
 
 // sessionDetailMsg carries a loaded session.
 type sessionDetailMsg struct {
-	session *domain.Session
+	session *session.Session
 }
 
 // detailModel holds the state for the session detail view.
 type detailModel struct {
-	session *domain.Session
+	session *session.Session
 	lines   []string
 	width   int
 	height  int
 	scroll  int
 	loaded  bool
+	loading bool
 }
 
 func newDetailModel() detailModel {
@@ -34,14 +35,23 @@ func (m *detailModel) setSize(w, h int) {
 	m.height = h
 }
 
-func (m *detailModel) setSession(s *domain.Session) {
+func (m *detailModel) setSession(s *session.Session) {
 	m.session = s
 	m.scroll = 0
 	m.loaded = true
+	m.loading = false
 	m.lines = m.buildLines()
 }
 
-func (m detailModel) loadSession(f *cmdutil.Factory, sid domain.SessionID) tea.Cmd {
+func (m *detailModel) startLoading() {
+	m.loading = true
+	m.loaded = false
+	m.session = nil
+	m.lines = nil
+	m.scroll = 0
+}
+
+func (m detailModel) loadSession(f *cmdutil.Factory, sid session.ID) tea.Cmd {
 	return func() tea.Msg {
 		store, err := f.Store()
 		if err != nil {
@@ -128,6 +138,9 @@ func (m detailModel) visibleRows() int {
 }
 
 func (m detailModel) view() string {
+	if m.loading {
+		return "\n  Loading session..."
+	}
 	if !m.loaded || m.session == nil {
 		return "\n  No session selected. Press [esc] to go back."
 	}
@@ -235,11 +248,11 @@ func (m detailModel) buildLines() []string {
 			// Role badge
 			var roleStyle string
 			switch msg.Role {
-			case domain.RoleUser:
+			case session.RoleUser:
 				roleStyle = styleHighlight.Render("USER")
-			case domain.RoleAssistant:
+			case session.RoleAssistant:
 				roleStyle = styleSuccess.Render("ASSISTANT")
-			case domain.RoleSystem:
+			case session.RoleSystem:
 				roleStyle = styleWarning.Render("SYSTEM")
 			default:
 				roleStyle = styleMuted.Render(string(msg.Role))
@@ -280,15 +293,15 @@ func (m detailModel) buildLines() []string {
 	return lines
 }
 
-func changeIcon(ct domain.ChangeType) string {
+func changeIcon(ct session.ChangeType) string {
 	switch ct {
-	case domain.ChangeCreated:
+	case session.ChangeCreated:
 		return styleSuccess.Render("+")
-	case domain.ChangeModified:
+	case session.ChangeModified:
 		return styleWarning.Render("~")
-	case domain.ChangeDeleted:
+	case session.ChangeDeleted:
 		return styleError.Render("-")
-	case domain.ChangeRead:
+	case session.ChangeRead:
 		return styleMuted.Render("r")
 	default:
 		return " "

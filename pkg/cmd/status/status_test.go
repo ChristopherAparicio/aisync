@@ -9,7 +9,8 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/config"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -83,20 +84,20 @@ func TestStatusCmd_withSession(t *testing.T) {
 	topLevel, _ := gitClient.TopLevel()
 	branch, _ := gitClient.CurrentBranch()
 
-	session := &domain.Session{
-		ID:          domain.NewSessionID(),
-		Provider:    domain.ProviderClaudeCode,
+	sess := &session.Session{
+		ID:          session.NewID(),
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      branch,
 		ProjectPath: topLevel,
-		StorageMode: domain.StorageModeCompact,
-		Messages: []domain.Message{
-			{ID: "m1", Role: domain.RoleUser, Content: "hello"},
-			{ID: "m2", Role: domain.RoleAssistant, Content: "hi"},
+		StorageMode: session.StorageModeCompact,
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "hello"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "hi"},
 		},
 	}
 
-	if saveErr := store.Save(session); saveErr != nil {
+	if saveErr := store.Save(sess); saveErr != nil {
 		t.Fatalf("Save() error: %v", saveErr)
 	}
 
@@ -139,11 +140,11 @@ func testFactory(t *testing.T, repoDir string) *cmdutil.Factory {
 		return git.NewClient(repoDir), nil
 	}
 
-	f.ConfigFunc = func() (domain.Config, error) {
+	f.ConfigFunc = func() (*config.Config, error) {
 		return config.New(globalDir, filepath.Join(repoDir, ".aisync"))
 	}
 
-	f.StoreFunc = func() (domain.Store, error) {
+	f.StoreFunc = func() (storage.Store, error) {
 		return sqlite.New(dbPath)
 	}
 

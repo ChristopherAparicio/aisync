@@ -33,6 +33,9 @@ Does PR review. Sees a problem. Wants to understand why the agent made that choi
 ### P3 — Tech Lead
 Wants visibility into AI agent usage in the team: which sessions, how many tokens, which files touched.
 
+### P4 — AI Agent Operator
+Configures and maintains AI agent skills/tools (OpenCode skills, MCP servers, Claude Code settings). Uses aisync to observe how agents behave in real sessions, identify misconfigurations, and improve tool definitions. The investigation agent is their primary tool.
+
 ---
 
 ## User Stories
@@ -137,6 +140,406 @@ aisync secrets add-pattern "name" "regex"  # Add custom pattern
 
 **US-16: List sessions for a branch**
 > `aisync list` shows all sessions linked to the current branch with a summary.
+
+### Replay (Model Comparison)
+
+**US-17: Replay a session with a different model**
+> As a developer, I can take a captured session and replay the user-side messages through a different model/provider to compare outputs.
+>
+> ```bash
+> aisync replay <session-id> --model claude-sonnet-4-20250514
+> aisync replay <session-id> --provider opencode --agent coder
+> ```
+>
+> The replay:
+> 1. Extracts all user messages from the original session
+> 2. Feeds them sequentially to the target model
+> 3. Captures the new session as a "replay" linked to the original
+> 4. Produces a comparison report: tokens, cost, files produced, diff of outputs
+
+**US-18: Compare replayed sessions**
+> As a developer, after replaying a session with one or more models, I can view a comparison:
+>
+> ```bash
+> aisync compare <session-original> <session-replay-1> [<session-replay-2>...]
+> ```
+>
+> Shows side-by-side: token usage, cost, number of tool calls, files changed, success/failure of the task. Helps decide which model is most cost-effective for a given type of work.
+
+### Tool & MCP Token Accounting
+
+**US-19: Per-tool token breakdown**
+> As a developer, I can see how many tokens each tool/MCP call consumed within a session.
+>
+> ```bash
+> aisync show <session-id> --tool-usage
+> ```
+>
+> Output:
+> ```
+> Tool usage breakdown:
+>   Read         45 calls    12,000 tokens  (21%)
+>   Edit         12 calls     8,000 tokens  (14%)
+>   Bash          3 calls     2,500 tokens   (4%)
+>   Thinking     —           35,000 tokens  (61%)
+>   Total        60 calls    57,500 tokens
+> ```
+>
+> This requires `full` storage mode (tool calls are stripped in `compact`). If captured in `compact` mode, show a warning that tool-level accounting is unavailable.
+
+**US-20: MCP skill cost tracking across sessions**
+> As a developer or team lead, I can see aggregated tool/MCP usage across sessions to identify expensive patterns (e.g., "Read is called 10x more than needed" or "Bash tool calls cost the most tokens").
+>
+> ```bash
+> aisync stats --tools
+> aisync stats --tools --branch feature/auth
+> ```
+
+### AI-Blame (File → Session Lookup)
+
+**US-21: Find which AI session modified a file**
+> As a developer, when I see a bug or want to understand a file, I can find the AI session that last modified it.
+>
+> ```bash
+> aisync blame src/auth/oauth.py
+> ```
+>
+> Output:
+> ```
+> src/auth/oauth.py
+>   Session:  abc123 (claude-code)
+>   Branch:   feature/auth-oauth2
+>   Author:   Christopher
+>   Date:     2026-02-16
+>   Summary:  "Implemented OAuth2 with PKCE flow"
+>   Action:   created
+>
+>   → aisync restore --session abc123
+>   → aisync show abc123
+> ```
+
+**US-22: Restore session from file blame**
+> As a developer, after finding the session via blame, I can directly restore it to debug or continue the work.
+>
+> ```bash
+> aisync blame src/auth/oauth.py --restore
+> ```
+>
+> This is a shortcut for `aisync blame` → get session ID → `aisync restore --session <id>`.
+
+### AI-Powered Session Summarization
+
+**US-30: Auto-summarize sessions with AI**
+> As a developer, when a session is captured, aisync can automatically generate an intelligent summary using an AI model. This summary captures intent, outcome, key decisions, friction points, and open items — far richer than the provider's native summary.
+>
+> ```bash
+> aisync capture --summarize                  # One-time AI summarization
+> aisync config set summarize.enabled true    # Enable auto-summarization on every capture
+> ```
+>
+> Auto-summarization is triggered at capture time (or post-capture as a background step). It reads the session messages and produces a structured summary:
+> ```
+> Intent:     Implement OAuth2 with PKCE for the auth module
+> Outcome:    Completed — 3 files created, 1 modified, all tests passing
+> Decisions:  PKCE over implicit flow, httpOnly cookies for tokens
+> Friction:   Had to retry CORS config twice, model confused redirect URIs
+> Open items: Rate limiting not yet implemented on token endpoint
+> ```
+>
+> Requirements:
+> - An AI model must be available (Claude CLI in PATH, or configurable model endpoint)
+> - Summarization is non-blocking: failures are logged but do not prevent capture
+> - Works with any storage mode (`full`, `compact`, `summary`)
+> - In `summary` mode, the AI summary replaces the heuristic summary
+
+**US-31: Detect similar sessions on a branch**
+> As a developer, when multiple sessions exist on the same branch, aisync uses AI summaries to detect whether sessions are doing similar or overlapping work (e.g., multiple retries of the same task).
+>
+> ```bash
+> aisync list --branch feature/auth --similar
+> ```
+>
+> Output:
+> ```
+> Similar session groups on feature/auth:
+>   Group 1 (same intent: "Implement OAuth2"):
+>     abc123  57K tokens  2 hours ago   origin
+>     def456  32K tokens  1 hour ago    ~85% similar — retried CORS config
+>   Standalone:
+>     ghi789  12K tokens  30 min ago    different topic (logging refactor)
+> ```
+>
+> Detection uses AI summary comparison + file change overlap. This helps identify wasted retries and understand the real cost of a feature.
+
+### Session Explanation
+
+**US-32: Explain a session or commit**
+> As a developer, I can ask aisync to explain what happened in a session or what a specific commit did, in natural language.
+>
+> ```bash
+> aisync explain <session-id>
+> aisync explain <commit-sha>
+> aisync explain                              # Explain current branch's latest session
+> ```
+>
+> Output:
+> ```
+> Session abc123 — Explain
+>
+> This session implemented OAuth2 authentication with PKCE flow for the Django app.
+> The developer asked the agent to create a secure auth module. The agent:
+> 1. Read the existing handler.py to understand the current auth setup
+> 2. Created a new oauth.py with PKCE code verifier/challenge generation
+> 3. Modified handler.py to use the new OAuth flow
+> 4. Added comprehensive tests in test_oauth.py
+>
+> The agent initially tried an implicit flow but the developer corrected it to use PKCE.
+> Two tool calls failed (file read on wrong path) before succeeding.
+>
+> Files: 3 created, 1 modified | Tokens: 57,000 | Cost: ~$1.57
+> ```
+>
+> Requires an AI model to generate the explanation. Falls back to showing the stored summary if no model is available.
+
+### Session Rewind (Fork from Message)
+
+**US-33: Rewind to a specific point in a session**
+> As a developer, when an AI agent goes off track mid-session, I can rewind to a specific message in the session and fork from there — creating a new session that starts with the context up to that point.
+>
+> ```bash
+> aisync rewind <session-id>                  # Interactive: select a message to rewind to
+> aisync rewind <session-id> --message <n>    # Rewind to message N
+> ```
+>
+> The rewind:
+> 1. Shows the session messages as a numbered list (interactive selection or `--message N`)
+> 2. Creates a new session containing only messages up to the selected point
+> 3. Restores this truncated session into the target provider
+> 4. The developer can continue from that exact context with a fresh agent response
+>
+> The original session is preserved. The new (rewound) session is linked as a "fork-of" the original with a `forked_at_message` reference.
+>
+> ```bash
+> aisync list --tree
+> ```
+> ```
+> abc123 (origin, 57K tokens)
+> ├── def456 (fork at msg 5, 32K tokens) — rewound and retried
+> └── jkl012 (fork at msg 3, 28K tokens) — rewound earlier
+> ```
+>
+> This is the actionable counterpart to fork detection (US-24): while US-24 detects forks retroactively, `rewind` lets the developer intentionally create a fork from a known-good point.
+
+### Resume Workflow
+
+**US-34: Resume work on a branch in one command**
+> As a developer, I can switch to a branch and restore its AI session in a single command, without needing to know session IDs.
+>
+> ```bash
+> aisync resume <branch>                       # Checkout + restore latest session
+> aisync resume <branch> --session <id>        # Checkout + restore specific session
+> aisync resume <branch> --provider opencode   # Checkout + restore into specific provider
+> ```
+>
+> `resume` is a convenience command that combines:
+> 1. `git checkout <branch>`
+> 2. `aisync restore` (latest session for that branch, or specified session)
+> 3. Print continuation instructions (which command to run to continue with the agent)
+>
+> If the branch has multiple sessions (Phase 5), `resume` restores the most recent one by default, or prompts interactively if `--session` is not specified.
+
+### Server & API
+
+**US-35: API server for multi-client access**
+> As a developer, I can start an aisync server that exposes all capabilities over HTTP/REST, enabling Web UI, TUI, and external tools to interact with aisync without going through the CLI.
+>
+> ```bash
+> aisync serve                         # Start API server on default port (8080)
+> aisync serve --port 9090             # Custom port
+> aisync serve --host 0.0.0.0         # Listen on all interfaces (team use)
+> ```
+>
+> The API exposes the same operations as the CLI — capture, restore, list, show, export, import, link, stats, push, pull — through RESTful endpoints. The CLI continues to work standalone (no server required).
+
+**US-36: MCP Server integration**
+> As a developer using Claude Code or OpenCode, I can configure aisync as an MCP server so the AI agent can directly capture, restore, list, or analyze sessions during a conversation — without leaving the chat.
+>
+> ```bash
+> aisync mcp serve                    # Start MCP server mode
+> ```
+>
+> MCP tools exposed:
+> - `aisync_capture` — capture the current session
+> - `aisync_restore` — restore a session into the current agent
+> - `aisync_list` — list sessions for the current branch
+> - `aisync_show` — show session details
+> - `aisync_analyze` — trigger AI investigation of a session
+> - `aisync_explain` — explain what happened in a session
+>
+> This makes aisync a first-class tool within AI agent workflows.
+
+### Investigation Agent (AI-Powered Analysis)
+
+**US-37: Investigate a session with AI**
+> As a developer, when I observe an AI agent making poor decisions (e.g., misusing a skill, going in circles, ignoring context), I can ask aisync to investigate the session and explain what went wrong.
+>
+> ```bash
+> aisync analyze <session-id>
+> aisync analyze <session-id> --question "Why did the agent keep re-reading the same file?"
+> ```
+>
+> The investigation:
+> 1. Loads the full session from storage (messages, tool calls, file changes)
+> 2. Reads relevant files from the codebase (skill definitions, tool configs)
+> 3. Sends the context to an LLM for analysis
+> 4. Returns: root cause, evidence from the conversation, concrete recommendations
+>
+> ```
+> Investigation: Session abc123
+>
+> Root cause: The agent's Read skill definition does not specify a file size limit.
+> When the agent tried to read a 2MB log file, it consumed 15,000 tokens on a single
+> tool call, then re-read the same file 3 more times because it couldn't fit the
+> content in its context window.
+>
+> Evidence:
+>   - Message 12: Read(server.log) → 15,234 tokens
+>   - Message 15: Read(server.log) → 15,234 tokens (duplicate)
+>   - Message 18: Read(server.log) → 15,234 tokens (duplicate)
+>
+> Recommendations:
+>   1. Add max_size parameter to Read skill (limit to 500 lines or 50KB)
+>   2. Add a grep/search skill for large files
+>   3. Update .opencode/skills/read.md to mention the size limit
+> ```
+
+**US-38: Propose changes from investigation**
+> As a developer, after an investigation identifies issues, aisync can automatically propose concrete changes to the repository and optionally create a PR.
+>
+> ```bash
+> aisync analyze <session-id> --propose-changes
+> aisync analyze <session-id> --propose-changes --create-pr
+> ```
+>
+> This creates a diff with the recommended changes (e.g., updated skill definition, new tool config) and optionally pushes it as a pull request for review.
+
+### Multi-Session Branch Intelligence
+
+**US-23: Keep multiple sessions per branch**
+> As a developer, when I start a new AI conversation on an existing branch, aisync should NOT overwrite the previous session. Instead, it should store both and version them.
+>
+> ```bash
+> aisync list --branch feature/auth
+> ```
+>
+> Output:
+> ```
+> ID        PROVIDER     TYPE    MESSAGES  TOKENS    CAPTURED
+> abc123    claude-code  origin  23        57,000    2 hours ago
+> def456    claude-code  fork    15        32,000    1 hour ago   ← fork of abc123
+> ghi789    opencode     new     8         12,000    30 min ago   ← unrelated
+> ```
+
+**US-24: Fork detection (same-start conversations)**
+> As a developer, when I start a new conversation on the same branch that begins with the same initial messages as a previous session, aisync detects this is a "fork" (retry with different approach) and links them.
+>
+> Detection: hash the first N user messages. If two sessions share the same prefix hash → fork relationship.
+>
+> ```bash
+> aisync list --branch feature/auth --tree
+> ```
+>
+> Output:
+> ```
+> abc123 (origin, 57K tokens)
+> ├── def456 (fork, 32K tokens) — retried from message 5
+> └── jkl012 (fork, 28K tokens) — retried from message 3
+> ghi789 (standalone, 12K tokens) — unrelated topic
+> ```
+
+**US-25: Off-topic session detection**
+> When a new conversation on a branch is unrelated to the branch's purpose (e.g., asking about a different bug on a `feature/auth` branch), aisync can flag it as "off-topic" or "standalone" rather than linking it to the feature work.
+>
+> Heuristic: compare the session's file changes and topic keywords with the branch's previous sessions. Low overlap → flag as off-topic.
+>
+> Off-topic sessions can be:
+> - Ignored in branch cost aggregation
+> - Garbage collected after N days
+> - Moved to a "misc" category
+
+### Cost Tracking & Forecasting
+
+**US-26: Real cost per session**
+> As a developer, I can see the actual monetary cost of each AI session based on the model's pricing.
+>
+> ```bash
+> aisync show <session-id> --cost
+> ```
+>
+> Output:
+> ```
+> Cost breakdown:
+>   Model:   claude-opus-4-5 ($15/M input, $75/M output)
+>   Input:   45,000 tokens → $0.675
+>   Output:  12,000 tokens → $0.900
+>   Total:   $1.575
+> ```
+>
+> Pricing table is configurable and ships with defaults for major models. OpenCode already provides cost info — use it when available.
+
+**US-27: Feature cost aggregation**
+> As a developer or team lead, I can see the total cost of a feature (branch) across all sessions, including forks and retries.
+>
+> ```bash
+> aisync stats --cost --branch feature/auth
+> ```
+>
+> Output:
+> ```
+> Branch: feature/auth
+>   Sessions: 4 (2 forks, 1 off-topic excluded)
+>   Total tokens: 129,000
+>   Total cost: $4.85
+>     abc123 (origin):     $1.57
+>     def456 (fork):       $1.20   ← retry, same work
+>     jkl012 (fork):       $2.08   ← retry, same work
+>     ghi789 (off-topic):  $0.45   (excluded from total)
+> ```
+
+**US-28: Cost forecasting**
+> Over time, aisync builds a model of cost patterns: "a feature branch typically requires 3.2 sessions and costs $4-8". This helps teams estimate AI costs for project planning.
+>
+> ```bash
+> aisync stats --forecast
+> ```
+>
+> Output:
+> ```
+> Cost forecast (based on 23 completed branches):
+>   Avg cost per feature branch:  $5.40  (±$2.10)
+>   Avg sessions per branch:      3.2
+>   Avg tokens per session:       42,000
+>   Most expensive model:         claude-opus-4-5 ($3.80/branch avg)
+>   Most cost-effective:          claude-sonnet-4 ($1.60/branch avg)
+> ```
+
+### Web UI
+
+**US-29: Web dashboard for session browsing**
+> As a developer or team lead, I can launch a local web UI to browse sessions visually.
+>
+> ```bash
+> aisync web
+> ```
+>
+> The web UI shows:
+> - Branch tree with all associated sessions (origin, forks, off-topic)
+> - Session details with messages, tool calls, file changes
+> - Cost breakdown per branch, per session, per model
+> - Fork visualization (which sessions are retries of which)
+> - Click-to-restore: select a session and generate the restore command
+>
+> Initially a local server (localhost). Team-shared version is a future consideration.
 
 ---
 
@@ -373,6 +776,29 @@ aisync restore --as-context          # Instead of importing, generate CONTEXT.md
                                      # that agent can read (useful for Cursor)
 ```
 
+### Resume
+
+```bash
+aisync resume <branch>               # Checkout branch + restore latest session
+aisync resume <branch> --session <id> # Checkout + restore specific session
+aisync resume <branch> --provider opencode  # Checkout + restore into specific provider
+```
+
+### Rewind
+
+```bash
+aisync rewind <session-id>           # Interactive: pick message to rewind to
+aisync rewind <session-id> --message 5  # Rewind to message 5
+```
+
+### Explain
+
+```bash
+aisync explain                       # Explain current branch's latest session
+aisync explain <session-id>          # Explain a specific session
+aisync explain <commit-sha>          # Explain what a commit's AI session did
+```
+
 ### Sync
 
 ```bash
@@ -583,11 +1009,36 @@ This file is placed at project root or in `.aisync/CONTEXT.md` and can be refere
 - [ ] CLI dashboard: tokens consumed, sessions per branch
 - [ ] Correlation between commit files and session files
 
+### Phase 3.5 — Architecture Evolution (COMPLETE)
+- [x] Extract Service Layer (`internal/service/SessionService`, `SyncService`)
+- [x] HTTP/REST API server (`aisync serve`) — 15 endpoints
+- [x] Client SDK (`client/`) — 15 methods, full Go HTTP client
+- [x] MCP Server integration (`aisync mcp serve`) — 14 tools
+- [x] User Identity Layer — `users` table, `owner_id` on sessions, auto-detect from git
+- [ ] Analysis Service with LLM-powered investigation agent (moved to Phase 5)
+
 ### Phase 4 — CI Automation (future)
 - [ ] GitHub Action / Webhook: on CI failure → prepare fix session
 - [ ] Notify dev: "Session available to fix PR #42"
 - [ ] Slack integration / notifications via n8n
 - [ ] Support for GitHub / GitLab / Bitbucket
+
+### Phase 5 — Session Intelligence & Cost Tracking
+- [ ] Multi-session per branch (remove 1:1 overwrite, version sessions)
+- [ ] Fork detection (hash-based prefix matching of user messages)
+- [ ] Off-topic session detection (file overlap + topic heuristic)
+- [ ] AI-Blame: `aisync blame <file>` → find session that modified it
+- [ ] AI-Blame with restore: `aisync blame <file> --restore`
+- [ ] Per-tool/MCP token accounting (`aisync show --tool-usage`)
+- [ ] Aggregated tool stats (`aisync stats --tools`)
+- [ ] Real cost tracking per session (model pricing table)
+- [ ] Feature cost aggregation per branch (`aisync stats --cost --branch`)
+
+### Phase 6 — Replay & Forecasting
+- [ ] Session replay with different model (`aisync replay <id> --model`)
+- [ ] Session comparison (`aisync compare <id1> <id2>`)
+- [ ] Cost forecasting based on historical patterns
+- [ ] Web UI for session browsing, fork visualization, cost dashboard
 
 ---
 
@@ -601,6 +1052,11 @@ This file is placed at project root or in `.aisync/CONTEXT.md` and can be refere
 | Sensitive data in sessions | Secret leaks | Configurable filter (regex) before export |
 | Claude Code changes JSONL format | Parser breaks | Format stable for months, but monitor |
 | Conflicts on aisync/sessions branch | Push fails | Merge strategy: always accept-theirs (append-only) |
+| Model pricing changes frequently | Cost estimates become inaccurate | Configurable pricing table, auto-update from public API or manual override |
+| Replay produces different results than original | Non-deterministic LLMs | Replay is for comparison, not exact reproduction. Temperature=0 where possible |
+| Fork detection false positives | Common prompts hash the same | Use N first user messages (not just 1), require minimum overlap threshold |
+| Multi-session per branch → storage growth | SQLite grows large | Session expiration policy, garbage collection for old off-topic sessions |
+| Tool token accounting unavailable in compact mode | Users confused by missing data | Clear warning, suggest `full` mode for accounting use cases |
 
 ---
 
@@ -639,3 +1095,29 @@ This file is placed at project root or in `.aisync/CONTEXT.md` and can be refere
 7. **Summary generation:** for `summary` mode, use LLM to summarize or do heuristic parsing (first user message + last assistant message)? → LLM would be better but adds dependency. Start with heuristic, LLM optional.
 
 8. **Secret scan scope:** also scan tool call contents (e.g. a `cat .env` whose output contains secrets)? → Yes by default (`scan_tool_outputs: true`), but can be disabled for performance.
+
+9. **Replay execution:** How does replay actually call the target model? Options: (a) aisync embeds an LLM client and calls APIs directly, (b) aisync generates a script/session file that the provider can execute, (c) aisync uses MCP or provider CLI to feed messages. Option (a) adds a big dependency but gives the most control.
+
+10. **Fork detection threshold:** How many initial messages need to match to consider two sessions a "fork"? Just the first user message? First 3? Hash-based or content-similarity-based?
+
+11. **Off-topic detection:** Heuristic (file overlap) or LLM-assisted (summarize both sessions, compare)? Heuristic is cheaper but less accurate.
+
+12. **Cost data source:** Use OpenCode's built-in cost info when available? Maintain our own pricing table? Allow user overrides for enterprise/custom pricing?
+
+13. **Web UI tech stack:** Go template-based (simple, single binary), or separate frontend (React/Svelte) served by aisync? Single binary is simpler but limits interactivity.
+
+14. **Multi-session migration:** When we switch from 1-session-per-branch to N-sessions-per-branch, how do we migrate existing data? Keep the old session as "v1", new captures create new entries?
+
+15. **Auto-summarization model:** Which AI model should be used for auto-summarization? Use Claude CLI if available? Allow configurable endpoint? Should we support local models (Ollama) for privacy-sensitive teams?
+
+16. **Auto-summarization timing:** Summarize at capture time (synchronous, blocking) or post-capture (async background job)? Sync is simpler but adds latency to commits. Async needs a queue/retry mechanism.
+
+17. **Rewind scope:** When rewinding to message N, should we also restore the working directory state to that point? Or only restore the session context (messages 1..N) and let the developer decide what to do with the code? Code state restore would require git stash/checkpoint integration.
+
+18. **Explain depth:** Should `explain` generate a short summary (3-5 lines) or a detailed analysis (agent reasoning, failed attempts, decisions)? → Offer `--short` / `--detailed` flags?
+
+19. **API authentication:** For the `aisync serve` API, do we need auth for local-only usage? What about team/remote deployment — API keys? OAuth? → Start with no auth for localhost, add API key for remote.
+
+20. **MCP transport:** Which MCP transport to use — stdio (simple, one process) or HTTP/SSE (allows remote)? → Start with stdio for local AI tool integration.
+
+21. **Investigation scope:** Should the investigation agent have write access to the codebase (create files, modify configs) or only propose changes as diffs? → Start with read-only analysis + diff proposals, optionally create PR.

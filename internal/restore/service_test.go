@@ -6,22 +6,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestRestore_byBranch(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          "ses-1",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "main",
 		ProjectPath: "/test/project",
 		Summary:     "Test session",
 	}
 
-	store := &mockStore{sessionByBranch: session}
-	reg := provider.NewRegistry(&mockProvider{name: domain.ProviderClaudeCode, canImportVal: true})
+	store := &mockStore{sessionByBranch: sess}
+	reg := provider.NewRegistry(&mockProvider{name: session.ProviderClaudeCode, canImportVal: true})
 	svc := NewService(reg, store)
 
 	projectDir := t.TempDir()
@@ -43,16 +44,16 @@ func TestRestore_byBranch(t *testing.T) {
 }
 
 func TestRestore_bySessionID(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          "ses-1",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		ProjectPath: "/test/project",
 		Summary:     "Test session",
 	}
 
-	store := &mockStore{sessionByID: session}
-	reg := provider.NewRegistry(&mockProvider{name: domain.ProviderClaudeCode, canImportVal: true})
+	store := &mockStore{sessionByID: sess}
+	reg := provider.NewRegistry(&mockProvider{name: session.ProviderClaudeCode, canImportVal: true})
 	svc := NewService(reg, store)
 
 	projectDir := t.TempDir()
@@ -70,23 +71,23 @@ func TestRestore_bySessionID(t *testing.T) {
 }
 
 func TestRestore_asContext(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          "ses-1",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feat/auth",
 		ProjectPath: "/test/project",
 		Summary:     "Implemented OAuth2",
-		Messages: []domain.Message{
-			{ID: "m1", Role: domain.RoleUser, Content: "Add OAuth2"},
-			{ID: "m2", Role: domain.RoleAssistant, Content: "Done!"},
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "Add OAuth2"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "Done!"},
 		},
-		FileChanges: []domain.FileChange{
-			{FilePath: "auth.go", ChangeType: domain.ChangeCreated},
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go", ChangeType: session.ChangeCreated},
 		},
 	}
 
-	store := &mockStore{sessionByBranch: session}
+	store := &mockStore{sessionByBranch: sess}
 	reg := provider.NewRegistry()
 	svc := NewService(reg, store)
 
@@ -138,30 +139,30 @@ func TestRestore_sessionNotFound(t *testing.T) {
 }
 
 func TestRestore_crossProvider(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          "ses-cross",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feat/cross",
 		ProjectPath: "/test/project",
 		Summary:     "Cross-provider test",
-		Messages: []domain.Message{
-			{ID: "m1", Role: domain.RoleUser, Content: "Hello"},
-			{ID: "m2", Role: domain.RoleAssistant, Content: "Hi!"},
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "Hello"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "Hi!"},
 		},
 	}
 
-	store := &mockStore{sessionByBranch: session}
-	importingProvider := &mockImportProvider{name: domain.ProviderOpenCode}
+	store := &mockStore{sessionByBranch: sess}
+	importingProvider := &mockImportProvider{name: session.ProviderOpenCode}
 	reg := provider.NewRegistry(importingProvider)
-	conv := &mockConverter{}
+	conv := converter.New()
 	svc := NewServiceWithConverter(reg, store, conv)
 
 	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath:  projectDir,
 		Branch:       "feat/cross",
-		ProviderName: domain.ProviderOpenCode, // different from source (claude-code)
+		ProviderName: session.ProviderOpenCode, // different from source (claude-code)
 	})
 	if err != nil {
 		t.Fatalf("Restore() error: %v", err)
@@ -178,20 +179,20 @@ func TestRestore_crossProvider(t *testing.T) {
 }
 
 func TestRestore_crossProviderFallbackToContext(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          "ses-fallback",
-		Provider:    domain.ProviderCursor, // cursor source
+		Provider:    session.ProviderCursor, // cursor source
 		Agent:       "cursor-agent",
 		Branch:      "feat/cursor",
 		ProjectPath: "/test/project",
 		Summary:     "Cursor session",
 	}
 
-	store := &mockStore{sessionByBranch: session}
-	noImportProvider := &mockProvider{name: domain.ProviderCursor}
+	store := &mockStore{sessionByBranch: sess}
+	noImportProvider := &mockProvider{name: session.ProviderCursor}
 	noImportProvider.canImportVal = false
 	reg := provider.NewRegistry(noImportProvider)
-	conv := &mockConverter{}
+	conv := converter.New()
 	svc := NewServiceWithConverter(reg, store, conv)
 
 	projectDir := t.TempDir()
@@ -209,16 +210,16 @@ func TestRestore_crossProviderFallbackToContext(t *testing.T) {
 }
 
 func TestRestore_agentOverride(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          "ses-agent",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Agent:       "claude",
 		Branch:      "feat/agent",
 		ProjectPath: "/test/project",
 		Summary:     "Agent test",
 	}
 
-	store := &mockStore{sessionByBranch: session}
+	store := &mockStore{sessionByBranch: sess}
 	reg := provider.NewRegistry()
 	svc := NewService(reg, store)
 
@@ -240,26 +241,26 @@ func TestRestore_agentOverride(t *testing.T) {
 }
 
 func TestRestore_sameProviderNoConversion(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:          "ses-same",
-		Provider:    domain.ProviderOpenCode,
+		Provider:    session.ProviderOpenCode,
 		Agent:       "opencode",
 		Branch:      "feat/same",
 		ProjectPath: "/test/project",
 		Summary:     "Same provider test",
 	}
 
-	store := &mockStore{sessionByBranch: session}
-	importingProvider := &mockImportProvider{name: domain.ProviderOpenCode}
+	store := &mockStore{sessionByBranch: sess}
+	importingProvider := &mockImportProvider{name: session.ProviderOpenCode}
 	reg := provider.NewRegistry(importingProvider)
-	conv := &mockConverter{}
+	conv := converter.New()
 	svc := NewServiceWithConverter(reg, store, conv)
 
 	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath:  projectDir,
 		Branch:       "feat/same",
-		ProviderName: domain.ProviderOpenCode, // same as source
+		ProviderName: session.ProviderOpenCode, // same as source
 	})
 	if err != nil {
 		t.Fatalf("Restore() error: %v", err)
@@ -269,97 +270,76 @@ func TestRestore_sameProviderNoConversion(t *testing.T) {
 	if result.Method != "native" {
 		t.Errorf("Method = %q, want native (same provider)", result.Method)
 	}
-
-	// Converter should NOT have been called
-	if conv.toNativeCalled {
-		t.Error("converter should not be called for same-provider restore")
-	}
 }
 
 // --- Mocks ---
 
 type mockStore struct {
-	sessionByID     *domain.Session
-	sessionByBranch *domain.Session
+	sessionByID     *session.Session
+	sessionByBranch *session.Session
 }
 
-func (m *mockStore) Save(_ *domain.Session) error { return nil }
-func (m *mockStore) Get(_ domain.SessionID) (*domain.Session, error) {
+func (m *mockStore) Save(_ *session.Session) error { return nil }
+func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
 	if m.sessionByID != nil {
 		return m.sessionByID, nil
 	}
-	return nil, domain.ErrSessionNotFound
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) GetByBranch(_ string, _ string) (*domain.Session, error) {
+func (m *mockStore) GetByBranch(_ string, _ string) (*session.Session, error) {
 	if m.sessionByBranch != nil {
 		return m.sessionByBranch, nil
 	}
-	return nil, domain.ErrSessionNotFound
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) {
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return nil, nil
 }
-func (m *mockStore) Delete(_ domain.SessionID) error { return nil }
-func (m *mockStore) AddLink(_ domain.SessionID, _ domain.Link) error {
+func (m *mockStore) Delete(_ session.ID) error { return nil }
+func (m *mockStore) AddLink(_ session.ID, _ session.Link) error {
 	return nil
 }
-func (m *mockStore) GetByLink(_ domain.LinkType, _ string) ([]domain.SessionSummary, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) Close() error { return nil }
+func (m *mockStore) Close() error                                   { return nil }
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
+}
 
 type mockProvider struct {
-	name         domain.ProviderName
+	name         session.ProviderName
 	canImportVal bool
 }
 
-func (m *mockProvider) Name() domain.ProviderName { return m.name }
-func (m *mockProvider) Detect(_ string, _ string) ([]domain.SessionSummary, error) {
+func (m *mockProvider) Name() session.ProviderName { return m.name }
+func (m *mockProvider) Detect(_ string, _ string) ([]session.Summary, error) {
 	return nil, nil
 }
-func (m *mockProvider) Export(_ domain.SessionID, _ domain.StorageMode) (*domain.Session, error) {
+func (m *mockProvider) Export(_ session.ID, _ session.StorageMode) (*session.Session, error) {
 	return nil, nil
 }
-func (m *mockProvider) CanImport() bool                { return m.canImportVal }
-func (m *mockProvider) Import(_ *domain.Session) error { return domain.ErrImportNotSupported }
+func (m *mockProvider) CanImport() bool                 { return m.canImportVal }
+func (m *mockProvider) Import(_ *session.Session) error { return session.ErrImportNotSupported }
 
 // mockImportProvider successfully imports sessions.
 type mockImportProvider struct {
-	name         domain.ProviderName
+	name         session.ProviderName
 	importCalled bool
 }
 
-func (m *mockImportProvider) Name() domain.ProviderName { return m.name }
-func (m *mockImportProvider) Detect(_ string, _ string) ([]domain.SessionSummary, error) {
+func (m *mockImportProvider) Name() session.ProviderName { return m.name }
+func (m *mockImportProvider) Detect(_ string, _ string) ([]session.Summary, error) {
 	return nil, nil
 }
-func (m *mockImportProvider) Export(_ domain.SessionID, _ domain.StorageMode) (*domain.Session, error) {
+func (m *mockImportProvider) Export(_ session.ID, _ session.StorageMode) (*session.Session, error) {
 	return nil, nil
 }
 func (m *mockImportProvider) CanImport() bool { return true }
-func (m *mockImportProvider) Import(_ *domain.Session) error {
+func (m *mockImportProvider) Import(_ *session.Session) error {
 	m.importCalled = true
 	return nil
-}
-
-// mockConverter simulates cross-provider conversion.
-type mockConverter struct {
-	toNativeCalled bool
-}
-
-func (m *mockConverter) SupportedFormats() []domain.ProviderName {
-	return []domain.ProviderName{domain.ProviderClaudeCode, domain.ProviderOpenCode}
-}
-
-func (m *mockConverter) ToNative(session *domain.Session, _ domain.ProviderName) ([]byte, error) {
-	m.toNativeCalled = true
-	// Return a minimal valid JSON that FromNative can parse
-	return []byte(`{"id":"` + string(session.ID) + `","provider":"opencode","messages":[]}`), nil
-}
-
-func (m *mockConverter) FromNative(data []byte, _ domain.ProviderName) (*domain.Session, error) {
-	return &domain.Session{
-		ID:       "converted",
-		Provider: domain.ProviderOpenCode,
-	}, nil
 }

@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	syncsvc "github.com/ChristopherAparicio/aisync/internal/gitsync"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -99,17 +98,10 @@ func NewCmdSync(f *cmdutil.Factory) *cobra.Command {
 func runPush(opts *PushOptions) error {
 	out := opts.IO.Out
 
-	gitClient, err := opts.Factory.Git()
+	svc, err := opts.Factory.SyncService()
 	if err != nil {
-		return fmt.Errorf("not a git repository")
+		return fmt.Errorf("initializing sync service: %w", err)
 	}
-
-	store, err := opts.Factory.Store()
-	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
-	}
-
-	svc := syncsvc.NewService(gitClient, store)
 
 	result, err := svc.Push(!opts.NoRemote)
 	if err != nil {
@@ -132,17 +124,10 @@ func runPush(opts *PushOptions) error {
 func runPull(opts *PullOptions) error {
 	out := opts.IO.Out
 
-	gitClient, err := opts.Factory.Git()
+	svc, err := opts.Factory.SyncService()
 	if err != nil {
-		return fmt.Errorf("not a git repository")
+		return fmt.Errorf("initializing sync service: %w", err)
 	}
-
-	store, err := opts.Factory.Store()
-	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
-	}
-
-	svc := syncsvc.NewService(gitClient, store)
 
 	result, err := svc.Pull(!opts.NoRemote)
 	if err != nil {
@@ -162,41 +147,26 @@ func runPull(opts *PullOptions) error {
 func runSync(opts *SyncOptions) error {
 	out := opts.IO.Out
 
-	gitClient, err := opts.Factory.Git()
+	svc, err := opts.Factory.SyncService()
 	if err != nil {
-		return fmt.Errorf("not a git repository")
+		return fmt.Errorf("initializing sync service: %w", err)
 	}
 
-	store, err := opts.Factory.Store()
+	result, err := svc.Sync(!opts.NoRemote)
 	if err != nil {
-		return fmt.Errorf("opening store: %w", err)
+		return err
 	}
 
-	svc := syncsvc.NewService(gitClient, store)
-	remote := !opts.NoRemote
-
-	// Pull first
-	pullResult, err := svc.Pull(remote)
-	if err != nil {
-		return fmt.Errorf("pull: %w", err)
-	}
-
-	// Then push
-	pushResult, err := svc.Push(remote)
-	if err != nil {
-		return fmt.Errorf("push: %w", err)
-	}
-
-	if pullResult.Pulled == 0 && pushResult.Pushed == 0 {
+	if result.Pulled == 0 && result.Pushed == 0 {
 		fmt.Fprintln(out, "Everything up to date.")
 		return nil
 	}
 
-	if pullResult.Pulled > 0 {
-		fmt.Fprintf(out, "Pulled %d session(s).\n", pullResult.Pulled)
+	if result.Pulled > 0 {
+		fmt.Fprintf(out, "Pulled %d session(s).\n", result.Pulled)
 	}
-	if pushResult.Pushed > 0 {
-		fmt.Fprintf(out, "Pushed %d session(s).\n", pushResult.Pushed)
+	if result.Pushed > 0 {
+		fmt.Fprintf(out, "Pushed %d session(s).\n", result.Pushed)
 	}
 
 	return nil

@@ -6,23 +6,23 @@ package platform
 import (
 	"strings"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 // knownHosts maps hostname patterns to platform names.
-var knownHosts = map[string]domain.PlatformName{
-	"github.com":    domain.PlatformGitHub,
-	"gitlab.com":    domain.PlatformGitLab,
-	"bitbucket.org": domain.PlatformBitbucket,
+var knownHosts = map[string]session.PlatformName{
+	"github.com":    session.PlatformGitHub,
+	"gitlab.com":    session.PlatformGitLab,
+	"bitbucket.org": session.PlatformBitbucket,
 }
 
 // DetectFromRemoteURL determines the platform from a git remote URL.
 // Supports SSH (git@github.com:org/repo.git) and HTTPS (https://github.com/org/repo.git).
 // Returns ErrPlatformNotDetected if the URL doesn't match any known platform.
-func DetectFromRemoteURL(remoteURL string) (domain.PlatformName, error) {
+func DetectFromRemoteURL(remoteURL string) (session.PlatformName, error) {
 	host := extractHost(remoteURL)
 	if host == "" {
-		return "", domain.ErrPlatformNotDetected
+		return "", session.ErrPlatformNotDetected
 	}
 
 	// Check exact match first
@@ -38,7 +38,7 @@ func DetectFromRemoteURL(remoteURL string) (domain.PlatformName, error) {
 		}
 	}
 
-	return "", domain.ErrPlatformNotDetected
+	return "", session.ErrPlatformNotDetected
 }
 
 // extractHost extracts the hostname from a git remote URL.

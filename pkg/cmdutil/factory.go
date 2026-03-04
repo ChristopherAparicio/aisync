@@ -3,8 +3,15 @@ package cmdutil
 
 import (
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/config"
+	"github.com/ChristopherAparicio/aisync/internal/converter"
+	"github.com/ChristopherAparicio/aisync/internal/hooks"
+	"github.com/ChristopherAparicio/aisync/internal/platform"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
+	"github.com/ChristopherAparicio/aisync/internal/secrets"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
@@ -15,12 +22,16 @@ type Factory struct {
 	IOStreams *iostreams.IOStreams
 
 	// Lazy initializers — set by the composition root (default.go).
-	ConfigFunc   func() (domain.Config, error)
-	StoreFunc    func() (domain.Store, error)
-	GitFunc      func() (*git.Client, error)
-	RegistryFunc func() *provider.Registry
-	ScannerFunc  func() domain.SecretScanner
-	PlatformFunc func() (domain.Platform, error)
+	ConfigFunc         func() (*config.Config, error)
+	StoreFunc          func() (storage.Store, error)
+	GitFunc            func() (*git.Client, error)
+	RegistryFunc       func() *provider.Registry
+	ScannerFunc        func() *secrets.Scanner
+	PlatformFunc       func() (platform.Platform, error)
+	ConverterFunc      func() *converter.Converter
+	HooksManagerFunc   func() (*hooks.Manager, error)
+	SessionServiceFunc func() (*service.SessionService, error)
+	SyncServiceFunc    func() (*service.SyncService, error)
 
 	// CloseFunc releases resources (e.g., database connections).
 	// Set by the composition root, called by main on exit.
@@ -28,17 +39,17 @@ type Factory struct {
 }
 
 // Config returns the Config instance, initializing it on first call.
-func (f *Factory) Config() (domain.Config, error) {
+func (f *Factory) Config() (*config.Config, error) {
 	if f.ConfigFunc == nil {
-		return nil, domain.ErrConfigNotFound
+		return nil, session.ErrConfigNotFound
 	}
 	return f.ConfigFunc()
 }
 
 // Store returns the Store instance, initializing it on first call.
-func (f *Factory) Store() (domain.Store, error) {
+func (f *Factory) Store() (storage.Store, error) {
 	if f.StoreFunc == nil {
-		return nil, domain.ErrConfigNotFound
+		return nil, session.ErrConfigNotFound
 	}
 	return f.StoreFunc()
 }
@@ -46,7 +57,7 @@ func (f *Factory) Store() (domain.Store, error) {
 // Git returns the Git client, initializing it on first call.
 func (f *Factory) Git() (*git.Client, error) {
 	if f.GitFunc == nil {
-		return nil, domain.ErrConfigNotFound
+		return nil, session.ErrConfigNotFound
 	}
 	return f.GitFunc()
 }
@@ -60,7 +71,7 @@ func (f *Factory) Registry() *provider.Registry {
 }
 
 // Scanner returns the SecretScanner, or nil if not configured.
-func (f *Factory) Scanner() domain.SecretScanner {
+func (f *Factory) Scanner() *secrets.Scanner {
 	if f.ScannerFunc == nil {
 		return nil
 	}
@@ -69,11 +80,44 @@ func (f *Factory) Scanner() domain.SecretScanner {
 
 // Platform returns the code hosting platform client (GitHub, GitLab, etc.).
 // Returns ErrPlatformNotDetected if the platform cannot be determined.
-func (f *Factory) Platform() (domain.Platform, error) {
+func (f *Factory) Platform() (platform.Platform, error) {
 	if f.PlatformFunc == nil {
-		return nil, domain.ErrPlatformNotDetected
+		return nil, session.ErrPlatformNotDetected
 	}
 	return f.PlatformFunc()
+}
+
+// Converter returns the session format converter.
+func (f *Factory) Converter() *converter.Converter {
+	if f.ConverterFunc == nil {
+		return converter.New()
+	}
+	return f.ConverterFunc()
+}
+
+// HooksManager returns the git hooks manager.
+// Returns an error if the git hooks directory cannot be determined.
+func (f *Factory) HooksManager() (*hooks.Manager, error) {
+	if f.HooksManagerFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.HooksManagerFunc()
+}
+
+// SessionService returns the session service for business logic operations.
+func (f *Factory) SessionService() (*service.SessionService, error) {
+	if f.SessionServiceFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.SessionServiceFunc()
+}
+
+// SyncService returns the sync service for push/pull operations.
+func (f *Factory) SyncService() (*service.SyncService, error) {
+	if f.SyncServiceFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.SyncServiceFunc()
 }
 
 // Close releases all resources held by lazy-initialized dependencies.

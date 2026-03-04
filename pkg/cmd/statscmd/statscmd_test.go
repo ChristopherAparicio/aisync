@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -15,19 +17,19 @@ import (
 
 // mockStore for stats tests.
 type mockStore struct {
-	sessions  map[domain.SessionID]*domain.Session
-	summaries []domain.SessionSummary
+	sessions  map[session.ID]*session.Session
+	summaries []session.Summary
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		sessions: make(map[domain.SessionID]*domain.Session),
+		sessions: make(map[session.ID]*session.Session),
 	}
 }
 
-func (m *mockStore) Save(s *domain.Session) error {
+func (m *mockStore) Save(s *session.Session) error {
 	m.sessions[s.ID] = s
-	m.summaries = append(m.summaries, domain.SessionSummary{
+	m.summaries = append(m.summaries, session.Summary{
 		ID:           s.ID,
 		Provider:     s.Provider,
 		Branch:       s.Branch,
@@ -38,28 +40,34 @@ func (m *mockStore) Save(s *domain.Session) error {
 	return nil
 }
 
-func (m *mockStore) Get(id domain.SessionID) (*domain.Session, error) {
+func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	s, ok := m.sessions[id]
 	if !ok {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return s, nil
 }
 
-func (m *mockStore) GetByBranch(_, _ string) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByBranch(_, _ string) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
 
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) {
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return m.summaries, nil
 }
 
-func (m *mockStore) Delete(_ domain.SessionID) error                 { return nil }
-func (m *mockStore) AddLink(_ domain.SessionID, _ domain.Link) error { return nil }
-func (m *mockStore) Close() error                                    { return nil }
+func (m *mockStore) Delete(_ session.ID) error                  { return nil }
+func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
+func (m *mockStore) Close() error                               { return nil }
 
-func (m *mockStore) GetByLink(_ domain.LinkType, _ string) ([]domain.SessionSummary, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
+	return nil, session.ErrSessionNotFound
+}
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
 }
 
 func statsTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
@@ -75,7 +83,13 @@ func statsTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostre
 	f := &cmdutil.Factory{
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
-		StoreFunc: func() (domain.Store, error) { return store, nil },
+		StoreFunc: func() (storage.Store, error) { return store, nil },
+		SessionServiceFunc: func() (*service.SessionService, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store: store,
+				Git:   gitClient,
+			}), nil
+		},
 	}
 
 	return f, ios
@@ -118,35 +132,35 @@ func TestStats_withSessions(t *testing.T) {
 	store := newMockStore()
 
 	// Save sessions with file changes
-	s1 := &domain.Session{
+	s1 := &session.Session{
 		ID:       "stats-1",
-		Provider: domain.ProviderClaudeCode,
+		Provider: session.ProviderClaudeCode,
 		Branch:   "feature-auth",
-		Messages: make([]domain.Message, 5),
-		TokenUsage: domain.TokenUsage{
+		Messages: make([]session.Message, 5),
+		TokenUsage: session.TokenUsage{
 			InputTokens:  1000,
 			OutputTokens: 500,
 			TotalTokens:  1500,
 		},
-		FileChanges: []domain.FileChange{
-			{FilePath: "auth.go", ChangeType: domain.ChangeCreated},
-			{FilePath: "main.go", ChangeType: domain.ChangeModified},
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go", ChangeType: session.ChangeCreated},
+			{FilePath: "main.go", ChangeType: session.ChangeModified},
 		},
 		CreatedAt: time.Now(),
 	}
-	s2 := &domain.Session{
+	s2 := &session.Session{
 		ID:       "stats-2",
-		Provider: domain.ProviderOpenCode,
+		Provider: session.ProviderOpenCode,
 		Branch:   "feature-api",
-		Messages: make([]domain.Message, 10),
-		TokenUsage: domain.TokenUsage{
+		Messages: make([]session.Message, 10),
+		TokenUsage: session.TokenUsage{
 			InputTokens:  3000,
 			OutputTokens: 2000,
 			TotalTokens:  5000,
 		},
-		FileChanges: []domain.FileChange{
-			{FilePath: "api.go", ChangeType: domain.ChangeCreated},
-			{FilePath: "main.go", ChangeType: domain.ChangeModified},
+		FileChanges: []session.FileChange{
+			{FilePath: "api.go", ChangeType: session.ChangeCreated},
+			{FilePath: "main.go", ChangeType: session.ChangeModified},
 		},
 		CreatedAt: time.Now(),
 	}

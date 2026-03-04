@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestDefaultPatterns_loads(t *testing.T) {
@@ -82,7 +82,7 @@ func TestParsePatterns(t *testing.T) {
 }
 
 func TestScanner_Scan(t *testing.T) {
-	scanner := NewScanner(domain.SecretModeMask, nil)
+	scanner := NewScanner(session.SecretModeMask, nil)
 
 	tests := []struct {
 		name      string
@@ -155,7 +155,7 @@ func TestScanner_Scan(t *testing.T) {
 }
 
 func TestScanner_Mask(t *testing.T) {
-	scanner := NewScanner(domain.SecretModeMask, nil)
+	scanner := NewScanner(session.SecretModeMask, nil)
 
 	tests := []struct {
 		name        string
@@ -203,11 +203,11 @@ func TestScanner_Mask(t *testing.T) {
 
 func TestScanner_Mode(t *testing.T) {
 	tests := []struct {
-		mode domain.SecretMode
+		mode session.SecretMode
 	}{
-		{domain.SecretModeMask},
-		{domain.SecretModeWarn},
-		{domain.SecretModeBlock},
+		{session.SecretModeMask},
+		{session.SecretModeWarn},
+		{session.SecretModeBlock},
 	}
 
 	for _, tt := range tests {
@@ -221,18 +221,18 @@ func TestScanner_Mode(t *testing.T) {
 }
 
 func TestScanner_ScanSession(t *testing.T) {
-	scanner := NewScanner(domain.SecretModeMask, nil)
+	scanner := NewScanner(session.SecretModeMask, nil)
 
-	session := &domain.Session{
-		Messages: []domain.Message{
+	sess := &session.Session{
+		Messages: []session.Message{
 			{
 				Content: "Here is my key: AKIAIOSFODNN7EXAMPLE",
-				Role:    domain.RoleUser,
+				Role:    session.RoleUser,
 			},
 			{
 				Content: "I see your AWS key",
-				Role:    domain.RoleAssistant,
-				ToolCalls: []domain.ToolCall{
+				Role:    session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
 					{
 						Output: "Found ghp_ABCDEFghijklmnop1234567890abcdefghij in code",
 					},
@@ -240,12 +240,12 @@ func TestScanner_ScanSession(t *testing.T) {
 			},
 			{
 				Content: "No secrets here",
-				Role:    domain.RoleUser,
+				Role:    session.RoleUser,
 			},
 		},
 	}
 
-	matches := scanner.ScanSession(session)
+	matches := scanner.ScanSession(sess)
 	if len(matches) < 2 {
 		t.Fatalf("expected at least 2 matches, got %d", len(matches))
 	}
@@ -263,34 +263,34 @@ func TestScanner_ScanSession(t *testing.T) {
 }
 
 func TestScanner_MaskSession(t *testing.T) {
-	scanner := NewScanner(domain.SecretModeMask, nil)
+	scanner := NewScanner(session.SecretModeMask, nil)
 
-	session := &domain.Session{
-		Messages: []domain.Message{
+	sess := &session.Session{
+		Messages: []session.Message{
 			{
 				Content: "key=AKIAIOSFODNN7EXAMPLE",
-				Role:    domain.RoleUser,
+				Role:    session.RoleUser,
 			},
 			{
 				Content: "checking...",
-				Role:    domain.RoleAssistant,
-				ToolCalls: []domain.ToolCall{
+				Role:    session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
 					{Output: "found ghp_ABCDEFghijklmnop1234567890abcdefghij in code"},
 				},
 			},
 		},
 	}
 
-	scanner.MaskSession(session)
+	scanner.MaskSession(sess)
 
-	if strings.Contains(session.Messages[0].Content, "AKIA") {
+	if strings.Contains(sess.Messages[0].Content, "AKIA") {
 		t.Error("message content should be masked")
 	}
-	if !strings.Contains(session.Messages[0].Content, "***REDACTED:") {
+	if !strings.Contains(sess.Messages[0].Content, "***REDACTED:") {
 		t.Error("message content should contain redacted placeholder")
 	}
 
-	toolOutput := session.Messages[1].ToolCalls[0].Output
+	toolOutput := sess.Messages[1].ToolCalls[0].Output
 	if strings.Contains(toolOutput, "ghp_") {
 		t.Error("tool call output should be masked")
 	}
@@ -300,7 +300,7 @@ func TestScanner_MaskSession(t *testing.T) {
 }
 
 func TestScanner_AddPatterns(t *testing.T) {
-	scanner := NewScanner(domain.SecretModeMask, []Pattern{})
+	scanner := NewScanner(session.SecretModeMask, []Pattern{})
 	if scanner.PatternCount() != 0 {
 		t.Fatalf("expected 0 patterns, got %d", scanner.PatternCount())
 	}
@@ -328,7 +328,7 @@ func TestFormatMatches(t *testing.T) {
 	tests := []struct {
 		name    string
 		want    string
-		matches []domain.SecretMatch
+		matches []session.SecretMatch
 	}{
 		{
 			name:    "no matches",
@@ -337,14 +337,14 @@ func TestFormatMatches(t *testing.T) {
 		},
 		{
 			name: "single match",
-			matches: []domain.SecretMatch{
+			matches: []session.SecretMatch{
 				{Type: "AWS_ACCESS_KEY"},
 			},
 			want: "AWS_ACCESS_KEY",
 		},
 		{
 			name: "multiple same type",
-			matches: []domain.SecretMatch{
+			matches: []session.SecretMatch{
 				{Type: "AWS_ACCESS_KEY"},
 				{Type: "AWS_ACCESS_KEY"},
 			},
@@ -352,7 +352,7 @@ func TestFormatMatches(t *testing.T) {
 		},
 		{
 			name: "different types",
-			matches: []domain.SecretMatch{
+			matches: []session.SecretMatch{
 				{Type: "AWS_ACCESS_KEY"},
 				{Type: "GITHUB_TOKEN"},
 			},
@@ -376,7 +376,7 @@ func TestScanner_withCustomPatterns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	scanner := NewScanner(domain.SecretModeMask, custom)
+	scanner := NewScanner(session.SecretModeMask, custom)
 
 	matches := scanner.Scan("found mysecret_12345678 here")
 	if len(matches) != 1 {

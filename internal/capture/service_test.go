@@ -4,26 +4,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
+	"github.com/ChristopherAparicio/aisync/internal/secrets"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestCapture_autoDetect(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "ses-1", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-1", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:          "ses-1",
-			Provider:    domain.ProviderClaudeCode,
+			Provider:    session.ProviderClaudeCode,
 			Agent:       "claude",
 			Branch:      "main",
 			ProjectPath: "/test/project",
-			StorageMode: domain.StorageModeCompact,
+			StorageMode: session.StorageModeCompact,
 			Summary:     "Test session",
-			Messages:    []domain.Message{{ID: "m1", Role: domain.RoleUser, Content: "hello"}},
+			Messages:    []session.Message{{ID: "m1", Role: session.RoleUser, Content: "hello"}},
 		},
 	}
 
@@ -33,7 +34,7 @@ func TestCapture_autoDetect(t *testing.T) {
 	result, err := svc.Capture(Request{
 		ProjectPath: "/test/project",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err != nil {
 		t.Fatalf("Capture() error: %v", err)
@@ -42,8 +43,8 @@ func TestCapture_autoDetect(t *testing.T) {
 	if result.Session.ID != "ses-1" {
 		t.Errorf("Session.ID = %q, want %q", result.Session.ID, "ses-1")
 	}
-	if result.Provider != domain.ProviderClaudeCode {
-		t.Errorf("Provider = %q, want %q", result.Provider, domain.ProviderClaudeCode)
+	if result.Provider != session.ProviderClaudeCode {
+		t.Errorf("Provider = %q, want %q", result.Provider, session.ProviderClaudeCode)
 	}
 
 	// Verify session was stored
@@ -54,7 +55,7 @@ func TestCapture_autoDetect(t *testing.T) {
 	// Verify branch link was added
 	var hasBranchLink bool
 	for _, link := range result.Session.Links {
-		if link.LinkType == domain.LinkBranch && link.Ref == "main" {
+		if link.LinkType == session.LinkBranch && link.Ref == "main" {
 			hasBranchLink = true
 		}
 	}
@@ -66,19 +67,19 @@ func TestCapture_autoDetect(t *testing.T) {
 func TestCapture_explicitProvider(t *testing.T) {
 	store := &mockStore{}
 	claude := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "claude-1", Provider: domain.ProviderClaudeCode, Branch: "feat"},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "claude-1", Provider: session.ProviderClaudeCode, Branch: "feat"},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:       "claude-1",
-			Provider: domain.ProviderClaudeCode,
+			Provider: session.ProviderClaudeCode,
 		},
 	}
 	opencode := &mockProvider{
-		name: domain.ProviderOpenCode,
-		sessions: []domain.SessionSummary{
-			{ID: "oc-1", Provider: domain.ProviderOpenCode, CreatedAt: time.Now()},
+		name: session.ProviderOpenCode,
+		sessions: []session.Summary{
+			{ID: "oc-1", Provider: session.ProviderOpenCode, CreatedAt: time.Now()},
 		},
 	}
 
@@ -88,8 +89,8 @@ func TestCapture_explicitProvider(t *testing.T) {
 	result, err := svc.Capture(Request{
 		ProjectPath:  "/test/project",
 		Branch:       "feat",
-		Mode:         domain.StorageModeCompact,
-		ProviderName: domain.ProviderClaudeCode,
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderClaudeCode,
 	})
 	if err != nil {
 		t.Fatalf("Capture() error: %v", err)
@@ -103,11 +104,11 @@ func TestCapture_explicitProvider(t *testing.T) {
 func TestCapture_messageOverride(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "ses-1", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-1", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:      "ses-1",
 			Summary: "Original summary",
 		},
@@ -119,7 +120,7 @@ func TestCapture_messageOverride(t *testing.T) {
 	result, err := svc.Capture(Request{
 		ProjectPath: "/test/project",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 		Message:     "Custom summary",
 	})
 	if err != nil {
@@ -134,27 +135,27 @@ func TestCapture_messageOverride(t *testing.T) {
 func TestCapture_withScanner_maskMode(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "ses-1", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-1", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:       "ses-1",
-			Provider: domain.ProviderClaudeCode,
-			Messages: []domain.Message{
-				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: domain.RoleUser},
+			Provider: session.ProviderClaudeCode,
+			Messages: []session.Message{
+				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: session.RoleUser},
 			},
 		},
 	}
 
-	scanner := &mockScanner{mode: domain.SecretModeMask}
+	sc := secrets.NewScanner(session.SecretModeMask, nil)
 	reg := provider.NewRegistry(prov)
-	svc := NewServiceWithScanner(reg, store, scanner)
+	svc := NewServiceWithScanner(reg, store, sc)
 
 	result, err := svc.Capture(Request{
 		ProjectPath: "/test",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err != nil {
 		t.Fatalf("Capture() error: %v", err)
@@ -173,27 +174,27 @@ func TestCapture_withScanner_maskMode(t *testing.T) {
 func TestCapture_withScanner_blockMode(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "ses-1", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-1", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:       "ses-1",
-			Provider: domain.ProviderClaudeCode,
-			Messages: []domain.Message{
-				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: domain.RoleUser},
+			Provider: session.ProviderClaudeCode,
+			Messages: []session.Message{
+				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: session.RoleUser},
 			},
 		},
 	}
 
-	scanner := &mockScanner{mode: domain.SecretModeBlock}
+	sc := secrets.NewScanner(session.SecretModeBlock, nil)
 	reg := provider.NewRegistry(prov)
-	svc := NewServiceWithScanner(reg, store, scanner)
+	svc := NewServiceWithScanner(reg, store, sc)
 
 	_, err := svc.Capture(Request{
 		ProjectPath: "/test",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err == nil {
 		t.Fatal("Capture() should return error in block mode when secrets found")
@@ -206,27 +207,27 @@ func TestCapture_withScanner_blockMode(t *testing.T) {
 func TestCapture_withScanner_warnMode(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "ses-1", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-1", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:       "ses-1",
-			Provider: domain.ProviderClaudeCode,
-			Messages: []domain.Message{
-				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: domain.RoleUser},
+			Provider: session.ProviderClaudeCode,
+			Messages: []session.Message{
+				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: session.RoleUser},
 			},
 		},
 	}
 
-	scanner := &mockScanner{mode: domain.SecretModeWarn}
+	sc := secrets.NewScanner(session.SecretModeWarn, nil)
 	reg := provider.NewRegistry(prov)
-	svc := NewServiceWithScanner(reg, store, scanner)
+	svc := NewServiceWithScanner(reg, store, sc)
 
 	result, err := svc.Capture(Request{
 		ProjectPath: "/test",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err != nil {
 		t.Fatalf("Capture() error: %v", err)
@@ -244,15 +245,15 @@ func TestCapture_withScanner_warnMode(t *testing.T) {
 func TestCapture_noScanner(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "ses-1", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-1", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:       "ses-1",
-			Provider: domain.ProviderClaudeCode,
-			Messages: []domain.Message{
-				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: domain.RoleUser},
+			Provider: session.ProviderClaudeCode,
+			Messages: []session.Message{
+				{Content: "Here is AKIAIOSFODNN7EXAMPLE", Role: session.RoleUser},
 			},
 		},
 	}
@@ -263,7 +264,7 @@ func TestCapture_noScanner(t *testing.T) {
 	result, err := svc.Capture(Request{
 		ProjectPath: "/test",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err != nil {
 		t.Fatalf("Capture() error: %v", err)
@@ -277,16 +278,16 @@ func TestCapture_noScanner(t *testing.T) {
 func TestCapture_deduplication(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name: domain.ProviderClaudeCode,
-		sessions: []domain.SessionSummary{
-			{ID: "ses-first", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-first", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 		},
-		exportSession: &domain.Session{
+		exportSession: &session.Session{
 			ID:          "ses-first",
-			Provider:    domain.ProviderClaudeCode,
+			Provider:    session.ProviderClaudeCode,
 			Branch:      "main",
 			ProjectPath: "/test/project",
-			Messages:    []domain.Message{{ID: "m1", Role: domain.RoleUser, Content: "hello"}},
+			Messages:    []session.Message{{ID: "m1", Role: session.RoleUser, Content: "hello"}},
 		},
 	}
 
@@ -297,7 +298,7 @@ func TestCapture_deduplication(t *testing.T) {
 	result1, err := svc.Capture(Request{
 		ProjectPath: "/test/project",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err != nil {
 		t.Fatalf("First Capture() error: %v", err)
@@ -305,22 +306,22 @@ func TestCapture_deduplication(t *testing.T) {
 	firstID := result1.Session.ID
 
 	// Second capture with a different provider session ID
-	prov.sessions = []domain.SessionSummary{
-		{ID: "ses-second", Provider: domain.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+	prov.sessions = []session.Summary{
+		{ID: "ses-second", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
 	}
-	prov.exportSession = &domain.Session{
+	prov.exportSession = &session.Session{
 		ID:          "ses-second",
-		Provider:    domain.ProviderClaudeCode,
+		Provider:    session.ProviderClaudeCode,
 		Branch:      "main",
 		ProjectPath: "/test/project",
 		Summary:     "Updated session",
-		Messages:    []domain.Message{{ID: "m2", Role: domain.RoleUser, Content: "world"}},
+		Messages:    []session.Message{{ID: "m2", Role: session.RoleUser, Content: "world"}},
 	}
 
 	result2, err := svc.Capture(Request{
 		ProjectPath: "/test/project",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err != nil {
 		t.Fatalf("Second Capture() error: %v", err)
@@ -340,7 +341,7 @@ func TestCapture_deduplication(t *testing.T) {
 func TestCapture_noSessionsFound(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
-		name:     domain.ProviderClaudeCode,
+		name:     session.ProviderClaudeCode,
 		sessions: nil, // no sessions
 	}
 
@@ -350,7 +351,7 @@ func TestCapture_noSessionsFound(t *testing.T) {
 	_, err := svc.Capture(Request{
 		ProjectPath: "/test/project",
 		Branch:      "main",
-		Mode:        domain.StorageModeCompact,
+		Mode:        session.StorageModeCompact,
 	})
 	if err == nil {
 		t.Error("Capture() should return error when no sessions found")
@@ -360,117 +361,70 @@ func TestCapture_noSessionsFound(t *testing.T) {
 // --- Mocks ---
 
 type mockStore struct {
-	savedSession *domain.Session
-	byBranch     map[string]*domain.Session // key: "projectPath:branch"
+	savedSession *session.Session
+	byBranch     map[string]*session.Session // key: "projectPath:branch"
 	saveCount    int
 }
 
-func (m *mockStore) Save(session *domain.Session) error {
-	m.savedSession = session
+func (m *mockStore) Save(sess *session.Session) error {
+	m.savedSession = sess
 	m.saveCount++
 	if m.byBranch == nil {
-		m.byBranch = make(map[string]*domain.Session)
+		m.byBranch = make(map[string]*session.Session)
 	}
-	key := session.ProjectPath + ":" + session.Branch
-	m.byBranch[key] = session
+	key := sess.ProjectPath + ":" + sess.Branch
+	m.byBranch[key] = sess
 	return nil
 }
-func (m *mockStore) Get(_ domain.SessionID) (*domain.Session, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) GetByBranch(projectPath string, branch string) (*domain.Session, error) {
+func (m *mockStore) GetByBranch(projectPath string, branch string) (*session.Session, error) {
 	if m.byBranch == nil {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	key := projectPath + ":" + branch
 	s, ok := m.byBranch[key]
 	if !ok {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	return s, nil
 }
-func (m *mockStore) List(_ domain.ListOptions) ([]domain.SessionSummary, error) {
+func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 	return nil, nil
 }
-func (m *mockStore) Delete(_ domain.SessionID) error { return nil }
-func (m *mockStore) AddLink(_ domain.SessionID, _ domain.Link) error {
+func (m *mockStore) Delete(_ session.ID) error { return nil }
+func (m *mockStore) AddLink(_ session.ID, _ session.Link) error {
 	return nil
 }
-func (m *mockStore) GetByLink(_ domain.LinkType, _ string) ([]domain.SessionSummary, error) {
-	return nil, domain.ErrSessionNotFound
+func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
+	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) Close() error { return nil }
+func (m *mockStore) Close() error                                   { return nil }
+func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	return &session.SearchResult{}, nil
+}
 
 type mockProvider struct {
-	exportSession *domain.Session
-	name          domain.ProviderName
-	sessions      []domain.SessionSummary
+	exportSession *session.Session
+	name          session.ProviderName
+	sessions      []session.Summary
 }
 
-func (m *mockProvider) Name() domain.ProviderName { return m.name }
-func (m *mockProvider) Detect(_ string, _ string) ([]domain.SessionSummary, error) {
+func (m *mockProvider) Name() session.ProviderName { return m.name }
+func (m *mockProvider) Detect(_ string, _ string) ([]session.Summary, error) {
 	return m.sessions, nil
 }
-func (m *mockProvider) Export(_ domain.SessionID, _ domain.StorageMode) (*domain.Session, error) {
+func (m *mockProvider) Export(_ session.ID, _ session.StorageMode) (*session.Session, error) {
 	if m.exportSession == nil {
-		return nil, domain.ErrSessionNotFound
+		return nil, session.ErrSessionNotFound
 	}
 	// Return a copy to avoid mutation
 	s := *m.exportSession
 	return &s, nil
 }
-func (m *mockProvider) CanImport() bool                { return true }
-func (m *mockProvider) Import(_ *domain.Session) error { return nil }
-
-type mockScanner struct {
-	mode domain.SecretMode
-}
-
-func (m *mockScanner) Scan(content string) []domain.SecretMatch {
-	// Simple: detect "AKIA" as a fake secret for testing
-	var matches []domain.SecretMatch
-	idx := 0
-	for {
-		pos := indexOf(content[idx:], "AKIA")
-		if pos == -1 {
-			break
-		}
-		start := idx + pos
-		end := start + 20
-		if end > len(content) {
-			end = len(content)
-		}
-		matches = append(matches, domain.SecretMatch{
-			Type:     "AWS_ACCESS_KEY",
-			Value:    content[start:end],
-			StartPos: start,
-			EndPos:   end,
-		})
-		idx = end
-	}
-	return matches
-}
-
-func (m *mockScanner) Mask(content string) string {
-	matches := m.Scan(content)
-	if len(matches) == 0 {
-		return content
-	}
-	result := content
-	for i := len(matches) - 1; i >= 0; i-- {
-		match := matches[i]
-		result = result[:match.StartPos] + "***REDACTED:AWS_ACCESS_KEY***" + result[match.EndPos:]
-	}
-	return result
-}
-
-func (m *mockScanner) Mode() domain.SecretMode { return m.mode }
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
+func (m *mockProvider) CanImport() bool                 { return true }
+func (m *mockProvider) Import(_ *session.Session) error { return nil }

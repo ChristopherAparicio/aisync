@@ -22,7 +22,7 @@ import (
 // nativePattern detects "NATIVE_KEY_" followed by 6 digits.
 var nativePattern = regexp.MustCompile(`NATIVE_KEY_[0-9]{6}`)
 
-// SecretMatch mirrors domain.SecretMatch so the plugin doesn't import domain.
+// SecretMatch mirrors session.SecretMatch so the plugin doesn't import internal packages.
 type SecretMatch struct {
 	Type     string
 	Value    string

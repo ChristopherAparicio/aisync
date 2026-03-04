@@ -1,4 +1,4 @@
-package domain
+package session
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ func TestSession_JSONRoundTrip(t *testing.T) {
 	now := time.Date(2026, 2, 16, 14, 30, 0, 0, time.UTC)
 
 	session := Session{
-		ID:          SessionID("a1b2c3d4"),
+		ID:          ID("a1b2c3d4"),
 		Version:     1,
 		Provider:    ProviderClaudeCode,
 		Agent:       "claude",
@@ -110,7 +110,7 @@ func TestSession_JSONRoundTrip(t *testing.T) {
 
 func TestSession_JSONOmitsEmpty(t *testing.T) {
 	session := Session{
-		ID:          SessionID("test"),
+		ID:          ID("test"),
 		Provider:    ProviderOpenCode,
 		Agent:       "coder",
 		ProjectPath: "/test",
@@ -137,17 +137,17 @@ func TestSession_JSONOmitsEmpty(t *testing.T) {
 
 func TestSession_WithChildren(t *testing.T) {
 	parent := Session{
-		ID:          SessionID("parent-1"),
+		ID:          ID("parent-1"),
 		Provider:    ProviderOpenCode,
 		Agent:       "coder",
 		ProjectPath: "/test",
 		StorageMode: StorageModeCompact,
 		Children: []Session{
 			{
-				ID:          SessionID("child-1"),
+				ID:          ID("child-1"),
 				Provider:    ProviderOpenCode,
 				Agent:       "task",
-				ParentID:    SessionID("parent-1"),
+				ParentID:    ID("parent-1"),
 				ProjectPath: "/test",
 				StorageMode: StorageModeCompact,
 				Messages: []Message{
@@ -173,7 +173,7 @@ func TestSession_WithChildren(t *testing.T) {
 	if got.Children[0].Agent != "task" {
 		t.Errorf("Children[0].Agent = %q, want %q", got.Children[0].Agent, "task")
 	}
-	if got.Children[0].ParentID != SessionID("parent-1") {
+	if got.Children[0].ParentID != ID("parent-1") {
 		t.Errorf("Children[0].ParentID = %q, want %q", got.Children[0].ParentID, "parent-1")
 	}
 }

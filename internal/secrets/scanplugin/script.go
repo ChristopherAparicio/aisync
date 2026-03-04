@@ -6,10 +6,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
-// ScriptAdapter wraps an external script as a domain.SecretScanner.
+// ScriptAdapter wraps an external script as a SecretScanner.
 // The script receives content via stdin and writes JSON matches to stdout.
 //
 // Expected output format (JSON array):
@@ -19,12 +19,12 @@ import (
 // If the script exits with a non-zero code, the scan returns an empty result.
 type ScriptAdapter struct {
 	command string
-	mode    domain.SecretMode
+	mode    session.SecretMode
 	args    []string
 }
 
 // NewScriptAdapter creates a scanner that delegates to an external script.
-func NewScriptAdapter(command string, args []string, mode domain.SecretMode) *ScriptAdapter {
+func NewScriptAdapter(command string, args []string, mode session.SecretMode) *ScriptAdapter {
 	return &ScriptAdapter{
 		command: command,
 		args:    args,
@@ -33,7 +33,7 @@ func NewScriptAdapter(command string, args []string, mode domain.SecretMode) *Sc
 }
 
 // Scan runs the external script with content on stdin and parses JSON matches from stdout.
-func (s *ScriptAdapter) Scan(content string) []domain.SecretMatch {
+func (s *ScriptAdapter) Scan(content string) []session.SecretMatch {
 	cmd := exec.Command(s.command, s.args...)
 	cmd.Stdin = strings.NewReader(content)
 
@@ -48,7 +48,7 @@ func (s *ScriptAdapter) Scan(content string) []domain.SecretMatch {
 		return nil
 	}
 
-	var matches []domain.SecretMatch
+	var matches []session.SecretMatch
 	if jsonErr := json.Unmarshal([]byte(trimmed), &matches); jsonErr != nil {
 		return nil
 	}
@@ -77,6 +77,6 @@ func (s *ScriptAdapter) Mask(content string) string {
 }
 
 // Mode returns the current secret handling mode.
-func (s *ScriptAdapter) Mode() domain.SecretMode {
+func (s *ScriptAdapter) Mode() session.SecretMode {
 	return s.mode
 }

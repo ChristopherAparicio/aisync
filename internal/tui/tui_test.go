@@ -1,13 +1,14 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/ChristopherAparicio/aisync/internal/domain"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 func TestFormatTokenCount(t *testing.T) {
@@ -106,11 +107,11 @@ func TestWrapText(t *testing.T) {
 
 func TestChangeIcon(t *testing.T) {
 	// Just verify each type returns something non-empty
-	types := []domain.ChangeType{
-		domain.ChangeCreated,
-		domain.ChangeModified,
-		domain.ChangeDeleted,
-		domain.ChangeRead,
+	types := []session.ChangeType{
+		session.ChangeCreated,
+		session.ChangeModified,
+		session.ChangeDeleted,
+		session.ChangeRead,
 	}
 	for _, ct := range types {
 		got := changeIcon(ct)
@@ -131,40 +132,40 @@ func TestRenderField(t *testing.T) {
 }
 
 func TestDetailBuildLines(t *testing.T) {
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:       "test-id-123",
-		Provider: domain.ProviderClaudeCode,
+		Provider: session.ProviderClaudeCode,
 		Branch:   "feature/test",
 		Summary:  "Test session summary",
-		TokenUsage: domain.TokenUsage{
+		TokenUsage: session.TokenUsage{
 			InputTokens:  1000,
 			OutputTokens: 500,
 			TotalTokens:  1500,
 		},
-		Messages: []domain.Message{
+		Messages: []session.Message{
 			{
 				ID:      "msg-1",
-				Role:    domain.RoleUser,
+				Role:    session.RoleUser,
 				Content: "Hello",
 			},
 			{
 				ID:      "msg-2",
-				Role:    domain.RoleAssistant,
+				Role:    session.RoleAssistant,
 				Content: "Hi there!",
 				Model:   "claude-3",
 				Tokens:  100,
 			},
 		},
-		FileChanges: []domain.FileChange{
-			{FilePath: "main.go", ChangeType: domain.ChangeModified},
-			{FilePath: "new.go", ChangeType: domain.ChangeCreated},
+		FileChanges: []session.FileChange{
+			{FilePath: "main.go", ChangeType: session.ChangeModified},
+			{FilePath: "new.go", ChangeType: session.ChangeCreated},
 		},
-		Links: []domain.Link{
-			{LinkType: domain.LinkPR, Ref: "42"},
+		Links: []session.Link{
+			{LinkType: session.LinkPR, Ref: "42"},
 		},
 	}
 
-	m := detailModel{session: session}
+	m := detailModel{session: sess}
 	lines := m.buildLines()
 
 	if len(lines) == 0 {
@@ -225,7 +226,7 @@ func TestListView_withSessions(t *testing.T) {
 	m.setSessions(sessionListMsg{
 		{
 			ID:           "sess-1",
-			Provider:     domain.ProviderClaudeCode,
+			Provider:     session.ProviderClaudeCode,
 			Branch:       "main",
 			MessageCount: 5,
 			TotalTokens:  1000,
@@ -233,7 +234,7 @@ func TestListView_withSessions(t *testing.T) {
 		},
 		{
 			ID:           "sess-2",
-			Provider:     domain.ProviderOpenCode,
+			Provider:     session.ProviderOpenCode,
 			Branch:       "feature",
 			MessageCount: 10,
 			TotalTokens:  5000,
@@ -304,13 +305,13 @@ func TestDetailView_scroll(t *testing.T) {
 	m := newDetailModel()
 	m.setSize(80, 10) // Very small height to force scrolling
 
-	session := &domain.Session{
+	sess := &session.Session{
 		ID:       "scroll-test",
-		Provider: domain.ProviderClaudeCode,
+		Provider: session.ProviderClaudeCode,
 		Branch:   "main",
-		Messages: make([]domain.Message, 20), // Many messages to exceed viewport
+		Messages: make([]session.Message, 20), // Many messages to exceed viewport
 	}
-	m.setSession(session)
+	m.setSession(sess)
 
 	// Initially at scroll 0
 	if m.scroll != 0 {
@@ -333,6 +334,278 @@ func TestDetailView_scroll(t *testing.T) {
 	m.handleKey(testKeyMsg("k"))
 	if m.scroll != 0 {
 		t.Errorf("expected scroll 0 at top, got %d", m.scroll)
+	}
+}
+
+func TestEnterKey_navigatesToDetail(t *testing.T) {
+	// Create a Model in the list view with sessions loaded
+	m := Model{
+		active: viewList,
+		width:  120,
+		height: 40,
+	}
+	m.list.setSize(120, 37)
+	m.list.setSessions(sessionListMsg{
+		{ID: "sess-abc", Provider: "claude-code", Branch: "main", MessageCount: 3},
+		{ID: "sess-def", Provider: "open-code", Branch: "feature", MessageCount: 5},
+	})
+
+	// Verify we start in list view on first session
+	if m.active != viewList {
+		t.Fatalf("expected viewList, got %d", m.active)
+	}
+	if m.list.selectedID() != "sess-abc" {
+		t.Fatalf("expected sess-abc selected, got %s", m.list.selectedID())
+	}
+
+	// Simulate pressing Enter (real Enter key, not runes)
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	result, cmd := m.Update(enterMsg)
+	updatedModel := result.(Model)
+
+	// The view should IMMEDIATELY switch to detail (with loading state)
+	if updatedModel.active != viewDetail {
+		t.Fatalf("expected viewDetail immediately after Enter, got %d", updatedModel.active)
+	}
+	if !updatedModel.detail.loading {
+		t.Fatal("expected detail.loading to be true while async load is in progress")
+	}
+
+	// A command MUST have been returned (the async loader)
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd from Enter key, got nil")
+	}
+
+	t.Logf("Enter key correctly switched to detail view with loading state")
+
+	// Now simulate receiving sessionDetailMsg (what happens after async load succeeds)
+	testSession := &session.Session{
+		ID:       "sess-abc",
+		Provider: session.ProviderClaudeCode,
+		Branch:   "main",
+	}
+	result2, _ := updatedModel.Update(sessionDetailMsg{session: testSession})
+	finalModel := result2.(Model)
+
+	// NOW the view should be detail
+	if finalModel.active != viewDetail {
+		t.Errorf("expected viewDetail after sessionDetailMsg, got %d", finalModel.active)
+	}
+
+	// And the detail should have the session loaded (no longer in loading state)
+	if finalModel.detail.loading {
+		t.Error("expected detail.loading to be false after session loaded")
+	}
+	if finalModel.detail.session == nil {
+		t.Error("expected detail.session to be set")
+	}
+	if finalModel.detail.session.ID != "sess-abc" {
+		t.Errorf("expected detail session ID sess-abc, got %s", finalModel.detail.session.ID)
+	}
+	if !finalModel.detail.loaded {
+		t.Error("expected detail.loaded to be true")
+	}
+}
+
+// TestEnterKey_detailViewRendersContent verifies that after navigating to the
+// detail view via Enter + sessionDetailMsg, the View() actually renders the
+// session content (not the "No session selected" fallback).
+func TestEnterKey_detailViewRendersContent(t *testing.T) {
+	m := Model{
+		active: viewList,
+		width:  120,
+		height: 40,
+	}
+	m.list.setSize(120, 37)
+	m.detail.setSize(120, 37)
+	m.list.setSessions(sessionListMsg{
+		{ID: "sess-abc", Provider: "claude-code", Branch: "main"},
+	})
+
+	// Step 1: Press Enter
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	result, _ := m.Update(enterMsg)
+	m = result.(Model)
+
+	// Step 2: Receive sessionDetailMsg
+	testSession := &session.Session{
+		ID:       "sess-abc",
+		Provider: session.ProviderClaudeCode,
+		Branch:   "main",
+		Summary:  "Test session for enter-key bug",
+		Messages: []session.Message{
+			{ID: "msg-1", Role: session.RoleUser, Content: "Hello from test"},
+		},
+	}
+	result, _ = m.Update(sessionDetailMsg{session: testSession})
+	m = result.(Model)
+
+	// Step 3: Render the view
+	output := m.View()
+
+	// The view should show the session detail, NOT the fallback
+	if strings.Contains(output, "No session selected") {
+		t.Error("detail view shows 'No session selected' even though a session was loaded — the session data was lost!")
+	}
+	if !strings.Contains(output, "sess-abc") {
+		t.Error("detail view does not contain session ID 'sess-abc'")
+	}
+	if !strings.Contains(output, "Test session for enter-key bug") {
+		t.Error("detail view does not contain session summary")
+	}
+	if !strings.Contains(output, "Hello from test") {
+		t.Error("detail view does not contain message content")
+	}
+
+	// Check detail tab is active
+	if !strings.Contains(output, "Detail") {
+		t.Error("detail tab not visible in output")
+	}
+}
+
+// TestEnterKey_fullBubbleteaLoop simulates the actual bubbletea program loop
+// to verify the Enter key flow works end-to-end with proper tea.Model interface
+// boxing/unboxing, exactly as bubbletea does it at runtime.
+func TestEnterKey_fullBubbleteaLoop(t *testing.T) {
+	// Start with a Model (value type), just like tui.New() returns.
+	initialModel := Model{
+		active: viewList,
+		width:  120,
+		height: 40,
+	}
+	initialModel.list.setSize(120, 37)
+	initialModel.detail.setSize(120, 37)
+	initialModel.list.setSessions(sessionListMsg{
+		{ID: "sess-abc", Provider: "claude-code", Branch: "main", MessageCount: 3},
+	})
+
+	// Bubbletea stores the model as tea.Model (interface).
+	// This is what tea.NewProgram does internally.
+	var model tea.Model = initialModel
+
+	// Step 1: Simulate Enter keypress (exactly as bubbletea does it)
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	var cmd tea.Cmd
+	model, cmd = model.Update(enterMsg)
+
+	// Verify cmd was returned
+	if cmd == nil {
+		t.Fatal("BUG: Enter key did not return a tea.Cmd")
+	}
+
+	// Verify immediately switched to detail view with loading state
+	m1 := model.(Model)
+	if m1.active != viewDetail {
+		t.Fatalf("expected viewDetail immediately after Enter, got %d", m1.active)
+	}
+	if !m1.detail.loading {
+		t.Fatal("expected detail.loading to be true while async load is in progress")
+	}
+
+	// Step 2: Bubbletea would execute cmd() in a goroutine and send result.
+	// We simulate this by directly creating the expected message.
+	detailMsg := sessionDetailMsg{
+		session: &session.Session{
+			ID:       "sess-abc",
+			Provider: session.ProviderClaudeCode,
+			Branch:   "main",
+			Summary:  "Test session",
+			Messages: []session.Message{
+				{ID: "m1", Role: session.RoleUser, Content: "Hello"},
+			},
+		},
+	}
+
+	// Bubbletea calls model.Update(detailMsg) on the CURRENT model
+	model, _ = model.Update(detailMsg)
+
+	// Step 3: Verify the transition happened
+	m2 := model.(Model)
+	if m2.active != viewDetail {
+		t.Errorf("BUG: expected viewDetail after sessionDetailMsg, got %d", m2.active)
+	}
+	if m2.detail.session == nil {
+		t.Fatal("BUG: detail.session is nil after sessionDetailMsg")
+	}
+	if m2.detail.session.ID != "sess-abc" {
+		t.Errorf("expected session ID sess-abc, got %s", m2.detail.session.ID)
+	}
+	if !m2.detail.loaded {
+		t.Error("expected detail.loaded to be true")
+	}
+	if len(m2.detail.lines) == 0 {
+		t.Error("expected detail.lines to be built")
+	}
+
+	// Step 4: Verify the rendered view shows session content
+	output := model.View()
+	if strings.Contains(output, "No session selected") {
+		t.Error("BUG: View shows 'No session selected' after successful navigation")
+	}
+	if !strings.Contains(output, "sess-abc") {
+		t.Error("View does not contain session ID")
+	}
+	if !strings.Contains(output, "Test session") {
+		t.Error("View does not contain session summary")
+	}
+}
+
+// TestEnterKey_loadFailure verifies that when the async session load fails,
+// we navigate back to the list view with an error message.
+func TestEnterKey_loadFailure(t *testing.T) {
+	m := Model{
+		active: viewList,
+		width:  120,
+		height: 40,
+	}
+	m.list.setSize(120, 37)
+	m.detail.setSize(120, 37)
+	m.list.setSessions(sessionListMsg{
+		{ID: "sess-abc", Provider: "claude-code", Branch: "main"},
+	})
+
+	// Step 1: Press Enter — should switch to detail with loading
+	enterMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	result, cmd := m.Update(enterMsg)
+	m = result.(Model)
+
+	if m.active != viewDetail {
+		t.Fatalf("expected viewDetail after Enter, got %d", m.active)
+	}
+	if !m.detail.loading {
+		t.Fatal("expected detail.loading to be true")
+	}
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd from Enter key")
+	}
+
+	// Step 2: Simulate load failure (errMsg arrives)
+	result, _ = m.Update(errMsg{fmt.Errorf("session not found: no such session")})
+	m = result.(Model)
+
+	// Should go back to list view
+	if m.active != viewList {
+		t.Errorf("expected viewList after load error, got %d", m.active)
+	}
+	if m.detail.loading {
+		t.Error("expected detail.loading to be false after error")
+	}
+	// Error should be visible in status
+	if !m.status.isError {
+		t.Error("expected error status to be set")
+	}
+	if !strings.Contains(m.status.text, "session not found") {
+		t.Errorf("expected error text to contain 'session not found', got %q", m.status.text)
+	}
+}
+
+// TestDetailView_loading verifies the loading state renders correctly.
+func TestDetailView_loading(t *testing.T) {
+	m := newDetailModel()
+	m.startLoading()
+	v := m.view()
+	if !strings.Contains(v, "Loading session") {
+		t.Errorf("expected 'Loading session' during loading state, got: %s", v)
 	}
 }
 
