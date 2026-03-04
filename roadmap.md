@@ -304,7 +304,7 @@ Decisions taken during the design phase, before any code was written.
 - [x] **3.5.D.3** Define 4 sync tools: `aisync_push`, `aisync_pull`, `aisync_sync`, `aisync_index`
 - [x] **3.5.D.4** Create `pkg/cmd/mcpcmd/mcp.go` — `aisync mcp serve` command (stdio transport)
 - [x] **3.5.D.5** 10 tests in `internal/mcp/server_test.go`
-- [ ] **3.5.D.6** Documentation: how to configure Claude Code / OpenCode to use aisync MCP server
+- [x] **3.5.D.6** Documentation: how to configure Claude Code / OpenCode to use aisync MCP server
 
 ### Milestone 3.5.E — User Identity Layer (COMPLETE)
 

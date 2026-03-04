@@ -84,8 +84,9 @@ With hooks installed (`aisync init` offers this), capture happens automatically 
 | `aisync hooks install` | Install Git hooks for automatic capture |
 | `aisync secrets scan` | Scan sessions for leaked secrets |
 | `aisync tui` | Interactive terminal UI to browse sessions |
-| `aisync serve` | Start HTTP/REST API server (15 endpoints) |
-| `aisync mcp serve` | Start MCP server for AI tool integration (14 tools) |
+| `aisync serve` | Start HTTP/REST API server (16 endpoints) |
+| `aisync search` | Search sessions by keyword, branch, provider, time range |
+| `aisync mcp` | Start MCP server for AI tool integration (15 tools) |
 
 Run `aisync <command> --help` for detailed flags and usage.
 
@@ -128,6 +129,95 @@ Push sessions to a shared `aisync/sessions` Git branch so colleagues can pull th
 ### PR Integration
 Link sessions to PRs, post session summaries as comments, restore sessions from PR numbers, and view per-PR statistics.
 
+## MCP Server Integration
+
+aisync exposes 15 tools via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), allowing your AI assistant to capture, restore, list, search, and manage sessions directly from within your coding conversation.
+
+Start the MCP server manually:
+
+```bash
+aisync mcp
+```
+
+The server communicates over stdio (JSON-RPC 2.0). In practice, you configure your AI tool to launch it automatically.
+
+### Configure for Claude Code
+
+Add a `.mcp.json` file at your project root:
+
+```json
+{
+  "aisync": {
+    "command": "aisync",
+    "args": ["mcp"]
+  }
+}
+```
+
+Or if `aisync` is not in your `$PATH`, use the full path:
+
+```json
+{
+  "aisync": {
+    "command": "/usr/local/bin/aisync",
+    "args": ["mcp"]
+  }
+}
+```
+
+Claude Code will auto-start the MCP server and make all aisync tools available during your conversation. The tools appear with the `aisync_` prefix (e.g., `aisync_capture`, `aisync_list`).
+
+### Configure for OpenCode
+
+Add an `mcp` section to your `opencode.json` (at project root or `~/.config/opencode/config.json`):
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "aisync": {
+      "type": "local",
+      "command": ["aisync", "mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `aisync_capture` | Capture the current AI session |
+| `aisync_restore` | Restore a session into the current provider |
+| `aisync_get` | Get session details by ID |
+| `aisync_list` | List captured sessions |
+| `aisync_search` | Search sessions by keyword, branch, provider, time range |
+| `aisync_delete` | Delete a session |
+| `aisync_export` | Export a session (aisync, Claude, OpenCode, or context format) |
+| `aisync_import` | Import a session from raw data |
+| `aisync_link` | Link a session to a PR or commit |
+| `aisync_comment` | Post/update a PR comment with session summary |
+| `aisync_stats` | Get session statistics (tokens, counts, files) |
+| `aisync_push` | Push sessions to the git sync branch |
+| `aisync_pull` | Pull sessions from the git sync branch |
+| `aisync_sync` | Pull then push (bidirectional sync) |
+| `aisync_index` | Read the sync branch index |
+
+### Example: Capture from Within Claude Code
+
+Once configured, you can ask your AI assistant to interact with aisync directly:
+
+> "Capture this session with aisync"
+>
+> "List all aisync sessions on this branch"
+>
+> "Search aisync for sessions related to authentication"
+>
+> "Show me the stats for this project"
+
+The AI assistant will call the appropriate MCP tools automatically.
+
 ## Configuration
 
 Two-level config: global (`~/.aisync/config.json`) + per-repo (`.aisync/config.json`).
@@ -168,7 +258,7 @@ Cross-platform releases (Linux, macOS, Windows / amd64, arm64) are built with Go
 
 aisync follows **Hexagonal Architecture** (Ports & Adapters) with a clear server/client split:
 
-- **Service layer** -- `SessionService` (10 methods) and `SyncService` (4 methods) orchestrate all business logic
+- **Service layer** -- `SessionService` (12 methods) and `SyncService` (4 methods) orchestrate all business logic
 - **Three driving adapters** -- CLI (Cobra), HTTP/REST API (stdlib `net/http`), MCP Server (`mark3labs/mcp-go`)
 - **Provider layer** -- pluggable readers/writers for each AI tool (3 implementations)
 - **Storage layer** -- local SQLite with 4 tables (sessions, session_links, file_changes, users)
@@ -186,7 +276,7 @@ For full details, see [architecture.md](./architecture.md), [spec.md](./spec.md)
 | Phase 1 -- MVP | Done | Capture, restore, list, show, hooks, secrets, export/import |
 | Phase 2 -- Team Sharing | Done | Git sync, Cursor provider, cross-provider, plugin system |
 | Phase 3 -- PR Integration | Done | GitHub platform, PR linking, comments, stats, TUI |
-| Phase 3.5 -- Architecture | Done | Service layer, HTTP API (15 endpoints), Client SDK, MCP Server (14 tools), User Identity |
+| Phase 3.5 -- Architecture | Done | Service layer, HTTP API (16 endpoints), Client SDK, MCP Server (15 tools), Search, User Identity |
 | Phase 4 -- CI Automation | Planned | Auto-fix sessions on CI failure, webhooks, Slack/n8n |
 | Phase 5 -- Session Intelligence | Designed | Multi-session branches, AI-blame, tool token accounting, cost tracking |
 | Phase 6 -- Replay & Web UI | Designed | Session replay for model comparison, cost forecasting, web dashboard |
