@@ -4,13 +4,15 @@ OpenCode plugin that automatically captures AI sessions into [aisync](https://gi
 
 ## What it does
 
+The plugin listens to OpenCode's event stream and triggers capture at the right moments:
+
 | OpenCode Event | Plugin Action |
 |---|---|
-| `session.created` | Resolves current git branch, logs session start |
+| `session.created` | Logs session start + current git branch |
 | `session.idle` | Triggers `aisync capture` to snapshot the full session |
 | `session.error` | Captures immediately (session may not reach idle) |
 
-The plugin is intentionally minimal. All analysis (error rates, cost breakdown, token counts, tool usage) happens inside aisync after capture. The plugin's only job is to trigger capture at the right moment with the exact session ID.
+All analysis (error rates, cost breakdown, token counts, tool usage) happens inside aisync after capture. The plugin's only job is to trigger capture with the right session ID.
 
 ## Prerequisites
 
@@ -25,38 +27,23 @@ aisync --help
 
 ## Installation
 
-### Option A: Local plugin (recommended for getting started)
-
-Copy the plugin into your OpenCode global plugins directory:
-
-```bash
-# From the aisync repo
-cp -r plugins/opencode ~/.config/opencode/plugins/opencode-aisync
-```
-
-Or symlink it (useful during development):
+### Option A: Symlink (recommended)
 
 ```bash
 ln -s /path/to/aisync/plugins/opencode ~/.config/opencode/plugins/opencode-aisync
 ```
 
-### Option B: Project-level plugin
+### Option B: Copy
 
-Copy into your project's `.opencode/plugins/` directory:
+```bash
+cp -r /path/to/aisync/plugins/opencode ~/.config/opencode/plugins/opencode-aisync
+```
+
+### Option C: Project-level
 
 ```bash
 mkdir -p .opencode/plugins
 cp -r /path/to/aisync/plugins/opencode .opencode/plugins/opencode-aisync
-```
-
-### Option C: npm (when published)
-
-Add to your `opencode.json`:
-
-```json
-{
-  "plugin": ["opencode-aisync"]
-}
 ```
 
 ## Configuration
@@ -108,6 +95,22 @@ Key design decisions:
 - **Deduplication built-in.** The plugin tracks captured session IDs in memory to avoid duplicate captures within the same OpenCode process. Across processes, aisync's SQLite upsert (INSERT ON CONFLICT) handles deduplication.
 - **Failure is silent.** Capture errors are swallowed. The plugin must never break the agent workflow.
 
+## Plugin API
+
+This plugin uses OpenCode's official Plugin API (`@opencode-ai/plugin`). It exports a default function conforming to the `Plugin` type, and returns a `Hooks` object with a single `event` handler that dispatches on `event.type`:
+
+```js
+export default async (ctx) => ({
+  event: async ({ event }) => {
+    switch (event.type) {
+      case "session.idle":    // → capture
+      case "session.error":   // → capture
+      case "session.created": // → log
+    }
+  },
+});
+```
+
 ## After capture
 
 Once sessions are captured, use aisync to analyze them:
@@ -152,9 +155,10 @@ Output looks like:
 OpenCode Process
   |
   |-- Plugin: opencode-aisync (this)
-  |     |-- session.created  -> log + resolve branch
-  |     |-- session.idle     -> aisync capture --session-id <id>
-  |     |-- session.error    -> aisync capture --session-id <id>
+  |     |-- event hook dispatches on event.type:
+  |     |     session.created  -> log + resolve branch
+  |     |     session.idle     -> aisync capture --session-id <id>
+  |     |     session.error    -> aisync capture --session-id <id>
   |
   v
 aisync (Go binary, runs as subprocess)
@@ -172,9 +176,9 @@ The plugin does NOT:
 
 ## Roadmap
 
-- [ ] `tool.execute.after` hook for real-time error notifications (desktop notification on repeated failures)
+- [ ] `tool.execute.after` hook for real-time error notifications
 - [ ] `session.compacted` hook to re-capture after OpenCode compaction
-- [ ] Integration with `aisync activity emit` for richer event timeline (SessionActivity domain object)
+- [ ] Integration with `aisync activity emit` for richer event timeline
 
 ## License
 
