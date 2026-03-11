@@ -2,7 +2,10 @@
 package restore
 
 import (
+	"bufio"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +25,7 @@ type Options struct {
 	AgentFlag    string
 	AsContext    bool
 	PRFlag       int
+	Pick         bool
 }
 
 // NewCmdRestore creates the `aisync restore` command.
@@ -45,8 +49,67 @@ func NewCmdRestore(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.AgentFlag, "agent", "", "Target agent name (e.g., for OpenCode multi-agent)")
 	cmd.Flags().BoolVar(&opts.AsContext, "as-context", false, "Generate CONTEXT.md instead of native import")
 	cmd.Flags().IntVar(&opts.PRFlag, "pr", 0, "Restore session linked to this PR number")
+	cmd.Flags().BoolVar(&opts.Pick, "pick", false, "Choose from available sessions on the current branch")
 
 	return cmd
+}
+
+// pickSession lists sessions on the current branch and prompts the user to pick one.
+func pickSession(opts *Options, svc *service.SessionService, projectPath, branch string) (session.ID, error) {
+	out := opts.IO.Out
+
+	summaries, err := svc.List(service.ListRequest{
+		ProjectPath: projectPath,
+		Branch:      branch,
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing sessions: %w", err)
+	}
+
+	if len(summaries) == 0 {
+		return "", fmt.Errorf("no sessions found on branch %q", branch)
+	}
+
+	if len(summaries) == 1 {
+		fmt.Fprintf(out, "Only one session on branch %q, using %s\n", branch, summaries[0].ID)
+		return summaries[0].ID, nil
+	}
+
+	fmt.Fprintf(out, "Sessions on branch %q:\n\n", branch)
+	fmt.Fprintf(out, "  %-4s %-20s %-14s %6s  %s\n", "#", "ID", "PROVIDER", "TOKENS", "SUMMARY")
+	for i, s := range summaries {
+		summary := s.Summary
+		if len(summary) > 50 {
+			summary = summary[:47] + "..."
+		}
+		if summary == "" {
+			summary = "(no summary)"
+		}
+		fmt.Fprintf(out, "  %-4d %-20s %-14s %6d  %s\n",
+			i+1, truncateID(string(s.ID), 20), s.Provider, s.TotalTokens, summary)
+	}
+
+	fmt.Fprintf(out, "\nEnter number (1-%d): ", len(summaries))
+
+	scanner := bufio.NewScanner(opts.IO.In)
+	if !scanner.Scan() {
+		return "", fmt.Errorf("no input received")
+	}
+
+	choice, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
+	if err != nil || choice < 1 || choice > len(summaries) {
+		return "", fmt.Errorf("invalid choice: enter a number between 1 and %d", len(summaries))
+	}
+
+	return summaries[choice-1].ID, nil
+}
+
+// truncateID truncates a string to maxLen, adding "..." if needed.
+func truncateID(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func runRestore(opts *Options) error {
@@ -92,6 +155,15 @@ func runRestore(opts *Options) error {
 	svc, err := opts.Factory.SessionService()
 	if err != nil {
 		return fmt.Errorf("initializing service: %w", err)
+	}
+
+	// Interactive pick: list sessions on the current branch and let the user choose.
+	if opts.Pick && sessionID == "" {
+		picked, pickErr := pickSession(opts, svc, topLevel, branch)
+		if pickErr != nil {
+			return pickErr
+		}
+		sessionID = picked
 	}
 
 	// Restore

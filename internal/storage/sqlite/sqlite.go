@@ -226,7 +226,7 @@ func (s *Store) CountByBranch(projectPath string, branch string) (int, error) {
 
 // List returns session summaries matching the given options.
 func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
-	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, created_at, COALESCE(owner_id, '') FROM sessions WHERE 1=1"
+	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, created_at, COALESCE(owner_id, ''), COALESCE(parent_id, '') FROM sessions WHERE 1=1"
 	args := []interface{}{}
 
 	if opts.ProjectPath != "" {
@@ -253,7 +253,7 @@ func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
 	for rows.Next() {
 		var ss session.Summary
 		var createdAt string
-		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &createdAt, &ss.OwnerID); err != nil {
+		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &createdAt, &ss.OwnerID, &ss.ParentID); err != nil {
 			return nil, fmt.Errorf("scanning session row: %w", err)
 		}
 		summaries = append(summaries, ss)
@@ -304,7 +304,7 @@ func (s *Store) AddLink(sessionID session.ID, link session.Link) error {
 // GetByLink retrieves sessions linked to a specific ref (PR number, commit SHA, etc.).
 func (s *Store) GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error) {
 	rows, err := s.db.Query(`
-		SELECT s.id, s.provider, s.agent, s.branch, s.summary, s.message_count, s.total_tokens, s.created_at, COALESCE(s.owner_id, '')
+		SELECT s.id, s.provider, s.agent, s.branch, s.summary, s.message_count, s.total_tokens, s.created_at, COALESCE(s.owner_id, ''), COALESCE(s.parent_id, '')
 		FROM sessions s
 		INNER JOIN session_links sl ON s.id = sl.session_id
 		WHERE sl.link_type = ? AND sl.link_ref = ?
@@ -320,7 +320,7 @@ func (s *Store) GetByLink(linkType session.LinkType, ref string) ([]session.Summ
 	for rows.Next() {
 		var ss session.Summary
 		var createdAt string
-		if scanErr := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &createdAt, &ss.OwnerID); scanErr != nil {
+		if scanErr := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &createdAt, &ss.OwnerID, &ss.ParentID); scanErr != nil {
 			return nil, fmt.Errorf("scanning session row: %w", scanErr)
 		}
 		summaries = append(summaries, ss)
@@ -375,6 +375,26 @@ func (s *Store) loadFileChanges(sessionID session.ID) ([]session.FileChange, err
 	return changes, rows.Err()
 }
 
+// DeleteOlderThan removes sessions created before the given time.
+// Returns the number of deleted sessions.
+// Cascading deletes handle session_links and file_changes via foreign keys.
+func (s *Store) DeleteOlderThan(before time.Time) (int, error) {
+	result, err := s.db.Exec(
+		"DELETE FROM sessions WHERE created_at < ?",
+		before.Format("2006-01-02T15:04:05Z"),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deleting old sessions: %w", err)
+	}
+
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("checking rows affected: %w", err)
+	}
+
+	return int(count), nil
+}
+
 // ── Search ──
 
 const defaultSearchLimit = 50
@@ -401,7 +421,7 @@ func (s *Store) Search(query session.SearchQuery) (*session.SearchResult, error)
 	}
 
 	// Fetch paginated results
-	selectCols := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, created_at, COALESCE(owner_id, '')"
+	selectCols := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, created_at, COALESCE(owner_id, ''), COALESCE(parent_id, '')"
 	dataQuery := selectCols + " FROM sessions" + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	dataArgs := make([]interface{}, len(args), len(args)+2)
 	copy(dataArgs, args)
@@ -417,7 +437,7 @@ func (s *Store) Search(query session.SearchQuery) (*session.SearchResult, error)
 	for rows.Next() {
 		var ss session.Summary
 		var createdAt string
-		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &createdAt, &ss.OwnerID); err != nil {
+		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &createdAt, &ss.OwnerID, &ss.ParentID); err != nil {
 			return nil, fmt.Errorf("scanning search result: %w", err)
 		}
 		ss.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)

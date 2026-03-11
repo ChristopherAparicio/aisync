@@ -435,10 +435,11 @@ func (h *handlers) handleRewind(ctx context.Context, req mcp.CallToolRequest) (*
 
 func (h *handlers) handleStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var args struct {
-		ProjectPath string `json:"project_path"`
-		Branch      string `json:"branch"`
-		Provider    string `json:"provider"`
-		All         bool   `json:"all"`
+		ProjectPath  string `json:"project_path"`
+		Branch       string `json:"branch"`
+		Provider     string `json:"provider"`
+		All          bool   `json:"all"`
+		IncludeTools bool   `json:"include_tools"`
 	}
 	if err := req.BindArguments(&args); err != nil {
 		return toolError(err), nil
@@ -454,10 +455,11 @@ func (h *handlers) handleStats(ctx context.Context, req mcp.CallToolRequest) (*m
 	}
 
 	result, err := h.sessionSvc.Stats(service.StatsRequest{
-		ProjectPath: args.ProjectPath,
-		Branch:      args.Branch,
-		Provider:    providerName,
-		All:         args.All,
+		ProjectPath:  args.ProjectPath,
+		Branch:       args.Branch,
+		Provider:     providerName,
+		All:          args.All,
+		IncludeTools: args.IncludeTools,
 	})
 	if err != nil {
 		return toolError(err), nil
@@ -521,6 +523,100 @@ func (h *handlers) handleEfficiency(ctx context.Context, req mcp.CallToolRequest
 	result, err := h.sessionSvc.AnalyzeEfficiency(ctx, service.EfficiencyRequest{
 		SessionID: sid,
 		Model:     args.Model,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
+// ── Garbage Collection ──
+
+func (h *handlers) handleGC(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		OlderThan  string  `json:"older_than"`
+		KeepLatest float64 `json:"keep_latest"` // MCP numbers are float64
+		DryRun     bool    `json:"dry_run"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	result, err := h.sessionSvc.GarbageCollect(ctx, service.GCRequest{
+		OlderThan:  args.OlderThan,
+		KeepLatest: int(args.KeepLatest),
+		DryRun:     args.DryRun,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
+// ── Diff ──
+
+func (h *handlers) handleDiff(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		LeftID  string `json:"left_id"`
+		RightID string `json:"right_id"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	result, err := h.sessionSvc.Diff(ctx, service.DiffRequest{
+		LeftID:  args.LeftID,
+		RightID: args.RightID,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
+// ── Off-Topic Detection ──
+
+func (h *handlers) handleOffTopic(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		Branch      string  `json:"branch"`
+		ProjectPath string  `json:"project_path"`
+		Threshold   float64 `json:"threshold"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	result, err := h.sessionSvc.DetectOffTopic(ctx, service.OffTopicRequest{
+		ProjectPath: args.ProjectPath,
+		Branch:      args.Branch,
+		Threshold:   args.Threshold,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
+func (h *handlers) handleForecast(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		ProjectPath string  `json:"project_path"`
+		Branch      string  `json:"branch"`
+		Period      string  `json:"period"`
+		Days        float64 `json:"days"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	result, err := h.sessionSvc.Forecast(ctx, service.ForecastRequest{
+		ProjectPath: args.ProjectPath,
+		Branch:      args.Branch,
+		Period:      args.Period,
+		Days:        int(args.Days),
 	})
 	if err != nil {
 		return toolError(err), nil

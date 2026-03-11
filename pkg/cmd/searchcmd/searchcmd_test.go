@@ -63,6 +63,7 @@ func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 
 func (m *mockStore) Delete(_ session.ID) error                  { return nil }
 func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
+func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)   { return 0, nil }
 func (m *mockStore) Close() error                               { return nil }
 
 func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {

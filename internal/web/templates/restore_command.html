@@ -1,0 +1,6 @@
+{{define "restore_command"}}
+<div class="restore-cmd">
+  <code class="restore-code" id="restore-code">{{.}}</code>
+  <button class="restore-copy" onclick="navigator.clipboard.writeText(document.getElementById('restore-code').textContent).then(function(){var b=event.target;b.textContent='Copied!';setTimeout(function(){b.textContent='Copy'},1500)})">Copy</button>
+</div>
+{{end}}

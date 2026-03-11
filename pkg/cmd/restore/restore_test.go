@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
@@ -115,6 +116,7 @@ func (m *mockStore) GetByLink(linkType session.LinkType, ref string) ([]session.
 	}
 	return summaries, nil
 }
+func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
 func (m *mockStore) Close() error                                   { return nil }
 func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
 func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }

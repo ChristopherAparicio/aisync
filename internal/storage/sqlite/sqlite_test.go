@@ -1107,3 +1107,111 @@ func TestGetSessionsByFile_FilterByProvider(t *testing.T) {
 		t.Errorf("SessionID = %q, want blame-prov-2", entries[0].SessionID)
 	}
 }
+
+// ── DeleteOlderThan ──
+
+func TestDeleteOlderThan(t *testing.T) {
+	store := mustOpenStore(t)
+	now := time.Now().UTC()
+
+	// Create 3 sessions: 2 old, 1 recent
+	old1 := testSession("gc-old-1")
+	old1.CreatedAt = now.Add(-40 * 24 * time.Hour)
+	old2 := testSession("gc-old-2")
+	old2.CreatedAt = now.Add(-35 * 24 * time.Hour)
+	recent := testSession("gc-recent")
+	recent.CreatedAt = now.Add(-24 * time.Hour)
+
+	for _, s := range []*session.Session{old1, old2, recent} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	// Delete sessions older than 30 days
+	cutoff := now.Add(-30 * 24 * time.Hour)
+	deleted, err := store.DeleteOlderThan(cutoff)
+	if err != nil {
+		t.Fatalf("DeleteOlderThan() error = %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("expected 2 deleted, got %d", deleted)
+	}
+
+	// Verify old sessions are gone
+	_, err = store.Get("gc-old-1")
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("expected ErrSessionNotFound for gc-old-1, got %v", err)
+	}
+	_, err = store.Get("gc-old-2")
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("expected ErrSessionNotFound for gc-old-2, got %v", err)
+	}
+
+	// Verify recent session still exists
+	got, err := store.Get("gc-recent")
+	if err != nil {
+		t.Fatalf("Get(gc-recent) error = %v", err)
+	}
+	if got.ID != "gc-recent" {
+		t.Errorf("ID = %q, want gc-recent", got.ID)
+	}
+}
+
+func TestDeleteOlderThan_noneMatch(t *testing.T) {
+	store := mustOpenStore(t)
+
+	recent := testSession("gc-none")
+	recent.CreatedAt = time.Now().UTC().Add(-24 * time.Hour)
+	if err := store.Save(recent); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	deleted, err := store.DeleteOlderThan(cutoff)
+	if err != nil {
+		t.Fatalf("DeleteOlderThan() error = %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected 0 deleted, got %d", deleted)
+	}
+}
+
+func TestDeleteOlderThan_cascadesLinksAndFiles(t *testing.T) {
+	store := mustOpenStore(t)
+
+	old := testSession("gc-cascade")
+	old.CreatedAt = time.Now().UTC().Add(-40 * 24 * time.Hour)
+	old.FileChanges = []session.FileChange{
+		{FilePath: "main.go", ChangeType: session.ChangeModified},
+	}
+	if err := store.Save(old); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+	if err := store.AddLink("gc-cascade", session.Link{LinkType: session.LinkPR, Ref: "42"}); err != nil {
+		t.Fatalf("AddLink error = %v", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	deleted, err := store.DeleteOlderThan(cutoff)
+	if err != nil {
+		t.Fatalf("DeleteOlderThan() error = %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", deleted)
+	}
+
+	// File changes and links should be cascade-deleted
+	entries, err := store.GetSessionsByFile(session.BlameQuery{FilePath: "main.go"})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 file change entries after cascade, got %d", len(entries))
+	}
+
+	_, err = store.GetByLink(session.LinkPR, "42")
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("expected ErrSessionNotFound for link after cascade, got %v", err)
+	}
+}

@@ -1,9 +1,10 @@
 # aisync — Roadmap
 
-> Last updated: 2026-03-04
-> Status: Phase 1-3.5, 5.0-5.2, 5.4 COMPLETE — Phase 4, 5.3, 6 designed.
-> Phase 5.1 completed: Multi-Session per Branch (removed 1:1 constraint, CountByBranch, plural-aware UIs).
-> Phase 5.4 completed: Cost Tracking (pricing package, EstimateCost, --cost flags, API + MCP + client).
+> Last updated: 2026-03-05
+> Status: Phase 1-3.5, 5.0-5.5 COMPLETE — Phase 4, 6 designed. TD1-TD3 resolved.
+> Phase 5.3 completed: Tool/MCP Token Accounting (per-tool breakdown, --tool-usage, --tools, compact mode warning).
+> Phase 5.5 completed: Session Efficiency Analysis (LLM-powered efficiency scoring and recommendations).
+> TD3 completed: Session expiration / cleanup policy (`aisync gc --older-than 30d --keep-latest 5 --dry-run`).
 
 ---
 
@@ -388,11 +389,11 @@ Decisions taken during the design phase, before any code was written.
 - [x] **5.1.8** No schema migration needed — DB already supports multi-session (no UNIQUE constraint)
 
 **Future (deferred to later milestones):**
-- [ ] **5.1.9** Add `session_relationships` table: parent/child, fork-of, off-topic flags
-- [ ] **5.1.10** Fork detection: hash first N user messages, compare across sessions on same branch
-- [ ] **5.1.11** `aisync list --tree` to show fork visualization (include rewind forks from 5.0.5)
-- [ ] **5.1.12** Off-topic detection: compare file changes + topic overlap between sessions on same branch
-- [ ] **5.1.13** Update `aisync restore` to let user pick from multiple sessions per branch
+- [x] **5.1.9** ~~Table `session_relationships`~~ — SKIPPED: computed at runtime from `ParentID` instead of persisting a separate table. No new Store methods needed.
+- [x] **5.1.10** Fork detection: sessions with `ParentID` are marked as forks (`IsFork=true`). Detected during tree building via `buildTree()`.
+- [x] **5.1.11** `aisync list --tree` — shows sessions as indented tree with fork labels. `ParentID` added to `Summary` type, `ListTree()` service method, `buildTree()` with recursive pointer-based algorithm, 4 tests (noParents, parentChild with grandchild, orphanParent, empty).
+- [x] **5.1.12** Off-topic detection: `aisync list --off-topic` compares file overlap across sessions on same branch. `DetectOffTopic()` service method scores each session (0.0-1.0 overlap), flags sessions below threshold (default 20%). Full vertical slice: CLI `--off-topic`, API `GET /api/v1/sessions/off-topic?branch=`, MCP `aisync_off_topic` (24 tools), client SDK `DetectOffTopic()`. 7 tests.
+- [x] **5.1.13** `aisync restore --pick` — interactive session picker when multiple sessions exist on the current branch, lists sessions with ID/provider/tokens/summary and prompts for user choice via stdin
 
 ### Milestone 5.2 — AI-Blame
 
@@ -402,18 +403,18 @@ Decisions taken during the design phase, before any code was written.
 - [x] **5.2.2** Show session info, summary, and suggested actions (restore/show)
 - [x] **5.2.3** `aisync blame <file> --restore` — shortcut to restore the session that last touched the file
 - [x] **5.2.4** `aisync blame <file> --all` — show all sessions that ever touched this file
-- [ ] **5.2.5** Integrate with `aisync show` — link from session detail to blame view
+- [x] **5.2.5** Integrate with `aisync show --blame` — shows other sessions that touched the same files, per-file breakdown with session ID, provider, date, and summary
 
 ### Milestone 5.3 — Tool/MCP Token Accounting
 
 **Goal:** Per-tool token breakdown to understand where tokens are spent.
 
-- [ ] **5.3.1** Add `tool_tokens` field to ToolCall struct (estimated or actual)
-- [ ] **5.3.2** Claude Code provider: estimate per-tool tokens from usage deltas between messages
-- [ ] **5.3.3** OpenCode provider: extract per-tool tokens if available in part metadata
-- [ ] **5.3.4** `aisync show <id> --tool-usage` — per-tool breakdown table
-- [ ] **5.3.5** `aisync stats --tools` — aggregated tool usage across sessions
-- [ ] **5.3.6** Warn when `compact` mode is used that tool accounting requires `full` mode
+- [x] **5.3.1** Add `tool_tokens` field to ToolCall struct (estimated or actual)
+- [x] **5.3.2** Claude Code provider: estimate per-tool tokens from usage deltas between messages
+- [x] **5.3.3** OpenCode provider: extract per-tool tokens if available in part metadata
+- [x] **5.3.4** `aisync show <id> --tool-usage` — per-tool breakdown table
+- [x] **5.3.5** `aisync stats --tools` — aggregated tool usage across sessions
+- [x] **5.3.6** Warn when `compact` mode is used that tool accounting requires `full` mode
 
 ### Milestone 5.4 — Cost Tracking
 
@@ -426,6 +427,18 @@ Decisions taken during the design phase, before any code was written.
 - [x] **5.4.5** `aisync stats --cost --branch <name>` — total feature cost (excluding off-topic)
 - [x] **5.4.6** Use OpenCode's native cost data when available
 - [x] **5.4.7** `aisync config set pricing.<model> <input_price> <output_price>` — custom pricing overrides
+
+### Milestone 5.5 — Session Efficiency Analysis (COMPLETE)
+
+**Goal:** LLM-powered efficiency scoring to identify wasted tokens, anti-patterns, and improvement opportunities.
+
+- [x] **5.5.1** Define `EfficiencyReport` domain type (score 0-100, summary, strengths, issues, suggestions, patterns)
+- [x] **5.5.2** Implement `SessionService.AnalyzeEfficiency()` — builds data-rich prompt with token breakdown, tool stats, message patterns, conversation flow, cost estimate; clamps score to [0,100]
+- [x] **5.5.3** CLI: `aisync efficiency <id>` with `--json` and `--model` flags
+- [x] **5.5.4** API: `POST /api/v1/sessions/efficiency`
+- [x] **5.5.5** MCP: `aisync_efficiency` tool
+- [x] **5.5.6** Client SDK: `client.AnalyzeEfficiency(req)`
+- [x] **5.5.7** 7 tests (success, noLLM, notFound, noMessages, clampsScore, buildPrompt, safePercent)
 
 ---
 
@@ -447,21 +460,22 @@ Decisions taken during the design phase, before any code was written.
 
 **Goal:** Predict future AI costs based on historical patterns.
 
-- [ ] **6.2.1** Collect historical cost data per branch type (feature, fix, refactor)
-- [ ] **6.2.2** `aisync stats --forecast` — average cost per feature, per model, confidence interval
-- [ ] **6.2.3** Model recommendation: "For this type of task, Sonnet saves 60% vs Opus"
+- [x] **6.2.1** Collect historical cost data per branch type (feature, fix, refactor)
+- [x] **6.2.2** `aisync stats --forecast` — average cost per feature, per model, confidence interval
+- [x] **6.2.3** Model recommendation: "For this type of task, Sonnet saves 60% vs Opus"
 
 ### Milestone 6.3 — Web UI
 
 **Goal:** Local web dashboard for visual session browsing and cost analysis.
 
 - [x] **6.3.1** Decide tech stack: **Go templates + HTMX + D3.js** (decision D25)
-- [ ] **6.3.2** `aisync web` — launch local HTTP server (Go templates embedded via `go:embed`)
-- [ ] **6.3.3** Session list page: filterable table with search bar (keyword, branch, user, date)
-- [ ] **6.3.4** Session detail page: messages, tool calls, file changes, cost
-- [ ] **6.3.5** Branch tree view: all sessions per branch with fork visualization (D3.js)
-- [ ] **6.3.6** Cost dashboard: per-branch, per-model, trends over time
-- [ ] **6.3.7** Click-to-restore: generate restore command from the UI
+- [x] **6.3.2** `aisync web` — launch local HTTP server (Go templates embedded via `go:embed`)
+- [x] **6.3.3** Dashboard page: KPIs, recent sessions, top branches, cost forecast
+- [x] **6.3.4** Session list page: filterable table with search bar (keyword, branch, provider) + HTMX live filtering + pagination
+- [x] **6.3.5** Session detail page: messages, tool calls (collapsible), file changes (color-coded), cost breakdown, conversation view with thinking blocks
+- [x] **6.3.6** Branch explorer: per-branch cards with session tree timeline, fork visualization (CSS-based timeline with recursive template), 3 tests (empty, withData, withForks)
+- [x] **6.3.7** Cost dashboard: KPIs (total/avg/projected), cost-over-time bar chart, model breakdown with share bars + recommendations, per-branch cost table, 2 tests (empty, withData)
+- [x] **6.3.8** Click-to-restore: restore panel on session detail with provider selector, HTMX dynamic command generation, copy-to-clipboard button, 7 tests (panel render, default/provider/context/notFound partials, buildRestoreCmd unit tests)
 
 ---
 
@@ -540,10 +554,10 @@ Decisions taken during the design phase, before any code was written.
 
 ### Remaining
 
-- [ ] Session expiration / cleanup policy (ties into multi-session + garbage collection)
+- [x] Session expiration / cleanup policy — `aisync gc --older-than --keep-latest --dry-run`, API `POST /api/v1/gc`, MCP `aisync_gc`, client SDK `GarbageCollect()`, `DeleteOlderThan()` in Store interface
 - [ ] Compression for large sessions (zstd)
-- [ ] `aisync diff <session-1> <session-2>` to compare sessions (ties into Phase 6 Replay/Compare)
+- [x] `aisync diff <session-1> <session-2>` — side-by-side session comparison: token/cost deltas, file overlap, tool diff, message divergence. Service `Diff()` + 6 tests, CLI `aisync diff <id1> <id2> [--json]`, API `GET /api/v1/sessions/diff?left=&right=`, MCP `aisync_diff` (23 tools), client SDK `Diff()`
 - [ ] Telemetry opt-in (anonymous usage stats)
-- [ ] Fix `Import()` for Claude Code and OpenCode providers (currently returns `ErrImportNotSupported`)
-- [ ] Fix `aisync show <commit-sha>` to parse AI-Session trailer from commit message and resolve to session
-- [ ] Add `forked_at_message` field to session relationships (needed for rewind → fork linking in 5.0.5 + 5.1.4)
+- [x] Fix `Import()` for Claude Code and OpenCode providers — both fully implemented (CanImport=true)
+- [x] Fix `aisync show <commit-sha>` — verified: Get() correctly chains commit SHA → trailer → session ID; added tests for ParseSessionTrailer, looksLikeCommitSHA, and Get()
+- [x] Add `forked_at_message` field to session relationships (needed for rewind → fork linking in 5.0.5 + 5.1.4)

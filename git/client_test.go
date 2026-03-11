@@ -154,6 +154,85 @@ func TestGetNote_noNoteExists(t *testing.T) {
 	}
 }
 
+// ── ParseSessionTrailer ──
+
+func TestParseSessionTrailer(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{
+			name:    "with trailer",
+			message: "Add feature X\n\nSigned-off-by: Alice\nAI-Session: abc-123-def\n",
+			want:    "abc-123-def",
+		},
+		{
+			name:    "without trailer",
+			message: "Regular commit message\n\nSigned-off-by: Alice\n",
+			want:    "",
+		},
+		{
+			name:    "empty message",
+			message: "",
+			want:    "",
+		},
+		{
+			name:    "trailer with whitespace",
+			message: "msg\n\nAI-Session:   spaces-around   \n",
+			want:    "spaces-around",
+		},
+		{
+			name:    "trailer at first line",
+			message: "AI-Session: inline-id",
+			want:    "inline-id",
+		},
+		{
+			name:    "multiple trailers picks first",
+			message: "msg\n\nAI-Session: first\nAI-Session: second\n",
+			want:    "first",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseSessionTrailer(tt.message)
+			if got != tt.want {
+				t.Errorf("ParseSessionTrailer() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCommitMessage_and_IsValidCommit(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	sha, err := client.HeadCommitSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// IsValidCommit should return true for HEAD
+	if !client.IsValidCommit(sha) {
+		t.Errorf("IsValidCommit(%q) = false, want true", sha)
+	}
+
+	// IsValidCommit should return false for garbage
+	if client.IsValidCommit("not-a-commit") {
+		t.Error("IsValidCommit(not-a-commit) = true, want false")
+	}
+
+	// CommitMessage should return the commit message
+	msg, err := client.CommitMessage(sha)
+	if err != nil {
+		t.Fatalf("CommitMessage() error: %v", err)
+	}
+	if msg == "" {
+		t.Error("CommitMessage() returned empty string")
+	}
+}
+
 // initTestRepo creates a temporary git repository for testing.
 func initTestRepo(t *testing.T) string {
 	t.Helper()

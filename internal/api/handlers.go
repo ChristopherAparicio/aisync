@@ -555,6 +555,126 @@ func (s *Server) handleEfficiency(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Garbage Collection ──
+
+type gcRequest struct {
+	OlderThan  string `json:"older_than,omitempty"`
+	KeepLatest int    `json:"keep_latest,omitempty"`
+	DryRun     bool   `json:"dry_run,omitempty"`
+}
+
+func (s *Server) handleGC(w http.ResponseWriter, r *http.Request) {
+	var req gcRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	result, err := s.sessionSvc.GarbageCollect(r.Context(), service.GCRequest{
+		OlderThan:  req.OlderThan,
+		KeepLatest: req.KeepLatest,
+		DryRun:     req.DryRun,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Diff ──
+
+func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	left := q.Get("left")
+	right := q.Get("right")
+	if left == "" || right == "" {
+		writeError(w, http.StatusBadRequest, "both left and right query parameters are required")
+		return
+	}
+
+	result, err := s.sessionSvc.Diff(r.Context(), service.DiffRequest{
+		LeftID:  left,
+		RightID: right,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Off-Topic Detection ──
+
+func (s *Server) handleOffTopic(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	branch := q.Get("branch")
+	if branch == "" {
+		writeError(w, http.StatusBadRequest, "branch query parameter is required")
+		return
+	}
+
+	var threshold float64
+	if t := q.Get("threshold"); t != "" {
+		parsed, err := strconv.ParseFloat(t, 64)
+		if err != nil || parsed < 0 || parsed > 1 {
+			writeError(w, http.StatusBadRequest, "threshold must be a number between 0 and 1")
+			return
+		}
+		threshold = parsed
+	}
+
+	result, err := s.sessionSvc.DetectOffTopic(r.Context(), service.OffTopicRequest{
+		ProjectPath: q.Get("project_path"),
+		Branch:      branch,
+		Threshold:   threshold,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Forecast ──
+
+func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	var days int
+	if d := q.Get("days"); d != "" {
+		parsed, err := strconv.Atoi(d)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "days must be a positive integer")
+			return
+		}
+		days = parsed
+	}
+
+	period := q.Get("period")
+	if period != "" && period != "daily" && period != "weekly" {
+		writeError(w, http.StatusBadRequest, "period must be 'daily' or 'weekly'")
+		return
+	}
+
+	result, err := s.sessionSvc.Forecast(r.Context(), service.ForecastRequest{
+		ProjectPath: q.Get("project_path"),
+		Branch:      q.Get("branch"),
+		Period:      period,
+		Days:        days,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ── Stats ──
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -571,12 +691,14 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	all := q.Get("all") == "true"
+	includeTools := q.Get("tools") == "true"
 
 	result, err := s.sessionSvc.Stats(service.StatsRequest{
-		ProjectPath: q.Get("project_path"),
-		Branch:      q.Get("branch"),
-		Provider:    provider,
-		All:         all,
+		ProjectPath:  q.Get("project_path"),
+		Branch:       q.Get("branch"),
+		Provider:     provider,
+		All:          all,
+		IncludeTools: includeTools,
 	})
 	if err != nil {
 		mapServiceError(w, err)

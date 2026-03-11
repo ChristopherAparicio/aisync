@@ -1,0 +1,242 @@
+{{define "title"}}Session {{truncate .Session.ID 10}} — aisync{{end}}
+
+{{define "content"}}
+<!-- ── Metadata Header ── -->
+<div class="detail-header">
+  <div class="detail-header-top">
+    <h1 class="detail-title">
+      <a href="/sessions" class="back-link">&larr;</a>
+      Session <span class="font-mono">{{truncate .Session.ID 12}}</span>
+    </h1>
+    <span class="badge badge-provider">{{.Session.Provider}}</span>
+  </div>
+
+  <div class="detail-meta">
+    {{if .Session.Branch}}<div class="meta-item"><span class="meta-label">Branch</span><span class="font-mono">{{.Session.Branch}}</span></div>{{end}}
+    {{if .Session.CommitSHA}}<div class="meta-item"><span class="meta-label">Commit</span><span class="font-mono">{{truncate .Session.CommitSHA 10}}</span></div>{{end}}
+    {{if .Session.Agent}}<div class="meta-item"><span class="meta-label">Agent</span><span>{{.Session.Agent}}</span></div>{{end}}
+    {{if .Session.OwnerID}}<div class="meta-item"><span class="meta-label">Owner</span><span class="font-mono">{{truncate .Session.OwnerID 10}}</span></div>{{end}}
+    <div class="meta-item"><span class="meta-label">Created</span><span>{{timeAgo .Session.CreatedAt}}</span></div>
+    <div class="meta-item"><span class="meta-label">Mode</span><span>{{.Session.StorageMode}}</span></div>
+  </div>
+
+  {{if .Session.Summary}}
+  <p class="detail-summary">{{.Session.Summary}}</p>
+  {{end}}
+
+  {{if .Session.ParentID}}
+  <div class="detail-parent">
+    Forked from <a href="/sessions/{{.Session.ParentID}}" class="font-mono">{{truncate .Session.ParentID 10}}</a>
+    {{if gt .Session.ForkedAtMessage 0}} at message #{{.Session.ForkedAtMessage}}{{end}}
+  </div>
+  {{end}}
+</div>
+
+<!-- ── Restore Panel ── -->
+<div class="restore-panel" id="restore-panel">
+  <div class="restore-header">
+    <h2 class="restore-title">Restore Session</h2>
+    <span class="text-muted">Run this command in your project directory</span>
+  </div>
+  <div class="restore-controls">
+    <label class="restore-label" for="restore-provider">Provider</label>
+    <select id="restore-provider" name="provider" class="restore-select"
+      hx-get="/partials/restore-command/{{.Session.ID}}"
+      hx-target="#restore-cmd-wrap"
+      hx-swap="innerHTML"
+      hx-include="[name='provider'],[name='context']">
+      <option value="">Same ({{.Session.Provider}})</option>
+      <option value="claude-code">Claude Code</option>
+      <option value="opencode">OpenCode</option>
+      <option value="context">CONTEXT.md</option>
+    </select>
+    <label class="restore-check">
+      <input type="checkbox" name="context" value="true"
+        hx-get="/partials/restore-command/{{.Session.ID}}"
+        hx-target="#restore-cmd-wrap"
+        hx-swap="innerHTML"
+        hx-include="[name='provider'],[name='context']">
+      As CONTEXT.md
+    </label>
+  </div>
+  <div id="restore-cmd-wrap">
+    {{template "restore_command" .RestoreCmd}}
+  </div>
+</div>
+
+<!-- ── KPI Row ── -->
+<div class="kpi-grid detail-kpis">
+  <div class="kpi-card">
+    <div class="label">Messages</div>
+    <div class="value">{{len .Session.Messages}}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label">Total Tokens</div>
+    <div class="value">{{formatTokens .Session.TokenUsage.TotalTokens}}</div>
+    <div class="sub">{{formatTokens .Session.TokenUsage.InputTokens}} in / {{formatTokens .Session.TokenUsage.OutputTokens}} out</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label">Total Cost</div>
+    <div class="value">{{formatCost .TotalCost}}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label">Tool Calls</div>
+    <div class="value">{{.ToolCallCount}}</div>
+  </div>
+</div>
+
+<!-- ── Cost Breakdown ── -->
+{{if .CostBreakdown}}
+<div class="section">
+  <h2 class="section-title">Cost Breakdown</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="text-right">Messages</th>
+          <th class="text-right">Input</th>
+          <th class="text-right">Output</th>
+          <th class="text-right">Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .CostBreakdown}}
+        <tr>
+          <td class="font-mono">{{.Model}}</td>
+          <td class="text-right">{{.MessageCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .InputTokens}}</td>
+          <td class="text-right font-mono">{{formatTokens .OutputTokens}}</td>
+          <td class="text-right font-mono">{{formatCost .Cost.TotalCost}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── File Changes ── -->
+{{if .Session.FileChanges}}
+<div class="section">
+  <h2 class="section-title">File Changes <span class="text-muted">({{len .Session.FileChanges}})</span></h2>
+  <div class="file-list">
+    {{range .Session.FileChanges}}
+    <div class="file-entry">
+      <span class="file-badge file-{{.ChangeType}}">{{.ChangeType}}</span>
+      <span class="font-mono">{{.FilePath}}</span>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+<!-- ── Links ── -->
+{{if .Session.Links}}
+<div class="section">
+  <h2 class="section-title">Links</h2>
+  <div class="link-list">
+    {{range .Session.Links}}
+    <div class="link-entry">
+      <span class="badge">{{.LinkType}}</span>
+      <span class="font-mono">{{.Ref}}</span>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+<!-- ── Conversation ── -->
+{{if .Session.Messages}}
+<div class="section">
+  <h2 class="section-title">Conversation <span class="text-muted">({{len .Session.Messages}} messages)</span></h2>
+  <div class="chat">
+    {{range .Session.Messages}}
+    <div class="chat-msg chat-{{.Role}}">
+      <div class="chat-header">
+        <span class="chat-role">{{.Role}}</span>
+        {{if .Model}}<span class="chat-model font-mono">{{.Model}}</span>{{end}}
+        <span class="chat-time text-muted">{{timeAgo .Timestamp}}</span>
+        {{if or .InputTokens .OutputTokens}}
+        <span class="chat-tokens text-muted font-mono">{{formatTokens .InputTokens}}→{{formatTokens .OutputTokens}}</span>
+        {{end}}
+      </div>
+
+      {{if .Content}}
+      <div class="chat-content">{{.Content}}</div>
+      {{end}}
+
+      {{if .Thinking}}
+      <details class="chat-thinking">
+        <summary>Thinking</summary>
+        <div class="chat-thinking-content">{{.Thinking}}</div>
+      </details>
+      {{end}}
+
+      {{if .ToolCalls}}
+      <div class="chat-tools">
+        {{range .ToolCalls}}
+        <details class="tool-call tool-{{.State}}">
+          <summary class="tool-summary">
+            <span class="tool-name font-mono">{{.Name}}</span>
+            <span class="tool-state badge">{{.State}}</span>
+            {{if .DurationMs}}<span class="text-muted">{{formatDuration .DurationMs}}</span>{{end}}
+          </summary>
+          <div class="tool-body">
+            {{if .Input}}
+            <div class="tool-section">
+              <div class="tool-section-label">Input</div>
+              <pre class="tool-pre">{{truncate .Input 2000}}</pre>
+            </div>
+            {{end}}
+            {{if .Output}}
+            <div class="tool-section">
+              <div class="tool-section-label">Output</div>
+              <pre class="tool-pre">{{truncate .Output 2000}}</pre>
+            </div>
+            {{end}}
+          </div>
+        </details>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+<!-- ── Children ── -->
+{{if .Session.Children}}
+<div class="section">
+  <h2 class="section-title">Child Sessions <span class="text-muted">({{len .Session.Children}})</span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Provider</th>
+          <th>Branch</th>
+          <th class="text-right">Messages</th>
+          <th>When</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Session.Children}}
+        <tr>
+          <td class="font-mono"><a href="/sessions/{{.ID}}">{{truncate .ID 10}}</a></td>
+          <td><span class="badge badge-provider">{{.Provider}}</span></td>
+          <td>{{truncate .Branch 25}}</td>
+          <td class="text-right">{{len .Messages}}</td>
+          <td class="text-muted">{{timeAgo .CreatedAt}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+{{end}}
+
+{{template "layout" .}}

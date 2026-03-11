@@ -174,11 +174,12 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 
 	// ── Stats ──
 	s.AddTool(mcp.NewTool("aisync_stats",
-		mcp.WithDescription("Get aggregated statistics about captured sessions: total counts, token usage, per-branch breakdown, per-provider counts, and top files."),
+		mcp.WithDescription("Get aggregated statistics about captured sessions: total counts, token usage, per-branch breakdown, per-provider counts, and top files. Use include_tools to see aggregated tool usage."),
 		mcp.WithString("project_path", mcp.Description("Filter by project path")),
 		mcp.WithString("branch", mcp.Description("Filter by branch")),
 		mcp.WithString("provider", mcp.Description("Filter by provider")),
 		mcp.WithBoolean("all", mcp.Description("Include all sessions")),
+		mcp.WithBoolean("include_tools", mcp.Description("Include aggregated tool usage across sessions")),
 	), h.handleStats)
 
 	// ── Cost ──
@@ -199,6 +200,38 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to analyze")),
 		mcp.WithString("model", mcp.Description("LLM model to use (default: adapter default)")),
 	), h.handleEfficiency)
+
+	// ── Diff ──
+	s.AddTool(mcp.NewTool("aisync_diff",
+		mcp.WithDescription("Compare two sessions side-by-side. Shows token delta, cost delta, file overlap, tool usage comparison, and message divergence point."),
+		mcp.WithString("left_id", mcp.Required(), mcp.Description("Left session ID or commit SHA")),
+		mcp.WithString("right_id", mcp.Required(), mcp.Description("Right session ID or commit SHA")),
+	), h.handleDiff)
+
+	// ── Garbage Collection ──
+	s.AddTool(mcp.NewTool("aisync_gc",
+		mcp.WithDescription("Remove old sessions based on age and/or count policies. Use --dry-run to preview what would be deleted."),
+		mcp.WithString("older_than", mcp.Description("Delete sessions older than this duration (e.g. 30d, 24h, 7d12h)")),
+		mcp.WithNumber("keep_latest", mcp.Description("Keep only the N most recent sessions per branch")),
+		mcp.WithBoolean("dry_run", mcp.Description("If true, count but don't delete")),
+	), h.handleGC)
+
+	// ── Off-Topic Detection ──
+	s.AddTool(mcp.NewTool("aisync_off_topic",
+		mcp.WithDescription("Detect off-topic sessions on a branch by comparing file overlap. Sessions whose files don't overlap with other sessions are flagged. Useful for identifying unrelated work mixed into a feature branch."),
+		mcp.WithString("branch", mcp.Required(), mcp.Description("Git branch to analyze")),
+		mcp.WithString("project_path", mcp.Description("Filter by project path")),
+		mcp.WithNumber("threshold", mcp.Description("Overlap threshold (0.0-1.0). Sessions below this are off-topic (default: 0.2)")),
+	), h.handleOffTopic)
+
+	// ── Cost Forecast ──
+	s.AddTool(mcp.NewTool("aisync_forecast",
+		mcp.WithDescription("Forecast future AI costs based on historical session data. Analyzes spending trends, projects 30/90 day costs, and recommends cheaper model alternatives."),
+		mcp.WithString("project_path", mcp.Description("Filter by project path")),
+		mcp.WithString("branch", mcp.Description("Filter by branch")),
+		mcp.WithString("period", mcp.Description("Bucketing period: 'daily' or 'weekly' (default: weekly)")),
+		mcp.WithNumber("days", mcp.Description("Look-back window in days (default: 90)")),
+	), h.handleForecast)
 }
 
 // registerSyncTools registers all sync-related MCP tools.

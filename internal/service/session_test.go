@@ -3,9 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/llm"
+	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
@@ -748,6 +751,80 @@ func containsSubstring(s, substr string) bool {
 	return false
 }
 
+// ── Get ──
+
+func TestGet_bySessionID(t *testing.T) {
+	store := &mockStore{
+		sessions: map[session.ID]*session.Session{
+			"abc-123": {ID: "abc-123", Provider: "claude-code"},
+		},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	sess, err := svc.Get("abc-123")
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+	if sess.ID != "abc-123" {
+		t.Errorf("ID = %q, want %q", sess.ID, "abc-123")
+	}
+}
+
+func TestGet_notFound(t *testing.T) {
+	store := &mockStore{sessions: make(map[session.ID]*session.Session)}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	_, err := svc.Get("nonexistent-id")
+	if err == nil {
+		t.Fatal("Get() expected error for nonexistent session, got nil")
+	}
+}
+
+func TestGet_noGitClient_fallsBackToID(t *testing.T) {
+	// Even if the argument looks like a commit SHA, without a git client
+	// it should fall back to session ID lookup.
+	store := &mockStore{
+		sessions: map[session.ID]*session.Session{
+			"deadbeef": {ID: "deadbeef", Provider: "claude-code"},
+		},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store}) // no Git client
+
+	sess, err := svc.Get("deadbeef")
+	if err != nil {
+		t.Fatalf("Get() error: %v", err)
+	}
+	if sess.ID != "deadbeef" {
+		t.Errorf("ID = %q, want %q", sess.ID, "deadbeef")
+	}
+}
+
+// ── looksLikeCommitSHA ──
+
+func TestLooksLikeCommitSHA(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"abc1234", true},      // 7 hex chars — short SHA
+		{"deadbeefcafe", true}, // 12 hex chars
+		{"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", true}, // 40 chars — full SHA
+		{"ABCDEF1", true},      // uppercase hex
+		{"abc123", false},      // too short (6)
+		{"", false},            // empty
+		{"abc123g", false},     // non-hex char 'g'
+		{"abc-123-def", false}, // dashes (UUID-like)
+		{"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0a", false}, // 41 chars — too long
+	}
+
+	for _, tt := range tests {
+		got := looksLikeCommitSHA(tt.input)
+		if got != tt.want {
+			t.Errorf("looksLikeCommitSHA(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
 // ── Mocks ──
 
 type mockLLMClient struct {
@@ -791,6 +868,7 @@ func (m *mockStore) AddLink(_ session.ID, _ session.Link) error            { ret
 func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
 	return nil, session.ErrSessionNotFound
 }
+func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
 func (m *mockStore) Close() error                                   { return nil }
 func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
 func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
@@ -800,4 +878,1026 @@ func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error)
 }
 func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
 	return nil, nil
+}
+
+// ── Garbage Collection tests ──
+
+// gcMockStore is a more functional mock that supports List, Delete, DeleteOlderThan.
+type gcMockStore struct {
+	mockStore
+	allSessions []*session.Session
+	deleted     []session.ID
+	deletedByGC int
+}
+
+func (g *gcMockStore) Save(s *session.Session) error {
+	g.allSessions = append(g.allSessions, s)
+	return g.mockStore.Save(s)
+}
+
+func (g *gcMockStore) Get(id session.ID) (*session.Session, error) {
+	for _, s := range g.allSessions {
+		if s.ID == id {
+			return s, nil
+		}
+	}
+	return nil, session.ErrSessionNotFound
+}
+
+func (g *gcMockStore) List(_ session.ListOptions) ([]session.Summary, error) {
+	// Return in reverse order (most recent first)
+	var summaries []session.Summary
+	for i := len(g.allSessions) - 1; i >= 0; i-- {
+		s := g.allSessions[i]
+		summaries = append(summaries, session.Summary{
+			ID:           s.ID,
+			Provider:     s.Provider,
+			Branch:       s.Branch,
+			Summary:      s.Summary,
+			MessageCount: len(s.Messages),
+			TotalTokens:  s.TokenUsage.TotalTokens,
+		})
+	}
+	return summaries, nil
+}
+
+func (g *gcMockStore) Delete(id session.ID) error {
+	g.deleted = append(g.deleted, id)
+	return nil
+}
+
+func (g *gcMockStore) DeleteOlderThan(before time.Time) (int, error) {
+	count := 0
+	for _, s := range g.allSessions {
+		if s.CreatedAt.Before(before) {
+			count++
+		}
+	}
+	g.deletedByGC = count
+	return count, nil
+}
+
+func newGCMockStore() *gcMockStore {
+	return &gcMockStore{
+		mockStore: mockStore{sessions: make(map[session.ID]*session.Session)},
+	}
+}
+
+func TestGarbageCollect_olderThan(t *testing.T) {
+	store := newGCMockStore()
+	now := time.Now().UTC()
+
+	// Create sessions: 2 old (40 days ago), 1 recent (1 day ago)
+	old1 := &session.Session{ID: "old1", Provider: "claude-code", Branch: "main", CreatedAt: now.Add(-40 * 24 * time.Hour)}
+	old2 := &session.Session{ID: "old2", Provider: "claude-code", Branch: "main", CreatedAt: now.Add(-35 * 24 * time.Hour)}
+	recent := &session.Session{ID: "recent", Provider: "claude-code", Branch: "main", CreatedAt: now.Add(-24 * time.Hour)}
+
+	store.allSessions = []*session.Session{old1, old2, recent}
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.GarbageCollect(context.Background(), GCRequest{OlderThan: "30d"})
+	if err != nil {
+		t.Fatalf("GarbageCollect: %v", err)
+	}
+
+	if result.Deleted != 2 {
+		t.Errorf("expected 2 deleted, got %d", result.Deleted)
+	}
+}
+
+func TestGarbageCollect_dryRun(t *testing.T) {
+	store := newGCMockStore()
+	now := time.Now().UTC()
+
+	old := &session.Session{ID: "old", Provider: "claude-code", Branch: "main", CreatedAt: now.Add(-40 * 24 * time.Hour)}
+	recent := &session.Session{ID: "recent", Provider: "claude-code", Branch: "main", CreatedAt: now.Add(-24 * time.Hour)}
+	store.allSessions = []*session.Session{old, recent}
+	store.mockStore.sessions["old"] = old
+	store.mockStore.sessions["recent"] = recent
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.GarbageCollect(context.Background(), GCRequest{OlderThan: "30d", DryRun: true})
+	if err != nil {
+		t.Fatalf("GarbageCollect: %v", err)
+	}
+
+	if result.DryRun != true {
+		t.Error("expected DryRun=true")
+	}
+	if result.Would != 1 {
+		t.Errorf("expected 1 would-be-deleted, got %d", result.Would)
+	}
+	if result.Deleted != 0 {
+		t.Errorf("expected 0 deleted in dry-run, got %d", result.Deleted)
+	}
+}
+
+func TestGarbageCollect_keepLatest(t *testing.T) {
+	store := newGCMockStore()
+	now := time.Now().UTC()
+
+	// 4 sessions on "main", 2 on "dev"
+	for i := 0; i < 4; i++ {
+		s := &session.Session{
+			ID:        session.ID("main-" + string(rune('a'+i))),
+			Provider:  "claude-code",
+			Branch:    "main",
+			CreatedAt: now.Add(-time.Duration(4-i) * 24 * time.Hour),
+		}
+		store.allSessions = append(store.allSessions, s)
+	}
+	for i := 0; i < 2; i++ {
+		s := &session.Session{
+			ID:        session.ID("dev-" + string(rune('a'+i))),
+			Provider:  "claude-code",
+			Branch:    "dev",
+			CreatedAt: now.Add(-time.Duration(2-i) * 24 * time.Hour),
+		}
+		store.allSessions = append(store.allSessions, s)
+	}
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.GarbageCollect(context.Background(), GCRequest{KeepLatest: 2})
+	if err != nil {
+		t.Fatalf("GarbageCollect: %v", err)
+	}
+
+	// main: 4 sessions, keep 2 → delete 2
+	// dev: 2 sessions, keep 2 → delete 0
+	if result.Deleted != 2 {
+		t.Errorf("expected 2 deleted, got %d", result.Deleted)
+	}
+}
+
+func TestGarbageCollect_noPolicy(t *testing.T) {
+	store := newGCMockStore()
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	_, err := svc.GarbageCollect(context.Background(), GCRequest{})
+	if err == nil {
+		t.Error("expected error when no policy is specified")
+	}
+}
+
+// ── Diff tests ──
+
+func TestDiff_basic(t *testing.T) {
+	store := &mockStore{sessions: make(map[session.ID]*session.Session)}
+
+	left := &session.Session{
+		ID:       "left-1",
+		Provider: "claude-code",
+		Branch:   "main",
+		Summary:  "Add auth",
+		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "Add JWT auth"},
+			{Role: session.RoleAssistant, Content: "I'll implement JWT...", Model: "claude-sonnet-4"},
+			{Role: session.RoleUser, Content: "Looks good, add tests"},
+			{Role: session.RoleAssistant, Content: "Adding tests...", Model: "claude-sonnet-4"},
+		},
+		TokenUsage: session.TokenUsage{InputTokens: 1000, OutputTokens: 2000, TotalTokens: 3000},
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"},
+			{FilePath: "auth_test.go"},
+			{FilePath: "main.go"},
+		},
+	}
+	right := &session.Session{
+		ID:       "right-1",
+		Provider: "opencode",
+		Branch:   "feature/auth",
+		Summary:  "Add auth v2",
+		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "Add JWT auth"},
+			{Role: session.RoleAssistant, Content: "I'll implement JWT...", Model: "gpt-4o"},
+			{Role: session.RoleUser, Content: "Use sessions instead"},
+			{Role: session.RoleAssistant, Content: "Switching to sessions...", Model: "gpt-4o"},
+			{Role: session.RoleAssistant, Content: "Done with sessions", Model: "gpt-4o"},
+		},
+		TokenUsage: session.TokenUsage{InputTokens: 1500, OutputTokens: 3000, TotalTokens: 4500},
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"},
+			{FilePath: "session.go"},
+			{FilePath: "main.go"},
+		},
+	}
+
+	_ = store.Save(left)
+	_ = store.Save(right)
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Diff(context.Background(), DiffRequest{LeftID: "left-1", RightID: "right-1"})
+	if err != nil {
+		t.Fatalf("Diff() error: %v", err)
+	}
+
+	// Check sides
+	if result.Left.ID != "left-1" {
+		t.Errorf("Left.ID = %q, want %q", result.Left.ID, "left-1")
+	}
+	if result.Right.ID != "right-1" {
+		t.Errorf("Right.ID = %q, want %q", result.Right.ID, "right-1")
+	}
+	if result.Left.MessageCount != 4 {
+		t.Errorf("Left.MessageCount = %d, want 4", result.Left.MessageCount)
+	}
+	if result.Right.MessageCount != 5 {
+		t.Errorf("Right.MessageCount = %d, want 5", result.Right.MessageCount)
+	}
+
+	// Token delta
+	if result.TokenDelta.InputDelta != 500 {
+		t.Errorf("TokenDelta.InputDelta = %d, want 500", result.TokenDelta.InputDelta)
+	}
+	if result.TokenDelta.OutputDelta != 1000 {
+		t.Errorf("TokenDelta.OutputDelta = %d, want 1000", result.TokenDelta.OutputDelta)
+	}
+	if result.TokenDelta.TotalDelta != 1500 {
+		t.Errorf("TokenDelta.TotalDelta = %d, want 1500", result.TokenDelta.TotalDelta)
+	}
+
+	// File diff
+	if len(result.FileDiff.Shared) != 2 {
+		t.Errorf("FileDiff.Shared count = %d, want 2", len(result.FileDiff.Shared))
+	}
+	if len(result.FileDiff.LeftOnly) != 1 || result.FileDiff.LeftOnly[0] != "auth_test.go" {
+		t.Errorf("FileDiff.LeftOnly = %v, want [auth_test.go]", result.FileDiff.LeftOnly)
+	}
+	if len(result.FileDiff.RightOnly) != 1 || result.FileDiff.RightOnly[0] != "session.go" {
+		t.Errorf("FileDiff.RightOnly = %v, want [session.go]", result.FileDiff.RightOnly)
+	}
+
+	// Message delta: first 2 messages share same role+content, then diverge
+	if result.MessageDelta.CommonPrefix != 2 {
+		t.Errorf("MessageDelta.CommonPrefix = %d, want 2", result.MessageDelta.CommonPrefix)
+	}
+	if result.MessageDelta.LeftAfter != 2 {
+		t.Errorf("MessageDelta.LeftAfter = %d, want 2", result.MessageDelta.LeftAfter)
+	}
+	if result.MessageDelta.RightAfter != 3 {
+		t.Errorf("MessageDelta.RightAfter = %d, want 3", result.MessageDelta.RightAfter)
+	}
+}
+
+func TestDiff_identicalSessions(t *testing.T) {
+	store := &mockStore{sessions: make(map[session.ID]*session.Session)}
+
+	sess := &session.Session{
+		ID:       "sess-a",
+		Provider: "claude-code",
+		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
+			{Role: session.RoleAssistant, Content: "hi there"},
+		},
+		TokenUsage:  session.TokenUsage{InputTokens: 100, OutputTokens: 200, TotalTokens: 300},
+		FileChanges: []session.FileChange{{FilePath: "main.go"}},
+	}
+
+	// Save same session under two IDs
+	_ = store.Save(sess)
+	copy := *sess
+	copy.ID = "sess-b"
+	_ = store.Save(&copy)
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Diff(context.Background(), DiffRequest{LeftID: "sess-a", RightID: "sess-b"})
+	if err != nil {
+		t.Fatalf("Diff() error: %v", err)
+	}
+
+	if result.TokenDelta.TotalDelta != 0 {
+		t.Errorf("TokenDelta.TotalDelta = %d, want 0", result.TokenDelta.TotalDelta)
+	}
+	if result.MessageDelta.CommonPrefix != 2 {
+		t.Errorf("CommonPrefix = %d, want 2", result.MessageDelta.CommonPrefix)
+	}
+	if result.MessageDelta.LeftAfter != 0 || result.MessageDelta.RightAfter != 0 {
+		t.Errorf("LeftAfter=%d, RightAfter=%d, want 0,0", result.MessageDelta.LeftAfter, result.MessageDelta.RightAfter)
+	}
+	if len(result.FileDiff.Shared) != 1 {
+		t.Errorf("Shared = %d, want 1", len(result.FileDiff.Shared))
+	}
+	if len(result.FileDiff.LeftOnly) != 0 || len(result.FileDiff.RightOnly) != 0 {
+		t.Error("expected no LeftOnly/RightOnly files for identical sessions")
+	}
+}
+
+func TestDiff_emptyMessages(t *testing.T) {
+	store := &mockStore{sessions: make(map[session.ID]*session.Session)}
+	_ = store.Save(&session.Session{ID: "empty-a", Provider: "claude-code"})
+	_ = store.Save(&session.Session{ID: "empty-b", Provider: "opencode"})
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Diff(context.Background(), DiffRequest{LeftID: "empty-a", RightID: "empty-b"})
+	if err != nil {
+		t.Fatalf("Diff() error: %v", err)
+	}
+	if result.MessageDelta.CommonPrefix != 0 {
+		t.Errorf("CommonPrefix = %d, want 0", result.MessageDelta.CommonPrefix)
+	}
+}
+
+func TestDiff_toolDiff(t *testing.T) {
+	store := &mockStore{sessions: make(map[session.ID]*session.Session)}
+
+	left := &session.Session{
+		ID:       "tool-left",
+		Provider: "claude-code",
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, ToolCalls: []session.ToolCall{
+				{Name: "Read", State: session.ToolStateCompleted},
+				{Name: "Read", State: session.ToolStateCompleted},
+				{Name: "Write", State: session.ToolStateCompleted},
+			}},
+		},
+	}
+	right := &session.Session{
+		ID:       "tool-right",
+		Provider: "claude-code",
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, ToolCalls: []session.ToolCall{
+				{Name: "Read", State: session.ToolStateCompleted},
+				{Name: "Bash", State: session.ToolStateCompleted},
+				{Name: "Bash", State: session.ToolStateCompleted},
+				{Name: "Bash", State: session.ToolStateCompleted},
+			}},
+		},
+	}
+
+	_ = store.Save(left)
+	_ = store.Save(right)
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Diff(context.Background(), DiffRequest{LeftID: "tool-left", RightID: "tool-right"})
+	if err != nil {
+		t.Fatalf("Diff() error: %v", err)
+	}
+
+	// Should have 3 tools: Bash, Read, Write (sorted alphabetically)
+	if len(result.ToolDiff.Entries) != 3 {
+		t.Fatalf("ToolDiff.Entries count = %d, want 3", len(result.ToolDiff.Entries))
+	}
+
+	// Bash: 0 left, 3 right
+	bash := result.ToolDiff.Entries[0]
+	if bash.Name != "Bash" || bash.LeftCalls != 0 || bash.RightCalls != 3 || bash.CallsDelta != 3 {
+		t.Errorf("Bash entry = %+v, want {Bash 0 3 3}", bash)
+	}
+
+	// Read: 2 left, 1 right
+	read := result.ToolDiff.Entries[1]
+	if read.Name != "Read" || read.LeftCalls != 2 || read.RightCalls != 1 || read.CallsDelta != -1 {
+		t.Errorf("Read entry = %+v, want {Read 2 1 -1}", read)
+	}
+
+	// Write: 1 left, 0 right
+	write := result.ToolDiff.Entries[2]
+	if write.Name != "Write" || write.LeftCalls != 1 || write.RightCalls != 0 || write.CallsDelta != -1 {
+		t.Errorf("Write entry = %+v, want {Write 1 0 -1}", write)
+	}
+}
+
+func TestDiff_missingSession(t *testing.T) {
+	store := &mockStore{sessions: make(map[session.ID]*session.Session)}
+	_ = store.Save(&session.Session{ID: "exists", Provider: "claude-code"})
+
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	// Missing right
+	_, err := svc.Diff(context.Background(), DiffRequest{LeftID: "exists", RightID: "missing"})
+	if err == nil {
+		t.Error("expected error for missing right session")
+	}
+
+	// Missing left
+	_, err = svc.Diff(context.Background(), DiffRequest{LeftID: "missing", RightID: "exists"})
+	if err == nil {
+		t.Error("expected error for missing left session")
+	}
+}
+
+func TestDiff_emptyIDs(t *testing.T) {
+	svc := NewSessionService(SessionServiceConfig{
+		Store: &mockStore{sessions: make(map[session.ID]*session.Session)},
+	})
+
+	_, err := svc.Diff(context.Background(), DiffRequest{LeftID: "", RightID: "any"})
+	if err == nil {
+		t.Error("expected error for empty left ID")
+	}
+
+	_, err = svc.Diff(context.Background(), DiffRequest{LeftID: "any", RightID: ""})
+	if err == nil {
+		t.Error("expected error for empty right ID")
+	}
+}
+
+// ── BuildTree tests ──
+
+func TestBuildTree_noParents(t *testing.T) {
+	summaries := []session.Summary{
+		{ID: "a", Provider: "claude-code", Branch: "main"},
+		{ID: "b", Provider: "opencode", Branch: "main"},
+	}
+
+	tree := buildTree(summaries)
+	if len(tree) != 2 {
+		t.Fatalf("expected 2 roots, got %d", len(tree))
+	}
+	if tree[0].Summary.ID != "a" || tree[1].Summary.ID != "b" {
+		t.Errorf("unexpected root order: %s, %s", tree[0].Summary.ID, tree[1].Summary.ID)
+	}
+}
+
+func TestBuildTree_parentChild(t *testing.T) {
+	summaries := []session.Summary{
+		{ID: "root", Provider: "claude-code", Branch: "main"},
+		{ID: "child1", Provider: "claude-code", Branch: "main", ParentID: "root"},
+		{ID: "child2", Provider: "claude-code", Branch: "main", ParentID: "root"},
+		{ID: "grandchild", Provider: "claude-code", Branch: "main", ParentID: "child1"},
+	}
+
+	tree := buildTree(summaries)
+	if len(tree) != 1 {
+		t.Fatalf("expected 1 root, got %d", len(tree))
+	}
+	root := tree[0]
+	if root.Summary.ID != "root" {
+		t.Errorf("root ID = %q, want %q", root.Summary.ID, "root")
+	}
+	if len(root.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(root.Children))
+	}
+	if !root.Children[0].IsFork || !root.Children[1].IsFork {
+		t.Error("expected children to be marked as forks")
+	}
+
+	// child1 should have grandchild
+	child1 := root.Children[0]
+	if child1.Summary.ID != "child1" {
+		t.Errorf("child1 ID = %q, want %q", child1.Summary.ID, "child1")
+	}
+	if len(child1.Children) != 1 {
+		t.Fatalf("expected 1 grandchild, got %d", len(child1.Children))
+	}
+	if child1.Children[0].Summary.ID != "grandchild" {
+		t.Errorf("grandchild ID = %q, want %q", child1.Children[0].Summary.ID, "grandchild")
+	}
+}
+
+func TestBuildTree_orphanParent(t *testing.T) {
+	// Child has a ParentID that's not in the result set → treated as root.
+	summaries := []session.Summary{
+		{ID: "orphan", Provider: "claude-code", Branch: "main", ParentID: "missing-parent"},
+	}
+
+	tree := buildTree(summaries)
+	if len(tree) != 1 {
+		t.Fatalf("expected 1 root, got %d", len(tree))
+	}
+	if tree[0].Summary.ID != "orphan" {
+		t.Errorf("root ID = %q, want %q", tree[0].Summary.ID, "orphan")
+	}
+	if tree[0].IsFork {
+		t.Error("orphan should not be marked as fork")
+	}
+}
+
+func TestBuildTree_empty(t *testing.T) {
+	tree := buildTree(nil)
+	if len(tree) != 0 {
+		t.Errorf("expected 0 roots, got %d", len(tree))
+	}
+}
+
+// ── Off-Topic Detection tests ──
+
+// offTopicMockStore supports List (filtered by branch) and Get (with FileChanges).
+type offTopicMockStore struct {
+	mockStore
+}
+
+func newOffTopicStore(sessions ...*session.Session) *offTopicMockStore {
+	store := &offTopicMockStore{
+		mockStore: mockStore{sessions: make(map[session.ID]*session.Session)},
+	}
+	for _, s := range sessions {
+		store.sessions[s.ID] = s
+	}
+	return store
+}
+
+func (m *offTopicMockStore) List(opts session.ListOptions) ([]session.Summary, error) {
+	var result []session.Summary
+	for _, s := range m.sessions {
+		if opts.Branch != "" && s.Branch != opts.Branch {
+			continue
+		}
+		result = append(result, session.Summary{
+			ID:          s.ID,
+			Provider:    s.Provider,
+			Branch:      s.Branch,
+			Summary:     s.Summary,
+			TotalTokens: s.TokenUsage.TotalTokens,
+			CreatedAt:   s.CreatedAt,
+		})
+	}
+	// Sort by ID for deterministic test output
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func TestDetectOffTopic_twoOverlapping(t *testing.T) {
+	// Two sessions sharing files → neither is off-topic
+	s1 := &session.Session{
+		ID: "s1", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"}, {FilePath: "main.go"},
+		},
+	}
+	s2 := &session.Session{
+		ID: "s2", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"}, {FilePath: "auth_test.go"},
+		},
+	}
+
+	store := newOffTopicStore(s1, s2)
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.DetectOffTopic(context.Background(), OffTopicRequest{Branch: "feat"})
+	if err != nil {
+		t.Fatalf("DetectOffTopic: %v", err)
+	}
+
+	if result.Total != 2 {
+		t.Errorf("Total = %d, want 2", result.Total)
+	}
+	if result.OffTopic != 0 {
+		t.Errorf("OffTopic = %d, want 0", result.OffTopic)
+	}
+
+	// s1: auth.go is shared → 1/2 = 0.5 overlap
+	// s2: auth.go is shared → 1/2 = 0.5 overlap
+	for _, entry := range result.Sessions {
+		if entry.Overlap < 0.2 {
+			t.Errorf("session %s overlap = %.2f, expected >= 0.2", entry.ID, entry.Overlap)
+		}
+		if entry.IsOffTopic {
+			t.Errorf("session %s should not be off-topic", entry.ID)
+		}
+	}
+}
+
+func TestDetectOffTopic_oneOffTopic(t *testing.T) {
+	// Three sessions: s1 and s2 share files, s3 touches completely different files
+	s1 := &session.Session{
+		ID: "s1", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"}, {FilePath: "main.go"}, {FilePath: "config.go"},
+		},
+	}
+	s2 := &session.Session{
+		ID: "s2", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"}, {FilePath: "main.go"},
+		},
+	}
+	s3 := &session.Session{
+		ID: "s3", Provider: "opencode", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "readme.md"}, {FilePath: "docs/api.md"},
+		},
+	}
+
+	store := newOffTopicStore(s1, s2, s3)
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.DetectOffTopic(context.Background(), OffTopicRequest{Branch: "feat"})
+	if err != nil {
+		t.Fatalf("DetectOffTopic: %v", err)
+	}
+
+	if result.OffTopic != 1 {
+		t.Errorf("OffTopic = %d, want 1", result.OffTopic)
+	}
+
+	// s3 has 0% overlap → off-topic
+	for _, entry := range result.Sessions {
+		if entry.ID == "s3" {
+			if !entry.IsOffTopic {
+				t.Errorf("session s3 should be off-topic (overlap=%.2f)", entry.Overlap)
+			}
+			if entry.Overlap != 0.0 {
+				t.Errorf("s3 overlap = %.2f, want 0.0", entry.Overlap)
+			}
+		}
+	}
+}
+
+func TestDetectOffTopic_singleSession(t *testing.T) {
+	// With only 1 session, nothing can be off-topic
+	s := &session.Session{
+		ID: "solo", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{{FilePath: "main.go"}},
+	}
+
+	store := newOffTopicStore(s)
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.DetectOffTopic(context.Background(), OffTopicRequest{Branch: "feat"})
+	if err != nil {
+		t.Fatalf("DetectOffTopic: %v", err)
+	}
+
+	if result.Total != 1 {
+		t.Errorf("Total = %d, want 1", result.Total)
+	}
+	if result.OffTopic != 0 {
+		t.Errorf("OffTopic = %d, want 0", result.OffTopic)
+	}
+	if result.Sessions[0].Overlap != 1.0 {
+		t.Errorf("single session overlap = %.2f, want 1.0", result.Sessions[0].Overlap)
+	}
+}
+
+func TestDetectOffTopic_noFileChanges(t *testing.T) {
+	// Sessions without file changes should not be flagged
+	s1 := &session.Session{
+		ID: "s1", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{{FilePath: "main.go"}},
+	}
+	s2 := &session.Session{
+		ID: "s2", Provider: "claude-code", Branch: "feat",
+		// No file changes
+	}
+
+	store := newOffTopicStore(s1, s2)
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.DetectOffTopic(context.Background(), OffTopicRequest{Branch: "feat"})
+	if err != nil {
+		t.Fatalf("DetectOffTopic: %v", err)
+	}
+
+	// s2 has no files → overlap = 1.0 (not off-topic)
+	for _, entry := range result.Sessions {
+		if entry.ID == "s2" {
+			if entry.IsOffTopic {
+				t.Errorf("session with no files should not be off-topic")
+			}
+			if entry.Overlap != 1.0 {
+				t.Errorf("empty session overlap = %.2f, want 1.0", entry.Overlap)
+			}
+		}
+	}
+}
+
+func TestDetectOffTopic_branchRequired(t *testing.T) {
+	svc := NewSessionService(SessionServiceConfig{
+		Store: &mockStore{sessions: make(map[session.ID]*session.Session)},
+	})
+
+	_, err := svc.DetectOffTopic(context.Background(), OffTopicRequest{})
+	if err == nil {
+		t.Error("expected error when branch is empty")
+	}
+}
+
+func TestDetectOffTopic_topFiles(t *testing.T) {
+	// Verify top files are sorted by frequency
+	s1 := &session.Session{
+		ID: "s1", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "a.go"}, {FilePath: "b.go"}, {FilePath: "c.go"},
+		},
+	}
+	s2 := &session.Session{
+		ID: "s2", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "a.go"}, {FilePath: "b.go"},
+		},
+	}
+	s3 := &session.Session{
+		ID: "s3", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "a.go"},
+		},
+	}
+
+	store := newOffTopicStore(s1, s2, s3)
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.DetectOffTopic(context.Background(), OffTopicRequest{Branch: "feat"})
+	if err != nil {
+		t.Fatalf("DetectOffTopic: %v", err)
+	}
+
+	if len(result.TopFiles) < 3 {
+		t.Fatalf("TopFiles count = %d, want >= 3", len(result.TopFiles))
+	}
+	// a.go appears in 3 sessions, b.go in 2, c.go in 1
+	if result.TopFiles[0] != "a.go" {
+		t.Errorf("TopFiles[0] = %q, want %q", result.TopFiles[0], "a.go")
+	}
+	if result.TopFiles[1] != "b.go" {
+		t.Errorf("TopFiles[1] = %q, want %q", result.TopFiles[1], "b.go")
+	}
+	if result.TopFiles[2] != "c.go" {
+		t.Errorf("TopFiles[2] = %q, want %q", result.TopFiles[2], "c.go")
+	}
+}
+
+func TestDetectOffTopic_customThreshold(t *testing.T) {
+	// With a very high threshold (0.9), more sessions should be flagged
+	s1 := &session.Session{
+		ID: "s1", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "a.go"}, {FilePath: "b.go"}, {FilePath: "unique1.go"},
+		},
+	}
+	s2 := &session.Session{
+		ID: "s2", Provider: "claude-code", Branch: "feat",
+		FileChanges: []session.FileChange{
+			{FilePath: "a.go"}, {FilePath: "b.go"}, {FilePath: "unique2.go"},
+		},
+	}
+
+	store := newOffTopicStore(s1, s2)
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	// Default threshold (0.2): 2/3 overlap → not off-topic
+	result, err := svc.DetectOffTopic(context.Background(), OffTopicRequest{Branch: "feat"})
+	if err != nil {
+		t.Fatalf("DetectOffTopic: %v", err)
+	}
+	if result.OffTopic != 0 {
+		t.Errorf("default threshold: OffTopic = %d, want 0", result.OffTopic)
+	}
+
+	// High threshold (0.9): 2/3 overlap ≈ 0.67 < 0.9 → both off-topic
+	result, err = svc.DetectOffTopic(context.Background(), OffTopicRequest{Branch: "feat", Threshold: 0.9})
+	if err != nil {
+		t.Fatalf("DetectOffTopic with high threshold: %v", err)
+	}
+	if result.OffTopic != 2 {
+		t.Errorf("high threshold: OffTopic = %d, want 2", result.OffTopic)
+	}
+}
+
+// ── Forecast tests ──
+
+func TestForecast_basic(t *testing.T) {
+	now := time.Now().UTC()
+	// 3 sessions spread over the last 30 days, using claude-sonnet-4
+	s1 := &session.Session{
+		ID: "f1", Provider: "claude-code", Branch: "main",
+		CreatedAt:  now.Add(-25 * 24 * time.Hour),
+		TokenUsage: session.TokenUsage{InputTokens: 5000, OutputTokens: 10000, TotalTokens: 15000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 5000, OutputTokens: 10000},
+		},
+	}
+	s2 := &session.Session{
+		ID: "f2", Provider: "claude-code", Branch: "main",
+		CreatedAt:  now.Add(-15 * 24 * time.Hour),
+		TokenUsage: session.TokenUsage{InputTokens: 8000, OutputTokens: 20000, TotalTokens: 28000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 8000, OutputTokens: 20000},
+		},
+	}
+	s3 := &session.Session{
+		ID: "f3", Provider: "claude-code", Branch: "main",
+		CreatedAt:  now.Add(-5 * 24 * time.Hour),
+		TokenUsage: session.TokenUsage{InputTokens: 3000, OutputTokens: 7000, TotalTokens: 10000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 3000, OutputTokens: 7000},
+		},
+	}
+
+	store := newOffTopicStore(s1, s2, s3)
+	svc := NewSessionService(SessionServiceConfig{Store: store, Pricing: pricing.NewCalculator()})
+
+	result, err := svc.Forecast(context.Background(), ForecastRequest{Days: 90})
+	if err != nil {
+		t.Fatalf("Forecast: %v", err)
+	}
+
+	if result.SessionCount != 3 {
+		t.Errorf("SessionCount = %d, want 3", result.SessionCount)
+	}
+	if result.TotalCost <= 0 {
+		t.Errorf("TotalCost = %.4f, want > 0", result.TotalCost)
+	}
+	if result.Projected30d < 0 {
+		t.Errorf("Projected30d = %.4f, want >= 0", result.Projected30d)
+	}
+	if result.Projected90d < 0 {
+		t.Errorf("Projected90d = %.4f, want >= 0", result.Projected90d)
+	}
+	if result.Period != "weekly" {
+		t.Errorf("Period = %q, want %q", result.Period, "weekly")
+	}
+
+	// Should have model breakdown
+	if len(result.ModelBreakdown) != 1 {
+		t.Fatalf("ModelBreakdown count = %d, want 1", len(result.ModelBreakdown))
+	}
+	if result.ModelBreakdown[0].Model != "claude-sonnet-4" {
+		t.Errorf("ModelBreakdown[0].Model = %q, want %q", result.ModelBreakdown[0].Model, "claude-sonnet-4")
+	}
+}
+
+func TestForecast_noSessions(t *testing.T) {
+	store := newOffTopicStore() // empty
+	svc := NewSessionService(SessionServiceConfig{Store: store, Pricing: pricing.NewCalculator()})
+
+	result, err := svc.Forecast(context.Background(), ForecastRequest{Days: 30})
+	if err != nil {
+		t.Fatalf("Forecast: %v", err)
+	}
+
+	if result.SessionCount != 0 {
+		t.Errorf("SessionCount = %d, want 0", result.SessionCount)
+	}
+	if result.TrendDir != "stable" {
+		t.Errorf("TrendDir = %q, want %q", result.TrendDir, "stable")
+	}
+}
+
+func TestForecast_invalidPeriod(t *testing.T) {
+	store := newOffTopicStore()
+	svc := NewSessionService(SessionServiceConfig{Store: store, Pricing: pricing.NewCalculator()})
+
+	_, err := svc.Forecast(context.Background(), ForecastRequest{Period: "monthly"})
+	if err == nil {
+		t.Error("expected error for invalid period")
+	}
+}
+
+func TestForecast_dailyPeriod(t *testing.T) {
+	now := time.Now().UTC()
+	s := &session.Session{
+		ID: "d1", Provider: "claude-code", Branch: "main",
+		CreatedAt:  now.Add(-3 * 24 * time.Hour),
+		TokenUsage: session.TokenUsage{InputTokens: 1000, OutputTokens: 2000, TotalTokens: 3000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 1000, OutputTokens: 2000},
+		},
+	}
+
+	store := newOffTopicStore(s)
+	svc := NewSessionService(SessionServiceConfig{Store: store, Pricing: pricing.NewCalculator()})
+
+	result, err := svc.Forecast(context.Background(), ForecastRequest{Period: "daily", Days: 30})
+	if err != nil {
+		t.Fatalf("Forecast: %v", err)
+	}
+	if result.Period != "daily" {
+		t.Errorf("Period = %q, want %q", result.Period, "daily")
+	}
+	if len(result.Buckets) == 0 {
+		t.Error("expected at least 1 bucket for daily period")
+	}
+}
+
+func TestForecast_modelRecommendation(t *testing.T) {
+	now := time.Now().UTC()
+	// Using expensive claude-opus-4 model
+	s := &session.Session{
+		ID: "exp1", Provider: "claude-code", Branch: "main",
+		CreatedAt:  now.Add(-10 * 24 * time.Hour),
+		TokenUsage: session.TokenUsage{InputTokens: 10000, OutputTokens: 20000, TotalTokens: 30000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-opus-4", InputTokens: 10000, OutputTokens: 20000},
+		},
+	}
+
+	store := newOffTopicStore(s)
+	svc := NewSessionService(SessionServiceConfig{Store: store, Pricing: pricing.NewCalculator()})
+
+	result, err := svc.Forecast(context.Background(), ForecastRequest{Days: 30})
+	if err != nil {
+		t.Fatalf("Forecast: %v", err)
+	}
+
+	if len(result.ModelBreakdown) != 1 {
+		t.Fatalf("ModelBreakdown count = %d, want 1", len(result.ModelBreakdown))
+	}
+
+	// opus-4 should get a recommendation to switch to sonnet-4
+	rec := result.ModelBreakdown[0].Recommendation
+	if rec == "" {
+		t.Error("expected recommendation for claude-opus-4 to switch to cheaper model")
+	}
+	if result.ModelBreakdown[0].Share != 100.0 {
+		t.Errorf("Share = %.1f, want 100.0", result.ModelBreakdown[0].Share)
+	}
+}
+
+func TestForecast_multiModel(t *testing.T) {
+	now := time.Now().UTC()
+	s := &session.Session{
+		ID: "multi", Provider: "claude-code", Branch: "main",
+		CreatedAt:  now.Add(-10 * 24 * time.Hour),
+		TokenUsage: session.TokenUsage{InputTokens: 20000, OutputTokens: 40000, TotalTokens: 60000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-opus-4", InputTokens: 10000, OutputTokens: 20000},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 10000, OutputTokens: 20000},
+		},
+	}
+
+	store := newOffTopicStore(s)
+	svc := NewSessionService(SessionServiceConfig{Store: store, Pricing: pricing.NewCalculator()})
+
+	result, err := svc.Forecast(context.Background(), ForecastRequest{Days: 30})
+	if err != nil {
+		t.Fatalf("Forecast: %v", err)
+	}
+
+	if len(result.ModelBreakdown) != 2 {
+		t.Fatalf("ModelBreakdown count = %d, want 2", len(result.ModelBreakdown))
+	}
+
+	// Most expensive (opus) should be first
+	if result.ModelBreakdown[0].Model != "claude-opus-4" {
+		t.Errorf("ModelBreakdown[0].Model = %q, want %q (most expensive first)", result.ModelBreakdown[0].Model, "claude-opus-4")
+	}
+}
+
+func TestComputeTrend(t *testing.T) {
+	// Steadily increasing costs
+	buckets := []session.CostBucket{
+		{Cost: 1.0}, {Cost: 2.0}, {Cost: 3.0}, {Cost: 4.0},
+	}
+	_, dir := computeTrend(buckets, 7*24*time.Hour)
+	if dir != "increasing" {
+		t.Errorf("trend dir = %q, want %q", dir, "increasing")
+	}
+
+	// Steadily decreasing
+	buckets = []session.CostBucket{
+		{Cost: 4.0}, {Cost: 3.0}, {Cost: 2.0}, {Cost: 1.0},
+	}
+	_, dir = computeTrend(buckets, 7*24*time.Hour)
+	if dir != "decreasing" {
+		t.Errorf("trend dir = %q, want %q", dir, "decreasing")
+	}
+
+	// Flat
+	buckets = []session.CostBucket{
+		{Cost: 2.0}, {Cost: 2.0}, {Cost: 2.0}, {Cost: 2.0},
+	}
+	_, dir = computeTrend(buckets, 7*24*time.Hour)
+	if dir != "stable" {
+		t.Errorf("trend dir = %q, want %q", dir, "stable")
+	}
+
+	// Single bucket
+	_, dir = computeTrend([]session.CostBucket{{Cost: 5.0}}, 7*24*time.Hour)
+	if dir != "stable" {
+		t.Errorf("single bucket trend = %q, want %q", dir, "stable")
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantHrs float64
+		wantErr bool
+	}{
+		{"30d", 720, false},
+		{"7d", 168, false},
+		{"24h", 24, false},
+		{"1d12h", 36, false},
+		{"2h30m", 2.5, false},
+		{"", 0, true},
+		{"abc", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			dur, err := parseDuration(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			gotHrs := dur.Hours()
+			if gotHrs != tt.wantHrs {
+				t.Errorf("expected %.1f hours, got %.1f", tt.wantHrs, gotHrs)
+			}
+		})
+	}
 }

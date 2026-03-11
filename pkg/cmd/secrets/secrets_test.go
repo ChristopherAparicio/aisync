@@ -23,7 +23,8 @@ func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
 func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
 	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) Close() error { return nil }
+func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
+func (m *mockStore) Close() error                             { return nil }
 
 func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	for _, s := range m.sessions {

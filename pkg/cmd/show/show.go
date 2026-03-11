@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
@@ -18,9 +19,11 @@ type Options struct {
 	IO      *iostreams.IOStreams
 	Factory *cmdutil.Factory
 
-	ShowFiles  bool
-	ShowTokens bool
-	ShowCost   bool
+	ShowFiles     bool
+	ShowTokens    bool
+	ShowCost      bool
+	ShowToolUsage bool
+	ShowBlame     bool
 }
 
 // NewCmdShow creates the `aisync show` command.
@@ -47,6 +50,8 @@ associated session.`,
 	cmd.Flags().BoolVar(&opts.ShowFiles, "files", false, "Show files changed in session")
 	cmd.Flags().BoolVar(&opts.ShowTokens, "tokens", false, "Show token usage breakdown")
 	cmd.Flags().BoolVar(&opts.ShowCost, "cost", false, "Show estimated cost breakdown")
+	cmd.Flags().BoolVar(&opts.ShowToolUsage, "tool-usage", false, "Show per-tool token usage breakdown")
+	cmd.Flags().BoolVar(&opts.ShowBlame, "blame", false, "Show other sessions that touched the same files")
 
 	return cmd
 }
@@ -77,6 +82,12 @@ func runShow(opts *Options, idArg string) error {
 		fmt.Fprintf(out, "Captured: %s\n", sess.CreatedAt.Format("2006-01-02 15:04:05"))
 	}
 	fmt.Fprintf(out, "Mode:     %s\n", sess.StorageMode)
+	if sess.ParentID != "" {
+		fmt.Fprintf(out, "Parent:   %s\n", sess.ParentID)
+	}
+	if sess.ForkedAtMessage > 0 {
+		fmt.Fprintf(out, "Forked:   at message %d\n", sess.ForkedAtMessage)
+	}
 
 	// Message count by role
 	var userCount, assistantCount int
@@ -134,6 +145,47 @@ func runShow(opts *Options, idArg string) error {
 		}
 	}
 
+	// Tool usage
+	if opts.ShowToolUsage {
+		toolResult, toolErr := svc.ToolUsage(context.Background(), idArg)
+		if toolErr != nil {
+			fmt.Fprintf(out, "\nTool Usage: (error: %v)\n", toolErr)
+		} else {
+			fmt.Fprintln(out)
+			if toolResult.Warning != "" {
+				fmt.Fprintf(out, "Warning: %s\n\n", toolResult.Warning)
+			}
+			if toolResult.TotalCalls == 0 {
+				fmt.Fprintln(out, "Tool Usage: no tool calls found.")
+			} else {
+				fmt.Fprintf(out, "Tool Usage — %d total calls\n\n", toolResult.TotalCalls)
+				fmt.Fprintf(out, "  %-20s  %6s  %8s  %8s  %8s  %6s  %8s  %7s\n",
+					"TOOL", "CALLS", "IN TOK", "OUT TOK", "TOTAL", "ERR", "AVG ms", "%")
+				fmt.Fprintf(out, "  %-20s  %6s  %8s  %8s  %8s  %6s  %8s  %7s\n",
+					"────────────────────", "──────", "────────", "────────", "────────", "──────", "────────", "───────")
+				for _, t := range toolResult.Tools {
+					avgDur := "—"
+					if t.AvgDuration > 0 {
+						avgDur = fmt.Sprintf("%d", t.AvgDuration)
+					}
+					fmt.Fprintf(out, "  %-20s  %6d  %8s  %8s  %8s  %6d  %8s  %6.1f%%\n",
+						truncateStr(t.Name, 20),
+						t.Calls,
+						formatNumber(t.InputTokens),
+						formatNumber(t.OutputTokens),
+						formatNumber(t.TotalTokens),
+						t.ErrorCount,
+						avgDur,
+						t.Percentage,
+					)
+				}
+				if toolResult.TotalCost.TotalCost > 0 {
+					fmt.Fprintf(out, "\n  Estimated tool cost: %s\n", formatCost(toolResult.TotalCost.TotalCost))
+				}
+			}
+		}
+	}
+
 	// Files
 	if len(sess.FileChanges) > 0 && opts.ShowFiles {
 		fmt.Fprintln(out)
@@ -149,6 +201,45 @@ func runShow(opts *Options, idArg string) error {
 				prefix = "?"
 			}
 			fmt.Fprintf(out, "  %s %s  (%s)\n", prefix, fc.FilePath, fc.ChangeType)
+		}
+	}
+
+	// Blame: show other sessions that touched the same files.
+	if opts.ShowBlame && len(sess.FileChanges) > 0 {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Blame — other sessions touching the same files:")
+		hasResults := false
+		for _, fc := range sess.FileChanges {
+			blameResult, blameErr := svc.Blame(context.Background(), service.BlameRequest{
+				FilePath: fc.FilePath,
+				All:      true,
+			})
+			if blameErr != nil || len(blameResult.Entries) == 0 {
+				continue
+			}
+			// Filter out the current session itself.
+			var others []session.BlameEntry
+			for _, e := range blameResult.Entries {
+				if e.SessionID != sess.ID {
+					others = append(others, e)
+				}
+			}
+			if len(others) == 0 {
+				continue
+			}
+			hasResults = true
+			fmt.Fprintf(out, "\n  %s:\n", fc.FilePath)
+			for _, e := range others {
+				summary := e.Summary
+				if summary == "" {
+					summary = "(no summary)"
+				}
+				fmt.Fprintf(out, "    %s  %-14s  %s  %s\n",
+					e.SessionID, e.Provider, e.CreatedAt.Format("2006-01-02"), summary)
+			}
+		}
+		if !hasResults {
+			fmt.Fprintln(out, "  (no other sessions found)")
 		}
 	}
 
@@ -197,4 +288,11 @@ func formatCost(cost float64) string {
 		return fmt.Sprintf("$%.4f", cost)
 	}
 	return fmt.Sprintf("$%.2f", cost)
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-1] + "…"
 }

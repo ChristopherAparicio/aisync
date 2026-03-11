@@ -70,6 +70,10 @@ func runToolUsage(opts *Options) error {
 		return enc.Encode(result)
 	}
 
+	if result.Warning != "" {
+		fmt.Fprintf(out, "Warning: %s\n\n", result.Warning)
+	}
+
 	if result.TotalCalls == 0 {
 		fmt.Fprintln(out, "No tool calls found in this session.")
 		return nil

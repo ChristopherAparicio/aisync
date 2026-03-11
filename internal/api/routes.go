@@ -19,8 +19,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/link", s.handleLink)
 	mux.HandleFunc("POST /api/v1/sessions/comment", s.handleComment)
 
-	// Search
+	// Search, Diff & Off-Topic
 	mux.HandleFunc("GET /api/v1/sessions/search", s.handleSearch)
+	mux.HandleFunc("GET /api/v1/sessions/diff", s.handleDiff)
+	mux.HandleFunc("GET /api/v1/sessions/off-topic", s.handleOffTopic)
 
 	// Explain & Rewind
 	mux.HandleFunc("POST /api/v1/sessions/explain", s.handleExplain)
@@ -29,8 +31,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Blame
 	mux.HandleFunc("GET /api/v1/blame", s.handleBlame)
 
-	// Stats, Cost, Tool Usage & Efficiency
+	// Garbage Collection
+	mux.HandleFunc("POST /api/v1/gc", s.handleGC)
+
+	// Stats, Cost, Tool Usage, Efficiency & Forecast
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
+	mux.HandleFunc("GET /api/v1/stats/forecast", s.handleForecast)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/cost", s.handleCost)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-usage", s.handleToolUsage)
 	mux.HandleFunc("POST /api/v1/sessions/efficiency", s.handleEfficiency)

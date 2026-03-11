@@ -10,31 +10,33 @@ import "time"
 
 // Session represents a captured AI coding session.
 type Session struct {
-	ExportedAt  time.Time    `json:"exported_at"`
-	CreatedAt   time.Time    `json:"created_at"`
-	ProjectPath string       `json:"project_path"`
-	ExportedBy  string       `json:"exported_by,omitempty"`
-	ParentID    ID           `json:"parent_id,omitempty"`
-	OwnerID     ID           `json:"owner_id,omitempty"`
-	StorageMode StorageMode  `json:"storage_mode"`
-	Summary     string       `json:"summary,omitempty"`
-	ID          ID           `json:"id"`
-	Provider    ProviderName `json:"provider"`
-	Agent       string       `json:"agent"`
-	Branch      string       `json:"branch,omitempty"`
-	CommitSHA   string       `json:"commit_sha,omitempty"`
-	Messages    []Message    `json:"messages,omitempty"`
-	Children    []Session    `json:"children,omitempty"`
-	Links       []Link       `json:"links,omitempty"`
-	FileChanges []FileChange `json:"file_changes,omitempty"`
-	TokenUsage  TokenUsage   `json:"token_usage"`
-	Version     int          `json:"version"`
+	ExportedAt      time.Time    `json:"exported_at"`
+	CreatedAt       time.Time    `json:"created_at"`
+	ProjectPath     string       `json:"project_path"`
+	ExportedBy      string       `json:"exported_by,omitempty"`
+	ParentID        ID           `json:"parent_id,omitempty"`
+	OwnerID         ID           `json:"owner_id,omitempty"`
+	StorageMode     StorageMode  `json:"storage_mode"`
+	Summary         string       `json:"summary,omitempty"`
+	ID              ID           `json:"id"`
+	Provider        ProviderName `json:"provider"`
+	Agent           string       `json:"agent"`
+	Branch          string       `json:"branch,omitempty"`
+	CommitSHA       string       `json:"commit_sha,omitempty"`
+	Messages        []Message    `json:"messages,omitempty"`
+	Children        []Session    `json:"children,omitempty"`
+	Links           []Link       `json:"links,omitempty"`
+	FileChanges     []FileChange `json:"file_changes,omitempty"`
+	TokenUsage      TokenUsage   `json:"token_usage"`
+	ForkedAtMessage int          `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
+	Version         int          `json:"version"`
 }
 
 // Summary is a lightweight representation of a session for listings.
 type Summary struct {
 	CreatedAt    time.Time    `json:"created_at"`
 	ID           ID           `json:"id"`
+	ParentID     ID           `json:"parent_id,omitempty"`
 	OwnerID      ID           `json:"owner_id,omitempty"`
 	Provider     ProviderName `json:"provider"`
 	Agent        string       `json:"agent"`
@@ -117,6 +119,7 @@ type ToolUsageStats struct {
 	Tools      []ToolUsageEntry `json:"tools"`
 	TotalCalls int              `json:"total_calls"`
 	TotalCost  Cost             `json:"total_cost,omitempty"` // populated when pricing is available
+	Warning    string           `json:"warning,omitempty"`    // non-empty when data may be incomplete (e.g. compact mode)
 }
 
 // ToolUsageEntry aggregates token usage and call count for a single tool name.
@@ -259,6 +262,137 @@ func (s StructuredSummary) OneLine() string {
 		return s.Outcome
 	}
 	return s.Intent + ": " + s.Outcome
+}
+
+// SessionTreeNode represents a session in a tree structure.
+// Root nodes have no ParentID; child nodes were forked (e.g. via rewind).
+type SessionTreeNode struct {
+	Summary  Summary           `json:"summary"`
+	Children []SessionTreeNode `json:"children,omitempty"`
+	IsFork   bool              `json:"is_fork,omitempty"` // true if this session shares a message prefix with a sibling
+}
+
+// DiffResult holds a side-by-side comparison between two sessions.
+type DiffResult struct {
+	Left         DiffSide     `json:"left"`
+	Right        DiffSide     `json:"right"`
+	TokenDelta   TokenDelta   `json:"token_delta"`
+	CostDelta    CostDelta    `json:"cost_delta,omitempty"`
+	FileDiff     FileDiff     `json:"file_diff"`
+	ToolDiff     ToolDiff     `json:"tool_diff,omitempty"`
+	MessageDelta MessageDelta `json:"message_delta"`
+}
+
+// DiffSide holds summary metadata for one side of a diff.
+type DiffSide struct {
+	ID           ID           `json:"id"`
+	Provider     ProviderName `json:"provider"`
+	Branch       string       `json:"branch,omitempty"`
+	Summary      string       `json:"summary,omitempty"`
+	MessageCount int          `json:"message_count"`
+	TotalTokens  int          `json:"total_tokens"`
+	StorageMode  StorageMode  `json:"storage_mode"`
+}
+
+// TokenDelta shows the difference in token usage.
+type TokenDelta struct {
+	InputDelta  int `json:"input_delta"`  // right - left
+	OutputDelta int `json:"output_delta"` // right - left
+	TotalDelta  int `json:"total_delta"`  // right - left
+}
+
+// CostDelta shows the difference in estimated cost.
+type CostDelta struct {
+	LeftCost  float64 `json:"left_cost"`
+	RightCost float64 `json:"right_cost"`
+	Delta     float64 `json:"delta"` // right - left
+	Currency  string  `json:"currency"`
+}
+
+// FileDiff groups files into shared, left-only, and right-only.
+type FileDiff struct {
+	Shared    []string `json:"shared"`               // files touched by both sessions
+	LeftOnly  []string `json:"left_only,omitempty"`  // files only in left session
+	RightOnly []string `json:"right_only,omitempty"` // files only in right session
+}
+
+// ToolDiff compares tool usage between two sessions.
+type ToolDiff struct {
+	Entries []ToolDiffEntry `json:"entries"`
+}
+
+// ToolDiffEntry compares a single tool across two sessions.
+type ToolDiffEntry struct {
+	Name       string `json:"name"`
+	LeftCalls  int    `json:"left_calls"`
+	RightCalls int    `json:"right_calls"`
+	CallsDelta int    `json:"calls_delta"` // right - left
+}
+
+// MessageDelta shows where two sessions diverge in their message sequence.
+type MessageDelta struct {
+	CommonPrefix int `json:"common_prefix"` // number of messages that are identical at the start
+	LeftAfter    int `json:"left_after"`    // messages in left after common prefix
+	RightAfter   int `json:"right_after"`   // messages in right after common prefix
+}
+
+// OffTopicResult holds the analysis of sessions on a branch,
+// scoring each session's file relevance to the branch's overall topic.
+type OffTopicResult struct {
+	Branch   string          `json:"branch"`
+	Sessions []OffTopicEntry `json:"sessions"`
+	TopFiles []string        `json:"top_files"` // most common files across all sessions on this branch
+	Total    int             `json:"total"`     // total sessions analyzed
+	OffTopic int             `json:"off_topic"` // count of sessions flagged as off-topic
+}
+
+// OffTopicEntry scores a single session's relevance to the branch topic.
+type OffTopicEntry struct {
+	ID         ID           `json:"id"`
+	Provider   ProviderName `json:"provider"`
+	Summary    string       `json:"summary,omitempty"`
+	Files      []string     `json:"files"`        // files this session touched
+	Overlap    float64      `json:"overlap"`      // 0.0–1.0: fraction of this session's files that overlap with other sessions
+	IsOffTopic bool         `json:"is_off_topic"` // true when overlap is below threshold
+	CreatedAt  time.Time    `json:"created_at"`
+}
+
+// ForecastResult holds cost forecasting data computed from historical sessions.
+type ForecastResult struct {
+	// Historical data
+	Period       string       `json:"period"`         // bucketing period: "daily" or "weekly"
+	Buckets      []CostBucket `json:"buckets"`        // historical cost per time bucket
+	TotalCost    float64      `json:"total_cost"`     // total historical cost (USD)
+	AvgPerBucket float64      `json:"avg_per_bucket"` // average cost per bucket
+	SessionCount int          `json:"session_count"`  // total sessions analyzed
+
+	// Projection
+	Projected30d float64 `json:"projected_30d"` // estimated cost for the next 30 days
+	Projected90d float64 `json:"projected_90d"` // estimated cost for the next 90 days
+	TrendPerDay  float64 `json:"trend_per_day"` // daily cost trend (positive = increasing)
+	TrendDir     string  `json:"trend_dir"`     // "increasing", "decreasing", or "stable"
+
+	// Model recommendations
+	ModelBreakdown []ModelForecast `json:"model_breakdown"` // per-model cost breakdown + recommendation
+}
+
+// CostBucket holds cost data for a time period.
+type CostBucket struct {
+	Start        time.Time `json:"start"`
+	End          time.Time `json:"end"`
+	Cost         float64   `json:"cost"`
+	Tokens       int       `json:"tokens"`
+	SessionCount int       `json:"session_count"`
+}
+
+// ModelForecast holds per-model cost data and a savings recommendation.
+type ModelForecast struct {
+	Model          string  `json:"model"`
+	Cost           float64 `json:"cost"`                     // total cost for this model
+	Tokens         int     `json:"tokens"`                   // total tokens for this model
+	SessionCount   int     `json:"session_count"`            // sessions using this model
+	Share          float64 `json:"share"`                    // percentage of total cost (0-100)
+	Recommendation string  `json:"recommendation,omitempty"` // e.g. "Switch to Sonnet to save ~60%"
 }
 
 // User represents an aisync user, identified by their git identity.

@@ -1,6 +1,10 @@
 package storage
 
-import "github.com/ChristopherAparicio/aisync/internal/session"
+import (
+	"time"
+
+	"github.com/ChristopherAparicio/aisync/internal/session"
+)
 
 // Store persists sessions and users in local storage.
 // Current implementation: sqlite/.
@@ -53,6 +57,10 @@ type Store interface {
 	// Results are ordered by created_at DESC. Optional filters narrow by branch/provider.
 	// Limit 0 means return all matching sessions.
 	GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntry, error)
+
+	// DeleteOlderThan removes sessions created before the given time.
+	// Returns the number of deleted sessions.
+	DeleteOlderThan(before time.Time) (int, error)
 
 	// Close releases any resources held by the store.
 	Close() error

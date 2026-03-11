@@ -1,0 +1,112 @@
+{{define "dashboard.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}aisync — Dashboard{{end}}
+
+{{define "content"}}
+{{if eq .TotalSessions 0}}
+  <div class="empty-state">
+    <p>No sessions captured yet.</p>
+    <p class="hint">Run <code>aisync capture</code> to get started.</p>
+  </div>
+{{else}}
+  <!-- KPIs -->
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Sessions</div>
+      <div class="value">{{.TotalSessions}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Total Tokens</div>
+      <div class="value">{{formatTokens .TotalTokens}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Total Cost</div>
+      <div class="value">{{formatCost .TotalCost}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Trend</div>
+      <div class="value {{if eq .TrendDir "increasing"}}trend-up{{else if eq .TrendDir "decreasing"}}trend-down{{else}}trend-stable{{end}}">
+        {{if eq .TrendDir "increasing"}}↑{{else if eq .TrendDir "decreasing"}}↓{{else}}→{{end}}
+        {{.TrendDir}}
+      </div>
+      {{if .HasForecast}}
+      <div class="sub">{{formatCost .TrendPerDay}}/day</div>
+      {{end}}
+    </div>
+  </div>
+
+  {{if .HasForecast}}
+  <!-- Projections -->
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Projected 30 days</div>
+      <div class="value">{{formatCost .Projected30d}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Projected 90 days</div>
+      <div class="value">{{formatCost .Projected90d}}</div>
+    </div>
+  </div>
+  {{end}}
+
+  <div class="grid-2">
+    <!-- Recent Sessions -->
+    <div class="section">
+      <h2 class="section-title">Recent Sessions</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Provider</th>
+              <th>Branch</th>
+              <th class="text-right">Tokens</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .RecentSessions}}
+            <tr>
+              <td class="font-mono">{{truncate .ID 10}}</td>
+              <td><span class="badge badge-provider">{{.Provider}}</span></td>
+              <td>{{truncate .Branch 25}}</td>
+              <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+              <td class="text-muted">{{timeAgo .CreatedAt}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Top Branches -->
+    <div class="section">
+      <h2 class="section-title">Top Branches</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Branch</th>
+              <th class="text-right">Sessions</th>
+              <th class="text-right">Tokens</th>
+              <th class="text-right">Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .TopBranches}}
+            <tr>
+              <td>{{truncate .Branch 30}}</td>
+              <td class="text-right">{{.SessionCount}}</td>
+              <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+              <td class="text-right font-mono">{{formatCost .TotalCost}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{{end}}
+{{end}}

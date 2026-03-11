@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
@@ -58,6 +59,7 @@ func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
 
 func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
 func (m *mockStore) Delete(_ session.ID) error                             { return nil }
+func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)              { return 0, nil }
 func (m *mockStore) Close() error                                          { return nil }
 
 func (m *mockStore) AddLink(sessionID session.ID, link session.Link) error {

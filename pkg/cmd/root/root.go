@@ -10,9 +10,11 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/capture"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/commentcmd"
 	configcmd "github.com/ChristopherAparicio/aisync/pkg/cmd/config"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/diffcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/efficiencycmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/explaincmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/export"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/gccmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/hooks"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/importcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/initcmd"
@@ -31,6 +33,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/synccmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/toolusagecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/tuicmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/webcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
 
@@ -69,12 +72,15 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(efficiencycmd.NewCmdEfficiency(f))
 	cmd.AddCommand(resumecmd.NewCmdResume(f))
 	cmd.AddCommand(rewindcmd.NewCmdRewind(f))
+	cmd.AddCommand(gccmd.NewCmdGC(f))
+	cmd.AddCommand(diffcmd.NewCmdDiff(f))
 	cmd.AddCommand(tuicmd.NewCmdTUI(f))
 	cmd.AddCommand(configcmd.NewCmdConfig(f))
 	cmd.AddCommand(synccmd.NewCmdPush(f))
 	cmd.AddCommand(synccmd.NewCmdPull(f))
 	cmd.AddCommand(synccmd.NewCmdSync(f))
 	cmd.AddCommand(servecmd.NewCmdServe(f))
+	cmd.AddCommand(webcmd.NewCmdWeb(f))
 	cmd.AddCommand(mcpcmd.NewCmdMCP(f))
 
 	return cmd

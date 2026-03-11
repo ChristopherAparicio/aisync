@@ -1,0 +1,36 @@
+{{define "sessions.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}aisync — Sessions{{end}}
+
+{{define "content"}}
+<div class="section">
+  <h2 class="section-title">Sessions</h2>
+
+  <!-- Filters -->
+  <div class="filters"
+       hx-get="/partials/sessions-table"
+       hx-trigger="input changed delay:300ms from:.filter-input, change from:.filter-select"
+       hx-target="#sessions-table"
+       hx-include=".filter-input, .filter-select"
+       hx-push-url="false">
+    <input type="text" name="keyword" value="{{.FilterKeyword}}"
+           class="filter-input" placeholder="Search sessions...">
+    <input type="text" name="branch" value="{{.FilterBranch}}"
+           class="filter-input" placeholder="Branch filter...">
+    <select name="provider" class="filter-select">
+      <option value="">All providers</option>
+      <option value="claude-code" {{if eq .FilterProvider "claude-code"}}selected{{end}}>Claude Code</option>
+      <option value="opencode" {{if eq .FilterProvider "opencode"}}selected{{end}}>OpenCode</option>
+      <option value="cursor" {{if eq .FilterProvider "cursor"}}selected{{end}}>Cursor</option>
+    </select>
+    <span class="text-muted filter-count">{{.TotalCount}} sessions</span>
+  </div>
+
+  <!-- Table (swapped via HTMX) -->
+  <div id="sessions-table">
+    {{template "sessions_table.html" .}}
+  </div>
+</div>
+{{end}}

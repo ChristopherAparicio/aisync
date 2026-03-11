@@ -15,24 +15,25 @@ import (
 
 // Session represents a captured AI coding session.
 type Session struct {
-	ExportedAt  time.Time    `json:"exported_at"`
-	CreatedAt   time.Time    `json:"created_at"`
-	ProjectPath string       `json:"project_path"`
-	ExportedBy  string       `json:"exported_by,omitempty"`
-	ParentID    string       `json:"parent_id,omitempty"`
-	OwnerID     string       `json:"owner_id,omitempty"`
-	StorageMode string       `json:"storage_mode"`
-	Summary     string       `json:"summary,omitempty"`
-	ID          string       `json:"id"`
-	Provider    string       `json:"provider"`
-	Agent       string       `json:"agent"`
-	Branch      string       `json:"branch,omitempty"`
-	CommitSHA   string       `json:"commit_sha,omitempty"`
-	Messages    []Message    `json:"messages,omitempty"`
-	Links       []Link       `json:"links,omitempty"`
-	FileChanges []FileChange `json:"file_changes,omitempty"`
-	TokenUsage  TokenUsage   `json:"token_usage"`
-	Version     int          `json:"version"`
+	ExportedAt      time.Time    `json:"exported_at"`
+	CreatedAt       time.Time    `json:"created_at"`
+	ProjectPath     string       `json:"project_path"`
+	ExportedBy      string       `json:"exported_by,omitempty"`
+	ParentID        string       `json:"parent_id,omitempty"`
+	OwnerID         string       `json:"owner_id,omitempty"`
+	StorageMode     string       `json:"storage_mode"`
+	Summary         string       `json:"summary,omitempty"`
+	ID              string       `json:"id"`
+	Provider        string       `json:"provider"`
+	Agent           string       `json:"agent"`
+	Branch          string       `json:"branch,omitempty"`
+	CommitSHA       string       `json:"commit_sha,omitempty"`
+	Messages        []Message    `json:"messages,omitempty"`
+	Links           []Link       `json:"links,omitempty"`
+	FileChanges     []FileChange `json:"file_changes,omitempty"`
+	TokenUsage      TokenUsage   `json:"token_usage"`
+	ForkedAtMessage int          `json:"forked_at_message,omitempty"`
+	Version         int          `json:"version"`
 }
 
 // Summary is a lightweight session representation for listings.
@@ -526,10 +527,11 @@ func (c *Client) Blame(opts BlameOptions) (*BlameResult, error) {
 
 // StatsOptions controls statistics queries.
 type StatsOptions struct {
-	ProjectPath string
-	Branch      string
-	Provider    string
-	All         bool
+	ProjectPath  string
+	Branch       string
+	Provider     string
+	All          bool
+	IncludeTools bool // if true, include aggregated tool usage
 }
 
 // BranchStats holds aggregated stats per branch.
@@ -546,15 +548,24 @@ type FileEntry struct {
 	Count int    `json:"Count"`
 }
 
+// AggregatedToolStats holds tool usage aggregated across multiple sessions.
+type AggregatedToolStats struct {
+	Tools      []ToolUsageEntry `json:"tools"`
+	TotalCalls int              `json:"total_calls"`
+	TotalCost  Cost             `json:"total_cost,omitempty"`
+	Warning    string           `json:"warning,omitempty"`
+}
+
 // StatsResult contains aggregated statistics.
 type StatsResult struct {
-	TotalSessions int            `json:"TotalSessions"`
-	TotalMessages int            `json:"TotalMessages"`
-	TotalTokens   int            `json:"TotalTokens"`
-	TotalCost     float64        `json:"TotalCost"`
-	PerBranch     []*BranchStats `json:"PerBranch"`
-	PerProvider   map[string]int `json:"PerProvider"`
-	TopFiles      []FileEntry    `json:"TopFiles"`
+	TotalSessions int                  `json:"TotalSessions"`
+	TotalMessages int                  `json:"TotalMessages"`
+	TotalTokens   int                  `json:"TotalTokens"`
+	TotalCost     float64              `json:"TotalCost"`
+	PerBranch     []*BranchStats       `json:"PerBranch"`
+	PerProvider   map[string]int       `json:"PerProvider"`
+	TopFiles      []FileEntry          `json:"TopFiles"`
+	ToolStats     *AggregatedToolStats `json:"tool_stats,omitempty"`
 }
 
 // Stats computes aggregated statistics across sessions.
@@ -571,6 +582,9 @@ func (c *Client) Stats(opts StatsOptions) (*StatsResult, error) {
 	}
 	if opts.All {
 		q.Set("all", "true")
+	}
+	if opts.IncludeTools {
+		q.Set("tools", "true")
 	}
 
 	path := "/api/v1/stats"
@@ -642,6 +656,7 @@ type ToolUsageStats struct {
 	Tools      []ToolUsageEntry `json:"tools"`
 	TotalCalls int              `json:"total_calls"`
 	TotalCost  Cost             `json:"total_cost,omitempty"`
+	Warning    string           `json:"warning,omitempty"` // non-empty when data may be incomplete
 }
 
 // ToolUsage retrieves per-tool token usage breakdown for a session.
@@ -651,6 +666,32 @@ func (c *Client) ToolUsage(idOrSHA string) (*ToolUsageStats, error) {
 		return nil, err
 	}
 	var result ToolUsageStats
+	return &result, decode(data, &result)
+}
+
+// ── Garbage Collection ──
+
+// GCRequest contains inputs for garbage collection.
+type GCRequest struct {
+	OlderThan  string `json:"older_than,omitempty"`
+	KeepLatest int    `json:"keep_latest,omitempty"`
+	DryRun     bool   `json:"dry_run,omitempty"`
+}
+
+// GCResult contains the outcome of garbage collection.
+type GCResult struct {
+	Deleted int  `json:"deleted"`
+	Would   int  `json:"would"`
+	DryRun  bool `json:"dry_run"`
+}
+
+// GarbageCollect removes old sessions based on age and count policies.
+func (c *Client) GarbageCollect(req GCRequest) (*GCResult, error) {
+	data, err := c.doPost("/api/v1/gc", req)
+	if err != nil {
+		return nil, err
+	}
+	var result GCResult
 	return &result, decode(data, &result)
 }
 
@@ -687,5 +728,206 @@ func (c *Client) AnalyzeEfficiency(req EfficiencyRequest) (*EfficiencyResult, er
 		return nil, err
 	}
 	var result EfficiencyResult
+	return &result, decode(data, &result)
+}
+
+// ── Diff ──
+
+// DiffRequest contains inputs for comparing two sessions.
+type DiffRequest struct {
+	LeftID  string
+	RightID string
+}
+
+// DiffResult holds a side-by-side comparison between two sessions.
+type DiffResult struct {
+	Left         DiffSide     `json:"left"`
+	Right        DiffSide     `json:"right"`
+	TokenDelta   TokenDelta   `json:"token_delta"`
+	CostDelta    CostDelta    `json:"cost_delta,omitempty"`
+	FileDiff     FileDiff     `json:"file_diff"`
+	ToolDiff     ToolDiff     `json:"tool_diff,omitempty"`
+	MessageDelta MessageDelta `json:"message_delta"`
+}
+
+// DiffSide holds summary metadata for one side of a diff.
+type DiffSide struct {
+	ID           string `json:"id"`
+	Provider     string `json:"provider"`
+	Branch       string `json:"branch,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	MessageCount int    `json:"message_count"`
+	TotalTokens  int    `json:"total_tokens"`
+	StorageMode  string `json:"storage_mode"`
+}
+
+// TokenDelta shows the difference in token usage.
+type TokenDelta struct {
+	InputDelta  int `json:"input_delta"`
+	OutputDelta int `json:"output_delta"`
+	TotalDelta  int `json:"total_delta"`
+}
+
+// CostDelta shows the difference in estimated cost.
+type CostDelta struct {
+	LeftCost  float64 `json:"left_cost"`
+	RightCost float64 `json:"right_cost"`
+	Delta     float64 `json:"delta"`
+	Currency  string  `json:"currency"`
+}
+
+// FileDiff groups files into shared, left-only, and right-only.
+type FileDiff struct {
+	Shared    []string `json:"shared"`
+	LeftOnly  []string `json:"left_only,omitempty"`
+	RightOnly []string `json:"right_only,omitempty"`
+}
+
+// ToolDiff compares tool usage between two sessions.
+type ToolDiff struct {
+	Entries []ToolDiffEntry `json:"entries"`
+}
+
+// ToolDiffEntry compares a single tool across two sessions.
+type ToolDiffEntry struct {
+	Name       string `json:"name"`
+	LeftCalls  int    `json:"left_calls"`
+	RightCalls int    `json:"right_calls"`
+	CallsDelta int    `json:"calls_delta"`
+}
+
+// MessageDelta shows where two sessions diverge in their message sequence.
+type MessageDelta struct {
+	CommonPrefix int `json:"common_prefix"`
+	LeftAfter    int `json:"left_after"`
+	RightAfter   int `json:"right_after"`
+}
+
+// Diff compares two sessions side-by-side.
+func (c *Client) Diff(req DiffRequest) (*DiffResult, error) {
+	q := url.Values{}
+	q.Set("left", req.LeftID)
+	q.Set("right", req.RightID)
+
+	data, err := c.doGet("/api/v1/sessions/diff?" + q.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var result DiffResult
+	return &result, decode(data, &result)
+}
+
+// ── Off-Topic Detection ──
+
+// OffTopicRequest contains inputs for off-topic detection.
+type OffTopicRequest struct {
+	ProjectPath string  // filter by project
+	Branch      string  // required — the branch to analyze
+	Threshold   float64 // 0.0–1.0 overlap threshold (default: 0.2)
+}
+
+// OffTopicResult holds the analysis of sessions on a branch.
+type OffTopicResult struct {
+	Branch   string          `json:"branch"`
+	Sessions []OffTopicEntry `json:"sessions"`
+	TopFiles []string        `json:"top_files"`
+	Total    int             `json:"total"`
+	OffTopic int             `json:"off_topic"`
+}
+
+// OffTopicEntry scores a single session's relevance to the branch topic.
+type OffTopicEntry struct {
+	ID         string    `json:"id"`
+	Provider   string    `json:"provider"`
+	Summary    string    `json:"summary,omitempty"`
+	Files      []string  `json:"files"`
+	Overlap    float64   `json:"overlap"`
+	IsOffTopic bool      `json:"is_off_topic"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// DetectOffTopic analyzes sessions on a branch and flags those with low file overlap.
+func (c *Client) DetectOffTopic(req OffTopicRequest) (*OffTopicResult, error) {
+	q := url.Values{}
+	q.Set("branch", req.Branch)
+	if req.ProjectPath != "" {
+		q.Set("project_path", req.ProjectPath)
+	}
+	if req.Threshold > 0 {
+		q.Set("threshold", strconv.FormatFloat(req.Threshold, 'f', -1, 64))
+	}
+
+	data, err := c.doGet("/api/v1/sessions/off-topic?" + q.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var result OffTopicResult
+	return &result, decode(data, &result)
+}
+
+// ── Cost Forecast ──
+
+// ForecastRequest contains inputs for cost forecasting.
+type ForecastRequest struct {
+	ProjectPath string // filter by project
+	Branch      string // filter by branch
+	Period      string // "daily" or "weekly" (default: "weekly")
+	Days        int    // look-back window in days (default: 90)
+}
+
+// ForecastResult holds cost forecast data and model recommendations.
+type ForecastResult struct {
+	Period         string          `json:"period"`
+	Buckets        []CostBucket    `json:"buckets"`
+	TotalCost      float64         `json:"total_cost"`
+	AvgPerBucket   float64         `json:"avg_per_bucket"`
+	SessionCount   int             `json:"session_count"`
+	Projected30d   float64         `json:"projected_30d"`
+	Projected90d   float64         `json:"projected_90d"`
+	TrendPerDay    float64         `json:"trend_per_day"`
+	TrendDir       string          `json:"trend_dir"`
+	ModelBreakdown []ModelForecast `json:"model_breakdown"`
+}
+
+// CostBucket holds cost data for a time period.
+type CostBucket struct {
+	Start        time.Time `json:"start"`
+	End          time.Time `json:"end"`
+	Cost         float64   `json:"cost"`
+	Tokens       int       `json:"tokens"`
+	SessionCount int       `json:"session_count"`
+}
+
+// ModelForecast holds per-model cost data and a savings recommendation.
+type ModelForecast struct {
+	Model          string  `json:"model"`
+	Cost           float64 `json:"cost"`
+	Tokens         int     `json:"tokens"`
+	SessionCount   int     `json:"session_count"`
+	Share          float64 `json:"share"`
+	Recommendation string  `json:"recommendation,omitempty"`
+}
+
+// Forecast analyzes historical session costs and projects future spending.
+func (c *Client) Forecast(req ForecastRequest) (*ForecastResult, error) {
+	q := url.Values{}
+	if req.ProjectPath != "" {
+		q.Set("project_path", req.ProjectPath)
+	}
+	if req.Branch != "" {
+		q.Set("branch", req.Branch)
+	}
+	if req.Period != "" {
+		q.Set("period", req.Period)
+	}
+	if req.Days > 0 {
+		q.Set("days", strconv.Itoa(req.Days))
+	}
+
+	data, err := c.doGet("/api/v1/stats/forecast?" + q.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var result ForecastResult
 	return &result, decode(data, &result)
 }

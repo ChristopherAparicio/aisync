@@ -1,0 +1,77 @@
+{{define "title"}}Branches — aisync{{end}}
+
+{{define "content"}}
+<h1 class="page-title">Branch Explorer</h1>
+
+{{if eq (len .Branches) 0}}
+  <div class="empty-state">
+    <p>No branches found.</p>
+    <p class="hint">Run <code>aisync capture</code> to get started.</p>
+  </div>
+{{else}}
+
+<!-- ── Branch Cards ── -->
+<div class="branch-grid">
+  {{range .Branches}}
+  <div class="branch-card" id="branch-{{.Slug}}">
+    <div class="branch-card-header">
+      <span class="branch-name font-mono">{{.Name}}</span>
+      <span class="branch-count">{{.SessionCount}} session{{if ne .SessionCount 1}}s{{end}}</span>
+    </div>
+    <div class="branch-card-stats">
+      <span class="font-mono">{{formatTokens .TotalTokens}}</span> tokens
+      <span class="branch-sep">·</span>
+      <span class="font-mono">{{formatCost .TotalCost}}</span>
+    </div>
+
+    <!-- Timeline -->
+    {{if .Sessions}}
+    <div class="timeline">
+      {{range .Sessions}}
+      <div class="timeline-node {{if .IsFork}}timeline-fork{{end}}">
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+          <a href="/sessions/{{.Summary.ID}}" class="timeline-id font-mono">{{truncate .Summary.ID 10}}</a>
+          <span class="timeline-provider badge badge-provider">{{.Summary.Provider}}</span>
+          {{if .Summary.Summary}}<span class="timeline-summary text-muted">{{truncate .Summary.Summary 40}}</span>{{end}}
+          <span class="timeline-when text-muted">{{timeAgo .Summary.CreatedAt}}</span>
+          <span class="timeline-tokens font-mono text-muted">{{formatTokens .Summary.TotalTokens}}</span>
+        </div>
+
+        {{if .Children}}
+        <div class="timeline-children">
+          {{template "tree_children" .Children}}
+        </div>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+
+{{end}}
+{{end}}
+
+{{define "tree_children"}}
+{{range .}}
+<div class="timeline-node timeline-fork">
+  <div class="timeline-dot dot-fork"></div>
+  <div class="timeline-content">
+    <a href="/sessions/{{.Summary.ID}}" class="timeline-id font-mono">{{truncate .Summary.ID 10}}</a>
+    <span class="timeline-provider badge badge-provider">{{.Summary.Provider}}</span>
+    {{if .Summary.Summary}}<span class="timeline-summary text-muted">{{truncate .Summary.Summary 40}}</span>{{end}}
+    <span class="timeline-when text-muted">{{timeAgo .Summary.CreatedAt}}</span>
+    <span class="timeline-tokens font-mono text-muted">{{formatTokens .Summary.TotalTokens}}</span>
+  </div>
+  {{if .Children}}
+  <div class="timeline-children">
+    {{template "tree_children" .Children}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}
+
+{{template "layout" .}}

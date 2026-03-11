@@ -94,6 +94,47 @@ func newCalculator(prices []ModelPrice) *Calculator {
 	return &Calculator{prices: entries}
 }
 
+// CheaperAlternative returns a cheaper model suggestion for the given model, if one exists.
+// Returns the alternative model name, estimated savings fraction (0.0–1.0), and true if found.
+func (c *Calculator) CheaperAlternative(model string) (string, float64, bool) {
+	current, ok := c.Lookup(model)
+	if !ok {
+		return "", 0, false
+	}
+
+	// Map of expensive → cheaper alternatives within the same family.
+	alternatives := map[string]string{
+		"claude-opus-4":   "claude-sonnet-4",
+		"claude-sonnet-4": "claude-haiku-3.5",
+		"gpt-4o":          "gpt-4o-mini",
+		"gpt-4.1":         "gpt-4.1-mini",
+		"gpt-4.1-mini":    "gpt-4.1-nano",
+		"o3":              "o3-mini",
+		"gemini-2.5-pro":  "gemini-2.5-flash",
+	}
+
+	lower := strings.ToLower(model)
+	for expensive, cheap := range alternatives {
+		if strings.HasPrefix(lower, expensive) {
+			alt, found := c.Lookup(cheap)
+			if !found {
+				continue
+			}
+			// Weighted average cost (assume 50/50 input/output mix for simplicity).
+			currentAvg := (current.InputPerMToken + current.OutputPerMToken) / 2
+			altAvg := (alt.InputPerMToken + alt.OutputPerMToken) / 2
+			if currentAvg <= 0 {
+				continue
+			}
+			savings := 1.0 - (altAvg / currentAvg)
+			if savings > 0.05 { // only recommend if >5% savings
+				return cheap, savings, true
+			}
+		}
+	}
+	return "", 0, false
+}
+
 // Lookup finds the price for a model identifier using prefix matching.
 // Returns the price and true if found, or zero ModelPrice and false if not.
 func (c *Calculator) Lookup(model string) (ModelPrice, bool) {
