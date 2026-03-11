@@ -1,0 +1,25 @@
+{
+  "name": "opencode-aisync",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for aisync — auto-capture AI sessions on idle, track errors and git context",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "aisync",
+    "ai-sessions",
+    "capture"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChristopherAparicio/aisync.git",
+    "directory": "plugins/opencode"
+  },
+  "license": "MIT"
+}
