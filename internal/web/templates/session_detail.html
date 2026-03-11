@@ -83,6 +83,11 @@
     <div class="label">Tool Calls</div>
     <div class="value">{{.ToolCallCount}}</div>
   </div>
+  <div class="kpi-card{{if gt .ErrorCount 0}} kpi-error{{end}}">
+    <div class="label">Errors</div>
+    <div class="value">{{.ErrorCount}}</div>
+    {{if gt .ToolCallCount 0}}<div class="sub">{{printf "%.0f" .ErrorRate}}% error rate</div>{{end}}
+  </div>
 </div>
 
 <!-- ── Cost Breakdown ── -->

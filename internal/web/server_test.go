@@ -791,6 +791,91 @@ func TestBuildRestoreCmd(t *testing.T) {
 	}
 }
 
+// ── Error KPIs ──
+
+func TestSessionDetail_errorCount(t *testing.T) {
+	srv := newTestServer(t)
+
+	sess := testutil.NewSession("error-kpi-1")
+	sess.Messages[1].ToolCalls = []session.ToolCall{
+		{ID: "tc-1", Name: "bash", Input: "go build", Output: "ok", State: session.ToolStateCompleted},
+		{ID: "tc-2", Name: "bash", Input: "gh api ...", Output: "404 Not Found", State: session.ToolStateError},
+		{ID: "tc-3", Name: "bash", Input: "gh api v2", Output: "422 Unprocessable", State: session.ToolStateError},
+		{ID: "tc-4", Name: "bash", Input: "gh api v3", Output: "ok", State: session.ToolStateCompleted},
+		{ID: "tc-5", Name: "Write", Input: "file.go", Output: "written", State: session.ToolStateCompleted},
+	}
+	data, _ := json.Marshal(sess)
+	if _, err := srv.sessionSvc.Import(service.ImportRequest{
+		Data:         data,
+		SourceFormat: "aisync",
+		IntoTarget:   "aisync",
+	}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sessions/error-kpi-1", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	// Should show error count.
+	if !strings.Contains(body, "Errors") {
+		t.Error("expected 'Errors' KPI label")
+	}
+	// Should highlight with error class (2 errors out of 5 tool calls).
+	if !strings.Contains(body, "kpi-error") {
+		t.Error("expected kpi-error class when errors > 0")
+	}
+	// Should show error rate (2/5 = 40%).
+	if !strings.Contains(body, "40%") {
+		t.Error("expected '40%' error rate")
+	}
+	// Tool calls with error state should have red badge.
+	if !strings.Contains(body, "tool-error") {
+		t.Error("expected tool-error class on failed tool calls")
+	}
+}
+
+func TestSessionDetail_noErrors(t *testing.T) {
+	srv := newTestServer(t)
+
+	sess := testutil.NewSession("no-errors-1")
+	sess.Messages[1].ToolCalls = []session.ToolCall{
+		{ID: "tc-1", Name: "bash", Input: "go build", Output: "ok", State: session.ToolStateCompleted},
+	}
+	data, _ := json.Marshal(sess)
+	if _, err := srv.sessionSvc.Import(service.ImportRequest{
+		Data:         data,
+		SourceFormat: "aisync",
+		IntoTarget:   "aisync",
+	}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sessions/no-errors-1", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	// Should show Errors label but no error class.
+	if !strings.Contains(body, "Errors") {
+		t.Error("expected 'Errors' KPI label")
+	}
+	if strings.Contains(body, "kpi-error") {
+		t.Error("should NOT have kpi-error class when errors = 0")
+	}
+}
+
 // ── Static ──
 
 func TestStaticCSS(t *testing.T) {

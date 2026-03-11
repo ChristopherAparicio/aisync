@@ -118,6 +118,9 @@ a:hover { text-decoration: underline; }
   margin-top: 0.25rem;
 }
 
+.kpi-error { border-color: var(--red); }
+.kpi-error .value { color: var(--red); }
+
 .trend-up { color: var(--red); }
 .trend-down { color: var(--green); }
 .trend-stable { color: var(--text-muted); }

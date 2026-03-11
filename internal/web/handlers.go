@@ -195,6 +195,8 @@ type sessionDetailPage struct {
 	TotalCost     float64
 	CostBreakdown []session.ModelCost
 	ToolCallCount int
+	ErrorCount    int
+	ErrorRate     float64 // 0-100 percentage
 	RestoreCmd    string
 }
 
@@ -218,9 +220,17 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		Session: sess,
 	}
 
-	// Count tool calls across all messages.
+	// Count tool calls and errors across all messages.
 	for i := range sess.Messages {
-		data.ToolCallCount += len(sess.Messages[i].ToolCalls)
+		for _, tc := range sess.Messages[i].ToolCalls {
+			data.ToolCallCount++
+			if tc.State == session.ToolStateError {
+				data.ErrorCount++
+			}
+		}
+	}
+	if data.ToolCallCount > 0 {
+		data.ErrorRate = float64(data.ErrorCount) / float64(data.ToolCallCount) * 100
 	}
 
 	// Compute cost breakdown via pricing calculator.
