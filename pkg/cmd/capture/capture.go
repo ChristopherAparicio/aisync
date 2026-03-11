@@ -3,6 +3,7 @@ package capture
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +23,8 @@ type Options struct {
 	Message      string
 	Auto         bool
 	Summarize    bool
+	All          bool   // capture all sessions for the project
+	SessionID    string // capture a specific session by provider-native ID
 }
 
 // NewCmdCapture creates the `aisync capture` command.
@@ -45,13 +48,13 @@ func NewCmdCapture(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.Message, "message", "", "Manual summary message")
 	cmd.Flags().BoolVar(&opts.Auto, "auto", false, "Auto mode (used by git hooks, silent)")
 	cmd.Flags().BoolVar(&opts.Summarize, "summarize", false, "AI-summarize the session after capture")
+	cmd.Flags().BoolVar(&opts.All, "all", false, "Capture all sessions for the project (requires --provider)")
+	cmd.Flags().StringVar(&opts.SessionID, "session-id", "", "Capture a specific session by provider-native ID")
 
 	return cmd
 }
 
 func runCapture(opts *Options) error {
-	out := opts.IO.Out
-
 	// Git info
 	gitClient, err := opts.Factory.Git()
 	if err != nil {
@@ -92,6 +95,14 @@ func runCapture(opts *Options) error {
 		providerName = parsed
 	}
 
+	// Validate flag combinations
+	if opts.All && opts.SessionID != "" {
+		return fmt.Errorf("--all and --session-id are mutually exclusive")
+	}
+	if opts.All && providerName == "" {
+		return fmt.Errorf("--all requires --provider (e.g. --provider opencode)")
+	}
+
 	// Get service
 	svc, err := opts.Factory.SessionService()
 	if err != nil {
@@ -110,8 +121,7 @@ func runCapture(opts *Options) error {
 		summarizeModel = cfg.GetSummarizeModel()
 	}
 
-	// Capture
-	result, err := svc.Capture(service.CaptureRequest{
+	baseReq := service.CaptureRequest{
 		ProjectPath:  topLevel,
 		Branch:       branch,
 		Mode:         mode,
@@ -119,40 +129,98 @@ func runCapture(opts *Options) error {
 		Message:      opts.Message,
 		Summarize:    shouldSummarize,
 		Model:        summarizeModel,
-	})
+	}
+
+	// Dispatch: --all, --session-id, or default (most recent)
+	switch {
+	case opts.All:
+		return runCaptureAll(opts, svc, baseReq)
+	case opts.SessionID != "":
+		return runCaptureByID(opts, svc, baseReq)
+	default:
+		return runCaptureSingle(opts, svc, baseReq)
+	}
+}
+
+func runCaptureSingle(opts *Options, svc *service.SessionService, req service.CaptureRequest) error {
+	out := opts.IO.Out
+
+	result, err := svc.Capture(req)
 	if err != nil {
 		if opts.Auto {
-			return nil // silent failure in auto mode
+			return nil
 		}
 		return err
 	}
 
 	if !opts.Auto {
-		fmt.Fprintf(out, "Captured session %s\n", result.Session.ID)
-		fmt.Fprintf(out, "  Provider: %s\n", result.Provider)
-		fmt.Fprintf(out, "  Branch:   %s\n", result.Session.Branch)
-		fmt.Fprintf(out, "  Mode:     %s\n", result.Session.StorageMode)
-		fmt.Fprintf(out, "  Messages: %d\n", len(result.Session.Messages))
-		if result.Session.Summary != "" {
-			fmt.Fprintf(out, "  Summary:  %s\n", result.Session.Summary)
+		printResult(opts, out, result)
+	}
+	return nil
+}
+
+func runCaptureAll(opts *Options, svc *service.SessionService, req service.CaptureRequest) error {
+	out := opts.IO.Out
+
+	results, err := svc.CaptureAll(req)
+	if err != nil {
+		if opts.Auto {
+			return nil
 		}
-		if result.Summarized {
-			fmt.Fprintf(out, "  AI:       summarized\n")
-		}
-		if result.SecretsFound > 0 {
-			scanner := opts.Factory.Scanner()
-			fmt.Fprintf(out, "  Secrets:  %d detected", result.SecretsFound)
-			if scanner != nil {
-				switch scanner.Mode() {
-				case session.SecretModeMask:
-					fmt.Fprint(out, " (masked)")
-				case session.SecretModeWarn:
-					fmt.Fprint(out, " (warning: stored as-is)")
-				}
-			}
+		return err
+	}
+
+	if !opts.Auto {
+		fmt.Fprintf(out, "Captured %d sessions\n\n", len(results))
+		for i, r := range results {
+			fmt.Fprintf(out, "[%d/%d] ", i+1, len(results))
+			printResult(opts, out, r)
 			fmt.Fprintln(out)
 		}
 	}
-
 	return nil
+}
+
+func runCaptureByID(opts *Options, svc *service.SessionService, req service.CaptureRequest) error {
+	out := opts.IO.Out
+
+	result, err := svc.CaptureByID(req, session.ID(opts.SessionID))
+	if err != nil {
+		if opts.Auto {
+			return nil
+		}
+		return err
+	}
+
+	if !opts.Auto {
+		printResult(opts, out, result)
+	}
+	return nil
+}
+
+func printResult(opts *Options, out io.Writer, result *service.CaptureResult) {
+	fmt.Fprintf(out, "Captured session %s\n", result.Session.ID)
+	fmt.Fprintf(out, "  Provider: %s\n", result.Provider)
+	fmt.Fprintf(out, "  Branch:   %s\n", result.Session.Branch)
+	fmt.Fprintf(out, "  Mode:     %s\n", result.Session.StorageMode)
+	fmt.Fprintf(out, "  Messages: %d\n", len(result.Session.Messages))
+	if result.Session.Summary != "" {
+		fmt.Fprintf(out, "  Summary:  %s\n", result.Session.Summary)
+	}
+	if result.Summarized {
+		fmt.Fprintf(out, "  AI:       summarized\n")
+	}
+	if result.SecretsFound > 0 {
+		scanner := opts.Factory.Scanner()
+		fmt.Fprintf(out, "  Secrets:  %d detected", result.SecretsFound)
+		if scanner != nil {
+			switch scanner.Mode() {
+			case session.SecretModeMask:
+				fmt.Fprint(out, " (masked)")
+			case session.SecretModeWarn:
+				fmt.Fprint(out, " (warning: stored as-is)")
+			}
+		}
+		fmt.Fprintln(out)
+	}
 }

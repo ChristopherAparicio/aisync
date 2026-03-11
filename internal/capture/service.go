@@ -52,7 +52,7 @@ func NewServiceWithScanner(registry *provider.Registry, store storage.Store, sca
 	}
 }
 
-// Capture detects the active AI session, exports it, and stores it.
+// Capture detects the most recent AI session, exports it, and stores it.
 func (s *Service) Capture(req Request) (*Result, error) {
 	var (
 		summary *session.Summary
@@ -61,7 +61,6 @@ func (s *Service) Capture(req Request) (*Result, error) {
 	)
 
 	if req.ProviderName != "" {
-		// Explicit provider selection
 		prov, err = s.registry.Get(req.ProviderName)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", req.ProviderName, err)
@@ -76,38 +75,98 @@ func (s *Service) Capture(req Request) (*Result, error) {
 		}
 		summary = &summaries[0]
 	} else {
-		// Auto-detect: find the best session across all providers
 		summary, prov, err = s.registry.DetectBest(req.ProjectPath, req.Branch)
 		if err != nil {
 			return nil, fmt.Errorf("no active AI session found: %w", err)
 		}
 	}
 
-	// Export the session from the provider
+	return s.captureOne(prov, summary, req)
+}
+
+// CaptureAll detects all sessions for the given project/provider and captures each one.
+// Returns results for every successfully captured session. Stops on the first error.
+func (s *Service) CaptureAll(req Request) ([]*Result, error) {
+	summaries, prov, err := s.detectSessions(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []*Result
+	for i := range summaries {
+		result, captureErr := s.captureOne(prov, &summaries[i], req)
+		if captureErr != nil {
+			return results, fmt.Errorf("capturing session %s: %w", summaries[i].ID, captureErr)
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+// CaptureByID captures a specific session by its provider-native ID.
+func (s *Service) CaptureByID(req Request, sessionID session.ID) (*Result, error) {
+	_, prov, err := s.detectSessions(req)
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &session.Summary{ID: sessionID}
+	return s.captureOne(prov, summary, req)
+}
+
+// detectSessions resolves the provider and returns all available session summaries.
+func (s *Service) detectSessions(req Request) ([]session.Summary, provider.Provider, error) {
+	if req.ProviderName != "" {
+		prov, err := s.registry.Get(req.ProviderName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("provider %q: %w", req.ProviderName, err)
+		}
+		summaries, err := prov.Detect(req.ProjectPath, req.Branch)
+		if err != nil {
+			return nil, nil, fmt.Errorf("detecting sessions: %w", err)
+		}
+		if len(summaries) == 0 {
+			return nil, nil, fmt.Errorf("no sessions found for provider %q: %w",
+				req.ProviderName, session.ErrSessionNotFound)
+		}
+		return summaries, prov, nil
+	}
+
+	// Auto-detect: use DetectAll to get all sessions across providers
+	all, err := s.registry.DetectAll(req.ProjectPath, req.Branch)
+	if err != nil || len(all) == 0 {
+		return nil, nil, fmt.Errorf("no active AI sessions found: %w", session.ErrProviderNotDetected)
+	}
+
+	// All sessions from DetectAll come from potentially different providers.
+	// For CaptureAll without explicit provider, we need a provider per session.
+	// Simplification: require --provider with --all. This is enforced at CLI level.
+	// For now, return the first provider's sessions via DetectBest fallback.
+	best, prov, detectErr := s.registry.DetectBest(req.ProjectPath, req.Branch)
+	if detectErr != nil {
+		return nil, nil, fmt.Errorf("no active AI sessions found: %w", detectErr)
+	}
+	return []session.Summary{*best}, prov, nil
+}
+
+// captureOne exports, processes, and stores a single session.
+func (s *Service) captureOne(prov provider.Provider, summary *session.Summary, req Request) (*Result, error) {
 	sess, err := prov.Export(summary.ID, req.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("exporting session from %s: %w", prov.Name(), err)
 	}
 
-	// Override summary if provided
 	if req.Message != "" {
 		sess.Summary = req.Message
 	}
-
-	// Ensure branch is set
 	if sess.Branch == "" {
 		sess.Branch = req.Branch
 	}
-
-	// Ensure project path is set
 	if sess.ProjectPath == "" {
 		sess.ProjectPath = req.ProjectPath
 	}
-
-	// Ensure storage mode reflects the requested mode
 	sess.StorageMode = req.Mode
 
-	// Add branch link
 	if sess.Branch != "" {
 		sess.Links = append(sess.Links, session.Link{
 			LinkType: session.LinkBranch,
@@ -115,7 +174,6 @@ func (s *Service) Capture(req Request) (*Result, error) {
 		})
 	}
 
-	// Secret scanning (if scanner is configured)
 	var secretsFound int
 	if s.scanner != nil {
 		matches := s.scanner.Scan(sessionText(sess))
@@ -133,12 +191,10 @@ func (s *Service) Capture(req Request) (*Result, error) {
 		}
 	}
 
-	// Attach owner identity if provided
 	if req.OwnerID != "" {
 		sess.OwnerID = req.OwnerID
 	}
 
-	// Store the session
 	if err := s.store.Save(sess); err != nil {
 		return nil, fmt.Errorf("storing session: %w", err)
 	}

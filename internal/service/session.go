@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -193,6 +194,71 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 	return captureResult, nil
 }
 
+// CaptureAll detects all sessions for the given project/provider and captures each one.
+// Requires --provider to be set (CLI enforces this).
+func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error) {
+	var svc *capturesvc.Service
+	if s.scanner != nil {
+		svc = capturesvc.NewServiceWithScanner(s.registry, s.store, s.scanner)
+	} else {
+		svc = capturesvc.NewService(s.registry, s.store)
+	}
+
+	ownerID := s.resolveOwner()
+
+	results, err := svc.CaptureAll(capturesvc.Request{
+		ProjectPath:  req.ProjectPath,
+		Branch:       req.Branch,
+		Mode:         req.Mode,
+		ProviderName: req.ProviderName,
+		Message:      req.Message,
+		OwnerID:      ownerID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var captureResults []*CaptureResult
+	for _, r := range results {
+		captureResults = append(captureResults, &CaptureResult{
+			Session:      r.Session,
+			Provider:     r.Provider,
+			SecretsFound: r.SecretsFound,
+		})
+	}
+	return captureResults, nil
+}
+
+// CaptureByID captures a specific session by its provider-native ID.
+func (s *SessionService) CaptureByID(req CaptureRequest, sessionID session.ID) (*CaptureResult, error) {
+	var svc *capturesvc.Service
+	if s.scanner != nil {
+		svc = capturesvc.NewServiceWithScanner(s.registry, s.store, s.scanner)
+	} else {
+		svc = capturesvc.NewService(s.registry, s.store)
+	}
+
+	ownerID := s.resolveOwner()
+
+	result, err := svc.CaptureByID(capturesvc.Request{
+		ProjectPath:  req.ProjectPath,
+		Branch:       req.Branch,
+		Mode:         req.Mode,
+		ProviderName: req.ProviderName,
+		Message:      req.Message,
+		OwnerID:      ownerID,
+	}, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CaptureResult{
+		Session:      result.Session,
+		Provider:     result.Provider,
+		SecretsFound: result.SecretsFound,
+	}, nil
+}
+
 // ── Restore ──
 
 // RestoreRequest contains inputs for a restore operation.
@@ -305,6 +371,78 @@ func (s *SessionService) List(req ListRequest) ([]session.Summary, error) {
 	}
 
 	return s.store.List(listOpts)
+}
+
+// ListTree builds a hierarchical tree of sessions using ParentID relationships.
+// Sessions without a parent become root nodes. Fork detection compares user messages
+// across siblings to identify retries.
+func (s *SessionService) ListTree(ctx context.Context, req ListRequest) ([]session.SessionTreeNode, error) {
+	summaries, err := s.List(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return buildTree(summaries), nil
+}
+
+// buildTree constructs a tree from a flat list of summaries using ParentID.
+// The algorithm processes nodes in two passes:
+//  1. Create all nodes indexed by ID.
+//  2. Link children to parents. Nodes whose parent is not in the set become roots.
+//
+// Children are linked via pointers first, then flattened to values on output,
+// ensuring grandchildren are correctly included.
+func buildTree(summaries []session.Summary) []session.SessionTreeNode {
+	if len(summaries) == 0 {
+		return nil
+	}
+
+	// Index by ID for quick lookup.
+	type treeNode struct {
+		summary  session.Summary
+		children []*treeNode
+		isFork   bool
+	}
+
+	byID := make(map[session.ID]*treeNode, len(summaries))
+	for _, sm := range summaries {
+		byID[sm.ID] = &treeNode{summary: sm}
+	}
+
+	// Build parent → children relationships.
+	var roots []*treeNode
+	for _, sm := range summaries {
+		node := byID[sm.ID]
+		if sm.ParentID != "" {
+			parent, ok := byID[sm.ParentID]
+			if ok {
+				node.isFork = true
+				parent.children = append(parent.children, node)
+				continue
+			}
+		}
+		roots = append(roots, node)
+	}
+
+	// Recursively convert to the public type.
+	var convert func(n *treeNode) session.SessionTreeNode
+	convert = func(n *treeNode) session.SessionTreeNode {
+		out := session.SessionTreeNode{
+			Summary: n.summary,
+			IsFork:  n.isFork,
+		}
+		for _, child := range n.children {
+			out.Children = append(out.Children, convert(child))
+		}
+		return out
+	}
+
+	result := make([]session.SessionTreeNode, 0, len(roots))
+	for _, r := range roots {
+		result = append(result, convert(r))
+	}
+
+	return result
 }
 
 // ── Delete ──
@@ -716,10 +854,11 @@ func BuildCommentBody(sess *session.Session) string {
 
 // StatsRequest contains inputs for computing statistics.
 type StatsRequest struct {
-	ProjectPath string
-	Branch      string
-	Provider    session.ProviderName
-	All         bool
+	ProjectPath  string
+	Branch       string
+	Provider     session.ProviderName
+	All          bool
+	IncludeTools bool // if true, aggregate tool usage across sessions
 }
 
 // BranchStats holds aggregated stats per branch.
@@ -738,7 +877,16 @@ type StatsResult struct {
 	TotalCost     float64 // estimated cost in USD
 	PerBranch     []*BranchStats
 	PerProvider   map[session.ProviderName]int
-	TopFiles      []FileEntry // sorted by count descending, max 10
+	TopFiles      []FileEntry          // sorted by count descending, max 10
+	ToolStats     *AggregatedToolStats `json:"tool_stats,omitempty"` // populated when IncludeTools is true
+}
+
+// AggregatedToolStats holds tool usage aggregated across multiple sessions.
+type AggregatedToolStats struct {
+	Tools      []session.ToolUsageEntry `json:"tools"`
+	TotalCalls int                      `json:"total_calls"`
+	TotalCost  session.Cost             `json:"total_cost,omitempty"`
+	Warning    string                   `json:"warning,omitempty"` // set if any session used compact/summary mode
 }
 
 // FileEntry is a file path with its touch count.
@@ -866,11 +1014,18 @@ func (s *SessionService) ToolUsage(ctx context.Context, idOrSHA string) (*sessio
 		totalCost.Currency = "USD"
 	}
 
-	return &session.ToolUsageStats{
+	result := &session.ToolUsageStats{
 		Tools:      entries,
 		TotalCalls: totalCalls,
 		TotalCost:  totalCost,
-	}, nil
+	}
+
+	// Warn when storage mode limits tool call data fidelity.
+	if sess.StorageMode == session.StorageModeCompact || sess.StorageMode == session.StorageModeSummary {
+		result.Warning = fmt.Sprintf("session was captured in %q mode — tool call data may be incomplete; use --mode full for accurate tool accounting", sess.StorageMode)
+	}
+
+	return result, nil
 }
 
 // estimateTokens roughly estimates token count from text length.
@@ -929,6 +1084,16 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 	perBranch := make(map[string]*BranchStats)
 	fileCounts := make(map[string]int)
 
+	// Tool aggregation state (used when IncludeTools is true).
+	type toolAgg struct {
+		calls, errors, inputTok, outputTok, totalDur int
+	}
+	var perTool map[string]*toolAgg
+	var hasCompactSessions bool
+	if req.IncludeTools {
+		perTool = make(map[string]*toolAgg)
+	}
+
 	for _, sm := range summaries {
 		result.TotalSessions++
 		result.TotalTokens += sm.TotalTokens
@@ -946,7 +1111,7 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		// Per-provider
 		result.PerProvider[sm.Provider]++
 
-		// File changes + cost (requires loading full session)
+		// File changes + cost + tool usage (requires loading full session)
 		full, getErr := s.store.Get(sm.ID)
 		if getErr == nil {
 			for _, fc := range full.FileChanges {
@@ -958,6 +1123,39 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 			sessionCost := est.TotalCost.TotalCost
 			result.TotalCost += sessionCost
 			bs.TotalCost += sessionCost
+
+			// Tool aggregation
+			if req.IncludeTools {
+				if full.StorageMode == session.StorageModeCompact || full.StorageMode == session.StorageModeSummary {
+					hasCompactSessions = true
+				}
+				for i := range full.Messages {
+					for j := range full.Messages[i].ToolCalls {
+						tc := &full.Messages[i].ToolCalls[j]
+						agg, exists := perTool[tc.Name]
+						if !exists {
+							agg = &toolAgg{}
+							perTool[tc.Name] = agg
+						}
+						agg.calls++
+						inTok, outTok := tc.InputTokens, tc.OutputTokens
+						if inTok == 0 && len(tc.Input) > 0 {
+							inTok = estimateTokens(tc.Input)
+						}
+						if outTok == 0 && len(tc.Output) > 0 {
+							outTok = estimateTokens(tc.Output)
+						}
+						agg.inputTok += inTok
+						agg.outputTok += outTok
+						if tc.DurationMs > 0 {
+							agg.totalDur += tc.DurationMs
+						}
+						if tc.State == session.ToolStateError {
+							agg.errors++
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -983,6 +1181,58 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		files = files[:10]
 	}
 	result.TopFiles = files
+
+	// Build aggregated tool stats.
+	if req.IncludeTools && len(perTool) > 0 {
+		names := make([]string, 0, len(perTool))
+		for name := range perTool {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		var grandTotal, totalCalls int
+		entries := make([]session.ToolUsageEntry, 0, len(names))
+		for _, name := range names {
+			agg := perTool[name]
+			total := agg.inputTok + agg.outputTok
+			grandTotal += total
+			totalCalls += agg.calls
+
+			entry := session.ToolUsageEntry{
+				Name:         name,
+				Calls:        agg.calls,
+				InputTokens:  agg.inputTok,
+				OutputTokens: agg.outputTok,
+				TotalTokens:  total,
+				ErrorCount:   agg.errors,
+			}
+			if agg.calls > 0 && agg.totalDur > 0 {
+				entry.AvgDuration = agg.totalDur / agg.calls
+			}
+			entries = append(entries, entry)
+		}
+
+		// Compute percentages.
+		for i := range entries {
+			if grandTotal > 0 {
+				entries[i].Percentage = float64(entries[i].TotalTokens) / float64(grandTotal) * 100
+			}
+		}
+
+		// Sort by total tokens descending.
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].TotalTokens > entries[j].TotalTokens
+		})
+
+		aggStats := &AggregatedToolStats{
+			Tools:      entries,
+			TotalCalls: totalCalls,
+		}
+		if hasCompactSessions {
+			aggStats.Warning = "some sessions were captured in compact/summary mode — tool data may be incomplete"
+		}
+		result.ToolStats = aggStats
+	}
 
 	return result, nil
 }
@@ -1489,19 +1739,20 @@ func (s *SessionService) Rewind(ctx context.Context, req RewindRequest) (*Rewind
 
 	// Create the rewound session (fork)
 	rewound := &session.Session{
-		ID:          session.NewID(),
-		Provider:    original.Provider,
-		Agent:       original.Agent,
-		Branch:      original.Branch,
-		CommitSHA:   original.CommitSHA,
-		ProjectPath: original.ProjectPath,
-		StorageMode: original.StorageMode,
-		OwnerID:     original.OwnerID,
-		ParentID:    original.ID,
-		Messages:    make([]session.Message, req.AtMessage),
-		FileChanges: append([]session.FileChange(nil), original.FileChanges...), // deep copy
-		Links:       append([]session.Link(nil), original.Links...),             // deep copy
-		Summary:     fmt.Sprintf("Rewind of %s at message %d", original.ID, req.AtMessage),
+		ID:              session.NewID(),
+		Provider:        original.Provider,
+		Agent:           original.Agent,
+		Branch:          original.Branch,
+		CommitSHA:       original.CommitSHA,
+		ProjectPath:     original.ProjectPath,
+		StorageMode:     original.StorageMode,
+		OwnerID:         original.OwnerID,
+		ParentID:        original.ID,
+		ForkedAtMessage: req.AtMessage,
+		Messages:        make([]session.Message, req.AtMessage),
+		FileChanges:     append([]session.FileChange(nil), original.FileChanges...), // deep copy
+		Links:           append([]session.Link(nil), original.Links...),             // deep copy
+		Summary:         fmt.Sprintf("Rewind of %s at message %d", original.ID, req.AtMessage),
 	}
 	copy(rewound.Messages, original.Messages[:req.AtMessage])
 
@@ -1605,6 +1856,734 @@ func (s *SessionService) resolveSession(id session.ID, projectPath, branch strin
 		return s.store.Get(id)
 	}
 	return s.store.GetLatestByBranch(projectPath, branch)
+}
+
+// ── Garbage Collection ──
+
+// GCRequest contains inputs for garbage collection.
+type GCRequest struct {
+	OlderThan  string // duration string like "30d", "24h", "7d"
+	KeepLatest int    // keep the N most recent sessions per branch (0 = no per-branch limit)
+	DryRun     bool   // if true, count but don't delete
+}
+
+// GCResult contains the outcome of a garbage collection operation.
+type GCResult struct {
+	Deleted int  `json:"deleted"` // number of sessions deleted (0 if DryRun)
+	Would   int  `json:"would"`   // number of sessions that would be deleted (only in DryRun)
+	DryRun  bool `json:"dry_run"`
+}
+
+// GarbageCollect removes old sessions based on age and count policies.
+// Age-based: deletes sessions older than OlderThan duration.
+// Count-based: keeps only KeepLatest sessions per branch (deletes oldest first).
+// Both policies can be combined — the union of sessions matching either policy is deleted.
+func (s *SessionService) GarbageCollect(ctx context.Context, req GCRequest) (*GCResult, error) {
+	if req.OlderThan == "" && req.KeepLatest <= 0 {
+		return nil, fmt.Errorf("specify --older-than and/or --keep-latest")
+	}
+
+	result := &GCResult{DryRun: req.DryRun}
+
+	// Age-based cleanup
+	if req.OlderThan != "" {
+		dur, err := parseDuration(req.OlderThan)
+		if err != nil {
+			return nil, fmt.Errorf("invalid duration %q: %w", req.OlderThan, err)
+		}
+		cutoff := time.Now().UTC().Add(-dur)
+
+		if req.DryRun {
+			// Count sessions that would be deleted
+			summaries, listErr := s.store.List(session.ListOptions{All: true})
+			if listErr != nil {
+				return nil, fmt.Errorf("listing sessions: %w", listErr)
+			}
+			for _, sm := range summaries {
+				full, getErr := s.store.Get(sm.ID)
+				if getErr != nil {
+					continue
+				}
+				if full.CreatedAt.Before(cutoff) {
+					result.Would++
+				}
+			}
+		} else {
+			count, delErr := s.store.DeleteOlderThan(cutoff)
+			if delErr != nil {
+				return nil, fmt.Errorf("deleting old sessions: %w", delErr)
+			}
+			result.Deleted += count
+		}
+	}
+
+	// Count-based cleanup (per branch)
+	if req.KeepLatest > 0 {
+		summaries, listErr := s.store.List(session.ListOptions{All: true})
+		if listErr != nil {
+			return nil, fmt.Errorf("listing sessions: %w", listErr)
+		}
+
+		// Group by branch
+		perBranch := make(map[string][]session.Summary)
+		for _, sm := range summaries {
+			perBranch[sm.Branch] = append(perBranch[sm.Branch], sm)
+		}
+
+		// For each branch, keep only the most recent KeepLatest.
+		// List() returns sessions ordered by created_at DESC, so we skip the first N.
+		for _, sessions := range perBranch {
+			if len(sessions) <= req.KeepLatest {
+				continue
+			}
+			toDelete := sessions[req.KeepLatest:]
+			for _, sm := range toDelete {
+				if req.DryRun {
+					result.Would++
+				} else {
+					if delErr := s.store.Delete(sm.ID); delErr == nil {
+						result.Deleted++
+					}
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// parseDuration parses a human-friendly duration string.
+// Supports: "30d" (days), "24h" (hours), "7d12h" (days+hours).
+// Falls back to time.ParseDuration for standard Go durations.
+func parseDuration(s string) (time.Duration, error) {
+	// Check for day notation: "Nd" or "NdMh"
+	if strings.ContainsAny(s, "d") {
+		var days, hours int
+		parts := strings.Split(s, "d")
+		if len(parts) >= 1 && parts[0] != "" {
+			d, err := strconv.Atoi(parts[0])
+			if err != nil {
+				return 0, fmt.Errorf("invalid day count: %w", err)
+			}
+			days = d
+		}
+		if len(parts) >= 2 && parts[1] != "" {
+			// Remaining part after "d", e.g. "12h"
+			rem, err := time.ParseDuration(parts[1])
+			if err != nil {
+				return 0, fmt.Errorf("invalid remaining duration: %w", err)
+			}
+			hours = int(rem.Hours())
+		}
+		return time.Duration(days)*24*time.Hour + time.Duration(hours)*time.Hour, nil
+	}
+
+	// Fallback to standard Go duration
+	return time.ParseDuration(s)
+}
+
+// ── Diff ──
+
+// DiffRequest contains inputs for comparing two sessions.
+type DiffRequest struct {
+	LeftID  string // session ID or commit SHA
+	RightID string // session ID or commit SHA
+}
+
+// Diff compares two sessions side-by-side and returns a structured diff.
+// It computes token deltas, cost deltas, file overlap, tool usage comparison,
+// and identifies where the message sequences diverge.
+func (s *SessionService) Diff(ctx context.Context, req DiffRequest) (*session.DiffResult, error) {
+	if req.LeftID == "" || req.RightID == "" {
+		return nil, fmt.Errorf("both left and right session IDs are required")
+	}
+
+	left, err := s.Get(req.LeftID)
+	if err != nil {
+		return nil, fmt.Errorf("left session: %w", err)
+	}
+
+	right, err := s.Get(req.RightID)
+	if err != nil {
+		return nil, fmt.Errorf("right session: %w", err)
+	}
+
+	result := &session.DiffResult{
+		Left:         buildDiffSide(left),
+		Right:        buildDiffSide(right),
+		TokenDelta:   computeTokenDelta(left, right),
+		FileDiff:     computeFileDiff(left, right),
+		ToolDiff:     computeToolDiff(left, right),
+		MessageDelta: computeMessageDelta(left, right),
+	}
+
+	// Cost delta (uses pricing calculator).
+	leftCost := s.pricing.SessionCost(left)
+	rightCost := s.pricing.SessionCost(right)
+	result.CostDelta = session.CostDelta{
+		LeftCost:  leftCost.TotalCost.TotalCost,
+		RightCost: rightCost.TotalCost.TotalCost,
+		Delta:     rightCost.TotalCost.TotalCost - leftCost.TotalCost.TotalCost,
+		Currency:  "USD",
+	}
+
+	return result, nil
+}
+
+// buildDiffSide extracts summary metadata from a session for one side of a diff.
+func buildDiffSide(sess *session.Session) session.DiffSide {
+	return session.DiffSide{
+		ID:           sess.ID,
+		Provider:     sess.Provider,
+		Branch:       sess.Branch,
+		Summary:      sess.Summary,
+		MessageCount: len(sess.Messages),
+		TotalTokens:  sess.TokenUsage.TotalTokens,
+		StorageMode:  sess.StorageMode,
+	}
+}
+
+// computeTokenDelta calculates the difference in token usage between two sessions.
+func computeTokenDelta(left, right *session.Session) session.TokenDelta {
+	return session.TokenDelta{
+		InputDelta:  right.TokenUsage.InputTokens - left.TokenUsage.InputTokens,
+		OutputDelta: right.TokenUsage.OutputTokens - left.TokenUsage.OutputTokens,
+		TotalDelta:  right.TokenUsage.TotalTokens - left.TokenUsage.TotalTokens,
+	}
+}
+
+// computeFileDiff groups file changes into shared, left-only, and right-only.
+func computeFileDiff(left, right *session.Session) session.FileDiff {
+	leftFiles := make(map[string]struct{}, len(left.FileChanges))
+	for _, fc := range left.FileChanges {
+		leftFiles[fc.FilePath] = struct{}{}
+	}
+
+	rightFiles := make(map[string]struct{}, len(right.FileChanges))
+	for _, fc := range right.FileChanges {
+		rightFiles[fc.FilePath] = struct{}{}
+	}
+
+	var shared, leftOnly, rightOnly []string
+
+	for f := range leftFiles {
+		if _, ok := rightFiles[f]; ok {
+			shared = append(shared, f)
+		} else {
+			leftOnly = append(leftOnly, f)
+		}
+	}
+	for f := range rightFiles {
+		if _, ok := leftFiles[f]; !ok {
+			rightOnly = append(rightOnly, f)
+		}
+	}
+
+	// Sort for deterministic output.
+	sort.Strings(shared)
+	sort.Strings(leftOnly)
+	sort.Strings(rightOnly)
+
+	return session.FileDiff{
+		Shared:    shared,
+		LeftOnly:  leftOnly,
+		RightOnly: rightOnly,
+	}
+}
+
+// computeToolDiff compares tool usage between two sessions.
+func computeToolDiff(left, right *session.Session) session.ToolDiff {
+	leftTools := countToolCalls(left)
+	rightTools := countToolCalls(right)
+
+	// Collect all tool names.
+	allTools := make(map[string]struct{})
+	for name := range leftTools {
+		allTools[name] = struct{}{}
+	}
+	for name := range rightTools {
+		allTools[name] = struct{}{}
+	}
+
+	// Sort tool names for deterministic output.
+	names := make([]string, 0, len(allTools))
+	for name := range allTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	entries := make([]session.ToolDiffEntry, 0, len(names))
+	for _, name := range names {
+		lc := leftTools[name]
+		rc := rightTools[name]
+		entries = append(entries, session.ToolDiffEntry{
+			Name:       name,
+			LeftCalls:  lc,
+			RightCalls: rc,
+			CallsDelta: rc - lc,
+		})
+	}
+
+	return session.ToolDiff{Entries: entries}
+}
+
+// countToolCalls returns a map of tool name → call count for a session.
+func countToolCalls(sess *session.Session) map[string]int {
+	counts := make(map[string]int)
+	for i := range sess.Messages {
+		for j := range sess.Messages[i].ToolCalls {
+			counts[sess.Messages[i].ToolCalls[j].Name]++
+		}
+	}
+	return counts
+}
+
+// computeMessageDelta finds the common prefix length and counts remaining messages.
+// Two messages are considered identical when they share the same role and content.
+func computeMessageDelta(left, right *session.Session) session.MessageDelta {
+	minLen := len(left.Messages)
+	if len(right.Messages) < minLen {
+		minLen = len(right.Messages)
+	}
+
+	commonPrefix := 0
+	for i := 0; i < minLen; i++ {
+		lm := &left.Messages[i]
+		rm := &right.Messages[i]
+		if lm.Role != rm.Role || lm.Content != rm.Content {
+			break
+		}
+		commonPrefix++
+	}
+
+	return session.MessageDelta{
+		CommonPrefix: commonPrefix,
+		LeftAfter:    len(left.Messages) - commonPrefix,
+		RightAfter:   len(right.Messages) - commonPrefix,
+	}
+}
+
+// ── Off-Topic Detection ──
+
+// OffTopicRequest contains inputs for off-topic detection.
+type OffTopicRequest struct {
+	ProjectPath string  // required — limits to this project
+	Branch      string  // required — the branch to analyze
+	Threshold   float64 // 0.0–1.0 overlap threshold; below = off-topic (default 0.2)
+}
+
+// DetectOffTopic compares file changes across all sessions on a branch
+// and flags sessions whose files don't overlap with the branch's dominant topic.
+// A session is "off-topic" when the fraction of its files shared with at least
+// one other session on the branch falls below the threshold.
+func (s *SessionService) DetectOffTopic(ctx context.Context, req OffTopicRequest) (*session.OffTopicResult, error) {
+	if req.Branch == "" {
+		return nil, fmt.Errorf("branch is required for off-topic detection")
+	}
+
+	threshold := req.Threshold
+	if threshold <= 0 {
+		threshold = 0.2 // default: 20% overlap minimum
+	}
+
+	summaries, err := s.store.List(session.ListOptions{
+		ProjectPath: req.ProjectPath,
+		Branch:      req.Branch,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+
+	if len(summaries) < 2 {
+		// With 0 or 1 sessions, off-topic detection is meaningless.
+		entries := make([]session.OffTopicEntry, 0, len(summaries))
+		for _, sm := range summaries {
+			full, getErr := s.store.Get(sm.ID)
+			if getErr != nil {
+				continue
+			}
+			files := uniqueFiles(full)
+			entries = append(entries, session.OffTopicEntry{
+				ID:        sm.ID,
+				Provider:  sm.Provider,
+				Summary:   sm.Summary,
+				Files:     files,
+				Overlap:   1.0,
+				CreatedAt: sm.CreatedAt,
+			})
+		}
+		return &session.OffTopicResult{
+			Branch:   req.Branch,
+			Sessions: entries,
+			Total:    len(entries),
+		}, nil
+	}
+
+	// Load full sessions to access file changes.
+	type sessionFiles struct {
+		summary session.Summary
+		files   map[string]struct{}
+	}
+	loaded := make([]sessionFiles, 0, len(summaries))
+	for _, sm := range summaries {
+		full, getErr := s.store.Get(sm.ID)
+		if getErr != nil {
+			continue // skip sessions that can't be loaded
+		}
+		fileSet := make(map[string]struct{}, len(full.FileChanges))
+		for _, fc := range full.FileChanges {
+			fileSet[fc.FilePath] = struct{}{}
+		}
+		loaded = append(loaded, sessionFiles{summary: sm, files: fileSet})
+	}
+
+	// Build global file frequency: how many sessions touch each file.
+	fileFreq := make(map[string]int)
+	for _, sf := range loaded {
+		for f := range sf.files {
+			fileFreq[f]++
+		}
+	}
+
+	// Score each session: overlap = fraction of its files that appear in ≥2 sessions.
+	entries := make([]session.OffTopicEntry, 0, len(loaded))
+	offTopicCount := 0
+	for _, sf := range loaded {
+		files := sortedKeys(sf.files)
+		overlap := computeOverlap(sf.files, fileFreq)
+		isOff := overlap < threshold && len(sf.files) > 0
+		if isOff {
+			offTopicCount++
+		}
+		entries = append(entries, session.OffTopicEntry{
+			ID:         sf.summary.ID,
+			Provider:   sf.summary.Provider,
+			Summary:    sf.summary.Summary,
+			Files:      files,
+			Overlap:    overlap,
+			IsOffTopic: isOff,
+			CreatedAt:  sf.summary.CreatedAt,
+		})
+	}
+
+	// Top files: sorted by frequency descending, capped at 10.
+	topFiles := topFilesByFrequency(fileFreq, 10)
+
+	return &session.OffTopicResult{
+		Branch:   req.Branch,
+		Sessions: entries,
+		TopFiles: topFiles,
+		Total:    len(entries),
+		OffTopic: offTopicCount,
+	}, nil
+}
+
+// computeOverlap returns the fraction of files in fileSet that appear in ≥2 sessions.
+// Returns 1.0 for empty file sets (sessions without files aren't off-topic).
+func computeOverlap(fileSet map[string]struct{}, fileFreq map[string]int) float64 {
+	if len(fileSet) == 0 {
+		return 1.0
+	}
+	shared := 0
+	for f := range fileSet {
+		if fileFreq[f] >= 2 {
+			shared++
+		}
+	}
+	return float64(shared) / float64(len(fileSet))
+}
+
+// uniqueFiles returns a sorted, deduplicated list of file paths from a session.
+func uniqueFiles(sess *session.Session) []string {
+	seen := make(map[string]struct{}, len(sess.FileChanges))
+	for _, fc := range sess.FileChanges {
+		seen[fc.FilePath] = struct{}{}
+	}
+	return sortedKeys(seen)
+}
+
+// sortedKeys returns the sorted keys of a string set.
+func sortedKeys(m map[string]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// topFilesByFrequency returns the top N files by how many sessions touch them.
+func topFilesByFrequency(freq map[string]int, n int) []string {
+	type entry struct {
+		file  string
+		count int
+	}
+	entries := make([]entry, 0, len(freq))
+	for f, c := range freq {
+		entries = append(entries, entry{f, c})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].count != entries[j].count {
+			return entries[i].count > entries[j].count
+		}
+		return entries[i].file < entries[j].file
+	})
+	if len(entries) > n {
+		entries = entries[:n]
+	}
+	result := make([]string, len(entries))
+	for i, e := range entries {
+		result[i] = e.file
+	}
+	return result
+}
+
+// ── Cost Forecasting ──
+
+// ForecastRequest contains inputs for cost forecasting.
+type ForecastRequest struct {
+	ProjectPath string // optional — limit to this project
+	Branch      string // optional — limit to this branch
+	Period      string // "daily" or "weekly" (default: "weekly")
+	Days        int    // look-back window in days (default: 90)
+}
+
+// Forecast analyzes historical session costs and projects future spending.
+// It buckets sessions by time period, applies linear regression for trend,
+// and recommends cheaper model alternatives.
+func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*session.ForecastResult, error) {
+	period := req.Period
+	if period == "" {
+		period = "weekly"
+	}
+	if period != "daily" && period != "weekly" {
+		return nil, fmt.Errorf("period must be 'daily' or 'weekly', got %q", period)
+	}
+
+	lookbackDays := req.Days
+	if lookbackDays <= 0 {
+		lookbackDays = 90
+	}
+
+	now := time.Now().UTC()
+	since := now.AddDate(0, 0, -lookbackDays)
+
+	// Query all sessions in the time window.
+	summaries, err := s.store.List(session.ListOptions{
+		ProjectPath: req.ProjectPath,
+		Branch:      req.Branch,
+		All:         req.Branch == "" && req.ProjectPath == "",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+
+	// Filter to time window.
+	var filtered []session.Summary
+	for _, sm := range summaries {
+		if !sm.CreatedAt.Before(since) {
+			filtered = append(filtered, sm)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return &session.ForecastResult{
+			Period:   period,
+			TrendDir: "stable",
+		}, nil
+	}
+
+	// Load full sessions for cost calculation + model breakdown.
+	var loaded []sessionCostEntry
+	globalModels := make(map[string]*forecastModelAgg)
+
+	for _, sm := range filtered {
+		full, getErr := s.store.Get(sm.ID)
+		if getErr != nil {
+			continue
+		}
+		estimate := s.pricing.SessionCost(full)
+		loaded = append(loaded, sessionCostEntry{
+			createdAt: full.CreatedAt,
+			cost:      estimate.TotalCost.TotalCost,
+			tokens:    full.TokenUsage.TotalTokens,
+		})
+		for _, mc := range estimate.PerModel {
+			g, ok := globalModels[mc.Model]
+			if !ok {
+				g = &forecastModelAgg{}
+				globalModels[mc.Model] = g
+			}
+			g.cost += mc.Cost.TotalCost
+			g.tokens += mc.InputTokens + mc.OutputTokens
+			g.count++
+		}
+	}
+
+	// Build time buckets.
+	bucketDuration := 7 * 24 * time.Hour // weekly
+	if period == "daily" {
+		bucketDuration = 24 * time.Hour
+	}
+
+	buckets := buildCostBuckets(loaded, since, now, bucketDuration)
+
+	// Compute totals.
+	var totalCost float64
+	for _, b := range buckets {
+		totalCost += b.Cost
+	}
+
+	avgPerBucket := 0.0
+	if len(buckets) > 0 {
+		avgPerBucket = totalCost / float64(len(buckets))
+	}
+
+	// Linear regression on bucket costs for trend.
+	trendPerDay, trendDir := computeTrend(buckets, bucketDuration)
+
+	// Project forward.
+	projected30d := math.Max(0, avgPerBucket*30.0/bucketDuration.Hours()*24+trendPerDay*15) // avg + mid-point trend
+	projected90d := math.Max(0, avgPerBucket*90.0/bucketDuration.Hours()*24+trendPerDay*45)
+
+	// Model breakdown with recommendations.
+	modelBreakdown := buildModelBreakdown(globalModels, totalCost, s.pricing)
+
+	return &session.ForecastResult{
+		Period:         period,
+		Buckets:        buckets,
+		TotalCost:      totalCost,
+		AvgPerBucket:   avgPerBucket,
+		SessionCount:   len(loaded),
+		Projected30d:   math.Round(projected30d*10000) / 10000, // round to 4 decimals
+		Projected90d:   math.Round(projected90d*10000) / 10000,
+		TrendPerDay:    math.Round(trendPerDay*10000) / 10000,
+		TrendDir:       trendDir,
+		ModelBreakdown: modelBreakdown,
+	}, nil
+}
+
+// buildCostBuckets groups session costs into time buckets.
+func buildCostBuckets(sessions []sessionCostEntry, start, end time.Time, bucketDur time.Duration) []session.CostBucket {
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	// Determine bucket boundaries.
+	var buckets []session.CostBucket
+	for t := start; t.Before(end); t = t.Add(bucketDur) {
+		bucketEnd := t.Add(bucketDur)
+		if bucketEnd.After(end) {
+			bucketEnd = end
+		}
+		buckets = append(buckets, session.CostBucket{
+			Start: t,
+			End:   bucketEnd,
+		})
+	}
+
+	// Assign sessions to buckets.
+	for _, sc := range sessions {
+		for i := range buckets {
+			if !sc.createdAt.Before(buckets[i].Start) && sc.createdAt.Before(buckets[i].End) {
+				buckets[i].Cost += sc.cost
+				buckets[i].Tokens += sc.tokens
+				buckets[i].SessionCount++
+				break
+			}
+		}
+	}
+
+	return buckets
+}
+
+// sessionCostEntry is a lightweight struct for bucket building.
+type sessionCostEntry struct {
+	createdAt time.Time
+	cost      float64
+	tokens    int
+}
+
+// forecastModelAgg accumulates per-model cost data for forecasting.
+type forecastModelAgg struct {
+	cost   float64
+	tokens int
+	count  int
+}
+
+// computeTrend applies simple linear regression on bucket costs to determine the trend.
+// Returns the daily cost change and a direction string.
+func computeTrend(buckets []session.CostBucket, bucketDur time.Duration) (float64, string) {
+	n := len(buckets)
+	if n < 2 {
+		return 0, "stable"
+	}
+
+	// Linear regression: y = a + b*x, where x is bucket index, y is cost.
+	var sumX, sumY, sumXY, sumX2 float64
+	for i, b := range buckets {
+		x := float64(i)
+		y := b.Cost
+		sumX += x
+		sumY += y
+		sumXY += x * y
+		sumX2 += x * x
+	}
+
+	nf := float64(n)
+	denom := nf*sumX2 - sumX*sumX
+	if denom == 0 {
+		return 0, "stable"
+	}
+
+	slope := (nf*sumXY - sumX*sumY) / denom // cost change per bucket
+	daysPerBucket := bucketDur.Hours() / 24.0
+	trendPerDay := slope / daysPerBucket
+
+	dir := "stable"
+	// Only flag as increasing/decreasing if the change is >5% of the average.
+	avg := sumY / nf
+	if avg > 0 && math.Abs(slope)/avg > 0.05 {
+		if trendPerDay > 0 {
+			dir = "increasing"
+		} else {
+			dir = "decreasing"
+		}
+	}
+
+	return trendPerDay, dir
+}
+
+// buildModelBreakdown creates per-model cost data with savings recommendations.
+func buildModelBreakdown(models map[string]*forecastModelAgg, totalCost float64, calc *pricing.Calculator) []session.ModelForecast {
+	entries := make([]session.ModelForecast, 0, len(models))
+
+	for model, agg := range models {
+		share := 0.0
+		if totalCost > 0 {
+			share = (agg.cost / totalCost) * 100
+		}
+
+		var rec string
+		if altModel, savings, ok := calc.CheaperAlternative(model); ok && savings > 0.1 {
+			rec = fmt.Sprintf("Switch to %s to save ~%.0f%%", altModel, savings*100)
+		}
+
+		entries = append(entries, session.ModelForecast{
+			Model:          model,
+			Cost:           agg.cost,
+			Tokens:         agg.tokens,
+			SessionCount:   agg.count,
+			Share:          math.Round(share*10) / 10,
+			Recommendation: rec,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Cost > entries[j].Cost // most expensive first
+	})
+
+	return entries
 }
 
 // looksLikeCommitSHA returns true if s looks like a hex commit SHA (7-40 chars).

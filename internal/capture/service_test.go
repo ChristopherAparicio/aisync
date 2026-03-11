@@ -343,6 +343,140 @@ func TestCapture_multiSession(t *testing.T) {
 	}
 }
 
+func TestCaptureAll_explicitProvider(t *testing.T) {
+	store := &mockStore{}
+	prov := &mockProvider{
+		name: session.ProviderOpenCode,
+		sessions: []session.Summary{
+			{ID: "oc-1", Provider: session.ProviderOpenCode, CreatedAt: time.Now()},
+			{ID: "oc-2", Provider: session.ProviderOpenCode, CreatedAt: time.Now().Add(-time.Hour)},
+			{ID: "oc-3", Provider: session.ProviderOpenCode, CreatedAt: time.Now().Add(-2 * time.Hour)},
+		},
+		exportSessions: map[session.ID]*session.Session{
+			"oc-1": {ID: "oc-1", Provider: session.ProviderOpenCode, Messages: []session.Message{{ID: "m1", Content: "hello"}}},
+			"oc-2": {ID: "oc-2", Provider: session.ProviderOpenCode, Messages: []session.Message{{ID: "m2", Content: "world"}}},
+			"oc-3": {ID: "oc-3", Provider: session.ProviderOpenCode, Messages: []session.Message{{ID: "m3", Content: "foo"}}},
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	results, err := svc.CaptureAll(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("CaptureAll() error: %v", err)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("CaptureAll() returned %d results, want 3", len(results))
+	}
+
+	// Verify all sessions were saved
+	if store.saveCount != 3 {
+		t.Errorf("saveCount = %d, want 3", store.saveCount)
+	}
+
+	// Verify IDs match
+	ids := make(map[session.ID]bool)
+	for _, r := range results {
+		ids[r.Session.ID] = true
+	}
+	for _, wantID := range []session.ID{"oc-1", "oc-2", "oc-3"} {
+		if !ids[wantID] {
+			t.Errorf("missing session %s in results", wantID)
+		}
+	}
+}
+
+func TestCaptureAll_noSessions(t *testing.T) {
+	store := &mockStore{}
+	prov := &mockProvider{
+		name:     session.ProviderOpenCode,
+		sessions: nil,
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	_, err := svc.CaptureAll(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err == nil {
+		t.Error("CaptureAll() should return error when no sessions found")
+	}
+}
+
+func TestCaptureByID(t *testing.T) {
+	store := &mockStore{}
+	prov := &mockProvider{
+		name: session.ProviderOpenCode,
+		sessions: []session.Summary{
+			{ID: "oc-1", Provider: session.ProviderOpenCode, CreatedAt: time.Now()},
+			{ID: "oc-2", Provider: session.ProviderOpenCode, CreatedAt: time.Now().Add(-time.Hour)},
+		},
+		exportSessions: map[session.ID]*session.Session{
+			"oc-1": {ID: "oc-1", Provider: session.ProviderOpenCode, Summary: "first"},
+			"oc-2": {ID: "oc-2", Provider: session.ProviderOpenCode, Summary: "second"},
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	// Capture only the second session
+	result, err := svc.CaptureByID(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	}, "oc-2")
+	if err != nil {
+		t.Fatalf("CaptureByID() error: %v", err)
+	}
+
+	if result.Session.ID != "oc-2" {
+		t.Errorf("Session.ID = %q, want %q", result.Session.ID, "oc-2")
+	}
+	if result.Session.Summary != "second" {
+		t.Errorf("Summary = %q, want %q", result.Session.Summary, "second")
+	}
+	if store.saveCount != 1 {
+		t.Errorf("saveCount = %d, want 1", store.saveCount)
+	}
+}
+
+func TestCaptureByID_notFound(t *testing.T) {
+	store := &mockStore{}
+	prov := &mockProvider{
+		name: session.ProviderOpenCode,
+		sessions: []session.Summary{
+			{ID: "oc-1", Provider: session.ProviderOpenCode, CreatedAt: time.Now()},
+		},
+		// No exportSessions map and no default exportSession → Export returns ErrSessionNotFound
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	_, err := svc.CaptureByID(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	}, "nonexistent")
+	if err == nil {
+		t.Error("CaptureByID() should return error for nonexistent session")
+	}
+}
+
 func TestCapture_noSessionsFound(t *testing.T) {
 	store := &mockStore{}
 	prov := &mockProvider{
@@ -409,6 +543,7 @@ func (m *mockStore) AddLink(_ session.ID, _ session.Link) error {
 func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
 	return nil, session.ErrSessionNotFound
 }
+func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
 func (m *mockStore) Close() error                                   { return nil }
 func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
 func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
@@ -421,20 +556,27 @@ func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntr
 }
 
 type mockProvider struct {
-	exportSession *session.Session
-	name          session.ProviderName
-	sessions      []session.Summary
+	exportSession  *session.Session
+	exportSessions map[session.ID]*session.Session // keyed exports for multi-session tests
+	name           session.ProviderName
+	sessions       []session.Summary
 }
 
 func (m *mockProvider) Name() session.ProviderName { return m.name }
 func (m *mockProvider) Detect(_ string, _ string) ([]session.Summary, error) {
 	return m.sessions, nil
 }
-func (m *mockProvider) Export(_ session.ID, _ session.StorageMode) (*session.Session, error) {
+func (m *mockProvider) Export(id session.ID, _ session.StorageMode) (*session.Session, error) {
+	// Check keyed exports first (for multi-session tests)
+	if m.exportSessions != nil {
+		if s, ok := m.exportSessions[id]; ok {
+			copy := *s
+			return &copy, nil
+		}
+	}
 	if m.exportSession == nil {
 		return nil, session.ErrSessionNotFound
 	}
-	// Return a copy to avoid mutation
 	s := *m.exportSession
 	return &s, nil
 }
