@@ -314,6 +314,146 @@ func TestSessionCost_userMessagesIgnored(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Dual cost / billing type tests
+// ---------------------------------------------------------------------------
+
+func TestSessionCost_subscriptionBilling(t *testing.T) {
+	c := NewCalculator()
+
+	// All messages from anthropic with cost=0 → subscription billing.
+	sess := &session.Session{
+		TokenUsage: session.TokenUsage{InputTokens: 10_000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 5_000, ProviderID: "anthropic", ProviderCost: 0},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 3_000, ProviderID: "anthropic", ProviderCost: 0},
+		},
+	}
+
+	est := c.SessionCost(sess)
+	bd := est.Breakdown
+
+	if bd.BillingType != session.BillingSubscription {
+		t.Errorf("BillingType = %q, want %q", bd.BillingType, session.BillingSubscription)
+	}
+	if bd.ActualCost.TotalCost != 0 {
+		t.Errorf("ActualCost = %f, want 0", bd.ActualCost.TotalCost)
+	}
+	if bd.APICost.TotalCost <= 0 {
+		t.Error("APICost should be positive for known model")
+	}
+	assertFloat(t, "Savings", bd.Savings.TotalCost, bd.APICost.TotalCost)
+}
+
+func TestSessionCost_apiBilling(t *testing.T) {
+	c := NewCalculator()
+
+	// All messages from bedrock with cost>0 → API billing.
+	sess := &session.Session{
+		TokenUsage: session.TokenUsage{InputTokens: 10_000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 5_000, ProviderID: "amazon-bedrock", ProviderCost: 0.05},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 3_000, ProviderID: "amazon-bedrock", ProviderCost: 0.03},
+		},
+	}
+
+	est := c.SessionCost(sess)
+	bd := est.Breakdown
+
+	if bd.BillingType != session.BillingAPI {
+		t.Errorf("BillingType = %q, want %q", bd.BillingType, session.BillingAPI)
+	}
+	assertFloat(t, "ActualCost", bd.ActualCost.TotalCost, 0.08)
+	assertFloat(t, "Savings", bd.Savings.TotalCost, bd.APICost.TotalCost-0.08)
+}
+
+func TestSessionCost_mixedBilling(t *testing.T) {
+	c := NewCalculator()
+
+	// Mix: one bedrock (cost>0) + one anthropic (cost=0) → mixed.
+	sess := &session.Session{
+		TokenUsage: session.TokenUsage{InputTokens: 20_000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 5_000, ProviderID: "amazon-bedrock", ProviderCost: 0.10},
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 5_000, ProviderID: "anthropic", ProviderCost: 0},
+		},
+	}
+
+	est := c.SessionCost(sess)
+	bd := est.Breakdown
+
+	if bd.BillingType != session.BillingMixed {
+		t.Errorf("BillingType = %q, want %q", bd.BillingType, session.BillingMixed)
+	}
+	assertFloat(t, "ActualCost", bd.ActualCost.TotalCost, 0.10)
+	if bd.Savings.TotalCost <= 0 {
+		t.Error("expected positive savings for mixed billing")
+	}
+}
+
+func TestSessionCost_breakdownMatchesTotalCost(t *testing.T) {
+	c := NewCalculator()
+
+	sess := &session.Session{
+		TokenUsage: session.TokenUsage{InputTokens: 50_000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-opus-4", OutputTokens: 10_000, ProviderID: "anthropic", ProviderCost: 0},
+		},
+	}
+
+	est := c.SessionCost(sess)
+
+	// TotalCost (backward-compat) should equal Breakdown.APICost.
+	assertFloat(t, "TotalCost vs APICost", est.TotalCost.TotalCost, est.Breakdown.APICost.TotalCost)
+}
+
+func TestSessionCost_noProviderData(t *testing.T) {
+	c := NewCalculator()
+
+	// Legacy messages without ProviderID/ProviderCost (zero values).
+	// All ProviderCost==0, no ProviderID, so hasAPIMsgs stays false → subscription.
+	sess := &session.Session{
+		TokenUsage: session.TokenUsage{InputTokens: 10_000},
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 5_000},
+		},
+	}
+
+	est := c.SessionCost(sess)
+	bd := est.Breakdown
+
+	if bd.BillingType != session.BillingSubscription {
+		t.Errorf("BillingType = %q, want %q for legacy data", bd.BillingType, session.BillingSubscription)
+	}
+	if bd.ActualCost.TotalCost != 0 {
+		t.Errorf("ActualCost = %f, want 0 for legacy data", bd.ActualCost.TotalCost)
+	}
+	// Savings should equal the full API cost since actual is 0.
+	assertFloat(t, "Savings", bd.Savings.TotalCost, bd.APICost.TotalCost)
+}
+
+func TestSessionCost_breakdownCurrencyUSD(t *testing.T) {
+	c := NewCalculator()
+
+	sess := &session.Session{
+		Messages: []session.Message{
+			{Role: session.RoleAssistant, Model: "claude-sonnet-4", OutputTokens: 1_000, ProviderID: "anthropic", ProviderCost: 0},
+		},
+	}
+
+	est := c.SessionCost(sess)
+
+	if est.Breakdown.APICost.Currency != "USD" {
+		t.Errorf("APICost.Currency = %q, want USD", est.Breakdown.APICost.Currency)
+	}
+	if est.Breakdown.ActualCost.Currency != "USD" {
+		t.Errorf("ActualCost.Currency = %q, want USD", est.Breakdown.ActualCost.Currency)
+	}
+	if est.Breakdown.Savings.Currency != "USD" {
+		t.Errorf("Savings.Currency = %q, want USD", est.Breakdown.Savings.Currency)
+	}
+}
+
 func assertFloat(t *testing.T, name string, got, want float64) {
 	t.Helper()
 	if math.Abs(got-want) > 0.0001 {

@@ -121,9 +121,17 @@ func runCapture(opts *Options) error {
 		summarizeModel = cfg.GetSummarizeModel()
 	}
 
+	// For --all captures, don't force the current branch on every session.
+	// OpenCode sessions don't track branches — forcing the current branch
+	// would incorrectly assign "main" to sessions worked on other branches.
+	captureBranch := branch
+	if opts.All {
+		captureBranch = "" // each session keeps whatever branch the provider reports
+	}
+
 	baseReq := service.CaptureRequest{
 		ProjectPath:  topLevel,
-		Branch:       branch,
+		Branch:       captureBranch,
 		Mode:         mode,
 		ProviderName: providerName,
 		Message:      opts.Message,
@@ -142,7 +150,7 @@ func runCapture(opts *Options) error {
 	}
 }
 
-func runCaptureSingle(opts *Options, svc *service.SessionService, req service.CaptureRequest) error {
+func runCaptureSingle(opts *Options, svc service.SessionServicer, req service.CaptureRequest) error {
 	out := opts.IO.Out
 
 	result, err := svc.Capture(req)
@@ -159,7 +167,7 @@ func runCaptureSingle(opts *Options, svc *service.SessionService, req service.Ca
 	return nil
 }
 
-func runCaptureAll(opts *Options, svc *service.SessionService, req service.CaptureRequest) error {
+func runCaptureAll(opts *Options, svc service.SessionServicer, req service.CaptureRequest) error {
 	out := opts.IO.Out
 
 	results, err := svc.CaptureAll(req)
@@ -171,8 +179,23 @@ func runCaptureAll(opts *Options, svc *service.SessionService, req service.Captu
 	}
 
 	if !opts.Auto {
-		fmt.Fprintf(out, "Captured %d sessions\n\n", len(results))
+		var skipped int
+		for _, r := range results {
+			if r.Skipped {
+				skipped++
+			}
+		}
+		fmt.Fprintf(out, "Captured %d sessions", len(results)-skipped)
+		if skipped > 0 {
+			fmt.Fprintf(out, " (%d unchanged, skipped)", skipped)
+		}
+		fmt.Fprintln(out)
+		fmt.Fprintln(out)
+
 		for i, r := range results {
+			if r.Skipped {
+				continue
+			}
 			fmt.Fprintf(out, "[%d/%d] ", i+1, len(results))
 			printResult(opts, out, r)
 			fmt.Fprintln(out)
@@ -181,7 +204,7 @@ func runCaptureAll(opts *Options, svc *service.SessionService, req service.Captu
 	return nil
 }
 
-func runCaptureByID(opts *Options, svc *service.SessionService, req service.CaptureRequest) error {
+func runCaptureByID(opts *Options, svc service.SessionServicer, req service.CaptureRequest) error {
 	out := opts.IO.Out
 
 	result, err := svc.CaptureByID(req, session.ID(opts.SessionID))
@@ -199,6 +222,10 @@ func runCaptureByID(opts *Options, svc *service.SessionService, req service.Capt
 }
 
 func printResult(opts *Options, out io.Writer, result *service.CaptureResult) {
+	if result.Skipped {
+		fmt.Fprintf(out, "Skipped session %s (unchanged)\n", result.Session.ID)
+		return
+	}
 	fmt.Fprintf(out, "Captured session %s\n", result.Session.ID)
 	fmt.Fprintf(out, "  Provider: %s\n", result.Provider)
 	fmt.Fprintf(out, "  Branch:   %s\n", result.Session.Branch)

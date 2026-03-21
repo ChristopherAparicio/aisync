@@ -1,5 +1,18 @@
 {{define "title"}}Costs — aisync{{end}}
 
+{{define "project-selector"}}
+{{if .Projects}}
+<div class="project-selector">
+  <select class="project-select" onchange="if(this.value){location.href='/costs?project='+encodeURIComponent(this.value)}else{location.href='/costs'}">
+    <option value="">All projects</option>
+    {{range .Projects}}
+    <option value="{{.Path}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+    {{end}}
+  </select>
+</div>
+{{end}}
+{{end}}
+
 {{define "content"}}
 <h1 class="page-title">Cost Dashboard</h1>
 
@@ -15,11 +28,12 @@
   <div class="kpi-card">
     <div class="label">Total Cost</div>
     <div class="value">{{formatCost .TotalCost}}</div>
-    <div class="sub">across {{.TotalSessions}} sessions</div>
+    <div class="sub kpi-savings-inline">↓ {{formatCost .Savings}} saved</div>
   </div>
   <div class="kpi-card">
     <div class="label">Avg / Session</div>
     <div class="value">{{formatCost .AvgPerSession}}</div>
+    <div class="sub">{{.TotalSessions}} sessions</div>
   </div>
   {{if .HasForecast}}
   <div class="kpi-card">

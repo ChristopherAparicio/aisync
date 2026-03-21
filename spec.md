@@ -1121,3 +1121,93 @@ This file is placed at project root or in `.aisync/CONTEXT.md` and can be refere
 20. **MCP transport:** Which MCP transport to use — stdio (simple, one process) or HTTP/SSE (allows remote)? → Start with stdio for local AI tool integration.
 
 21. **Investigation scope:** Should the investigation agent have write access to the codebase (create files, modify configs) or only propose changes as diffs? → Start with read-only analysis + diff proposals, optionally create PR.
+
+---
+
+## Future Vision
+
+These are potential features and integrations identified during development. They represent natural extensions of the current platform and are documented here for future planning.
+
+### Cross-Model Replay (Phase 6.1)
+
+**Goal:** Replay a session with a different LLM model to compare quality, cost, and speed.
+
+| Feature | Description |
+|---------|-------------|
+| `aisync replay <id> --model <model>` | Replay the user messages of a session through a different model |
+| `aisync replay <id> --provider <provider>` | Replay via a different provider (e.g., Claude → OpenCode → Ollama) |
+| `aisync compare <id1> <id2>` | Side-by-side comparison: token delta, cost delta, file overlap, output diff |
+| Replay sessions stored with `replay_of` link | Maintain the relationship between original and replay for analysis |
+
+**Architecture considerations:**
+- Requires an embedded LLM client (not just provider adapters) capable of sending user messages and receiving responses
+- The existing Session Replay engine (Phase 8.8) handles git worktree isolation; cross-model adds the LLM interaction layer
+- Could leverage the existing `llm.Client` interface with new adapters for direct API calls
+
+### CI/CD Integration (Phase 4)
+
+**Goal:** Automatically create fix sessions when CI fails on a PR.
+
+| Feature | Description |
+|---------|-------------|
+| GitHub Action | On CI failure, prepare a fix session with original context + CI error logs |
+| Webhook notification | "Session available to fix PR #42" — notify developers via webhook |
+| Auto-context loading | When a developer starts a new session on a broken PR, auto-load the original session context + CI errors |
+
+**Implementation path:**
+- GitHub Action: uses `aisync` CLI + `gh` to create a new session pre-loaded with the failing session's context + CI output
+- Webhook: leverage existing webhook infrastructure (Phase 9.2) with a new `session.ci_fix_available` event type
+- Requires: GitHub Actions marketplace packaging, CI log parsing, session pre-seeding
+
+### External Integrations
+
+| Integration | Description | Dependency |
+|-------------|-------------|------------|
+| **Slack** | Post session summaries, analysis alerts, cost reports to Slack channels | Slack webhook URL or Bot token |
+| **n8n / Zapier** | Generic webhook consumer for workflow automation | Existing webhook infrastructure (Phase 9.2) |
+| **GitLab** | Platform adapter for GitLab MRs (currently GitHub-only) | `internal/platform/` interface already supports this |
+| **Bitbucket** | Platform adapter for Bitbucket PRs | Same platform interface |
+| **Parlay** | Parlay as webhook consumer for cross-agent orchestration | Requires Parlay webhook endpoint (blocked) |
+
+### Database Drivers
+
+The `database.driver` config key is already implemented (currently validates `"sqlite"` only). Future drivers could include:
+
+| Driver | Use Case |
+|--------|----------|
+| **PostgreSQL** | Team/enterprise deployment with shared server |
+| **MySQL** | Alternative RDBMS for existing infrastructure |
+| **DuckDB** | Analytics-oriented queries on large session datasets |
+
+**Implementation path:** The `storage.Store` interface (11 methods) is already abstracted. A new driver means implementing this interface + a migration strategy.
+
+### Telemetry & Observability
+
+The telemetry framework is implemented (`internal/telemetry/`) with a `Collector` interface, `LocalCollector` (JSONL file), and `NoopCollector`. Future extensions:
+
+| Feature | Description |
+|---------|-------------|
+| **Remote collector** | Send anonymous usage stats to an aisync telemetry endpoint |
+| **Prometheus metrics** | Expose `/metrics` endpoint for server mode (session count, token throughput, analysis latency) |
+| **OpenTelemetry** | Trace spans for capture/analyze/restore operations |
+| **Cost alerts** | Notify when daily/weekly cost exceeds a configurable threshold |
+
+### AI-Powered Features
+
+| Feature | Description |
+|---------|-------------|
+| **Session clustering** | Group similar sessions using embedding similarity (not just file overlap) |
+| **Automatic retrospective** | Weekly LLM-generated report: what went well, recurring problems, cost trends |
+| **Smart skill generation** | Automatically create SKILL.md files from patterns observed in successful sessions |
+| **Agent benchmarking** | Compare agent effectiveness across projects/providers using analysis scores |
+| **Conversation search** | Semantic search across session messages using embeddings |
+
+### Deployment & Packaging
+
+| Feature | Description |
+|---------|-------------|
+| **Docker image** | Official Docker image for `aisync serve` |
+| **Helm chart** | Kubernetes deployment for team/enterprise |
+| **Homebrew formula** | `brew install aisync` |
+| **APT/RPM packages** | Linux distribution packages |
+| **VS Code extension** | Session browser, inline analysis, cost indicators |

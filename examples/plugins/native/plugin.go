@@ -77,3 +77,7 @@ func (s *nativeScanner) Mode() string {
 var NewScanner = func(mode string) interface{} {
 	return &nativeScanner{mode: mode}
 }
+
+// main is required by Go for package main but unused in plugin mode.
+// Build with: go build -buildmode=plugin -o example-native-scanner.so ./examples/plugins/native/
+func main() {}

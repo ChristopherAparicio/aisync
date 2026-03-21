@@ -17,7 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
 //go:embed templates/*.html
@@ -28,18 +30,26 @@ var staticFS embed.FS
 
 // Server is the aisync web dashboard server.
 type Server struct {
-	sessionSvc *service.SessionService
-	httpServer *http.Server
-	pages      map[string]*template.Template // page templates (layout + page)
-	partials   *template.Template            // standalone partials (no layout)
-	logger     *log.Logger
+	sessionSvc  service.SessionServicer
+	analysisSvc service.AnalysisServicer // optional — nil disables analysis features
+	registrySvc *service.RegistryService // optional — nil disables project/capability features
+	store       storage.Store            // optional — nil disables user preferences
+	cfg         *config.Config           // optional — nil uses defaults
+	httpServer  *http.Server
+	pages       map[string]*template.Template // page templates (layout + page)
+	partials    *template.Template            // standalone partials (no layout)
+	logger      *log.Logger
 }
 
 // Config holds the configuration for creating a new web Server.
 type Config struct {
-	SessionService *service.SessionService
-	Addr           string      // e.g. ":8372" or "127.0.0.1:8372"
-	Logger         *log.Logger // optional — defaults to stderr
+	SessionService  service.SessionServicer
+	AnalysisService service.AnalysisServicer // optional — nil disables analysis features
+	RegistryService *service.RegistryService // optional — nil disables project/capability features
+	Store           storage.Store            // optional — nil disables user preferences
+	AppConfig       *config.Config           // optional — nil uses defaults
+	Addr            string                   // e.g. ":8372" or "127.0.0.1:8372"
+	Logger          *log.Logger              // optional — defaults to stderr
 }
 
 // New creates a web Server with the given configuration.
@@ -58,9 +68,13 @@ func New(cfg Config) (*Server, error) {
 	pageSpecs := [][]string{
 		{"templates/dashboard.html"},
 		{"templates/sessions.html", "templates/sessions_table.html"},
-		{"templates/session_detail.html", "templates/restore_command.html"},
+		{"templates/session_detail.html", "templates/restore_command.html", "templates/analysis_partial.html"},
 		{"templates/branch_explorer.html"},
 		{"templates/cost_dashboard.html"},
+		{"templates/projects.html"},
+		{"templates/branch_timeline.html"},
+		{"templates/usage.html"},
+		{"templates/analytics.html"},
 	}
 
 	pages := make(map[string]*template.Template, len(pageSpecs))
@@ -78,20 +92,25 @@ func New(cfg Config) (*Server, error) {
 	partials, err := template.New("").Funcs(funcs).ParseFS(templateFS,
 		"templates/sessions_table.html",
 		"templates/restore_command.html",
+		"templates/analysis_partial.html",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("parse partials: %w", err)
 	}
 
 	s := &Server{
-		sessionSvc: cfg.SessionService,
-		pages:      pages,
-		partials:   partials,
-		logger:     logger,
+		sessionSvc:  cfg.SessionService,
+		analysisSvc: cfg.AnalysisService,
+		registrySvc: cfg.RegistryService,
+		store:       cfg.Store,
+		cfg:         cfg.AppConfig,
+		pages:       pages,
+		partials:    partials,
+		logger:      logger,
 	}
 
 	mux := http.NewServeMux()
-	s.registerRoutes(mux)
+	s.RegisterRoutes(mux)
 
 	s.httpServer = &http.Server{
 		Addr:              cfg.Addr,
@@ -104,8 +123,10 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// registerRoutes registers all web routes.
-func (s *Server) registerRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers all web dashboard routes on the given ServeMux.
+// This allows external callers (e.g., a unified server) to mount web routes
+// alongside API routes on a shared mux.
+func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Static assets
 	staticSub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
@@ -115,11 +136,20 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sessions", s.handleSessions)
 	mux.HandleFunc("GET /sessions/{id}", s.handleSessionDetail)
 	mux.HandleFunc("GET /branches", s.handleBranches)
+	mux.HandleFunc("GET /branches/{name...}", s.handleBranchTimeline)
+	mux.HandleFunc("GET /projects", s.handleProjects)
 	mux.HandleFunc("GET /costs", s.handleCosts)
+	mux.HandleFunc("GET /usage", s.handleUsage)
+	// mux.HandleFunc("GET /analytics", s.handleAnalytics) // TODO: implement analytics page
 
 	// HTMX partials
 	mux.HandleFunc("GET /partials/sessions-table", s.handleSessionsTable)
 	mux.HandleFunc("GET /partials/restore-command/{id}", s.handleRestoreCommand)
+	mux.HandleFunc("GET /partials/analysis/{id}", s.handleAnalysisPartial)
+	mux.HandleFunc("POST /partials/analyze/{id}", s.handleRunAnalysis)
+
+	// API endpoints (JSON)
+	mux.HandleFunc("GET /api/projects", s.handleAPIProjects)
 }
 
 // ListenAndServe starts the web server and blocks until shutdown.

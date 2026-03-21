@@ -24,6 +24,8 @@ const defaultTimeout = 30 * time.Second
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	authToken  string // JWT Bearer token (optional)
+	apiKey     string // API key (optional, alternative to token)
 }
 
 // Option configures a Client.
@@ -40,6 +42,20 @@ func WithHTTPClient(hc *http.Client) Option {
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) {
 		c.httpClient.Timeout = d
+	}
+}
+
+// WithAuthToken sets a JWT Bearer token for authenticated requests.
+func WithAuthToken(token string) Option {
+	return func(c *Client) {
+		c.authToken = token
+	}
+}
+
+// WithAPIKey sets an API key for authenticated requests.
+func WithAPIKey(key string) Option {
+	return func(c *Client) {
+		c.apiKey = key
 	}
 }
 
@@ -97,11 +113,39 @@ func (c *Client) Health() error {
 	return err
 }
 
+// IsAvailable probes the server health with a short timeout (500ms).
+// Returns true if the server responds to the health check, false otherwise.
+// This is used by the CLI to decide between remote and local mode.
+func (c *Client) IsAvailable() bool {
+	probe := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := probe.Get(c.baseURL + "/api/v1/health")
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
 // ── Internal HTTP helpers ──
+
+// setAuthHeaders injects authentication headers if configured.
+func (c *Client) setAuthHeaders(req *http.Request) {
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	} else if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+}
 
 // doGet performs a GET request and returns the response body.
 func (c *Client) doGet(path string) ([]byte, error) {
-	resp, err := c.httpClient.Get(c.baseURL + path)
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create GET request: %w", err)
+	}
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}
@@ -116,7 +160,14 @@ func (c *Client) doPost(path string, body any) ([]byte, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	resp, err := c.httpClient.Post(c.baseURL+path, "application/json", bytes.NewReader(data))
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("create POST request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", path, err)
 	}
@@ -130,10 +181,33 @@ func (c *Client) doDelete(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create DELETE request: %w", err)
 	}
+	c.setAuthHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("DELETE %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	return c.readResponse(resp)
+}
+
+// doPatch performs a PATCH request with a JSON body.
+func (c *Client) doPatch(path string, body any) ([]byte, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("create PATCH request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("PATCH %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 	return c.readResponse(resp)

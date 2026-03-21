@@ -22,3 +22,21 @@ type Provider interface {
 	// Returns ErrImportNotSupported if CanImport() is false.
 	Import(s *session.Session) error
 }
+
+// Freshness holds the minimal data needed to determine if a session
+// has changed since the last capture. Used by the skip-if-unchanged
+// optimization to avoid re-exporting unmodified sessions.
+type Freshness struct {
+	MessageCount int   // number of messages in the source session
+	UpdatedAt    int64 // source session's last update timestamp (epoch ms)
+}
+
+// FreshnessChecker is an optional interface that providers can implement
+// to support the skip-if-unchanged optimization. The capture service
+// checks for this via type assertion before calling Export.
+type FreshnessChecker interface {
+	// SessionFreshness returns the message count and last-updated timestamp
+	// for a session directly from the source, without performing a full export.
+	// Returns an error if the session doesn't exist or can't be queried.
+	SessionFreshness(sessionID session.ID) (*Freshness, error)
+}

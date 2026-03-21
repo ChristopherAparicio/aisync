@@ -16,110 +16,22 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
-// mockStore for search tests.
-type mockStore struct {
-	sessions  map[session.ID]*session.Session
-	summaries []session.Summary
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{
-		sessions: make(map[session.ID]*session.Session),
-	}
-}
-
-func (m *mockStore) Save(s *session.Session) error {
-	m.sessions[s.ID] = s
-	m.summaries = append(m.summaries, session.Summary{
-		ID:           s.ID,
-		Provider:     s.Provider,
-		Agent:        s.Agent,
-		Branch:       s.Branch,
-		Summary:      s.Summary,
-		MessageCount: len(s.Messages),
-		TotalTokens:  s.TokenUsage.TotalTokens,
-		CreatedAt:    s.CreatedAt,
-		OwnerID:      s.OwnerID,
-	})
-	return nil
-}
-
-func (m *mockStore) Get(id session.ID) (*session.Session, error) {
-	s, ok := m.sessions[id]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	return m.summaries, nil
-}
-
-func (m *mockStore) Delete(_ session.ID) error                  { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)   { return 0, nil }
-func (m *mockStore) Close() error                               { return nil }
-
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(q session.SearchQuery) (*session.SearchResult, error) {
-	// Simple search simulation: filter summaries by keyword in Summary field
-	var matched []session.Summary
-	for _, s := range m.summaries {
-		if q.Keyword != "" && !strings.Contains(strings.ToLower(s.Summary), strings.ToLower(q.Keyword)) {
-			continue
-		}
-		if q.Branch != "" && s.Branch != q.Branch {
-			continue
-		}
-		if q.Provider != "" && s.Provider != q.Provider {
-			continue
-		}
-		matched = append(matched, s)
-	}
-	if matched == nil {
-		matched = []session.Summary{}
-	}
-	limit := q.Limit
-	if limit <= 0 {
-		limit = 50
-	}
-	return &session.SearchResult{
-		Sessions:   matched,
-		TotalCount: len(matched),
-		Limit:      limit,
-		Offset:     q.Offset,
-	}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
-
-func searchTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
+func searchTestFactory(t *testing.T, store *testutil.MockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 
 	if store == nil {
-		store = newMockStore()
+		store = testutil.NewMockStore()
 	}
+	store.SearchFunc = testutil.DefaultSearchFunc(store)
 	gitClient := git.NewClient(repoDir)
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
 		StoreFunc: func() (storage.Store, error) { return store, nil },
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store: store,
 				Git:   gitClient,
@@ -144,7 +56,7 @@ func TestNewCmdSearch_flags(t *testing.T) {
 }
 
 func TestSearch_noResults(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	f, ios := searchTestFactory(t, store)
 
 	opts := &Options{
@@ -165,7 +77,7 @@ func TestSearch_noResults(t *testing.T) {
 }
 
 func TestSearch_tableOutput(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	s1 := &session.Session{
 		ID:       "search-1",
@@ -214,7 +126,7 @@ func TestSearch_tableOutput(t *testing.T) {
 }
 
 func TestSearch_jsonOutput(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	s1 := &session.Session{
 		ID:       "json-1",
@@ -255,7 +167,7 @@ func TestSearch_jsonOutput(t *testing.T) {
 }
 
 func TestSearch_quietOutput(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	for _, id := range []string{"quiet-1", "quiet-2"} {
 		_ = store.Save(&session.Session{

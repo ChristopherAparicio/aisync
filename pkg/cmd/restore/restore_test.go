@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
@@ -50,91 +49,13 @@ func (m *mockProvider) Import(s *session.Session) error {
 	return nil
 }
 
-// mockStore for restore tests — stores sessions in memory.
-type mockStore struct {
-	sessions map[session.ID]*session.Session
-	byBranch map[string]*session.Session  // key = "projectPath:branch"
-	links    map[string][]session.Summary // key = "linkType:ref"
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{
-		sessions: make(map[session.ID]*session.Session),
-		byBranch: make(map[string]*session.Session),
-		links:    make(map[string][]session.Summary),
-	}
-}
-
-func (m *mockStore) Save(s *session.Session) error {
-	m.sessions[s.ID] = s
-	key := s.ProjectPath + ":" + s.Branch
-	m.byBranch[key] = s
-	return nil
-}
-
-func (m *mockStore) Get(id session.ID) (*session.Session, error) {
-	s, ok := m.sessions[id]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-
-func (m *mockStore) GetLatestByBranch(projectPath, branch string) (*session.Session, error) {
-	key := projectPath + ":" + branch
-	s, ok := m.byBranch[key]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
-func (m *mockStore) Delete(_ session.ID) error                             { return nil }
-
-func (m *mockStore) AddLink(sessionID session.ID, link session.Link) error {
-	key := string(link.LinkType) + ":" + link.Ref
-	s, ok := m.sessions[sessionID]
-	if !ok {
-		return session.ErrSessionNotFound
-	}
-	summary := session.Summary{
-		ID:       s.ID,
-		Provider: s.Provider,
-		Branch:   s.Branch,
-	}
-	m.links[key] = append(m.links[key], summary)
-	return nil
-}
-
-func (m *mockStore) GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error) {
-	key := string(linkType) + ":" + ref
-	summaries, ok := m.links[key]
-	if !ok || len(summaries) == 0 {
-		return nil, session.ErrSessionNotFound
-	}
-	return summaries, nil
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
-func (m *mockStore) Close() error                                   { return nil }
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
-
-func testFactory(t *testing.T, prov *mockProvider, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams, string) {
+func testFactory(t *testing.T, prov *mockProvider, store *testutil.MockStore) (*cmdutil.Factory, *iostreams.IOStreams, string) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 
 	if store == nil {
-		store = newMockStore()
+		store = testutil.NewMockStore()
 	}
 	gitClient := git.NewClient(repoDir)
 
@@ -152,7 +73,7 @@ func testFactory(t *testing.T, prov *mockProvider, store *mockStore) (*cmdutil.F
 		RegistryFunc: func() *provider.Registry {
 			return registry
 		},
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store:    store,
 				Registry: registry,
@@ -170,7 +91,7 @@ func TestRestore_byBranch_contextFallback(t *testing.T) {
 		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	f, ios, repoDir := testFactory(t, prov, store)
 
@@ -221,7 +142,7 @@ func TestRestore_bySessionID(t *testing.T) {
 		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("restore-by-id")
 	sess.Provider = session.ProviderClaudeCode
@@ -254,7 +175,7 @@ func TestRestore_asContext(t *testing.T) {
 		name:      session.ProviderClaudeCode,
 		canImport: true,
 	}
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("restore-ctx")
 	sess.Provider = session.ProviderClaudeCode
@@ -288,7 +209,7 @@ func TestRestore_withProviderFlag(t *testing.T) {
 		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("restore-prov")
 	sess.Provider = session.ProviderOpenCode
@@ -319,7 +240,7 @@ func TestRestore_withAgentFlag(t *testing.T) {
 		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("restore-agent")
 	sess.Provider = session.ProviderClaudeCode
@@ -351,7 +272,7 @@ func TestRestore_nativeImport(t *testing.T) {
 		name:      session.ProviderClaudeCode,
 		canImport: true,
 	}
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("restore-native")
 	sess.Provider = session.ProviderClaudeCode
@@ -434,7 +355,7 @@ func TestRestore_byPR(t *testing.T) {
 		name:      session.ProviderClaudeCode,
 		canImport: false,
 	}
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("restore-pr-42")
 	sess.Provider = session.ProviderClaudeCode
@@ -469,7 +390,7 @@ func TestRestore_byPR(t *testing.T) {
 }
 
 func TestRestore_byPR_notFound(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	f, ios, _ := testFactory(t, nil, store)
 
 	opts := &Options{

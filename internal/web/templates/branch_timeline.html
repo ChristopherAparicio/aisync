@@ -1,0 +1,69 @@
+{{define "branch_timeline.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}{{.BranchName}} — Timeline{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <h1 class="page-title">
+    <a href="/branches" class="text-muted" style="text-decoration:none">&larr;</a>
+    Branch: <span class="font-mono">{{.BranchName}}</span>
+  </h1>
+</div>
+
+{{if not .HasEntries}}
+<div class="empty-state">
+  <p>No activity found on this branch.</p>
+</div>
+{{else}}
+<div class="branch-timeline">
+  {{range .Entries}}
+  {{if eq .Type "session"}}
+  <div class="tl-entry tl-session">
+    <div class="tl-marker tl-marker-session" title="AI Session"></div>
+    <div class="tl-content">
+      <div class="tl-header">
+        <a href="/sessions/{{.SessionID}}" class="tl-id font-mono">{{truncate .SessionID 12}}</a>
+        <span class="badge badge-provider">{{.SessionProvider}}</span>
+        {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
+        <span class="tl-when text-muted">{{.TimeAgo}}</span>
+        <span class="tl-stats font-mono text-muted">{{.SessionMessages}} msgs · {{formatTokens .SessionTokens}}</span>
+      </div>
+      {{if .SessionSummary}}
+      <div class="tl-summary">{{.SessionSummary}}</div>
+      {{end}}
+      {{if or .Intent .Outcome}}
+      <div class="tl-objective">
+        {{if .Intent}}<div class="tl-intent"><strong>Intent:</strong> {{.Intent}}</div>{{end}}
+        {{if .Outcome}}<div class="tl-outcome"><strong>Outcome:</strong> {{.Outcome}}</div>{{end}}
+      </div>
+      {{end}}
+      {{if .ExplainShort}}
+      <div class="tl-explain">{{.ExplainShort}}</div>
+      {{end}}
+    </div>
+  </div>
+
+  {{else if eq .Type "commit"}}
+  <div class="tl-entry tl-commit">
+    <div class="tl-marker tl-marker-commit" title="Git Commit"></div>
+    <div class="tl-content">
+      <div class="tl-header">
+        <span class="tl-sha font-mono">{{truncate .CommitSHA 8}}</span>
+        <span class="tl-commit-msg">{{.CommitMessage}}</span>
+        <span class="tl-when text-muted">{{.TimeAgo}}</span>
+      </div>
+      <div class="tl-commit-meta text-muted">
+        by {{.CommitAuthor}}
+        {{if .LinkedSessionID}}
+        · <a href="/sessions/{{.LinkedSessionID}}" class="text-muted">linked to {{truncate .LinkedSessionID 10}}</a>
+        {{end}}
+      </div>
+    </div>
+  </div>
+  {{end}}
+  {{end}}
+</div>
+{{end}}
+{{end}}

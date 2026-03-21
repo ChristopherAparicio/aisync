@@ -4,28 +4,76 @@
 
 {{define "title"}}aisync — Sessions{{end}}
 
+{{define "project-selector"}}
+{{if .Projects}}
+<div class="project-selector">
+  <select class="project-select" onchange="if(this.value){location.href='/sessions?project='+encodeURIComponent(this.value)}else{location.href='/sessions'}">
+    <option value="">All projects</option>
+    {{range .Projects}}
+    <option value="{{.Path}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+    {{end}}
+  </select>
+</div>
+{{end}}
+{{end}}
+
 {{define "content"}}
 <div class="section">
-  <h2 class="section-title">Sessions</h2>
+  <h2 class="section-title">Sessions <span class="text-muted filter-count">({{.TotalCount}})</span></h2>
 
-  <!-- Filters -->
+  <!-- Primary Filters -->
   <div class="filters"
        hx-get="/partials/sessions-table"
-       hx-trigger="input changed delay:300ms from:.filter-input, change from:.filter-select"
+       hx-trigger="input changed delay:300ms from:.filter-input, change from:.filter-select, change from:.filter-date"
        hx-target="#sessions-table"
-       hx-include=".filter-input, .filter-select"
+       hx-include=".filter-input, .filter-select, .filter-date, .filter-hidden"
        hx-push-url="false">
-    <input type="text" name="keyword" value="{{.FilterKeyword}}"
-           class="filter-input" placeholder="Search sessions...">
-    <input type="text" name="branch" value="{{.FilterBranch}}"
-           class="filter-input" placeholder="Branch filter...">
-    <select name="provider" class="filter-select">
-      <option value="">All providers</option>
-      <option value="claude-code" {{if eq .FilterProvider "claude-code"}}selected{{end}}>Claude Code</option>
-      <option value="opencode" {{if eq .FilterProvider "opencode"}}selected{{end}}>OpenCode</option>
-      <option value="cursor" {{if eq .FilterProvider "cursor"}}selected{{end}}>Cursor</option>
-    </select>
-    <span class="text-muted filter-count">{{.TotalCount}} sessions</span>
+
+    <div class="filters-primary">
+      {{template "project-selector" .}}
+      <input type="text" name="keyword" value="{{.FilterKeyword}}"
+             class="filter-input" placeholder="Search sessions..." style="flex:1;min-width:200px;">
+      <input type="date" name="since" value="{{.FilterSince}}"
+             class="filter-date" title="From date">
+      <input type="date" name="until" value="{{.FilterUntil}}"
+             class="filter-date" title="Until date">
+      <button class="conv-btn" type="button" onclick="document.getElementById('more-filters').classList.toggle('hidden')">More filters</button>
+    </div>
+
+    <!-- Secondary Filters (collapsed by default) -->
+    <div class="filters-secondary hidden" id="more-filters">
+      <select name="provider" class="filter-select">
+        <option value="">All providers</option>
+        <option value="claude-code" {{if eq .FilterProvider "claude-code"}}selected{{end}}>Claude Code</option>
+        <option value="opencode" {{if eq .FilterProvider "opencode"}}selected{{end}}>OpenCode</option>
+        <option value="cursor" {{if eq .FilterProvider "cursor"}}selected{{end}}>Cursor</option>
+      </select>
+      <select name="session_type" class="filter-select">
+        <option value="">All types</option>
+        <option value="feature" {{if eq .FilterSessionType "feature"}}selected{{end}}>Feature</option>
+        <option value="bug" {{if eq .FilterSessionType "bug"}}selected{{end}}>Bug</option>
+        <option value="refactor" {{if eq .FilterSessionType "refactor"}}selected{{end}}>Refactor</option>
+        <option value="exploration" {{if eq .FilterSessionType "exploration"}}selected{{end}}>Exploration</option>
+        <option value="devops" {{if eq .FilterSessionType "devops"}}selected{{end}}>DevOps</option>
+      </select>
+      <select name="project_category" class="filter-select">
+        <option value="">All categories</option>
+        <option value="backend" {{if eq .FilterProjectCategory "backend"}}selected{{end}}>Backend</option>
+        <option value="frontend" {{if eq .FilterProjectCategory "frontend"}}selected{{end}}>Frontend</option>
+        <option value="fullstack" {{if eq .FilterProjectCategory "fullstack"}}selected{{end}}>Fullstack</option>
+        <option value="ops" {{if eq .FilterProjectCategory "ops"}}selected{{end}}>Ops</option>
+      </select>
+      <input type="text" name="branch" value="{{.FilterBranch}}"
+             class="filter-input" placeholder="Branch..." style="max-width:150px;">
+      <input type="text" name="owner" value="{{.FilterOwner}}"
+             class="filter-input" placeholder="Owner..." style="max-width:120px;">
+    </div>
+
+    {{if .FilterProject}}
+    <input type="hidden" name="project" value="{{.FilterProject}}" class="filter-input">
+    {{end}}
+    <input type="hidden" name="sort_by" value="{{.SortBy}}" class="filter-hidden">
+    <input type="hidden" name="sort_order" value="{{.SortOrder}}" class="filter-hidden">
   </div>
 
   <!-- Table (swapped via HTMX) -->

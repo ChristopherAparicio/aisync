@@ -16,7 +16,7 @@ import (
 
 // Config holds the configuration for creating an MCP server.
 type Config struct {
-	SessionService *service.SessionService
+	SessionService service.SessionServicer
 	SyncService    *service.SyncService // optional — nil when git sync is unavailable
 	Version        string               // aisync version string
 }
@@ -47,7 +47,7 @@ func NewServer(cfg Config) *server.MCPServer {
 
 // handlers holds service references for tool handler closures.
 type handlers struct {
-	sessionSvc *service.SessionService
+	sessionSvc service.SessionServicer
 	syncSvc    *service.SyncService
 }
 
@@ -232,6 +232,20 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithString("period", mcp.Description("Bucketing period: 'daily' or 'weekly' (default: weekly)")),
 		mcp.WithNumber("days", mcp.Description("Look-back window in days (default: 90)")),
 	), h.handleForecast)
+
+	// ── Ingest ──
+	s.AddTool(mcp.NewTool("aisync_ingest",
+		mcp.WithDescription("Push a session into aisync from an external client (e.g. voice assistant, custom agent, Ollama). This is the simplest path — no provider detection or file-system reads. Requires at least a provider name and one message."),
+		mcp.WithString("provider", mcp.Required(), mcp.Description("Provider name: parlay, ollama, claude-code, opencode, or cursor")),
+		mcp.WithString("messages_json", mcp.Required(), mcp.Description("JSON array of messages. Each message: {\"role\":\"user\"|\"assistant\"|\"system\", \"content\":\"...\", \"model\":\"...\", \"tool_calls\":[{\"name\":\"...\",\"input\":\"...\",\"output\":\"...\"}], \"input_tokens\":N, \"output_tokens\":N}")),
+		mcp.WithString("agent", mcp.Description("Agent name (e.g. 'jarvis'). Defaults to provider name.")),
+		mcp.WithString("project_path", mcp.Description("Absolute path to the project directory")),
+		mcp.WithString("branch", mcp.Description("Git branch name")),
+		mcp.WithString("summary", mcp.Description("One-line summary of the session")),
+		mcp.WithString("session_id", mcp.Description("Custom session ID (UUID). Auto-generated if omitted.")),
+		mcp.WithString("remote_url", mcp.Description("Git remote URL (e.g. 'github.com/org/repo'). Auto-detected from git if omitted.")),
+		mcp.WithString("delegated_from_session_id", mcp.Description("If set, creates a delegated_from link to this parent session")),
+	), h.handleIngest)
 }
 
 // registerSyncTools registers all sync-related MCP tools.

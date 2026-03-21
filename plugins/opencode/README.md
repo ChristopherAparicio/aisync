@@ -4,15 +4,18 @@ OpenCode plugin that automatically captures AI sessions into [aisync](https://gi
 
 ## What it does
 
-The plugin listens to OpenCode's event stream and triggers capture at the right moments:
+The plugin hooks into OpenCode's full plugin API for capture and real-time monitoring:
 
-| OpenCode Event | Plugin Action |
-|---|---|
-| `session.created` | Logs session start + current git branch |
-| `session.idle` | Triggers `aisync capture` to snapshot the full session |
-| `session.error` | Captures immediately (session may not reach idle) |
+| Hook | Trigger | Plugin Action |
+|---|---|---|
+| `event: session.created` | Agent starts | Logs session start + initializes counters |
+| `event: session.idle` | Agent finishes | Captures full session (main trigger) |
+| `event: session.error` | Agent errors | Captures immediately (may not reach idle) |
+| `chat.message` | Each new message | Tracks message count + optional incremental capture |
+| `tool.execute.after` | After each tool call | Detects tool errors in real-time |
+| `experimental.session.compacting` | Session compaction | Re-captures before compaction (preserves history) |
 
-All analysis (error rates, cost breakdown, token counts, tool usage) happens inside aisync after capture. The plugin's only job is to trigger capture with the right session ID.
+All deep analysis (error rates, cost breakdown, token counts, tool usage, project categorization) happens inside aisync after capture. The plugin handles capture timing and real-time error tracking.
 
 ## Prerequisites
 
@@ -54,6 +57,7 @@ The plugin is configured via environment variables. No config file needed.
 |---|---|---|
 | `AISYNC_CAPTURE_MODE` | `compact` | Storage mode: `full`, `compact`, or `summary` |
 | `AISYNC_PLUGIN_DEBUG` | _(unset)_ | Set to `1` to enable debug logging |
+| `AISYNC_INCREMENTAL_INTERVAL` | `0` | Capture every N messages (0 = disabled, only on idle/error) |
 
 ### Storage modes
 
@@ -92,6 +96,9 @@ Key design decisions:
 
 - **Capture on idle, not on every message.** The session is complete when the agent goes idle. Capturing mid-session would produce an incomplete snapshot.
 - **Capture on error too.** If the session errors out, it may never reach idle. We capture immediately so the failed session is preserved.
+- **Incremental capture (optional).** Set `AISYNC_INCREMENTAL_INTERVAL=20` to capture every 20 messages for long sessions.
+- **Tool error tracking.** The plugin monitors tool call results and counts errors per session in real-time.
+- **Compaction awareness.** When OpenCode compacts a session, the plugin re-captures to preserve the full history before compaction.
 - **Deduplication built-in.** The plugin tracks captured session IDs in memory to avoid duplicate captures within the same OpenCode process. Across processes, aisync's SQLite upsert (INSERT ON CONFLICT) handles deduplication.
 - **Failure is silent.** Capture errors are swallowed. The plugin must never break the agent workflow.
 
@@ -169,16 +176,21 @@ aisync (Go binary, runs as subprocess)
 ```
 
 The plugin does NOT:
-- Parse messages or tool calls (aisync does this)
-- Track errors in real-time (aisync computes this from the captured snapshot)
+- Parse messages or tool calls (aisync does this post-capture)
+- Track cost in real-time (aisync computes this from the captured snapshot)
 - Maintain its own database (aisync handles all persistence)
 - Send data to any remote server (everything is local)
 
+The plugin DOES:
+- Track message counts per session (in-memory)
+- Track tool errors per session (in-memory)
+- Re-capture before session compaction
+- Support incremental capture for long sessions
+
 ## Roadmap
 
-- [ ] `tool.execute.after` hook for real-time error notifications
-- [ ] `session.compacted` hook to re-capture after OpenCode compaction
 - [ ] Integration with `aisync activity emit` for richer event timeline
+- [ ] Expose aisync tools via the plugin `tool` hook (alongside MCP)
 
 ## License
 

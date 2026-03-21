@@ -7,10 +7,11 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/testutil"
 )
 
 func TestCapture_autoDetect(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -48,7 +49,7 @@ func TestCapture_autoDetect(t *testing.T) {
 	}
 
 	// Verify session was stored
-	if store.savedSession == nil {
+	if store.LastSaved == nil {
 		t.Error("Session was not saved to store")
 	}
 
@@ -65,7 +66,7 @@ func TestCapture_autoDetect(t *testing.T) {
 }
 
 func TestCapture_explicitProvider(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	claude := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -102,7 +103,7 @@ func TestCapture_explicitProvider(t *testing.T) {
 }
 
 func TestCapture_messageOverride(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -133,7 +134,7 @@ func TestCapture_messageOverride(t *testing.T) {
 }
 
 func TestCapture_withScanner_maskMode(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -172,7 +173,7 @@ func TestCapture_withScanner_maskMode(t *testing.T) {
 }
 
 func TestCapture_withScanner_blockMode(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -199,13 +200,13 @@ func TestCapture_withScanner_blockMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("Capture() should return error in block mode when secrets found")
 	}
-	if store.savedSession != nil {
+	if store.LastSaved != nil {
 		t.Error("session should NOT be saved in block mode")
 	}
 }
 
 func TestCapture_withScanner_warnMode(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -243,7 +244,7 @@ func TestCapture_withScanner_warnMode(t *testing.T) {
 }
 
 func TestCapture_noScanner(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -276,7 +277,7 @@ func TestCapture_noScanner(t *testing.T) {
 }
 
 func TestCapture_multiSession(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderClaudeCode,
 		sessions: []session.Summary{
@@ -333,8 +334,8 @@ func TestCapture_multiSession(t *testing.T) {
 	}
 
 	// Both sessions should be saved (saveCount == 2)
-	if store.saveCount != 2 {
-		t.Errorf("saveCount = %d, want 2", store.saveCount)
+	if store.SaveCount != 2 {
+		t.Errorf("saveCount = %d, want 2", store.SaveCount)
 	}
 
 	// Summary should reflect the second session
@@ -344,7 +345,7 @@ func TestCapture_multiSession(t *testing.T) {
 }
 
 func TestCaptureAll_explicitProvider(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderOpenCode,
 		sessions: []session.Summary{
@@ -377,8 +378,8 @@ func TestCaptureAll_explicitProvider(t *testing.T) {
 	}
 
 	// Verify all sessions were saved
-	if store.saveCount != 3 {
-		t.Errorf("saveCount = %d, want 3", store.saveCount)
+	if store.SaveCount != 3 {
+		t.Errorf("saveCount = %d, want 3", store.SaveCount)
 	}
 
 	// Verify IDs match
@@ -394,7 +395,7 @@ func TestCaptureAll_explicitProvider(t *testing.T) {
 }
 
 func TestCaptureAll_noSessions(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name:     session.ProviderOpenCode,
 		sessions: nil,
@@ -415,7 +416,7 @@ func TestCaptureAll_noSessions(t *testing.T) {
 }
 
 func TestCaptureByID(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderOpenCode,
 		sessions: []session.Summary{
@@ -448,13 +449,13 @@ func TestCaptureByID(t *testing.T) {
 	if result.Session.Summary != "second" {
 		t.Errorf("Summary = %q, want %q", result.Session.Summary, "second")
 	}
-	if store.saveCount != 1 {
-		t.Errorf("saveCount = %d, want 1", store.saveCount)
+	if store.SaveCount != 1 {
+		t.Errorf("saveCount = %d, want 1", store.SaveCount)
 	}
 }
 
 func TestCaptureByID_notFound(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name: session.ProviderOpenCode,
 		sessions: []session.Summary{
@@ -478,7 +479,7 @@ func TestCaptureByID_notFound(t *testing.T) {
 }
 
 func TestCapture_noSessionsFound(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	prov := &mockProvider{
 		name:     session.ProviderClaudeCode,
 		sessions: nil, // no sessions
@@ -497,63 +498,209 @@ func TestCapture_noSessionsFound(t *testing.T) {
 	}
 }
 
+// --- Skip-if-unchanged tests ---
+
+func TestCapture_skipUnchangedSession(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.Freshness = map[session.ID][2]int64{
+		"ses-1": {50, 1771245758000}, // stored: 50 msgs, updated at timestamp
+	}
+	prov := &mockFreshnessProvider{
+		mockProvider: mockProvider{
+			name: session.ProviderOpenCode,
+			sessions: []session.Summary{
+				{ID: "ses-1", Provider: session.ProviderOpenCode, Branch: "main", CreatedAt: time.Now()},
+			},
+			exportSession: &session.Session{
+				ID: "ses-1", Provider: session.ProviderOpenCode,
+				Branch: "main", ProjectPath: "/test/project",
+				Messages: make([]session.Message, 50),
+			},
+		},
+		freshness: map[session.ID]*provider.Freshness{
+			"ses-1": {MessageCount: 50, UpdatedAt: 1771245758000}, // same as stored
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+	if !result.Skipped {
+		t.Error("Capture() should skip unchanged session")
+	}
+	if store.SaveCount != 0 {
+		t.Errorf("Save() called %d times, want 0 (skipped)", store.SaveCount)
+	}
+}
+
+func TestCapture_noSkipWhenMessageCountDiffers(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.Freshness = map[session.ID][2]int64{
+		"ses-1": {50, 1771245758000}, // stored: 50 msgs
+	}
+	prov := &mockFreshnessProvider{
+		mockProvider: mockProvider{
+			name: session.ProviderOpenCode,
+			sessions: []session.Summary{
+				{ID: "ses-1", Provider: session.ProviderOpenCode, Branch: "main", CreatedAt: time.Now()},
+			},
+			exportSession: &session.Session{
+				ID: "ses-1", Provider: session.ProviderOpenCode,
+				Branch: "main", ProjectPath: "/test/project",
+				Messages: make([]session.Message, 55),
+			},
+		},
+		freshness: map[session.ID]*provider.Freshness{
+			"ses-1": {MessageCount: 55, UpdatedAt: 1771245760000}, // 55 > 50 → changed
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+	if result.Skipped {
+		t.Error("Capture() should NOT skip when message count differs")
+	}
+	if store.SaveCount != 1 {
+		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	}
+}
+
+func TestCapture_noSkipWhenUpdatedAtDiffers(t *testing.T) {
+	// Simulates rewind: message count same, but updatedAt changed.
+	store := testutil.NewMockStore()
+	store.Freshness = map[session.ID][2]int64{
+		"ses-1": {50, 1771245758000},
+	}
+	prov := &mockFreshnessProvider{
+		mockProvider: mockProvider{
+			name: session.ProviderOpenCode,
+			sessions: []session.Summary{
+				{ID: "ses-1", Provider: session.ProviderOpenCode, Branch: "main", CreatedAt: time.Now()},
+			},
+			exportSession: &session.Session{
+				ID: "ses-1", Provider: session.ProviderOpenCode,
+				Branch: "main", ProjectPath: "/test/project",
+				Messages: make([]session.Message, 50),
+			},
+		},
+		freshness: map[session.ID]*provider.Freshness{
+			"ses-1": {MessageCount: 50, UpdatedAt: 1771245800000}, // same count, different timestamp
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+	if result.Skipped {
+		t.Error("Capture() should NOT skip when updatedAt differs (rewind case)")
+	}
+	if store.SaveCount != 1 {
+		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	}
+}
+
+func TestCapture_noSkipOnFirstCapture(t *testing.T) {
+	store := testutil.NewMockStore() // no freshness data → first capture
+	prov := &mockFreshnessProvider{
+		mockProvider: mockProvider{
+			name: session.ProviderOpenCode,
+			sessions: []session.Summary{
+				{ID: "ses-new", Provider: session.ProviderOpenCode, Branch: "main", CreatedAt: time.Now()},
+			},
+			exportSession: &session.Session{
+				ID: "ses-new", Provider: session.ProviderOpenCode,
+				Branch: "main", ProjectPath: "/test/project",
+				Messages: make([]session.Message, 10),
+			},
+		},
+		freshness: map[session.ID]*provider.Freshness{
+			"ses-new": {MessageCount: 10, UpdatedAt: 1771245758000},
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+	if result.Skipped {
+		t.Error("Capture() should NOT skip on first capture")
+	}
+	if store.SaveCount != 1 {
+		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	}
+}
+
+func TestCapture_noSkipForNonFreshnessProvider(t *testing.T) {
+	// Regular provider (no FreshnessChecker) — always captures.
+	store := testutil.NewMockStore()
+	prov := &mockProvider{
+		name: session.ProviderClaudeCode,
+		sessions: []session.Summary{
+			{ID: "ses-claude", Provider: session.ProviderClaudeCode, Branch: "main", CreatedAt: time.Now()},
+		},
+		exportSession: &session.Session{
+			ID: "ses-claude", Provider: session.ProviderClaudeCode,
+			Branch: "main", ProjectPath: "/test/project",
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test/project",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderClaudeCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+	if result.Skipped {
+		t.Error("Capture() should NOT skip for providers without FreshnessChecker")
+	}
+	if store.SaveCount != 1 {
+		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	}
+}
+
 // --- Mocks ---
-
-type mockStore struct {
-	savedSession *session.Session
-	byBranch     map[string]*session.Session // key: "projectPath:branch"
-	saveCount    int
-}
-
-func (m *mockStore) Save(sess *session.Session) error {
-	m.savedSession = sess
-	m.saveCount++
-	if m.byBranch == nil {
-		m.byBranch = make(map[string]*session.Session)
-	}
-	key := sess.ProjectPath + ":" + sess.Branch
-	m.byBranch[key] = sess
-	return nil
-}
-func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) GetLatestByBranch(projectPath string, branch string) (*session.Session, error) {
-	if m.byBranch == nil {
-		return nil, session.ErrSessionNotFound
-	}
-	key := projectPath + ":" + branch
-	s, ok := m.byBranch[key]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-
-// CountByBranch is a stub — capture service does not call it.
-// Use saveCount to verify multi-session behavior instead.
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return m.saveCount, nil }
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	return nil, nil
-}
-func (m *mockStore) Delete(_ session.ID) error { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error {
-	return nil
-}
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
-func (m *mockStore) Close() error                                   { return nil }
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
 
 type mockProvider struct {
 	exportSession  *session.Session
@@ -582,3 +729,18 @@ func (m *mockProvider) Export(id session.ID, _ session.StorageMode) (*session.Se
 }
 func (m *mockProvider) CanImport() bool                 { return true }
 func (m *mockProvider) Import(_ *session.Session) error { return nil }
+
+// mockFreshnessProvider wraps mockProvider and adds FreshnessChecker support.
+type mockFreshnessProvider struct {
+	mockProvider
+	freshness map[session.ID]*provider.Freshness
+}
+
+func (m *mockFreshnessProvider) SessionFreshness(id session.ID) (*provider.Freshness, error) {
+	if m.freshness != nil {
+		if f, ok := m.freshness[id]; ok {
+			return f, nil
+		}
+	}
+	return nil, session.ErrSessionNotFound
+}

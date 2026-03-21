@@ -2,9 +2,11 @@ package api
 
 import "net/http"
 
-// registerRoutes registers all API routes on the given ServeMux.
+// RegisterRoutes registers all API routes on the given ServeMux.
+// This allows external callers (e.g., a unified server) to mount API routes
+// alongside other route sets on a shared mux.
 // Uses Go 1.22+ method-based routing patterns: "METHOD /path".
-func (s *Server) registerRoutes(mux *http.ServeMux) {
+func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Health
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 
@@ -46,6 +48,45 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sync/pull", s.handleSyncPull)
 	mux.HandleFunc("POST /api/v1/sync/sync", s.handleSyncSync)
 	mux.HandleFunc("GET /api/v1/sync/index", s.handleSyncIndex)
+
+	// Ingest
+	mux.HandleFunc("POST /api/v1/ingest", s.handleIngest)
+	mux.HandleFunc("POST /api/v1/ingest/ollama", s.handleIngestOllama)
+
+	// Session updates
+	mux.HandleFunc("PATCH /api/v1/sessions/{id}", s.handlePatchSession)
+
+	// Trends
+	mux.HandleFunc("GET /api/v1/stats/trends", s.handleTrends)
+
+	// Projects
+	mux.HandleFunc("GET /api/v1/projects", s.handleListProjects)
+
+	// Analysis (optional — returns 404 if AnalysisService is nil)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/analyze", s.handleAnalyze)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/analysis", s.handleGetAnalysis)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/analyses", s.handleListAnalyses)
+
+	// Session-to-session links (delegation, continuation, related, etc.)
+	mux.HandleFunc("POST /api/v1/sessions/session-links", s.handleLinkSessions)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/session-links", s.handleGetSessionLinks)
+	mux.HandleFunc("DELETE /api/v1/sessions/session-links/{linkID}", s.handleDeleteSessionLink)
+
+	// Session replay (optional — returns 404 if replay engine is nil)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/replay", s.handleReplay)
+
+	// Skill resolver (optional — returns 404 if skill resolver is nil)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/skills/resolve", s.handleSkillResolve)
+
+	// Authentication (optional — returns 404 if auth service is nil)
+	mux.HandleFunc("POST /api/v1/auth/register", s.handleAuthRegister)
+	mux.HandleFunc("POST /api/v1/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("GET /api/v1/auth/me", s.handleAuthMe)
+	mux.HandleFunc("POST /api/v1/auth/keys", s.handleCreateAPIKey)
+	mux.HandleFunc("GET /api/v1/auth/keys", s.handleListAPIKeys)
+	mux.HandleFunc("DELETE /api/v1/auth/keys/{id}", s.handleDeleteAPIKey)
+	mux.HandleFunc("POST /api/v1/auth/keys/{id}/revoke", s.handleRevokeAPIKey)
+	mux.HandleFunc("GET /api/v1/auth/users", s.handleListUsers)
 }
 
 // handleHealth returns a simple health check.

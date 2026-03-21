@@ -4,9 +4,14 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	ollamaingest "github.com/ChristopherAparicio/aisync/internal/ingest/ollama"
+	"github.com/ChristopherAparicio/aisync/internal/replay"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 )
 
 // ── Capture ──
@@ -174,6 +179,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		ProjectPath: q.Get("project_path"),
 		Branch:      q.Get("branch"),
 		Provider:    provider,
+		OwnerID:     q.Get("owner_id"),
 		PRNumber:    prNumber,
 		All:         all,
 	})
@@ -365,6 +371,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
+	voice := q.Get("voice") == "true"
 
 	result, err := s.sessionSvc.Search(service.SearchRequest{
 		Keyword:     q.Get("keyword"),
@@ -376,6 +383,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Until:       q.Get("until"),
 		Limit:       limit,
 		Offset:      offset,
+		Voice:       voice,
 	})
 	if err != nil {
 		mapServiceError(w, err)
@@ -697,8 +705,395 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		ProjectPath:  q.Get("project_path"),
 		Branch:       q.Get("branch"),
 		Provider:     provider,
+		OwnerID:      q.Get("owner_id"),
 		All:          all,
 		IncludeTools: includeTools,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Ingest ──
+
+// handleIngest accepts a session pushed by an external client.
+// POST /api/v1/ingest
+func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
+	var req service.IngestRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	result, err := s.sessionSvc.Ingest(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Ingest Ollama ──
+
+// handleIngestOllama accepts an Ollama-native /api/chat conversation format
+// and converts it into an aisync session via the universal ingest path.
+// POST /api/v1/ingest/ollama
+func (s *Server) handleIngestOllama(w http.ResponseWriter, r *http.Request) {
+	var req ollamaingest.Request
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	// Convert Ollama format → IngestRequest.
+	ingestReq, err := ollamaingest.Convert(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Delegate to the universal ingest path.
+	result, err := s.sessionSvc.Ingest(r.Context(), ingestReq)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Projects ──
+
+// handleListProjects returns all distinct projects with aggregated stats.
+// GET /api/v1/projects
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	groups, err := s.sessionSvc.ListProjects(r.Context())
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+	if groups == nil {
+		groups = []session.ProjectGroup{}
+	}
+	writeJSON(w, http.StatusOK, groups)
+}
+
+// ── Trends ──
+
+// handleTrends returns trend comparison between current and previous period.
+// GET /api/v1/stats/trends?type=bug&period=7d
+func (s *Server) handleTrends(w http.ResponseWriter, r *http.Request) {
+	req := service.TrendRequest{}
+	req.SessionType = r.URL.Query().Get("type")
+	if prov := r.URL.Query().Get("provider"); prov != "" {
+		req.Provider = session.ProviderName(prov)
+	}
+
+	// Parse period: "7d", "30d", "24h", etc.
+	if periodStr := r.URL.Query().Get("period"); periodStr != "" {
+		// Simple parser: last char is unit (d/h), rest is number.
+		if len(periodStr) > 1 {
+			numStr := periodStr[:len(periodStr)-1]
+			unit := periodStr[len(periodStr)-1]
+			num, err := strconv.Atoi(numStr)
+			if err == nil && num > 0 {
+				switch unit {
+				case 'd':
+					req.Period = time.Duration(num) * 24 * time.Hour
+				case 'h':
+					req.Period = time.Duration(num) * time.Hour
+				}
+			}
+		}
+	}
+
+	result, err := s.sessionSvc.Trends(r.Context(), req)
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ── Session Updates ──
+
+// patchSessionRequest is the body for PATCH /api/v1/sessions/{id}.
+type patchSessionRequest struct {
+	SessionType string `json:"session_type,omitempty"`
+}
+
+// handlePatchSession updates mutable fields on a session (currently only session_type).
+// PATCH /api/v1/sessions/{id}
+func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
+	id, err := session.ParseID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+
+	var req patchSessionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if req.SessionType != "" {
+		if patchErr := s.sessionSvc.TagSession(r.Context(), id, req.SessionType); patchErr != nil {
+			mapServiceError(w, patchErr)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// ── Session Links ──
+
+// handleLinkSessions creates a session-to-session link (delegation, continuation, etc.).
+// POST /api/v1/sessions/session-links
+func (s *Server) handleLinkSessions(w http.ResponseWriter, r *http.Request) {
+	var req service.SessionLinkRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	link, err := s.sessionSvc.LinkSessions(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, link)
+}
+
+// handleGetSessionLinks retrieves all session-to-session links for a given session.
+// GET /api/v1/sessions/{id}/session-links
+func (s *Server) handleGetSessionLinks(w http.ResponseWriter, r *http.Request) {
+	id, err := session.ParseID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+
+	links, err := s.sessionSvc.GetLinkedSessions(r.Context(), id)
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, links)
+}
+
+// handleDeleteSessionLink removes a session-to-session link by its ID.
+// DELETE /api/v1/sessions/session-links/{linkID}
+func (s *Server) handleDeleteSessionLink(w http.ResponseWriter, r *http.Request) {
+	id, err := session.ParseID(r.PathValue("linkID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid link id")
+		return
+	}
+
+	if err := s.sessionSvc.DeleteSessionLink(r.Context(), id); err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── Analysis ──
+
+// analyzeRequest is the optional JSON body for POST /api/v1/sessions/{id}/analyze.
+type analyzeRequest struct {
+	Trigger string `json:"trigger,omitempty"` // "manual" (default) or "auto"
+}
+
+// handleAnalyze triggers an analysis for a session.
+// POST /api/v1/sessions/{id}/analyze
+func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
+	if s.analysisSvc == nil {
+		writeError(w, http.StatusNotFound, "analysis service not configured")
+		return
+	}
+
+	sessionID, err := session.ParseID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+
+	// Parse optional body (trigger defaults to "manual").
+	var req analyzeRequest
+	if r.ContentLength > 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+	trigger := analysis.TriggerManual
+	if req.Trigger == string(analysis.TriggerAuto) {
+		trigger = analysis.TriggerAuto
+	}
+
+	result, err := s.analysisSvc.Analyze(r.Context(), service.AnalysisRequest{
+		SessionID: sessionID,
+		Trigger:   trigger,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, result.Analysis)
+}
+
+// handleGetAnalysis returns the latest analysis for a session.
+// GET /api/v1/sessions/{id}/analysis
+func (s *Server) handleGetAnalysis(w http.ResponseWriter, r *http.Request) {
+	if s.analysisSvc == nil {
+		writeError(w, http.StatusNotFound, "analysis service not configured")
+		return
+	}
+
+	sessionID, err := session.ParseID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+
+	a, err := s.analysisSvc.GetLatestAnalysis(string(sessionID))
+	if err != nil {
+		if err == analysis.ErrAnalysisNotFound {
+			writeError(w, http.StatusNotFound, "no analysis found for this session")
+			return
+		}
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, a)
+}
+
+// handleListAnalyses returns all analyses for a session, newest first.
+// GET /api/v1/sessions/{id}/analyses
+func (s *Server) handleListAnalyses(w http.ResponseWriter, r *http.Request) {
+	if s.analysisSvc == nil {
+		writeError(w, http.StatusNotFound, "analysis service not configured")
+		return
+	}
+
+	sessionID, err := session.ParseID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+
+	analyses, err := s.analysisSvc.ListAnalyses(string(sessionID))
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	if analyses == nil {
+		analyses = []*analysis.SessionAnalysis{}
+	}
+	writeJSON(w, http.StatusOK, analyses)
+}
+
+// ── Replay ──
+
+// replayRequest is the JSON body for POST /api/v1/sessions/{id}/replay.
+type replayRequest struct {
+	Provider    string `json:"provider,omitempty"`     // override provider
+	Agent       string `json:"agent,omitempty"`        // override agent
+	Model       string `json:"model,omitempty"`        // override model
+	CommitSHA   string `json:"commit_sha,omitempty"`   // override commit
+	MaxMessages int    `json:"max_messages,omitempty"` // limit user messages (0 = all)
+}
+
+// handleReplay triggers a session replay.
+// POST /api/v1/sessions/{id}/replay
+func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
+	if s.replayEngine == nil {
+		writeError(w, http.StatusNotFound, "replay engine not configured")
+		return
+	}
+
+	sessionID, err := session.ParseID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid session id")
+		return
+	}
+
+	// Parse optional body.
+	var req replayRequest
+	if r.ContentLength > 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+
+	// Parse optional provider.
+	var provider session.ProviderName
+	if req.Provider != "" {
+		parsed, parseErr := session.ParseProviderName(req.Provider)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		provider = parsed
+	}
+
+	result, err := s.replayEngine.Replay(r.Context(), replay.Request{
+		SourceSessionID: sessionID,
+		Provider:        provider,
+		Agent:           req.Agent,
+		Model:           req.Model,
+		CommitSHA:       req.CommitSHA,
+		MaxMessages:     req.MaxMessages,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, result)
+}
+
+// ── Skill Resolver ──
+
+type skillResolveRequest struct {
+	SkillNames []string `json:"skill_names,omitempty"` // optional filter
+	DryRun     bool     `json:"dry_run"`               // true = suggest only, false = apply
+}
+
+// handleSkillResolve analyzes missed skills and proposes/applies improvements.
+// POST /api/v1/sessions/{id}/skills/resolve
+func (s *Server) handleSkillResolve(w http.ResponseWriter, r *http.Request) {
+	if s.skillResolver == nil {
+		writeError(w, http.StatusNotFound, "skill resolver not configured")
+		return
+	}
+
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session id is required")
+		return
+	}
+
+	// Parse optional body.
+	var req skillResolveRequest
+	req.DryRun = true // default to dry-run for safety
+	if r.ContentLength > 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+
+	result, err := s.skillResolver.Resolve(r.Context(), skillresolver.ResolveRequest{
+		SessionID:  sessionID,
+		SkillNames: req.SkillNames,
+		DryRun:     req.DryRun,
 	})
 	if err != nil {
 		mapServiceError(w, err)

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/llm"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -842,7 +844,10 @@ func (m *mockLLMClient) Complete(_ context.Context, req llm.CompletionRequest) (
 }
 
 type mockStore struct {
-	sessions map[session.ID]*session.Session
+	sessions     map[session.ID]*session.Session
+	analyses     map[string]*analysis.SessionAnalysis
+	searchResult *session.SearchResult                // configurable for voice search tests
+	sessionLinks map[session.ID][]session.SessionLink // session-to-session links
 }
 
 func (m *mockStore) Save(sess *session.Session) error {
@@ -864,21 +869,138 @@ func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
 func (m *mockStore) CountByBranch(_, _ string) (int, error)                { return 0, nil }
 func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
 func (m *mockStore) Delete(_ session.ID) error                             { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error            { return nil }
+func (m *mockStore) UpdateSessionType(_ session.ID, _ string) error        { return nil }
+func (m *mockStore) UpdateProjectCategory(_ string, _ string) (int, error) { return 0, nil }
+func (m *mockStore) SetProjectCategory(_ session.ID, _ string) error       { return nil }
+func (m *mockStore) SaveForkRelation(_ session.ForkRelation) error         { return nil }
+func (m *mockStore) GetForkRelations(_ session.ID) ([]session.ForkRelation, error) {
+	return nil, nil
+}
+func (m *mockStore) GetTotalDeduplication() (int, int, error)       { return 0, 0, nil }
+func (m *mockStore) SaveObjective(_ session.SessionObjective) error { return nil }
+func (m *mockStore) GetObjective(_ session.ID) (*session.SessionObjective, error) {
+	return nil, nil
+}
+func (m *mockStore) ListObjectives(_ []session.ID) (map[session.ID]*session.SessionObjective, error) {
+	return nil, nil
+}
+func (m *mockStore) UpsertTokenBucket(_ session.TokenUsageBucket) error { return nil }
+func (m *mockStore) QueryTokenBuckets(_ string, _, _ time.Time, _ string) ([]session.TokenUsageBucket, error) {
+	return nil, nil
+}
+func (m *mockStore) GetLastBucketComputeTime(_ string) (time.Time, error) {
+	return time.Time{}, nil
+}
+func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
 func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
 	return nil, session.ErrSessionNotFound
 }
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
-func (m *mockStore) Close() error                                   { return nil }
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
+func (m *mockStore) Close() error                             { return nil }
+
+func (m *mockStore) GetPreferences(_ session.ID) (*session.UserPreferences, error) { return nil, nil }
+func (m *mockStore) SavePreferences(_ *session.UserPreferences) error              { return nil }
+
+func (m *mockStore) GetCache(_ string, _ time.Duration) ([]byte, error) { return nil, nil }
+func (m *mockStore) SetCache(_ string, _ []byte) error                  { return nil }
+func (m *mockStore) InvalidateCache(_ string) error                     { return nil }
+func (m *mockStore) GetFreshness(_ session.ID) (int, int64, error)      { return 0, 0, nil }
+func (m *mockStore) ListProjects() ([]session.ProjectGroup, error)      { return nil, nil }
+func (m *mockStore) SaveUser(_ *session.User) error                     { return nil }
+func (m *mockStore) GetUser(_ session.ID) (*session.User, error)        { return nil, nil }
+func (m *mockStore) GetUserByEmail(_ string) (*session.User, error)     { return nil, nil }
 func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
+	if m.searchResult != nil {
+		return m.searchResult, nil
+	}
 	return &session.SearchResult{}, nil
 }
 func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
 	return nil, nil
 }
+func (m *mockStore) SaveAnalysis(a *analysis.SessionAnalysis) error {
+	if m.analyses == nil {
+		m.analyses = make(map[string]*analysis.SessionAnalysis)
+	}
+	m.analyses[a.ID] = a
+	return nil
+}
+func (m *mockStore) GetAnalysis(id string) (*analysis.SessionAnalysis, error) {
+	if m.analyses != nil {
+		if a, ok := m.analyses[id]; ok {
+			return a, nil
+		}
+	}
+	return nil, analysis.ErrAnalysisNotFound
+}
+func (m *mockStore) GetAnalysisBySession(sessionID string) (*analysis.SessionAnalysis, error) {
+	if m.analyses != nil {
+		for _, a := range m.analyses {
+			if a.SessionID == sessionID {
+				return a, nil
+			}
+		}
+	}
+	return nil, analysis.ErrAnalysisNotFound
+}
+func (m *mockStore) ListAnalyses(sessionID string) ([]*analysis.SessionAnalysis, error) {
+	var results []*analysis.SessionAnalysis
+	if m.analyses != nil {
+		for _, a := range m.analyses {
+			if a.SessionID == sessionID {
+				results = append(results, a)
+			}
+		}
+	}
+	return results, nil
+}
+func (m *mockStore) LinkSessions(link session.SessionLink) error {
+	if m.sessionLinks == nil {
+		m.sessionLinks = make(map[session.ID][]session.SessionLink)
+	}
+	m.sessionLinks[link.SourceSessionID] = append(m.sessionLinks[link.SourceSessionID], link)
+	// Also store the inverse link.
+	inverse := link
+	inverse.ID = session.NewID()
+	inverse.SourceSessionID, inverse.TargetSessionID = link.TargetSessionID, link.SourceSessionID
+	inverse.LinkType = link.LinkType.Inverse()
+	m.sessionLinks[inverse.SourceSessionID] = append(m.sessionLinks[inverse.SourceSessionID], inverse)
+	return nil
+}
+func (m *mockStore) GetLinkedSessions(id session.ID) ([]session.SessionLink, error) {
+	if m.sessionLinks == nil {
+		return nil, nil
+	}
+	return m.sessionLinks[id], nil
+}
+func (m *mockStore) DeleteSessionLink(id session.ID) error {
+	for src, links := range m.sessionLinks {
+		for i, l := range links {
+			if l.ID == id {
+				m.sessionLinks[src] = append(links[:i], links[i+1:]...)
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// Auth store stubs.
+func (m *mockStore) CreateAuthUser(_ *auth.User) error        { return nil }
+func (m *mockStore) GetAuthUser(_ string) (*auth.User, error) { return nil, auth.ErrUserNotFound }
+func (m *mockStore) GetAuthUserByUsername(_ string) (*auth.User, error) {
+	return nil, auth.ErrUserNotFound
+}
+func (m *mockStore) UpdateAuthUser(_ *auth.User) error    { return nil }
+func (m *mockStore) ListAuthUsers() ([]*auth.User, error) { return nil, nil }
+func (m *mockStore) CreateAPIKey(_ *auth.APIKey) error    { return nil }
+func (m *mockStore) GetAPIKeyByHash(_ string) (*auth.APIKey, error) {
+	return nil, auth.ErrAPIKeyNotFound
+}
+func (m *mockStore) ListAPIKeysByUser(_ string) ([]*auth.APIKey, error) { return nil, nil }
+func (m *mockStore) UpdateAPIKey(_ *auth.APIKey) error                  { return nil }
+func (m *mockStore) DeleteAPIKey(_ string) error                        { return nil }
+func (m *mockStore) CountAuthUsers() (int, error)                       { return 0, nil }
 
 // ── Garbage Collection tests ──
 
@@ -1899,5 +2021,549 @@ func TestParseDuration(t *testing.T) {
 				t.Errorf("expected %.1f hours, got %.1f", tt.wantHrs, gotHrs)
 			}
 		})
+	}
+}
+
+// ── Ingest Tests ──
+
+func newIngestService(t *testing.T) (*SessionService, *mockStore) {
+	t.Helper()
+	store := &mockStore{sessions: make(map[session.ID]*session.Session)}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+	return svc, store
+}
+
+func TestIngest_MinimalPayload(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "parlay",
+		Messages: []IngestMessage{
+			{Role: "user", Content: "Hello"},
+			{Role: "assistant", Content: "Hi there!"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+	if result.SessionID == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+	if result.Provider != session.ProviderParlay {
+		t.Errorf("provider = %q, want %q", result.Provider, session.ProviderParlay)
+	}
+
+	// Verify stored.
+	sess, ok := store.sessions[result.SessionID]
+	if !ok {
+		t.Fatal("session not found in store")
+	}
+	if len(sess.Messages) != 2 {
+		t.Errorf("messages count = %d, want 2", len(sess.Messages))
+	}
+	if sess.Agent != "parlay" {
+		t.Errorf("agent = %q, want %q (defaulted to provider)", sess.Agent, "parlay")
+	}
+}
+
+func TestIngest_MissingProvider(t *testing.T) {
+	svc, _ := newIngestService(t)
+
+	_, err := svc.Ingest(context.Background(), IngestRequest{
+		Messages: []IngestMessage{{Role: "user", Content: "Hello"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing provider")
+	}
+}
+
+func TestIngest_MissingMessages(t *testing.T) {
+	svc, _ := newIngestService(t)
+
+	_, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "ollama",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing messages")
+	}
+}
+
+func TestIngest_InvalidProvider(t *testing.T) {
+	svc, _ := newIngestService(t)
+
+	_, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "unknown-tool",
+		Messages: []IngestMessage{{Role: "user", Content: "Hello"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid provider")
+	}
+}
+
+func TestIngest_ComputesTokens(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "ollama",
+		Messages: []IngestMessage{
+			{Role: "user", Content: "Hello", InputTokens: 100},
+			{Role: "assistant", Content: "Hi", OutputTokens: 50},
+			{Role: "user", Content: "Bye", InputTokens: 30},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	sess := store.sessions[result.SessionID]
+	if sess.TokenUsage.InputTokens != 130 {
+		t.Errorf("InputTokens = %d, want 130", sess.TokenUsage.InputTokens)
+	}
+	if sess.TokenUsage.OutputTokens != 50 {
+		t.Errorf("OutputTokens = %d, want 50", sess.TokenUsage.OutputTokens)
+	}
+	if sess.TokenUsage.TotalTokens != 180 {
+		t.Errorf("TotalTokens = %d, want 180", sess.TokenUsage.TotalTokens)
+	}
+}
+
+func TestIngest_ComputesToolCounts(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "parlay",
+		Messages: []IngestMessage{
+			{Role: "assistant", Content: "Running...", ToolCalls: []IngestToolCall{
+				{Name: "bash", Input: "ls", Output: "file.txt", State: "completed"},
+				{Name: "bash", Input: "rm bad", State: "error"},
+			}},
+			{Role: "assistant", Content: "Done", ToolCalls: []IngestToolCall{
+				{Name: "memory", Input: "save", State: "completed"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	sess := store.sessions[result.SessionID]
+	// 3 total tool calls, 1 error
+	totalTC := 0
+	totalErr := 0
+	for _, msg := range sess.Messages {
+		totalTC += len(msg.ToolCalls)
+		for _, tc := range msg.ToolCalls {
+			if tc.State == session.ToolStateError {
+				totalErr++
+			}
+		}
+	}
+	if totalTC != 3 {
+		t.Errorf("tool call count = %d, want 3", totalTC)
+	}
+	if totalErr != 1 {
+		t.Errorf("error count = %d, want 1", totalErr)
+	}
+}
+
+func TestIngest_AutoGeneratesID(t *testing.T) {
+	svc, _ := newIngestService(t)
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "parlay",
+		Messages: []IngestMessage{{Role: "user", Content: "Hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+	if result.SessionID == "" {
+		t.Fatal("expected auto-generated session ID")
+	}
+}
+
+func TestIngest_PreservesExplicitID(t *testing.T) {
+	svc, _ := newIngestService(t)
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider:  "parlay",
+		SessionID: "my-custom-id-123",
+		Messages:  []IngestMessage{{Role: "user", Content: "Hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+	if string(result.SessionID) != "my-custom-id-123" {
+		t.Errorf("session ID = %q, want %q", result.SessionID, "my-custom-id-123")
+	}
+}
+
+func TestIngest_SetsDefaultToolState(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "ollama",
+		Messages: []IngestMessage{
+			{Role: "assistant", Content: "ok", ToolCalls: []IngestToolCall{
+				{Name: "bash", Input: "echo hi"}, // no State → should default to "completed"
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	sess := store.sessions[result.SessionID]
+	tc := sess.Messages[0].ToolCalls[0]
+	if tc.State != session.ToolStateCompleted {
+		t.Errorf("tool state = %q, want %q", tc.State, session.ToolStateCompleted)
+	}
+}
+
+// ── Delegate Detection Tests ──
+
+func TestIngest_ExplicitDelegatedFrom_CreatesLink(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	// First, plant a "parent" session directly in the store.
+	parentID := session.ID("parent-session-001")
+	store.sessions[parentID] = &session.Session{ID: parentID}
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider:               "parlay",
+		SessionID:              "child-session-001",
+		DelegatedFromSessionID: string(parentID),
+		Messages: []IngestMessage{
+			{Role: "user", Content: "do sub-task"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	// Child should have a delegated_from link pointing to parent.
+	links := store.sessionLinks[result.SessionID]
+	if len(links) == 0 {
+		t.Fatal("expected at least one link, got none")
+	}
+	found := false
+	for _, l := range links {
+		if l.LinkType == session.SessionLinkDelegatedFrom && l.TargetSessionID == parentID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected delegated_from link to parent %q, links = %+v", parentID, links)
+	}
+}
+
+func TestIngest_HeuristicDelegation_ToolCallWithSessionID(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	targetID := session.ID("sub-agent-session-xyz")
+	store.sessions[targetID] = &session.Session{ID: targetID}
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider:  "parlay",
+		SessionID: "orchestrator-001",
+		Messages: []IngestMessage{
+			{
+				Role:    "assistant",
+				Content: "delegating auth work",
+				ToolCalls: []IngestToolCall{
+					{
+						Name:  "delegate",
+						Input: `{"session_id":"sub-agent-session-xyz","task":"implement auth"}`,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	// Should have a delegated_to link to the sub-agent session.
+	links := store.sessionLinks[result.SessionID]
+	found := false
+	for _, l := range links {
+		if l.LinkType == session.SessionLinkDelegatedTo && l.TargetSessionID == targetID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected delegated_to link to %q, links = %+v", targetID, links)
+	}
+}
+
+func TestIngest_HeuristicDelegation_UnknownTool_NoLink(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	_, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider: "parlay",
+		Messages: []IngestMessage{
+			{
+				Role:    "assistant",
+				Content: "using bash",
+				ToolCalls: []IngestToolCall{
+					{
+						Name:  "bash",
+						Input: `{"session_id":"some-other-session"}`,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	// "bash" is not a delegate tool — no link should be created.
+	total := 0
+	for _, links := range store.sessionLinks {
+		total += len(links)
+	}
+	if total != 0 {
+		t.Errorf("expected no links for non-delegate tool, got %d", total)
+	}
+}
+
+func TestIngest_HeuristicDelegation_SelfLink_Skipped(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider:  "parlay",
+		SessionID: "self-session",
+		Messages: []IngestMessage{
+			{
+				Role: "assistant",
+				ToolCalls: []IngestToolCall{
+					{
+						// Points to itself — should be silently ignored.
+						Name:  "delegate",
+						Input: `{"session_id":"self-session"}`,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	links := store.sessionLinks[result.SessionID]
+	if len(links) != 0 {
+		t.Errorf("expected no self-link, got %d links", len(links))
+	}
+}
+
+func TestExtractSessionID(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{`{"session_id":"abc123"}`, "abc123"},
+		{`{"sessionId":"xyz"}`, "xyz"},
+		{`{"session-id":"hyphen"}`, "hyphen"},
+		{`{"other_key":"value"}`, ""},
+		{`not json`, ""},
+		{``, ""},
+		{`{"session_id":""}`, ""},
+	}
+	for _, tc := range cases {
+		got := extractSessionID(tc.raw)
+		if got != tc.want {
+			t.Errorf("extractSessionID(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// ── NormalizeRemoteURL Tests ──
+
+func TestNormalizeRemoteURL(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		// HTTPS format
+		{"https://github.com/org/repo.git", "github.com/org/repo"},
+		{"https://github.com/org/repo", "github.com/org/repo"},
+		{"http://github.com/org/repo.git", "github.com/org/repo"},
+		// SSH format
+		{"git@github.com:org/repo.git", "github.com/org/repo"},
+		{"git@github.com:org/repo", "github.com/org/repo"},
+		{"git@gitlab.com:team/project.git", "gitlab.com/team/project"},
+		// ssh:// format
+		{"ssh://git@github.com/org/repo.git", "github.com/org/repo"},
+		// Edge cases
+		{"", ""},
+		{"  ", ""},
+		{"https://github.com/org/repo.git/", "github.com/org/repo"},
+	}
+	for _, tc := range cases {
+		got := NormalizeRemoteURL(tc.raw)
+		if got != tc.want {
+			t.Errorf("NormalizeRemoteURL(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// ── Voice Search Tests ──
+
+func TestSearch_VoiceDefaultsLimitTo5(t *testing.T) {
+	store := &mockStore{
+		sessions: make(map[session.ID]*session.Session),
+		searchResult: &session.SearchResult{
+			Sessions:   make([]session.Summary, 10),
+			TotalCount: 10,
+			Limit:      5,
+		},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Search(SearchRequest{Voice: true})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	// The service should have set limit=5 (the mock returns it back).
+	if result.Limit != 5 {
+		t.Errorf("expected limit=5 for voice mode, got %d", result.Limit)
+	}
+}
+
+func TestSearch_VoiceReturnsVoiceResults(t *testing.T) {
+	now := time.Now().UTC()
+	store := &mockStore{
+		sessions: make(map[session.ID]*session.Session),
+		searchResult: &session.SearchResult{
+			Sessions: []session.Summary{
+				{
+					ID:        "sess-1",
+					Summary:   "Implemented **dark mode** toggle. Added CSS variables.",
+					Agent:     "jarvis",
+					Branch:    "feat/dark-mode",
+					CreatedAt: now.Add(-2 * time.Hour),
+				},
+				{
+					ID:        "sess-2",
+					Summary:   "Fixed `NullPointerException` in user service.",
+					Agent:     "copilot",
+					Branch:    "main",
+					CreatedAt: now.Add(-25 * time.Hour),
+				},
+			},
+			TotalCount: 2,
+			Limit:      5,
+		},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Search(SearchRequest{Voice: true})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if len(result.VoiceResults) != 2 {
+		t.Fatalf("expected 2 voice results, got %d", len(result.VoiceResults))
+	}
+
+	// Check first voice result.
+	v0 := result.VoiceResults[0]
+	if v0.ID != "sess-1" {
+		t.Errorf("v0.ID = %q, want 'sess-1'", v0.ID)
+	}
+	if v0.Agent != "jarvis" {
+		t.Errorf("v0.Agent = %q, want 'jarvis'", v0.Agent)
+	}
+	if v0.Branch != "feat/dark-mode" {
+		t.Errorf("v0.Branch = %q, want 'feat/dark-mode'", v0.Branch)
+	}
+	// Summary should have markdown stripped.
+	if v0.Summary != "Implemented dark mode toggle. Added CSS variables." {
+		t.Errorf("v0.Summary = %q, want markdown stripped", v0.Summary)
+	}
+	// TimeAgo should be "2 hours ago".
+	if v0.TimeAgo != "2 hours ago" {
+		t.Errorf("v0.TimeAgo = %q, want '2 hours ago'", v0.TimeAgo)
+	}
+
+	// Check second voice result.
+	v1 := result.VoiceResults[1]
+	if v1.Summary != "Fixed NullPointerException in user service." {
+		t.Errorf("v1.Summary = %q, want inline code stripped", v1.Summary)
+	}
+	if v1.TimeAgo != "yesterday" {
+		t.Errorf("v1.TimeAgo = %q, want 'yesterday'", v1.TimeAgo)
+	}
+}
+
+func TestSearch_NonVoiceOmitsVoiceResults(t *testing.T) {
+	store := &mockStore{
+		sessions: make(map[session.ID]*session.Session),
+		searchResult: &session.SearchResult{
+			Sessions: []session.Summary{
+				{ID: "sess-1", Summary: "hello"},
+			},
+			TotalCount: 1,
+			Limit:      50,
+		},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Search(SearchRequest{})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if result.VoiceResults != nil {
+		t.Errorf("expected nil VoiceResults for non-voice search, got %d items", len(result.VoiceResults))
+	}
+}
+
+func TestSearch_VoiceExplicitLimitOverridesDefault(t *testing.T) {
+	store := &mockStore{
+		sessions: make(map[session.ID]*session.Session),
+		searchResult: &session.SearchResult{
+			Sessions:   make([]session.Summary, 3),
+			TotalCount: 3,
+			Limit:      3,
+		},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Search(SearchRequest{Voice: true, Limit: 3})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if result.Limit != 3 {
+		t.Errorf("expected explicit limit=3, got %d", result.Limit)
+	}
+}
+
+func TestSearch_VoiceTruncatesSummaryToTwoSentences(t *testing.T) {
+	store := &mockStore{
+		sessions: make(map[session.ID]*session.Session),
+		searchResult: &session.SearchResult{
+			Sessions: []session.Summary{
+				{
+					ID:        "long",
+					Summary:   "First sentence. Second sentence. Third sentence. Fourth sentence.",
+					CreatedAt: time.Now().UTC(),
+				},
+			},
+			TotalCount: 1,
+			Limit:      5,
+		},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Search(SearchRequest{Voice: true})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	got := result.VoiceResults[0].Summary
+	want := "First sentence. Second sentence."
+	if got != want {
+		t.Errorf("summary = %q, want %q", got, want)
 	}
 }

@@ -6,6 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/agentscmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/analyzecmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/authcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/blamecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/capture"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/commentcmd"
@@ -21,6 +24,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/linkcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/listcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/mcpcmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/replaycmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/restore"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/rewindcmd"
@@ -28,6 +32,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/secrets"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/show"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/skillscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/statscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/status"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/synccmd"
@@ -82,6 +87,11 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(servecmd.NewCmdServe(f))
 	cmd.AddCommand(webcmd.NewCmdWeb(f))
 	cmd.AddCommand(mcpcmd.NewCmdMCP(f))
+	cmd.AddCommand(agentscmd.NewCmdAgents(f))
+	cmd.AddCommand(analyzecmd.NewCmdAnalyze(f))
+	cmd.AddCommand(replaycmd.NewCmdReplay(f))
+	cmd.AddCommand(skillscmd.NewCmdSkills(f))
+	cmd.AddCommand(authcmd.NewCmdAuth(f))
 
 	return cmd
 }

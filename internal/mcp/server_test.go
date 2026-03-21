@@ -487,6 +487,150 @@ func TestHandleStats(t *testing.T) {
 	}
 }
 
+// ── Ingest ──
+
+func TestHandleIngest(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	messagesJSON := `[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there","model":"qwen3:30b","input_tokens":100,"output_tokens":20}]`
+
+	req := callToolReq("aisync_ingest", map[string]any{
+		"provider":      "parlay",
+		"messages_json": messagesJSON,
+		"agent":         "jarvis",
+		"summary":       "Test ingest via MCP",
+	})
+
+	result, err := h.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleIngest error: %v", err)
+	}
+
+	text := requireTextResult(t, result)
+
+	var ingestResult service.IngestResult
+	if err := json.Unmarshal([]byte(text), &ingestResult); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if ingestResult.SessionID == "" {
+		t.Error("expected non-empty session ID")
+	}
+	if ingestResult.Provider != "parlay" {
+		t.Errorf("expected provider 'parlay', got %q", ingestResult.Provider)
+	}
+
+	// Verify retrievable via get.
+	getReq := callToolReq("aisync_get", map[string]any{
+		"id": string(ingestResult.SessionID),
+	})
+	getResult, err := h.handleGet(context.Background(), getReq)
+	if err != nil {
+		t.Fatalf("handleGet after ingest: %v", err)
+	}
+	requireTextResult(t, getResult)
+}
+
+func TestHandleIngest_WithToolCalls(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	messagesJSON := `[{"role":"user","content":"What time is it?"},{"role":"assistant","content":"Let me check...","tool_calls":[{"name":"bash","input":"date +%H:%M","output":"14:30","state":"completed"}],"input_tokens":50,"output_tokens":15}]`
+
+	req := callToolReq("aisync_ingest", map[string]any{
+		"provider":      "ollama",
+		"messages_json": messagesJSON,
+		"session_id":    "custom-ingest-id",
+	})
+
+	result, err := h.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleIngest error: %v", err)
+	}
+
+	text := requireTextResult(t, result)
+
+	var ingestResult service.IngestResult
+	if err := json.Unmarshal([]byte(text), &ingestResult); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if string(ingestResult.SessionID) != "custom-ingest-id" {
+		t.Errorf("expected session ID 'custom-ingest-id', got %q", ingestResult.SessionID)
+	}
+}
+
+func TestHandleIngest_MissingProvider(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	req := callToolReq("aisync_ingest", map[string]any{
+		"messages_json": `[{"role":"user","content":"Hello"}]`,
+	})
+
+	result, err := h.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleIngest error: %v", err)
+	}
+
+	errText := requireErrorResult(t, result)
+	if !strings.Contains(errText, "provider") {
+		t.Errorf("expected error about provider, got: %s", errText)
+	}
+}
+
+func TestHandleIngest_MissingMessages(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	req := callToolReq("aisync_ingest", map[string]any{
+		"provider": "parlay",
+	})
+
+	result, err := h.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleIngest error: %v", err)
+	}
+
+	errText := requireErrorResult(t, result)
+	if !strings.Contains(errText, "messages_json") {
+		t.Errorf("expected error about messages_json, got: %s", errText)
+	}
+}
+
+func TestHandleIngest_InvalidMessagesJSON(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	req := callToolReq("aisync_ingest", map[string]any{
+		"provider":      "parlay",
+		"messages_json": "not valid json",
+	})
+
+	result, err := h.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleIngest error: %v", err)
+	}
+
+	errText := requireErrorResult(t, result)
+	if !strings.Contains(errText, "invalid messages_json") {
+		t.Errorf("expected 'invalid messages_json' in error, got: %s", errText)
+	}
+}
+
+func TestHandleIngest_BadProvider(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	req := callToolReq("aisync_ingest", map[string]any{
+		"provider":      "nonexistent",
+		"messages_json": `[{"role":"user","content":"Hello"}]`,
+	})
+
+	result, err := h.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleIngest error: %v", err)
+	}
+
+	errText := requireErrorResult(t, result)
+	if !strings.Contains(errText, "unknown provider") {
+		t.Errorf("expected 'unknown provider' in error, got: %s", errText)
+	}
+}
+
 // ── Sync without SyncService ──
 
 func TestSyncToolsUnavailable(t *testing.T) {
@@ -543,7 +687,7 @@ func TestNewServerRegistersAllTools(t *testing.T) {
 		"aisync_comment", "aisync_search", "aisync_blame", "aisync_explain",
 		"aisync_rewind", "aisync_stats", "aisync_cost",
 		"aisync_tool_usage", "aisync_efficiency", "aisync_diff", "aisync_gc",
-		"aisync_off_topic", "aisync_forecast",
+		"aisync_off_topic", "aisync_forecast", "aisync_ingest",
 		"aisync_push", "aisync_pull", "aisync_sync", "aisync_index",
 	}
 

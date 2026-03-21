@@ -1,0 +1,51 @@
+{{define "projects.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Projects — aisync{{end}}
+
+{{define "content"}}
+<h1 class="page-title">Projects</h1>
+
+{{if not .Projects}}
+<div class="empty-state">
+  <p>No projects found.</p>
+  <p class="hint">Run <code>aisync capture</code> in a git repository to get started.</p>
+</div>
+{{else}}
+<div class="project-grid">
+  {{range .Projects}}
+  <div class="project-card">
+    <div class="project-card-header">
+      <h2 class="project-card-name">
+        <a href="/sessions?project={{.ProjectPath}}">{{.DisplayName}}</a>
+      </h2>
+      {{if .Provider}}
+      <span class="badge badge-provider">{{.Provider}}</span>
+      {{end}}
+      {{if .Category}}
+      <span class="badge badge-category">{{.Category}}</span>
+      {{end}}
+    </div>
+    {{if .RemoteURL}}
+    <div class="project-card-meta font-mono text-muted">{{.RemoteURL}}</div>
+    {{end}}
+    <div class="project-card-stats">
+      <div class="project-stat">
+        <span class="project-stat-value">{{.SessionCount}}</span>
+        <span class="project-stat-label">sessions</span>
+      </div>
+      <div class="project-stat">
+        <span class="project-stat-value">{{formatTokens .TotalTokens}}</span>
+        <span class="project-stat-label">tokens</span>
+      </div>
+    </div>
+    <div class="project-card-actions">
+      <a href="/sessions?project={{.ProjectPath}}" class="project-link">View sessions &rarr;</a>
+      <a href="/?project={{.ProjectPath}}" class="project-link">Dashboard &rarr;</a>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}

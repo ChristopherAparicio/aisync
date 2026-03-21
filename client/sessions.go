@@ -118,6 +118,106 @@ func (c *Client) Capture(req CaptureRequest) (*CaptureResult, error) {
 	return &result, decode(data, &result)
 }
 
+// ── Ingest ──
+
+// IngestRequest contains inputs for a session ingest (push) operation.
+type IngestRequest struct {
+	Provider    string          `json:"provider"`
+	Messages    []IngestMessage `json:"messages"`
+	Agent       string          `json:"agent,omitempty"`
+	ProjectPath string          `json:"project_path,omitempty"`
+	Branch      string          `json:"branch,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
+	SessionID   string          `json:"session_id,omitempty"`
+}
+
+// IngestMessage is a lightweight message for the ingest endpoint.
+type IngestMessage struct {
+	Role         string           `json:"role"`
+	Content      string           `json:"content"`
+	Model        string           `json:"model,omitempty"`
+	Thinking     string           `json:"thinking,omitempty"`
+	ToolCalls    []IngestToolCall `json:"tool_calls,omitempty"`
+	InputTokens  int              `json:"input_tokens,omitempty"`
+	OutputTokens int              `json:"output_tokens,omitempty"`
+}
+
+// IngestToolCall is a lightweight tool call for the ingest endpoint.
+type IngestToolCall struct {
+	Name       string `json:"name"`
+	Input      string `json:"input"`
+	Output     string `json:"output,omitempty"`
+	State      string `json:"state,omitempty"`
+	DurationMs int    `json:"duration_ms,omitempty"`
+}
+
+// IngestResult contains the output of an ingest operation.
+type IngestResult struct {
+	SessionID string `json:"session_id"`
+	Provider  string `json:"provider"`
+}
+
+// Ingest pushes a session to the aisync server without provider detection.
+func (c *Client) Ingest(req IngestRequest) (*IngestResult, error) {
+	data, err := c.doPost("/api/v1/ingest", req)
+	if err != nil {
+		return nil, err
+	}
+	var result IngestResult
+	return &result, decode(data, &result)
+}
+
+// ── Ingest Ollama ──
+
+// OllamaIngestRequest wraps an Ollama-native conversation with optional metadata.
+type OllamaIngestRequest struct {
+	// Metadata.
+	ProjectPath string `json:"project_path,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+
+	// Ollama fields.
+	Model           string          `json:"model"`
+	Conversation    []OllamaMessage `json:"conversation"`
+	PromptEvalCount int             `json:"prompt_eval_count,omitempty"`
+	EvalCount       int             `json:"eval_count,omitempty"`
+	TotalDuration   int64           `json:"total_duration,omitempty"`
+	EvalDuration    int64           `json:"eval_duration,omitempty"`
+}
+
+// OllamaMessage is a single message in an Ollama conversation.
+type OllamaMessage struct {
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	ToolCalls []OllamaToolCall `json:"tool_calls,omitempty"`
+	ToolName  string           `json:"tool_name,omitempty"`
+}
+
+// OllamaToolCall is an Ollama tool call within an assistant message.
+type OllamaToolCall struct {
+	Type     string             `json:"type,omitempty"`
+	Function OllamaFunctionCall `json:"function"`
+}
+
+// OllamaFunctionCall is the function details within an Ollama tool call.
+type OllamaFunctionCall struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+// IngestOllama pushes an Ollama-native conversation to aisync.
+// The server handles format conversion automatically.
+func (c *Client) IngestOllama(req OllamaIngestRequest) (*IngestResult, error) {
+	data, err := c.doPost("/api/v1/ingest/ollama", req)
+	if err != nil {
+		return nil, err
+	}
+	var result IngestResult
+	return &result, decode(data, &result)
+}
+
 // ── Restore ──
 
 // RestoreRequest contains inputs for a restore operation.
@@ -167,6 +267,7 @@ type ListOptions struct {
 	ProjectPath string
 	Branch      string
 	Provider    string
+	OwnerID     string
 	PRNumber    int
 	All         bool
 }
@@ -182,6 +283,9 @@ func (c *Client) List(opts ListOptions) ([]Summary, error) {
 	}
 	if opts.Provider != "" {
 		q.Set("provider", opts.Provider)
+	}
+	if opts.OwnerID != "" {
+		q.Set("owner_id", opts.OwnerID)
 	}
 	if opts.PRNumber > 0 {
 		q.Set("pr", strconv.Itoa(opts.PRNumber))
@@ -208,6 +312,13 @@ func (c *Client) List(opts ListOptions) ([]Summary, error) {
 // Delete removes a session by ID.
 func (c *Client) Delete(id string) error {
 	_, err := c.doDelete("/api/v1/sessions/" + url.PathEscape(id))
+	return err
+}
+
+// PatchSession updates mutable session fields (currently only session_type).
+func (c *Client) PatchSession(id string, sessionType string) error {
+	body := map[string]string{"session_type": sessionType}
+	_, err := c.doPatch("/api/v1/sessions/"+url.PathEscape(id), body)
 	return err
 }
 
@@ -360,14 +471,25 @@ type SearchOptions struct {
 	Until       string // RFC3339 or "2006-01-02"
 	Limit       int
 	Offset      int
+	Voice       bool // voice mode: compact results optimized for TTS
 }
 
 // SearchResult contains paginated search results.
 type SearchResult struct {
-	Sessions   []Summary `json:"sessions"`
-	TotalCount int       `json:"total_count"`
-	Limit      int       `json:"limit"`
-	Offset     int       `json:"offset"`
+	Sessions     []Summary      `json:"sessions"`
+	VoiceResults []VoiceSummary `json:"voice_results,omitempty"`
+	TotalCount   int            `json:"total_count"`
+	Limit        int            `json:"limit"`
+	Offset       int            `json:"offset"`
+}
+
+// VoiceSummary is a compact, TTS-optimized session representation.
+type VoiceSummary struct {
+	ID      string `json:"id"`
+	Summary string `json:"summary"`
+	TimeAgo string `json:"time_ago"`
+	Agent   string `json:"agent,omitempty"`
+	Branch  string `json:"branch,omitempty"`
 }
 
 // Search finds sessions matching the given criteria.
@@ -399,6 +521,9 @@ func (c *Client) Search(opts SearchOptions) (*SearchResult, error) {
 	}
 	if opts.Offset > 0 {
 		q.Set("offset", strconv.Itoa(opts.Offset))
+	}
+	if opts.Voice {
+		q.Set("voice", "true")
 	}
 
 	path := "/api/v1/sessions/search"
@@ -530,6 +655,7 @@ type StatsOptions struct {
 	ProjectPath  string
 	Branch       string
 	Provider     string
+	OwnerID      string
 	All          bool
 	IncludeTools bool // if true, include aggregated tool usage
 }
@@ -579,6 +705,9 @@ func (c *Client) Stats(opts StatsOptions) (*StatsResult, error) {
 	}
 	if opts.Provider != "" {
 		q.Set("provider", opts.Provider)
+	}
+	if opts.OwnerID != "" {
+		q.Set("owner_id", opts.OwnerID)
 	}
 	if opts.All {
 		q.Set("all", "true")
@@ -930,4 +1059,361 @@ func (c *Client) Forecast(req ForecastRequest) (*ForecastResult, error) {
 	}
 	var result ForecastResult
 	return &result, decode(data, &result)
+}
+
+// ── Session-to-Session Links ──
+
+// SessionLinkRequest contains inputs for creating a session-to-session link.
+type SessionLinkRequest struct {
+	SourceSessionID string `json:"source_session_id"`
+	TargetSessionID string `json:"target_session_id"`
+	LinkType        string `json:"link_type"`
+	Description     string `json:"description,omitempty"`
+}
+
+// SessionLink represents a link between two sessions.
+// ProjectGroup represents a project (grouping key for sessions).
+type ProjectGroup struct {
+	RemoteURL    string `json:"remote_url,omitempty"`
+	ProjectPath  string `json:"project_path"`
+	Provider     string `json:"provider"`
+	SessionCount int    `json:"session_count"`
+	TotalTokens  int    `json:"total_tokens"`
+	DisplayName  string `json:"display_name"`
+}
+
+// ListProjects returns all distinct projects with aggregated stats.
+func (c *Client) ListProjects() ([]ProjectGroup, error) {
+	data, err := c.doGet("/api/v1/projects")
+	if err != nil {
+		return nil, err
+	}
+	var groups []ProjectGroup
+	return groups, decode(data, &groups)
+}
+
+type SessionLink struct {
+	CreatedAt       time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	SourceSessionID string    `json:"source_session_id"`
+	TargetSessionID string    `json:"target_session_id"`
+	LinkType        string    `json:"link_type"`
+	Description     string    `json:"description,omitempty"`
+}
+
+// LinkSessions creates a bidirectional link between two sessions.
+func (c *Client) LinkSessions(req SessionLinkRequest) (*SessionLink, error) {
+	data, err := c.doPost("/api/v1/session-links", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionLink
+	return &result, decode(data, &result)
+}
+
+// GetLinkedSessions retrieves all session-to-session links for a given session.
+func (c *Client) GetLinkedSessions(sessionID string) ([]SessionLink, error) {
+	data, err := c.doGet("/api/v1/session-links?session_id=" + url.QueryEscape(sessionID))
+	if err != nil {
+		return nil, err
+	}
+	var result []SessionLink
+	return result, decode(data, &result)
+}
+
+// DeleteSessionLink removes a session-to-session link by its ID.
+func (c *Client) DeleteSessionLink(id string) error {
+	_, err := c.doDelete("/api/v1/session-links/" + url.PathEscape(id))
+	return err
+}
+
+// ── Analysis ──
+
+// AnalyzeRequest is the request body for POST /api/v1/sessions/{id}/analyze.
+type AnalyzeRequest struct {
+	Trigger string `json:"trigger,omitempty"` // "manual" (default) or "auto"
+}
+
+// AnalysisReport mirrors analysis.AnalysisReport.
+type AnalysisReport struct {
+	Score            int                 `json:"score"`
+	Summary          string              `json:"summary"`
+	Problems         []AnalysisProblem   `json:"problems,omitempty"`
+	Recommendations  []AnalysisRecommend `json:"recommendations,omitempty"`
+	SkillSuggestions []AnalysisSkill     `json:"skill_suggestions,omitempty"`
+}
+
+// AnalysisProblem mirrors analysis.Problem.
+type AnalysisProblem struct {
+	Severity     string `json:"severity"`
+	Description  string `json:"description"`
+	MessageStart int    `json:"message_start,omitempty"`
+	MessageEnd   int    `json:"message_end,omitempty"`
+	ToolName     string `json:"tool_name,omitempty"`
+}
+
+// AnalysisRecommend mirrors analysis.Recommendation.
+type AnalysisRecommend struct {
+	Category    string `json:"category"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Priority    int    `json:"priority"`
+}
+
+// AnalysisSkill mirrors analysis.SkillSuggestion.
+type AnalysisSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Trigger     string `json:"trigger,omitempty"`
+	Content     string `json:"content,omitempty"`
+}
+
+// SessionAnalysis mirrors analysis.SessionAnalysis.
+type SessionAnalysis struct {
+	ID         string         `json:"id"`
+	SessionID  string         `json:"session_id"`
+	CreatedAt  string         `json:"created_at"`
+	Trigger    string         `json:"trigger"`
+	Report     AnalysisReport `json:"report"`
+	Adapter    string         `json:"adapter"`
+	Model      string         `json:"model,omitempty"`
+	TokensUsed int            `json:"tokens_used,omitempty"`
+	DurationMs int            `json:"duration_ms,omitempty"`
+	Error      string         `json:"error,omitempty"`
+}
+
+// AnalyzeSession triggers an analysis for a session and returns the result.
+func (c *Client) AnalyzeSession(sessionID string, req AnalyzeRequest) (*SessionAnalysis, error) {
+	data, err := c.doPost("/api/v1/sessions/"+url.PathEscape(sessionID)+"/analyze", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionAnalysis
+	return &result, decode(data, &result)
+}
+
+// GetAnalysis retrieves the latest analysis for a session.
+func (c *Client) GetAnalysis(sessionID string) (*SessionAnalysis, error) {
+	data, err := c.doGet("/api/v1/sessions/" + url.PathEscape(sessionID) + "/analysis")
+	if err != nil {
+		return nil, err
+	}
+	var result SessionAnalysis
+	return &result, decode(data, &result)
+}
+
+// ListAnalyses returns all analyses for a session.
+func (c *Client) ListAnalyses(sessionID string) ([]SessionAnalysis, error) {
+	data, err := c.doGet("/api/v1/sessions/" + url.PathEscape(sessionID) + "/analyses")
+	if err != nil {
+		return nil, err
+	}
+	var result []SessionAnalysis
+	return result, decode(data, &result)
+}
+
+// ── Replay ──
+
+// ReplayRequest specifies options for replaying a session.
+type ReplayRequest struct {
+	Provider    string `json:"provider,omitempty"`     // override provider
+	Agent       string `json:"agent,omitempty"`        // override agent
+	Model       string `json:"model,omitempty"`        // override model
+	CommitSHA   string `json:"commit_sha,omitempty"`   // override commit
+	MaxMessages int    `json:"max_messages,omitempty"` // limit user messages (0 = all)
+}
+
+// ReplayResult contains the outcome of a session replay.
+type ReplayResult struct {
+	OriginalSession *Session          `json:"original_session"`
+	ReplaySession   *Session          `json:"replay_session,omitempty"`
+	WorktreePath    string            `json:"worktree_path"`
+	Duration        string            `json:"duration"` // Go duration string
+	Comparison      *ReplayComparison `json:"comparison,omitempty"`
+	Error           string            `json:"error,omitempty"`
+}
+
+// ReplayComparison compares metrics between original and replay sessions.
+type ReplayComparison struct {
+	OriginalTokens    int      `json:"original_tokens"`
+	ReplayTokens      int      `json:"replay_tokens"`
+	TokenDelta        int      `json:"token_delta"`
+	OriginalErrors    int      `json:"original_errors"`
+	ReplayErrors      int      `json:"replay_errors"`
+	ErrorDelta        int      `json:"error_delta"`
+	OriginalMessages  int      `json:"original_messages"`
+	ReplayMessages    int      `json:"replay_messages"`
+	OriginalSkills    []string `json:"original_skills,omitempty"`
+	ReplaySkills      []string `json:"replay_skills,omitempty"`
+	NewSkillsLoaded   []string `json:"new_skills_loaded,omitempty"`
+	SkillsLost        []string `json:"skills_lost,omitempty"`
+	OriginalToolCalls int      `json:"original_tool_calls"`
+	ReplayToolCalls   int      `json:"replay_tool_calls"`
+	Verdict           string   `json:"verdict"`
+}
+
+// ReplaySession triggers a replay of the given session and returns the result.
+func (c *Client) ReplaySession(sessionID string, req ReplayRequest) (*ReplayResult, error) {
+	data, err := c.doPost("/api/v1/sessions/"+url.PathEscape(sessionID)+"/replay", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ReplayResult
+	return &result, decode(data, &result)
+}
+
+// ── Skill Resolver ──
+
+// SkillResolveRequest specifies options for resolving missed skills.
+type SkillResolveRequest struct {
+	SkillNames []string `json:"skill_names,omitempty"` // optional filter
+	DryRun     bool     `json:"dry_run"`               // true = suggest only, false = apply
+}
+
+// SkillImprovement proposes a specific change to a SKILL.md file.
+type SkillImprovement struct {
+	SkillName           string   `json:"skill_name"`
+	SkillPath           string   `json:"skill_path"`
+	Kind                string   `json:"kind"`
+	CurrentDescription  string   `json:"current_description,omitempty"`
+	ProposedDescription string   `json:"proposed_description,omitempty"`
+	AddKeywords         []string `json:"add_keywords,omitempty"`
+	AddTriggerPatterns  []string `json:"add_trigger_patterns,omitempty"`
+	ProposedContent     string   `json:"proposed_content,omitempty"`
+	Reasoning           string   `json:"reasoning"`
+	Confidence          float64  `json:"confidence"`
+	SourceSessionID     string   `json:"source_session_id"`
+}
+
+// SkillResolveResult contains the outcome of a skill resolution.
+type SkillResolveResult struct {
+	SessionID    string             `json:"session_id"`
+	Improvements []SkillImprovement `json:"improvements"`
+	Applied      int                `json:"applied"`
+	Validated    bool               `json:"validated"`
+	Verdict      string             `json:"verdict"`
+	Duration     string             `json:"duration"` // Go duration string
+	Error        string             `json:"error,omitempty"`
+}
+
+// ResolveSkills analyzes missed skills for a session and proposes/applies improvements.
+func (c *Client) ResolveSkills(sessionID string, req SkillResolveRequest) (*SkillResolveResult, error) {
+	data, err := c.doPost("/api/v1/sessions/"+url.PathEscape(sessionID)+"/skills/resolve", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SkillResolveResult
+	return &result, decode(data, &result)
+}
+
+// ── Authentication ──
+
+// AuthRegisterRequest is the input for user registration.
+type AuthRegisterRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// AuthLoginRequest is the input for login.
+type AuthLoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// AuthResponse is returned by Register and Login.
+type AuthResponse struct {
+	Token string   `json:"token"`
+	User  AuthUser `json:"user"`
+}
+
+// AuthUser is the API view of a user (separate from session domain).
+type AuthUser struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	Active    bool   `json:"active"`
+	CreatedAt string `json:"created_at"`
+}
+
+// AuthAPIKey is the API view of an API key.
+type AuthAPIKey struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	KeyPrefix string  `json:"key_prefix"`
+	Active    bool    `json:"active"`
+	ExpiresAt *string `json:"expires_at,omitempty"`
+	CreatedAt string  `json:"created_at"`
+}
+
+// AuthCreateKeyResponse is returned when creating an API key.
+type AuthCreateKeyResponse struct {
+	RawKey string     `json:"raw_key"`
+	APIKey AuthAPIKey `json:"api_key"`
+}
+
+// Register creates a new user account.
+func (c *Client) Register(req AuthRegisterRequest) (*AuthResponse, error) {
+	data, err := c.doPost("/api/v1/auth/register", req)
+	if err != nil {
+		return nil, err
+	}
+	var result AuthResponse
+	return &result, decode(data, &result)
+}
+
+// Login authenticates with username+password.
+func (c *Client) Login(req AuthLoginRequest) (*AuthResponse, error) {
+	data, err := c.doPost("/api/v1/auth/login", req)
+	if err != nil {
+		return nil, err
+	}
+	var result AuthResponse
+	return &result, decode(data, &result)
+}
+
+// AuthMe returns the current user info from the JWT/API key.
+func (c *Client) AuthMe() (*AuthUser, error) {
+	data, err := c.doGet("/api/v1/auth/me")
+	if err != nil {
+		return nil, err
+	}
+	var result AuthUser
+	return &result, decode(data, &result)
+}
+
+// CreateAPIKeyRequest is the input for creating an API key.
+type CreateAPIKeyRequest struct {
+	Name string `json:"name"`
+}
+
+// AuthCreateAPIKey creates a new API key for the authenticated user.
+func (c *Client) AuthCreateAPIKey(req CreateAPIKeyRequest) (*AuthCreateKeyResponse, error) {
+	data, err := c.doPost("/api/v1/auth/keys", req)
+	if err != nil {
+		return nil, err
+	}
+	var result AuthCreateKeyResponse
+	return &result, decode(data, &result)
+}
+
+// AuthListAPIKeys returns all API keys for the authenticated user.
+func (c *Client) AuthListAPIKeys() ([]AuthAPIKey, error) {
+	data, err := c.doGet("/api/v1/auth/keys")
+	if err != nil {
+		return nil, err
+	}
+	var result []AuthAPIKey
+	return result, decode(data, &result)
+}
+
+// AuthRevokeAPIKey deactivates an API key.
+func (c *Client) AuthRevokeAPIKey(keyID string) error {
+	_, err := c.doPost("/api/v1/auth/keys/"+url.PathEscape(keyID)+"/revoke", nil)
+	return err
+}
+
+// AuthDeleteAPIKey permanently removes an API key.
+func (c *Client) AuthDeleteAPIKey(keyID string) error {
+	_, err := c.doDelete("/api/v1/auth/keys/" + url.PathEscape(keyID))
+	return err
 }

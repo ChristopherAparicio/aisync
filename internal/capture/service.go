@@ -25,7 +25,8 @@ type Request struct {
 type Result struct {
 	Session      *session.Session
 	Provider     session.ProviderName
-	SecretsFound int // number of secrets detected (0 if no scanner)
+	SecretsFound int  // number of secrets detected (0 if no scanner)
+	Skipped      bool // true if session was unchanged and export was skipped
 }
 
 // Service orchestrates the capture workflow.
@@ -150,7 +151,20 @@ func (s *Service) detectSessions(req Request) ([]session.Summary, provider.Provi
 }
 
 // captureOne exports, processes, and stores a single session.
+// If the provider supports FreshnessChecker, it compares the source's
+// message count + updated-at with the stored values to skip unchanged sessions.
 func (s *Service) captureOne(prov provider.Provider, summary *session.Summary, req Request) (*Result, error) {
+	// Skip-if-unchanged optimization: avoid expensive Export for unmodified sessions.
+	if checker, ok := prov.(provider.FreshnessChecker); ok {
+		if skipped := s.skipIfUnchanged(checker, summary.ID, prov.Name()); skipped {
+			return &Result{
+				Session:  &session.Session{ID: summary.ID},
+				Provider: prov.Name(),
+				Skipped:  true,
+			}, nil
+		}
+	}
+
 	sess, err := prov.Export(summary.ID, req.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("exporting session from %s: %w", prov.Name(), err)
@@ -166,6 +180,11 @@ func (s *Service) captureOne(prov provider.Provider, summary *session.Summary, r
 		sess.ProjectPath = req.ProjectPath
 	}
 	sess.StorageMode = req.Mode
+
+	// Auto-detect session lifecycle status from source freshness.
+	if sess.Status == "" {
+		sess.Status = session.DetectSessionStatus(sess.SourceUpdatedAt, sess.CreatedAt)
+	}
 
 	if sess.Branch != "" {
 		sess.Links = append(sess.Links, session.Link{
@@ -204,6 +223,33 @@ func (s *Service) captureOne(prov provider.Provider, summary *session.Summary, r
 		Provider:     prov.Name(),
 		SecretsFound: secretsFound,
 	}, nil
+}
+
+// skipIfUnchanged checks if a session has changed since the last capture
+// by comparing the source's message count and updated-at timestamp with
+// the values stored in aisync's database.
+//
+// Returns true (skip) when both match exactly — the session is unchanged.
+// Returns false (re-capture) when:
+//   - First capture (session not in store yet)
+//   - Message count differs (new messages, or rewind deleted some)
+//   - Source updated-at differs (catches rewind+re-add edge case where count stays same)
+//   - Any error during freshness check (fail-open: re-capture is safe)
+func (s *Service) skipIfUnchanged(checker provider.FreshnessChecker, sessionID session.ID, provName session.ProviderName) bool {
+	source, err := checker.SessionFreshness(sessionID)
+	if err != nil {
+		return false // can't determine freshness → re-capture
+	}
+
+	storedCount, storedUpdatedAt, err := s.store.GetFreshness(sessionID)
+	if err != nil {
+		return false // store error → re-capture
+	}
+	if storedCount == 0 && storedUpdatedAt == 0 {
+		return false // first capture — session not in store yet
+	}
+
+	return storedCount == source.MessageCount && storedUpdatedAt == source.UpdatedAt
 }
 
 // sessionText concatenates all scannable text from a session.

@@ -537,6 +537,16 @@ type contentBlock struct {
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"` // string or array
 	IsError   bool            `json:"is_error"`
+
+	// image block
+	Source *imageSource `json:"source,omitempty"`
+}
+
+// imageSource is the source object for image content blocks.
+type imageSource struct {
+	Type      string `json:"type"`       // "base64", "url"
+	MediaType string `json:"media_type"` // "image/png", "image/jpeg", etc.
+	Data      string `json:"data"`       // base64-encoded data (we only read length, not store)
 }
 
 // UnmarshalJSONL parses Claude Code JSONL bytes into a unified Session.
@@ -630,8 +640,10 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 	fileChanges := make(map[string]session.ChangeType)
 
 	var (
-		totalInput  int
-		totalOutput int
+		totalInput     int
+		totalOutput    int
+		totalCache     int
+		totalImageToks int
 	)
 
 	for _, line := range lines {
@@ -666,6 +678,7 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 			if msg.Usage != nil {
 				totalInput += msg.Usage.InputTokens + msg.Usage.CacheCreationInputTokens + msg.Usage.CacheReadInputTokens
 				totalOutput += msg.Usage.OutputTokens
+				totalCache += msg.Usage.CacheReadInputTokens + msg.Usage.CacheCreationInputTokens
 			}
 
 			// summary mode: only metadata, no messages
@@ -694,9 +707,15 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 			domainMsg.Content = parsed.text
 			domainMsg.Thinking = parsed.thinking
 			domainMsg.ToolCalls = parsed.toolCalls
+			domainMsg.Images = parsed.images
+			domainMsg.ContentBlocks = parsed.contentBlocks
 			if msg.Usage != nil {
 				domainMsg.InputTokens = msg.Usage.InputTokens + msg.Usage.CacheCreationInputTokens + msg.Usage.CacheReadInputTokens
 				domainMsg.OutputTokens = msg.Usage.OutputTokens
+			}
+			// Accumulate image tokens.
+			for _, img := range parsed.images {
+				totalImageToks += img.TokensEstimate
 			}
 
 			// For tool_result user messages, match with pending tool_uses
@@ -732,6 +751,8 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 		InputTokens:  totalInput,
 		OutputTokens: totalOutput,
 		TotalTokens:  totalInput + totalOutput,
+		ImageTokens:  totalImageToks,
+		CacheRead:    totalCache,
 	}
 
 	// Set file changes
@@ -746,11 +767,13 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 }
 
 type parsedContent struct {
-	text        string
-	thinking    string
-	toolCalls   []session.ToolCall
-	toolResults []toolResultInfo
-	tokens      int
+	text          string
+	thinking      string
+	toolCalls     []session.ToolCall
+	toolResults   []toolResultInfo
+	images        []session.ImageMeta
+	contentBlocks []session.ContentBlock
+	tokens        int
 }
 
 type toolResultInfo struct {
@@ -790,11 +813,45 @@ func parseContentBlocks(raw json.RawMessage, role string, mode session.StorageMo
 		switch block.Type {
 		case "text":
 			textParts = append(textParts, block.Text)
+			result.contentBlocks = append(result.contentBlocks, session.ContentBlock{
+				Type: session.ContentBlockText,
+				Text: block.Text,
+			})
 
 		case "thinking":
 			if mode == session.StorageModeFull {
 				result.thinking = block.Thinking
+				result.contentBlocks = append(result.contentBlocks, session.ContentBlock{
+					Type:     session.ContentBlockThinking,
+					Thinking: block.Thinking,
+				})
 			}
+
+		case "image":
+			// Extract image metadata without storing the actual base64 data.
+			img := session.ImageMeta{
+				Source: "base64",
+			}
+			if block.Source != nil {
+				img.MediaType = block.Source.MediaType
+				img.Source = block.Source.Type
+				if block.Source.Data != "" {
+					// Compute size from base64 length (base64 is ~4/3 ratio).
+					img.SizeBytes = len(block.Source.Data) * 3 / 4
+					// Anthropic image token estimation:
+					// ~765 tokens per 512x512 tile. Estimate from file size:
+					// ~1 token per 750 bytes as a rough heuristic.
+					img.TokensEstimate = img.SizeBytes / 750
+					if img.TokensEstimate < 85 {
+						img.TokensEstimate = 85 // minimum for any image
+					}
+				}
+			}
+			result.images = append(result.images, img)
+			result.contentBlocks = append(result.contentBlocks, session.ContentBlock{
+				Type:  session.ContentBlockImage,
+				Image: &img,
+			})
 
 		case "tool_use":
 			if mode == session.StorageModeFull || mode == session.StorageModeCompact {

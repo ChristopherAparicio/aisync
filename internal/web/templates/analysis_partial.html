@@ -1,0 +1,153 @@
+{{define "analysis_partial"}}
+{{if .HasAnalysis}}
+<div class="analysis-section">
+  <div class="analysis-header">
+    <h2 class="section-title">Session Analysis</h2>
+    <div class="analysis-meta">
+      <span class="badge badge-trigger">{{.Analysis.Trigger}}</span>
+      <span class="badge badge-adapter">{{.Analysis.Adapter}}</span>
+      {{if gt .Analysis.DurationMs 0}}<span class="text-muted font-mono">{{formatDuration .Analysis.DurationMs}}</span>{{end}}
+      <span class="text-muted">{{.Analysis.CreatedAt}}</span>
+    </div>
+  </div>
+
+  {{if .Analysis.Error}}
+  <div class="analysis-error">
+    <div class="analysis-error-label">Analysis failed</div>
+    <div class="analysis-error-msg">{{.Analysis.Error}}</div>
+  </div>
+  {{else}}
+  <!-- Score -->
+  <div class="analysis-score-row">
+    <div class="analysis-score analysis-score-{{.Analysis.ScoreClass}}">
+      <span class="analysis-score-value">{{.Analysis.Score}}</span>
+      <span class="analysis-score-label">/ 100</span>
+    </div>
+    <div class="analysis-summary">{{.Analysis.Summary}}</div>
+  </div>
+
+  <!-- Problems -->
+  {{if .Analysis.HasProblems}}
+  <div class="analysis-subsection">
+    <h3 class="analysis-subtitle">Problems <span class="text-muted">({{len .Analysis.Problems}})</span></h3>
+    <div class="analysis-problems">
+      {{range .Analysis.Problems}}
+      <div class="analysis-problem">
+        <span class="badge analysis-severity-{{.SeverityClass}}">{{.Severity}}</span>
+        <span class="analysis-problem-desc">{{.Description}}</span>
+        {{if .ToolName}}<span class="font-mono text-muted">{{.ToolName}}</span>{{end}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+
+  <!-- Recommendations -->
+  {{if .Analysis.HasRecommendations}}
+  <div class="analysis-subsection">
+    <h3 class="analysis-subtitle">Recommendations <span class="text-muted">({{len .Analysis.Recommendations}})</span></h3>
+    <div class="analysis-recommendations">
+      {{range .Analysis.Recommendations}}
+      <div class="analysis-rec">
+        <div class="analysis-rec-header">
+          <span class="badge analysis-cat-{{.CategoryClass}}">{{.Category}}</span>
+          <span class="analysis-rec-title">{{.Title}}</span>
+          {{if gt .Priority 0}}<span class="analysis-rec-priority text-muted">P{{.Priority}}</span>{{end}}
+        </div>
+        <div class="analysis-rec-desc">{{.Description}}</div>
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+
+  <!-- Skill Suggestions -->
+  {{if .Analysis.HasSkills}}
+  <div class="analysis-subsection">
+    <h3 class="analysis-subtitle">Suggested Skills <span class="text-muted">({{len .Analysis.SkillSuggestions}})</span></h3>
+    <div class="analysis-skills">
+      {{range .Analysis.SkillSuggestions}}
+      <div class="analysis-skill">
+        <div class="analysis-skill-name font-mono">{{.Name}}</div>
+        <div class="analysis-skill-desc">{{.Description}}</div>
+        {{if .Trigger}}<div class="analysis-skill-trigger text-muted">Trigger: {{.Trigger}}</div>{{end}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+
+  <!-- Skill Observation (available vs loaded vs missed) -->
+  {{if .Analysis.HasSkillObservation}}
+  <div class="analysis-subsection">
+    <h3 class="analysis-subtitle">Skill Observation</h3>
+    <div class="skill-obs-grid">
+      {{if .Analysis.SkillsLoaded}}
+      <div class="skill-obs-group">
+        <div class="skill-obs-label skill-obs-loaded">Loaded <span class="text-muted">({{len .Analysis.SkillsLoaded}})</span></div>
+        <div class="skill-obs-tags">
+          {{range .Analysis.SkillsLoaded}}<span class="skill-tag skill-tag-loaded font-mono">{{.}}</span>{{end}}
+        </div>
+      </div>
+      {{end}}
+      {{if .Analysis.SkillsMissed}}
+      <div class="skill-obs-group">
+        <div class="skill-obs-label skill-obs-missed">Missed <span class="text-muted">({{len .Analysis.SkillsMissed}})</span></div>
+        <div class="skill-obs-tags">
+          {{range .Analysis.SkillsMissed}}<span class="skill-tag skill-tag-missed font-mono">{{.}}</span>{{end}}
+        </div>
+      </div>
+      {{end}}
+      {{if .Analysis.SkillsDiscovered}}
+      <div class="skill-obs-group">
+        <div class="skill-obs-label skill-obs-discovered">Discovered <span class="text-muted">({{len .Analysis.SkillsDiscovered}})</span></div>
+        <div class="skill-obs-tags">
+          {{range .Analysis.SkillsDiscovered}}<span class="skill-tag skill-tag-discovered font-mono">{{.}}</span>{{end}}
+        </div>
+      </div>
+      {{end}}
+      {{if .Analysis.SkillsRecommended}}
+      <div class="skill-obs-group">
+        <div class="skill-obs-label">Recommended <span class="text-muted">({{len .Analysis.SkillsRecommended}})</span></div>
+        <div class="skill-obs-tags">
+          {{range .Analysis.SkillsRecommended}}<span class="skill-tag font-mono">{{.}}</span>{{end}}
+        </div>
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+  {{end}}
+
+  {{if .CanAnalyze}}
+  <div class="analysis-actions">
+    <button class="btn-analyze"
+      hx-post="/partials/analyze/{{.SessionID}}"
+      hx-target="#analysis-container"
+      hx-swap="innerHTML"
+      hx-disabled-elt="this"
+      onclick="this.textContent='Analyzing...'; this.disabled=true;">
+      Re-analyze
+    </button>
+  </div>
+  {{end}}
+</div>
+{{else}}
+{{if .CanAnalyze}}
+<div class="analysis-empty" id="analysis-empty-block">
+  <p class="text-muted analysis-empty-text">No analysis available for this session.</p>
+  <button class="btn-analyze analysis-trigger-btn"
+    hx-post="/partials/analyze/{{.SessionID}}"
+    hx-target="#analysis-container"
+    hx-swap="innerHTML"
+    hx-disabled-elt="this"
+    onclick="this.style.display='none'; document.querySelector('.analysis-empty-text').style.display='none'; document.getElementById('analyze-spinner').style.display='inline-flex';">
+    Analyze Session
+  </button>
+  <span id="analyze-spinner" class="analysis-spinner" style="display:none;">
+    <span class="spinner-dot"></span> Analyzing with Ollama...
+  </span>
+</div>
+{{end}}
+{{end}}
+{{end}}

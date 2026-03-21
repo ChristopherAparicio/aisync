@@ -14,23 +14,34 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/auth"
+	"github.com/ChristopherAparicio/aisync/internal/replay"
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 )
 
 // Server is the aisync HTTP API server.
 type Server struct {
-	sessionSvc *service.SessionService
-	syncSvc    *service.SyncService // optional — nil when git sync is unavailable
-	httpServer *http.Server
-	logger     *log.Logger
+	sessionSvc    service.SessionServicer
+	syncSvc       *service.SyncService           // optional — nil when git sync is unavailable
+	analysisSvc   service.AnalysisServicer       // optional — nil when analysis is unavailable
+	replayEngine  *replay.Engine                 // optional — nil when replay is unavailable
+	skillResolver skillresolver.ResolverServicer // optional — nil when skill resolver is unavailable
+	authSvc       auth.Servicer                  // optional — nil disables authentication
+	httpServer    *http.Server
+	logger        *log.Logger
 }
 
 // Config holds the configuration for creating a new Server.
 type Config struct {
-	SessionService *service.SessionService
-	SyncService    *service.SyncService // optional
-	Addr           string               // e.g. ":8371" or "127.0.0.1:8371"
-	Logger         *log.Logger          // optional — defaults to stderr
+	SessionService  service.SessionServicer
+	SyncService     *service.SyncService           // optional
+	AnalysisService service.AnalysisServicer       // optional — nil disables analysis endpoints
+	ReplayEngine    *replay.Engine                 // optional — nil disables replay endpoint
+	SkillResolver   skillresolver.ResolverServicer // optional — nil disables skill resolver endpoint
+	AuthService     auth.Servicer                  // optional — nil disables authentication
+	Addr            string                         // e.g. ":8371" or "127.0.0.1:8371"
+	Logger          *log.Logger                    // optional — defaults to stderr
 }
 
 // New creates a Server with the given configuration.
@@ -41,19 +52,23 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		sessionSvc: cfg.SessionService,
-		syncSvc:    cfg.SyncService,
-		logger:     logger,
+		sessionSvc:    cfg.SessionService,
+		syncSvc:       cfg.SyncService,
+		analysisSvc:   cfg.AnalysisService,
+		replayEngine:  cfg.ReplayEngine,
+		skillResolver: cfg.SkillResolver,
+		authSvc:       cfg.AuthService,
+		logger:        logger,
 	}
 
 	mux := http.NewServeMux()
-	s.registerRoutes(mux)
+	s.RegisterRoutes(mux)
 
 	s.httpServer = &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           s.withMiddleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      180 * time.Second, // generous for LLM analysis (Ollama can be slow)
 		IdleTimeout:       120 * time.Second,
 	}
 

@@ -289,17 +289,18 @@ For full details, see [architecture/](./architecture/), [spec.md](./spec.md), an
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| Phase 1 -- MVP | Done | Capture, restore, list, show, hooks, secrets, export/import |
-| Phase 2 -- Team Sharing | Done | Git sync, Cursor provider, cross-provider, plugin system |
-| Phase 3 -- PR Integration | Done | GitHub platform, PR linking, comments, stats, TUI |
-| Phase 3.5 -- Architecture | Done | Service layer, HTTP API (19 endpoints), Client SDK, MCP Server (18 tools), Search, User Identity |
-| Phase 4 -- CI Automation | Planned | Auto-fix sessions on CI failure, webhooks, Slack/n8n |
-| Phase 5.0 -- AI Intelligence | Done | Summarize, Explain, Resume, Rewind (LLM-powered session intelligence) |
-| Phase 5.2 -- AI-Blame | Done | File-level reverse lookup from sessions |
-| Phase 5.1/5.3/5.4 -- Multi-session & Cost | Planned | Multi-session branches, tool token accounting, cost tracking |
-| Phase 6 -- Replay & Web UI | Designed | Session replay for model comparison, cost forecasting, web dashboard |
+| Phase 1-3.5 -- Core | Done | Capture, restore, export/import, Git sync, PR linking, stats, service layer, HTTP API, Client SDK, MCP Server |
+| Phase 5.0-5.5 -- AI Intelligence | Done | Summarize, Explain, Rewind, Blame, Off-topic detection, Cost tracking, Forecast |
+| Phase 6.2-6.3 -- Web Dashboard | Done | Server-rendered dark theme dashboard, sessions/branches/costs/projects pages, HTMX |
+| Phase 7.1-7.4 -- Infrastructure | Done | Client/server dual-mode, SQLite with stats cache, daemon mode, systemd/launchd |
+| Phase 8.1-8.9 -- Platform | Done | Universal ingest, session tagging, project identity, analysis (4 LLM adapters), session replay, skill resolver, webhooks |
+| Phase 9.1-9.3 -- Operations | Done | JWT + API key auth, webhooks (4 event types), scheduled tasks (GC, capture, stats), zstd compression, telemetry framework |
+| Phase 6.1 -- Cross-model Replay | Future | Replay sessions with different LLM models for comparison |
+| Phase 4 -- CI Automation | Future | Auto-fix sessions on CI failure, GitHub Actions integration |
 
-See [roadmap.md](./roadmap.md) for detailed milestones and [spec.md](./spec.md) for user stories.
+**1456 tests across 87 packages. 5 providers supported: Claude Code, OpenCode, Cursor, Parlay, Ollama.**
+
+See [roadmap.md](./roadmap.md) for detailed milestones, [spec.md](./spec.md) for user stories and future vision.
 
 ## License
 

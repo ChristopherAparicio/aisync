@@ -3,18 +3,25 @@
 package factory
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
 
+	"github.com/ChristopherAparicio/aisync/client"
 	"github.com/ChristopherAparicio/aisync/git"
+	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/auth"
+	"github.com/ChristopherAparicio/aisync/internal/categorizer"
 	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/hooks"
 	"github.com/ChristopherAparicio/aisync/internal/llm"
 	claudellm "github.com/ChristopherAparicio/aisync/internal/llm/claude"
+	ollamallm "github.com/ChristopherAparicio/aisync/internal/llm/ollama"
+	"github.com/ChristopherAparicio/aisync/internal/llmfactory"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
 	ghplatform "github.com/ChristopherAparicio/aisync/internal/platform/github"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
@@ -24,9 +31,12 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/provider/opencode"
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/service/remote"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
+	"github.com/ChristopherAparicio/aisync/internal/tagger"
+	webhookspkg "github.com/ChristopherAparicio/aisync/internal/webhooks"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -75,12 +85,21 @@ func New() *cmdutil.Factory {
 		hooksMgrErr    error
 
 		cachedSessionSvc *service.SessionService
+		cachedRemoteSvc  *remote.SessionService
 		sessionSvcOnce   sync.Once
 		sessionSvcErr    error
 
 		cachedSyncSvc *service.SyncService
 		syncSvcOnce   sync.Once
 		syncSvcErr    error
+
+		cachedRegistrySvc *service.RegistryService
+		registrySvcOnce   sync.Once
+		registrySvcErr    error
+
+		cachedAnalysisSvc service.AnalysisServicer
+		analysisSvcOnce   sync.Once
+		analysisSvcErr    error
 	)
 
 	f.ConfigFunc = func() (*config.Config, error) {
@@ -94,12 +113,29 @@ func New() *cmdutil.Factory {
 
 	f.StoreFunc = func() (storage.Store, error) {
 		storeOnce.Do(func() {
-			dir := globalConfigDir()
-			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
-				storeErr = mkErr
-				return
+			// Check if database.path is configured (config or env var).
+			var dbPath string
+			if cfg, cfgErr := f.Config(); cfgErr == nil {
+				dbPath = cfg.GetDatabasePath()
 			}
-			dbPath := filepath.Join(dir, dbFileName)
+
+			if dbPath == "" {
+				// Default: ~/.aisync/sessions.db
+				dir := globalConfigDir()
+				if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+					storeErr = mkErr
+					return
+				}
+				dbPath = filepath.Join(dir, dbFileName)
+			} else {
+				// Custom path: ensure parent directory exists.
+				dir := filepath.Dir(dbPath)
+				if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+					storeErr = mkErr
+					return
+				}
+			}
+
 			cachedStore, storeErr = sqlite.New(dbPath)
 		})
 		return cachedStore, storeErr
@@ -201,8 +237,23 @@ func New() *cmdutil.Factory {
 		return cachedHooksMgr, hooksMgrErr
 	}
 
-	f.SessionServiceFunc = func() (*service.SessionService, error) {
+	f.SessionServiceFunc = func() (service.SessionServicer, error) {
 		sessionSvcOnce.Do(func() {
+			// ── Dual-mode detection ──
+			// If server.url is configured and the server is reachable, use the remote adapter.
+			if cfg, cfgErr := f.Config(); cfgErr == nil {
+				if serverURL := cfg.GetServerURL(); serverURL != "" {
+					c := newAuthenticatedClient(serverURL)
+					if c.IsAvailable() {
+						cachedRemoteSvc = remote.New(c)
+						fmt.Fprintf(os.Stderr, "[aisync] connected to server at %s\n", serverURL)
+						return
+					}
+					fmt.Fprintf(os.Stderr, "[aisync] server at %s unavailable, falling back to local mode\n", serverURL)
+				}
+			}
+
+			// ── Local mode (default) ──
 			store, stErr := f.Store()
 			if stErr != nil {
 				sessionSvcErr = stErr
@@ -218,9 +269,14 @@ func New() *cmdutil.Factory {
 			plat, _ := f.Platform()
 
 			// LLM client is optional — nil disables AI features (summarize, explain).
-			// Only created if the claude binary is available in PATH.
 			var llmClient llm.Client
-			if _, lookupErr := exec.LookPath("claude"); lookupErr == nil {
+			cfg0, cfg0Err := f.Config()
+			if cfg0Err == nil && cfg0.GetAnalysisAdapter() == "ollama" {
+				llmClient = ollamallm.New(ollamallm.Config{
+					BaseURL: cfg0.GetAnalysisOllamaURL(),
+					Model:   cfg0.GetAnalysisModel(),
+				})
+			} else if _, lookupErr := exec.LookPath("claude"); lookupErr == nil {
 				llmClient = claudellm.New()
 			}
 
@@ -242,17 +298,153 @@ func New() *cmdutil.Factory {
 				}
 			}
 
+			// ── Webhook dispatcher (optional) ──
+			var whDispatcher *webhookspkg.Dispatcher
+			if cfgErr == nil {
+				entries := cfg.GetWebhookEntries()
+				if len(entries) > 0 {
+					var hooks []webhookspkg.HookConfig
+					for _, e := range entries {
+						evts := make([]webhookspkg.EventType, len(e.Events))
+						for i, ev := range e.Events {
+							evts[i] = webhookspkg.EventType(ev)
+						}
+						hooks = append(hooks, webhookspkg.HookConfig{
+							URL:    e.URL,
+							Events: evts,
+							Secret: e.Secret,
+						})
+					}
+					whDispatcher = webhookspkg.New(webhookspkg.Config{Hooks: hooks})
+				}
+			}
+
+			// Post-capture hooks: auto-analysis + auto-tagging + webhooks.
+			var postCapture service.PostCaptureFunc
+
+			wantAnalysis := cfgErr == nil && cfg.IsAnalysisAutoEnabled()
+			wantTagging := cfgErr == nil && cfg.IsTaggingAutoEnabled()
+			wantCategoryDetect := cfgErr == nil && cfg.IsProjectAutoDetectEnabled()
+			wantWebhooks := whDispatcher != nil
+
+			if wantAnalysis || wantTagging || wantCategoryDetect || wantWebhooks {
+				errorThreshold := float64(0)
+				minToolCalls := 0
+				if wantAnalysis {
+					errorThreshold = cfg.GetAnalysisErrorThreshold()
+					minToolCalls = cfg.GetAnalysisMinToolCalls()
+				}
+
+				postCapture = func(sess *session.Session) {
+					// Webhook: session.captured
+					if wantWebhooks {
+						whDispatcher.Fire(webhookspkg.EventSessionCaptured, map[string]any{
+							"session_id": string(sess.ID),
+							"provider":   string(sess.Provider),
+							"agent":      sess.Agent,
+							"branch":     sess.Branch,
+							"summary":    sess.Summary,
+							"tokens":     sess.TokenUsage.TotalTokens,
+						})
+					}
+
+					// Auto-tagging: classify session type if not already tagged.
+					if wantTagging && sess.SessionType == "" {
+						analyzer, analyzerErr := llmfactory.NewAnalyzerFromConfig(cfg, cfg.GetTaggingProfile())
+						if analyzerErr == nil {
+							result := tagger.Classify(context.Background(), analyzer, sess, cfg.GetTaggingTags(), tagger.DefaultMaxMessages)
+							if result.Tag != "" && result.Tag != "other" {
+								sess.SessionType = result.Tag
+								_ = store.UpdateSessionType(sess.ID, result.Tag)
+
+								// Webhook: session.tagged
+								if wantWebhooks {
+									whDispatcher.Fire(webhookspkg.EventSessionTagged, map[string]any{
+										"session_id":   string(sess.ID),
+										"session_type": result.Tag,
+										"confidence":   result.Confidence,
+									})
+								}
+							}
+						}
+					}
+
+					// Project category auto-detection (cascade: config → heuristic → LLM).
+					if wantCategoryDetect && sess.ProjectCategory == "" {
+						cat := cfg.GetProjectCategory() // 1. Manual config (priority)
+						if cat == "" && sess.ProjectPath != "" {
+							cat = categorizer.DetectProjectCategory(sess.ProjectPath) // 2. File heuristic (free)
+						}
+						if cat == "" {
+							// 3. LLM fallback (costs tokens)
+							catAnalyzer, catErr := llmfactory.NewAnalyzerFromConfig(cfg, cfg.GetTaggingProfile())
+							if catErr == nil {
+								catResult := categorizer.ClassifyProject(
+									context.Background(), catAnalyzer, sess, cfg.GetProjectCategories(),
+								)
+								if catResult.Category != "" {
+									cat = catResult.Category
+								}
+							}
+						}
+						if cat != "" {
+							sess.ProjectCategory = cat
+							_, _ = store.UpdateProjectCategory(sess.ProjectPath, cat)
+						}
+					}
+
+					// Auto-analysis: only if error rate exceeds threshold.
+					if wantAnalysis && service.ShouldAutoAnalyze(sess, errorThreshold, minToolCalls) {
+						analysisSvc, analysisErr := f.AnalysisService()
+						if analysisErr != nil {
+							return
+						}
+						analysisResult, _ := analysisSvc.Analyze(context.Background(), service.AnalysisRequest{
+							SessionID:      sess.ID,
+							Trigger:        analysis.TriggerAuto,
+							ErrorThreshold: errorThreshold,
+							MinToolCalls:   minToolCalls,
+						})
+
+						// Auto-objective: compute intent/outcome for the session.
+						// Reuse the same LLM call context.
+						if sess != nil {
+							sessionSvcLocal, svcErr := f.SessionService()
+							if svcErr == nil {
+								_, _ = sessionSvcLocal.ComputeObjective(context.Background(), service.ComputeObjectiveRequest{
+									SessionID: string(sess.ID),
+								})
+							}
+						}
+
+						// Webhook: session.analyzed
+						if wantWebhooks && analysisResult != nil {
+							whDispatcher.Fire(webhookspkg.EventSessionAnalyzed, map[string]any{
+								"session_id": string(sess.ID),
+								"score":      analysisResult.Analysis.Report.Score,
+								"summary":    analysisResult.Analysis.Report.Summary,
+								"problems":   len(analysisResult.Analysis.Report.Problems),
+							})
+						}
+					}
+				}
+			}
+
 			cachedSessionSvc = service.NewSessionService(service.SessionServiceConfig{
-				Store:     store,
-				Registry:  registry,
-				Scanner:   scanner,
-				Converter: conv,
-				Pricing:   calc,
-				Git:       gitClient,
-				Platform:  plat,
-				LLM:       llmClient,
+				Store:       store,
+				Registry:    registry,
+				Scanner:     scanner,
+				Converter:   conv,
+				Pricing:     calc,
+				Git:         gitClient,
+				Platform:    plat,
+				LLM:         llmClient,
+				PostCapture: postCapture,
 			})
 		})
+		if cachedRemoteSvc != nil {
+			return cachedRemoteSvc, nil
+		}
 		return cachedSessionSvc, sessionSvcErr
 	}
 
@@ -273,6 +465,68 @@ func New() *cmdutil.Factory {
 		return cachedSyncSvc, syncSvcErr
 	}
 
+	f.RegistryServiceFunc = func() (*service.RegistryService, error) {
+		registrySvcOnce.Do(func() {
+			scannerReg := provider.NewScannerRegistry(
+				opencode.NewScanner(""),
+				claude.NewScanner(""),
+				cursorprov.NewScanner(),
+			)
+
+			// Store is optional for cost enrichment
+			store, _ := f.Store()
+
+			cachedRegistrySvc = service.NewRegistryService(service.RegistryServiceConfig{
+				Scanners: scannerReg,
+				Store:    store,
+			})
+		})
+		return cachedRegistrySvc, registrySvcErr
+	}
+
+	f.AnalysisServiceFunc = func() (service.AnalysisServicer, error) {
+		analysisSvcOnce.Do(func() {
+			// ── Remote mode: if a remote session service is active, use it for analysis too. ──
+			if cachedRemoteSvc != nil {
+				// The remote client is already connected — reuse it for analysis.
+				cfg, cfgErr := f.Config()
+				if cfgErr == nil {
+					if serverURL := cfg.GetServerURL(); serverURL != "" {
+						c := newAuthenticatedClient(serverURL)
+						cachedAnalysisSvc = remote.NewAnalysisService(c)
+						return
+					}
+				}
+			}
+
+			// ── Local mode ──
+			store, stErr := f.Store()
+			if stErr != nil {
+				analysisSvcErr = stErr
+				return
+			}
+
+			cfg, cfgErr := f.Config()
+			if cfgErr != nil {
+				analysisSvcErr = cfgErr
+				return
+			}
+
+			// Create analyzer from LLM profile (resolves provider + model + infra).
+			analyzer, analyzerErr := llmfactory.NewAnalyzerFromConfig(cfg, "")
+			if analyzerErr != nil {
+				analysisSvcErr = analyzerErr
+				return
+			}
+
+			cachedAnalysisSvc = service.NewAnalysisService(service.AnalysisServiceConfig{
+				Store:    store,
+				Analyzer: analyzer,
+			})
+		})
+		return cachedAnalysisSvc, analysisSvcErr
+	}
+
 	f.CloseFunc = func() error {
 		if cachedStore != nil {
 			return cachedStore.Close()
@@ -290,6 +544,15 @@ func globalConfigDir() string {
 		return ""
 	}
 	return filepath.Join(home, globalDirName)
+}
+
+// newAuthenticatedClient creates an API client with the stored JWT token (if any).
+func newAuthenticatedClient(serverURL string) *client.Client {
+	var opts []client.Option
+	if token := auth.LoadToken(globalConfigDir()); token != "" {
+		opts = append(opts, client.WithAuthToken(token))
+	}
+	return client.New(serverURL, opts...)
 }
 
 // repoConfigDir returns the per-repo config directory (.aisync/ in repo root).

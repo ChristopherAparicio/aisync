@@ -10,53 +10,108 @@ import "time"
 
 // Session represents a captured AI coding session.
 type Session struct {
-	ExportedAt      time.Time    `json:"exported_at"`
-	CreatedAt       time.Time    `json:"created_at"`
-	ProjectPath     string       `json:"project_path"`
-	ExportedBy      string       `json:"exported_by,omitempty"`
-	ParentID        ID           `json:"parent_id,omitempty"`
-	OwnerID         ID           `json:"owner_id,omitempty"`
-	StorageMode     StorageMode  `json:"storage_mode"`
-	Summary         string       `json:"summary,omitempty"`
-	ID              ID           `json:"id"`
-	Provider        ProviderName `json:"provider"`
-	Agent           string       `json:"agent"`
-	Branch          string       `json:"branch,omitempty"`
-	CommitSHA       string       `json:"commit_sha,omitempty"`
-	Messages        []Message    `json:"messages,omitempty"`
-	Children        []Session    `json:"children,omitempty"`
-	Links           []Link       `json:"links,omitempty"`
-	FileChanges     []FileChange `json:"file_changes,omitempty"`
-	TokenUsage      TokenUsage   `json:"token_usage"`
-	ForkedAtMessage int          `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
-	Version         int          `json:"version"`
+	ExportedAt      time.Time     `json:"exported_at"`
+	CreatedAt       time.Time     `json:"created_at"`
+	ProjectPath     string        `json:"project_path"`
+	RemoteURL       string        `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
+	ExportedBy      string        `json:"exported_by,omitempty"`
+	ParentID        ID            `json:"parent_id,omitempty"`
+	OwnerID         ID            `json:"owner_id,omitempty"`
+	StorageMode     StorageMode   `json:"storage_mode"`
+	Summary         string        `json:"summary,omitempty"`
+	ID              ID            `json:"id"`
+	Provider        ProviderName  `json:"provider"`
+	Agent           string        `json:"agent"`
+	Branch          string        `json:"branch,omitempty"`
+	CommitSHA       string        `json:"commit_sha,omitempty"`
+	Messages        []Message     `json:"messages,omitempty"`
+	Children        []Session     `json:"children,omitempty"`
+	Links           []Link        `json:"links,omitempty"`
+	FileChanges     []FileChange  `json:"file_changes,omitempty"`
+	TokenUsage      TokenUsage    `json:"token_usage"`
+	SessionType     string        `json:"session_type,omitempty"`      // classification tag: feature, bug, refactor, etc.
+	ProjectCategory string        `json:"project_category,omitempty"`  // project-level category: backend, frontend, ops, etc.
+	ForkedAtMessage int           `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
+	Status          SessionStatus `json:"status,omitempty"`            // lifecycle status: active, idle, archived
+	Version         int           `json:"version"`
+	SourceUpdatedAt int64         `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
 }
 
 // Summary is a lightweight representation of a session for listings.
 type Summary struct {
-	CreatedAt    time.Time    `json:"created_at"`
-	ID           ID           `json:"id"`
-	ParentID     ID           `json:"parent_id,omitempty"`
-	OwnerID      ID           `json:"owner_id,omitempty"`
-	Provider     ProviderName `json:"provider"`
-	Agent        string       `json:"agent"`
-	Branch       string       `json:"branch,omitempty"`
-	Summary      string       `json:"summary,omitempty"`
-	MessageCount int          `json:"message_count"`
-	TotalTokens  int          `json:"total_tokens"`
+	CreatedAt       time.Time     `json:"created_at"`
+	ID              ID            `json:"id"`
+	ParentID        ID            `json:"parent_id,omitempty"`
+	OwnerID         ID            `json:"owner_id,omitempty"`
+	Provider        ProviderName  `json:"provider"`
+	Agent           string        `json:"agent"`
+	Branch          string        `json:"branch,omitempty"`
+	ProjectPath     string        `json:"project_path,omitempty"`
+	RemoteURL       string        `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
+	Summary         string        `json:"summary,omitempty"`
+	SessionType     string        `json:"session_type,omitempty"`     // classification tag
+	ProjectCategory string        `json:"project_category,omitempty"` // project-level category
+	Status          SessionStatus `json:"status,omitempty"`           // lifecycle: active, idle, archived
+	MessageCount    int           `json:"message_count"`
+	TotalTokens     int           `json:"total_tokens"`
+	ToolCallCount   int           `json:"tool_call_count"` // total tool invocations
+	ErrorCount      int           `json:"error_count"`     // tool calls with state=error
 }
 
 // Message represents a single message in an AI conversation.
 type Message struct {
-	Timestamp    time.Time   `json:"timestamp"`
-	ID           string      `json:"id"`
-	Content      string      `json:"content"`
-	Model        string      `json:"model,omitempty"`
-	Thinking     string      `json:"thinking,omitempty"`
-	Role         MessageRole `json:"role"`
-	ToolCalls    []ToolCall  `json:"tool_calls,omitempty"`
-	InputTokens  int         `json:"input_tokens,omitempty"`
-	OutputTokens int         `json:"output_tokens,omitempty"`
+	Timestamp     time.Time      `json:"timestamp"`
+	ID            string         `json:"id"`
+	Content       string         `json:"content"`
+	Model         string         `json:"model,omitempty"`
+	ProviderID    string         `json:"provider_id,omitempty"` // e.g. "anthropic", "amazon-bedrock", "opencode"
+	Thinking      string         `json:"thinking,omitempty"`
+	Role          MessageRole    `json:"role"`
+	ToolCalls     []ToolCall     `json:"tool_calls,omitempty"`
+	Images        []ImageMeta    `json:"images,omitempty"`         // images included in this message
+	ContentBlocks []ContentBlock `json:"content_blocks,omitempty"` // structured content blocks (text, image, etc.)
+	InputTokens   int            `json:"input_tokens,omitempty"`
+	OutputTokens  int            `json:"output_tokens,omitempty"`
+	ProviderCost  float64        `json:"provider_cost,omitempty"` // actual cost reported by provider (0 = unknown/subscription)
+}
+
+// ContentBlock represents a structured content block within a message.
+// This preserves the rich structure from provider APIs (Claude content blocks,
+// OpenCode parts) instead of flattening everything to plain text.
+type ContentBlock struct {
+	Type     ContentBlockType `json:"type"`
+	Text     string           `json:"text,omitempty"`     // for "text" type
+	Image    *ImageMeta       `json:"image,omitempty"`    // for "image" type
+	ToolUse  *ToolCallRef     `json:"tool_use,omitempty"` // for "tool_use" type
+	Thinking string           `json:"thinking,omitempty"` // for "thinking" type
+}
+
+// ContentBlockType identifies the type of content block.
+type ContentBlockType string
+
+const (
+	ContentBlockText     ContentBlockType = "text"
+	ContentBlockImage    ContentBlockType = "image"
+	ContentBlockToolUse  ContentBlockType = "tool_use"
+	ContentBlockThinking ContentBlockType = "thinking"
+)
+
+// ImageMeta stores metadata about an image included in a message.
+// We store metadata only (not the actual image data) to keep session size manageable.
+type ImageMeta struct {
+	MediaType      string `json:"media_type"`                // e.g. "image/png", "image/jpeg"
+	Width          int    `json:"width,omitempty"`           // image width in pixels (if known)
+	Height         int    `json:"height,omitempty"`          // image height in pixels (if known)
+	SizeBytes      int    `json:"size_bytes,omitempty"`      // original size in bytes (from base64 length)
+	TokensEstimate int    `json:"tokens_estimate,omitempty"` // estimated tokens for this image
+	Source         string `json:"source,omitempty"`          // "base64", "url", "file"
+	FileName       string `json:"file_name,omitempty"`       // original filename if available
+}
+
+// ToolCallRef is a lightweight reference to a tool call within a content block.
+type ToolCallRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // ToolCall represents a tool invocation with its lifecycle.
@@ -71,6 +126,26 @@ type ToolCall struct {
 	OutputTokens int       `json:"output_tokens,omitempty"` // estimated tokens consumed by this tool's output
 }
 
+// TokenUsageBucket aggregates token consumption for a specific time window.
+// Buckets are pre-computed (nightly) and stored for fast dashboard queries.
+type TokenUsageBucket struct {
+	BucketStart    time.Time    `json:"bucket_start"`
+	BucketEnd      time.Time    `json:"bucket_end"`
+	Granularity    string       `json:"granularity"` // "1h" or "1d"
+	ProjectPath    string       `json:"project_path,omitempty"`
+	Provider       ProviderName `json:"provider,omitempty"`
+	InputTokens    int          `json:"input_tokens"`
+	OutputTokens   int          `json:"output_tokens"`
+	ImageTokens    int          `json:"image_tokens"`
+	SessionCount   int          `json:"session_count"`
+	MessageCount   int          `json:"message_count"`
+	ToolCallCount  int          `json:"tool_call_count"`
+	ToolErrorCount int          `json:"tool_error_count"`
+	ImageCount     int          `json:"image_count"`
+	UserMsgCount   int          `json:"user_msg_count"`   // messages from user (human interaction indicator)
+	AssistMsgCount int          `json:"assist_msg_count"` // messages from assistant
+}
+
 // FileChange records a file touched during a session.
 type FileChange struct {
 	FilePath   string     `json:"file_path"`
@@ -83,11 +158,38 @@ type Link struct {
 	Ref      string   `json:"ref"`
 }
 
+// SessionLink connects two sessions together (e.g. delegation, continuation).
+type SessionLink struct {
+	CreatedAt       time.Time       `json:"created_at"`
+	ID              ID              `json:"id"`
+	SourceSessionID ID              `json:"source_session_id"` // the session that initiated the link
+	TargetSessionID ID              `json:"target_session_id"` // the session being linked to
+	LinkType        SessionLinkType `json:"link_type"`         // e.g. "delegated_to", "related"
+	Description     string          `json:"description,omitempty"`
+}
+
 // TokenUsage tracks token consumption for a session.
 type TokenUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+	ImageTokens  int `json:"image_tokens,omitempty"` // tokens consumed by images (subset of InputTokens)
+	CacheRead    int `json:"cache_read,omitempty"`   // cache read tokens (subset of InputTokens)
+	CacheWrite   int `json:"cache_write,omitempty"`  // cache write/creation tokens (subset of InputTokens)
+}
+
+// ImageStats aggregates image usage across a session.
+type ImageStats struct {
+	Count       int `json:"count"`                  // total images in the session
+	TotalBytes  int `json:"total_bytes,omitempty"`  // total size of all images
+	TotalTokens int `json:"total_tokens,omitempty"` // estimated tokens for all images
+}
+
+// CommandStats tracks shell/bash command usage in a session.
+type CommandStats struct {
+	TotalCommands int            `json:"total_commands"`           // total bash/shell tool calls
+	ByCommand     map[string]int `json:"by_command,omitempty"`     // count per base command (e.g. "git": 5, "ls": 3)
+	ErrorCommands int            `json:"error_commands,omitempty"` // commands that returned errors
 }
 
 // Cost represents a monetary amount in a given currency.
@@ -98,11 +200,29 @@ type Cost struct {
 	Currency   string  `json:"currency"` // always "USD"
 }
 
+// BillingType indicates how a session was billed.
+type BillingType string
+
+const (
+	BillingAPI          BillingType = "api"          // pay-per-token (e.g. Bedrock, direct API key)
+	BillingSubscription BillingType = "subscription" // flat-rate subscription (e.g. Claude Max, OpenCode)
+	BillingMixed        BillingType = "mixed"        // mix of API and subscription within one session
+)
+
+// CostBreakdown provides dual cost view: API-equivalent vs actual.
+type CostBreakdown struct {
+	APICost     Cost        `json:"api_cost"`     // what it would cost at public API token rates
+	ActualCost  Cost        `json:"actual_cost"`  // what was actually charged (from provider_cost fields)
+	Savings     Cost        `json:"savings"`      // APICost - ActualCost
+	BillingType BillingType `json:"billing_type"` // "api", "subscription", or "mixed"
+}
+
 // CostEstimate is the full cost breakdown for a session.
 type CostEstimate struct {
-	TotalCost     Cost        `json:"total_cost"`
-	PerModel      []ModelCost `json:"per_model"`
-	UnknownModels []string    `json:"unknown_models,omitempty"` // models without pricing data
+	TotalCost     Cost          `json:"total_cost"`
+	Breakdown     CostBreakdown `json:"breakdown"`
+	PerModel      []ModelCost   `json:"per_model"`
+	UnknownModels []string      `json:"unknown_models,omitempty"` // models without pricing data
 }
 
 // ModelCost groups cost by model within a session.
@@ -145,12 +265,31 @@ type EfficiencyReport struct {
 	Patterns    []string `json:"patterns"`    // detected patterns (retry loops, over-reading, etc.)
 }
 
+// ProjectGroup represents a project (grouping key for sessions).
+// Projects are grouped primarily by git remote URL (e.g. "github.com/org/repo"),
+// then by provider-specific project path for non-git projects.
+type ProjectGroup struct {
+	RemoteURL    string       `json:"remote_url,omitempty"` // normalized git remote URL (empty if not a git repo)
+	ProjectPath  string       `json:"project_path"`         // local filesystem path
+	Provider     ProviderName `json:"provider"`             // dominant provider for this project
+	Category     string       `json:"category,omitempty"`   // project-level category: backend, frontend, ops, etc.
+	SessionCount int          `json:"session_count"`        // total sessions
+	TotalTokens  int          `json:"total_tokens"`         // aggregated tokens
+	DisplayName  string       `json:"display_name"`         // human-friendly label (e.g. "org/repo" or folder name)
+}
+
 // ListOptions controls session listing queries.
 type ListOptions struct {
-	ProjectPath string
-	Branch      string
-	Provider    ProviderName
-	All         bool
+	ProjectPath     string
+	RemoteURL       string // filter by normalized git remote URL (e.g. "github.com/org/repo")
+	Branch          string
+	Provider        ProviderName
+	SessionType     string // filter by session type (e.g. "bug", "feature")
+	ProjectCategory string // filter by project category (e.g. "backend", "frontend")
+	OwnerID         ID     // filter by session owner (empty = no filter)
+	Since           time.Time
+	Until           time.Time
+	All             bool
 }
 
 // SearchQuery defines criteria for searching sessions.
@@ -162,10 +301,13 @@ type SearchQuery struct {
 	Keyword string
 
 	// Filters narrow results by exact match on structured fields.
-	ProjectPath string
-	Branch      string
-	Provider    ProviderName
-	OwnerID     ID
+	ProjectPath     string
+	RemoteURL       string // filter by normalized git remote URL
+	Branch          string
+	Provider        ProviderName
+	OwnerID         ID
+	SessionType     string // filter by session type (e.g. "bug", "feature")
+	ProjectCategory string // filter by project category (e.g. "backend", "frontend")
 
 	// Time range filters (inclusive). Zero values are ignored.
 	Since time.Time
@@ -178,10 +320,21 @@ type SearchQuery struct {
 
 // SearchResult holds a page of search results with metadata.
 type SearchResult struct {
-	Sessions   []Summary `json:"sessions"`
-	TotalCount int       `json:"total_count"`
-	Limit      int       `json:"limit"`
-	Offset     int       `json:"offset"`
+	Sessions     []Summary      `json:"sessions"`
+	VoiceResults []VoiceSummary `json:"voice_results,omitempty"` // populated only when voice=true
+	TotalCount   int            `json:"total_count"`
+	Limit        int            `json:"limit"`
+	Offset       int            `json:"offset"`
+}
+
+// VoiceSummary is a compact, TTS-optimized representation of a session.
+// No markdown, no code blocks, plain text only.
+type VoiceSummary struct {
+	ID      ID     `json:"id"`
+	Summary string `json:"summary"`          // 1-2 sentences max, plain text
+	TimeAgo string `json:"time_ago"`         // human-readable: "2 hours ago", "yesterday"
+	Agent   string `json:"agent,omitempty"`  // e.g. "jarvis"
+	Branch  string `json:"branch,omitempty"` // e.g. "main"
 }
 
 // BlameEntry represents one session that touched a file.
@@ -262,6 +415,18 @@ func (s StructuredSummary) OneLine() string {
 		return s.Outcome
 	}
 	return s.Intent + ": " + s.Outcome
+}
+
+// SessionObjective is a persisted, rich description of what a session accomplished.
+// It combines the StructuredSummary (intent/outcome/decisions) with the Explain output
+// (narrative description). This is stored in a separate table and computed asynchronously
+// after capture — either via PostCapture hook or scheduled task.
+type SessionObjective struct {
+	SessionID    ID                `json:"session_id"`
+	Summary      StructuredSummary `json:"summary"`       // intent, outcome, decisions, friction, open_items
+	ExplainShort string            `json:"explain_short"` // 2-3 sentence narrative
+	ExplainFull  string            `json:"explain_full"`  // detailed paragraph (optional, costs more tokens)
+	ComputedAt   time.Time         `json:"computed_at"`
 }
 
 // SessionTreeNode represents a session in a tree structure.
@@ -402,4 +567,20 @@ type User struct {
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	Source    string    `json:"source"` // "git", "config", "api"
+}
+
+// UserPreferences stores per-user dashboard and UI preferences as JSON.
+// When UserID is empty, this represents the global defaults (anonymous/shared).
+type UserPreferences struct {
+	UpdatedAt time.Time            `json:"updated_at"`
+	UserID    ID                   `json:"user_id,omitempty"` // empty = global defaults
+	Dashboard DashboardPreferences `json:"dashboard"`
+}
+
+// DashboardPreferences holds dashboard-specific UI settings.
+type DashboardPreferences struct {
+	PageSize  int      `json:"page_size,omitempty"`  // 0 = use system default (25)
+	Columns   []string `json:"columns,omitempty"`    // empty = use system defaults
+	SortBy    string   `json:"sort_by,omitempty"`    // empty = "created_at"
+	SortOrder string   `json:"sort_order,omitempty"` // empty = "desc"
 }

@@ -8,75 +8,24 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
+	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
-// mockStore implements session.Store for testing.
-type mockStore struct {
-	sessions []*session.Session
-}
-
-func (m *mockStore) Save(_ *session.Session) error              { return nil }
-func (m *mockStore) Delete(_ session.ID) error                  { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
-func (m *mockStore) Close() error                             { return nil }
-
-func (m *mockStore) Get(id session.ID) (*session.Session, error) {
-	for _, s := range m.sessions {
-		if s.ID == id {
-			return s, nil
-		}
-	}
-	return nil, session.ErrSessionNotFound
-}
-
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	summaries := make([]session.Summary, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		summaries = append(summaries, session.Summary{
-			ID:       s.ID,
-			Provider: s.Provider,
-		})
-	}
-	return summaries, nil
-}
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
-
 func TestSecretsScan_cleanSession(t *testing.T) {
 	ios := iostreams.Test()
 
-	store := &mockStore{
-		sessions: []*session.Session{
-			{
-				ID:          "sess-1",
-				Provider:    session.ProviderClaudeCode,
-				CreatedAt:   time.Now(),
-				StorageMode: session.StorageModeCompact,
-				Messages: []session.Message{
-					{Role: session.RoleUser, Content: "Hello, help me with Go code"},
-					{Role: session.RoleAssistant, Content: "Sure, I can help!"},
-				},
-			},
+	store := testutil.NewMockStore(&session.Session{
+		ID:          "sess-1",
+		Provider:    session.ProviderClaudeCode,
+		CreatedAt:   time.Now(),
+		StorageMode: session.StorageModeCompact,
+		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "Hello, help me with Go code"},
+			{Role: session.RoleAssistant, Content: "Sure, I can help!"},
 		},
-	}
+	})
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
@@ -107,20 +56,16 @@ func TestSecretsScan_cleanSession(t *testing.T) {
 func TestSecretsScan_sessionWithSecrets(t *testing.T) {
 	ios := iostreams.Test()
 
-	store := &mockStore{
-		sessions: []*session.Session{
-			{
-				ID:          "sess-2",
-				Provider:    session.ProviderClaudeCode,
-				CreatedAt:   time.Now(),
-				StorageMode: session.StorageModeCompact,
-				Messages: []session.Message{
-					{Role: session.RoleUser, Content: "Use this key AKIAIOSFODNN7EXAMPLE"},
-					{Role: session.RoleAssistant, Content: "I'll use the ghp_ABCDEFghijklmnop1234567890abcdef token"},
-				},
-			},
+	store := testutil.NewMockStore(&session.Session{
+		ID:          "sess-2",
+		Provider:    session.ProviderClaudeCode,
+		CreatedAt:   time.Now(),
+		StorageMode: session.StorageModeCompact,
+		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "Use this key AKIAIOSFODNN7EXAMPLE"},
+			{Role: session.RoleAssistant, Content: "I'll use the ghp_ABCDEFghijklmnop1234567890abcdef token"},
 		},
-	}
+	})
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
@@ -148,19 +93,15 @@ func TestSecretsScan_sessionWithSecrets(t *testing.T) {
 func TestSecretsScan_specificSession(t *testing.T) {
 	ios := iostreams.Test()
 
-	store := &mockStore{
-		sessions: []*session.Session{
-			{
-				ID:          "sess-3",
-				Provider:    session.ProviderOpenCode,
-				CreatedAt:   time.Now(),
-				StorageMode: session.StorageModeCompact,
-				Messages: []session.Message{
-					{Role: session.RoleUser, Content: "Just regular text"},
-				},
-			},
+	store := testutil.NewMockStore(&session.Session{
+		ID:          "sess-3",
+		Provider:    session.ProviderOpenCode,
+		CreatedAt:   time.Now(),
+		StorageMode: session.StorageModeCompact,
+		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "Just regular text"},
 		},
-	}
+	})
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
@@ -192,7 +133,7 @@ func TestSecretsScan_specificSession(t *testing.T) {
 func TestSecretsScan_noSessions(t *testing.T) {
 	ios := iostreams.Test()
 
-	store := &mockStore{sessions: nil}
+	store := testutil.NewMockStore()
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
@@ -220,7 +161,7 @@ func TestSecretsScan_noSessions(t *testing.T) {
 func TestSecretsScan_sessionNotFound(t *testing.T) {
 	ios := iostreams.Test()
 
-	store := &mockStore{sessions: nil}
+	store := testutil.NewMockStore()
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,

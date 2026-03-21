@@ -10,15 +10,29 @@
 <body>
   <nav class="navbar">
     <a href="/" class="navbar-brand">ai<span>sync</span></a>
+    {{block "project-selector" .}}{{end}}
     <ul class="navbar-nav">
       <li><a href="/" class="{{if eq .Nav "dashboard"}}active{{end}}">Dashboard</a></li>
       <li><a href="/sessions" class="{{if eq .Nav "sessions"}}active{{end}}">Sessions</a></li>
+      <li><a href="/projects" class="{{if eq .Nav "projects"}}active{{end}}">Projects</a></li>
       <li><a href="/branches" class="{{if eq .Nav "branches"}}active{{end}}">Branches</a></li>
+      <li><a href="/usage" class="{{if eq .Nav "usage"}}active{{end}}">Usage</a></li>
       <li><a href="/costs" class="{{if eq .Nav "costs"}}active{{end}}">Costs</a></li>
     </ul>
   </nav>
   <main class="container">
     {{block "content" .}}{{end}}
   </main>
+  <script>
+  // Propagate ?project= filter across nav links.
+  (function(){
+    var p = new URLSearchParams(location.search).get('project');
+    if (!p) return;
+    var q = '?project=' + encodeURIComponent(p);
+    document.querySelectorAll('.navbar-nav a, .navbar-brand').forEach(function(a){
+      a.href = a.getAttribute('href') + q;
+    });
+  })();
+  </script>
 </body>
 </html>{{end}}

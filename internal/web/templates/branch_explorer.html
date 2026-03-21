@@ -1,5 +1,18 @@
 {{define "title"}}Branches — aisync{{end}}
 
+{{define "project-selector"}}
+{{if .Projects}}
+<div class="project-selector">
+  <select class="project-select" onchange="if(this.value){location.href='/branches?project='+encodeURIComponent(this.value)}else{location.href='/branches'}">
+    <option value="">All projects</option>
+    {{range .Projects}}
+    <option value="{{.Path}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+    {{end}}
+  </select>
+</div>
+{{end}}
+{{end}}
+
 {{define "content"}}
 <h1 class="page-title">Branch Explorer</h1>
 
@@ -15,7 +28,7 @@
   {{range .Branches}}
   <div class="branch-card" id="branch-{{.Slug}}">
     <div class="branch-card-header">
-      <span class="branch-name font-mono">{{.Name}}</span>
+      <a href="/branches/{{.Name}}" class="branch-name font-mono" style="text-decoration:none;color:var(--text)">{{if .Name}}{{.Name}}{{else}}<span class="text-muted">unknown</span>{{end}}</a>
       <span class="branch-count">{{.SessionCount}} session{{if ne .SessionCount 1}}s{{end}}</span>
     </div>
     <div class="branch-card-stats">
@@ -33,9 +46,17 @@
         <div class="timeline-content">
           <a href="/sessions/{{.Summary.ID}}" class="timeline-id font-mono">{{truncate .Summary.ID 10}}</a>
           <span class="timeline-provider badge badge-provider">{{.Summary.Provider}}</span>
-          {{if .Summary.Summary}}<span class="timeline-summary text-muted">{{truncate .Summary.Summary 40}}</span>{{end}}
+          {{if .Summary.SessionType}}<span class="badge badge-type">{{.Summary.SessionType}}</span>{{end}}
+          {{if .Summary.Status}}<span class="badge badge-status-{{.Summary.Status}}">{{.Summary.Status}}</span>{{end}}
+          {{if .Summary.Summary}}<span class="timeline-summary text-muted">{{truncate .Summary.Summary 50}}</span>{{end}}
           <span class="timeline-when text-muted">{{timeAgo .Summary.CreatedAt}}</span>
           <span class="timeline-tokens font-mono text-muted">{{formatTokens .Summary.TotalTokens}}</span>
+          {{with index $.Objectives (print .Summary.ID)}}
+          <div class="timeline-objective">
+            {{if .Intent}}<div class="timeline-intent"><strong>Intent:</strong> {{.Intent}}</div>{{end}}
+            {{if .Outcome}}<div class="timeline-outcome"><strong>Outcome:</strong> {{.Outcome}}</div>{{end}}
+          </div>
+          {{end}}
         </div>
 
         {{if .Children}}

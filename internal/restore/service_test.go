@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/testutil"
 )
 
 func TestRestore_byBranch(t *testing.T) {
@@ -22,11 +22,12 @@ func TestRestore_byBranch(t *testing.T) {
 		Summary:     "Test session",
 	}
 
-	store := &mockStore{sessionByBranch: sess}
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":main"] = sess
 	reg := provider.NewRegistry(&mockProvider{name: session.ProviderClaudeCode, canImportVal: true})
 	svc := NewService(reg, store)
 
-	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath: projectDir,
 		Branch:      "main",
@@ -53,7 +54,7 @@ func TestRestore_bySessionID(t *testing.T) {
 		Summary:     "Test session",
 	}
 
-	store := &mockStore{sessionByID: sess}
+	store := testutil.NewMockStore(sess)
 	reg := provider.NewRegistry(&mockProvider{name: session.ProviderClaudeCode, canImportVal: true})
 	svc := NewService(reg, store)
 
@@ -88,11 +89,12 @@ func TestRestore_asContext(t *testing.T) {
 		},
 	}
 
-	store := &mockStore{sessionByBranch: sess}
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/auth"] = sess
 	reg := provider.NewRegistry()
 	svc := NewService(reg, store)
 
-	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath: projectDir,
 		Branch:      "feat/auth",
@@ -126,7 +128,7 @@ func TestRestore_asContext(t *testing.T) {
 }
 
 func TestRestore_sessionNotFound(t *testing.T) {
-	store := &mockStore{} // no sessions
+	store := testutil.NewMockStore() // no sessions
 	reg := provider.NewRegistry()
 	svc := NewService(reg, store)
 
@@ -153,13 +155,14 @@ func TestRestore_crossProvider(t *testing.T) {
 		},
 	}
 
-	store := &mockStore{sessionByBranch: sess}
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/cross"] = sess
 	importingProvider := &mockImportProvider{name: session.ProviderOpenCode}
 	reg := provider.NewRegistry(importingProvider)
 	conv := converter.New()
 	svc := NewServiceWithConverter(reg, store, conv)
 
-	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath:  projectDir,
 		Branch:       "feat/cross",
@@ -189,14 +192,15 @@ func TestRestore_crossProviderFallbackToContext(t *testing.T) {
 		Summary:     "Cursor session",
 	}
 
-	store := &mockStore{sessionByBranch: sess}
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/cursor"] = sess
 	noImportProvider := &mockProvider{name: session.ProviderCursor}
 	noImportProvider.canImportVal = false
 	reg := provider.NewRegistry(noImportProvider)
 	conv := converter.New()
 	svc := NewServiceWithConverter(reg, store, conv)
 
-	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath: projectDir,
 		Branch:      "feat/cursor",
@@ -220,11 +224,12 @@ func TestRestore_agentOverride(t *testing.T) {
 		Summary:     "Agent test",
 	}
 
-	store := &mockStore{sessionByBranch: sess}
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/agent"] = sess
 	reg := provider.NewRegistry()
 	svc := NewService(reg, store)
 
-	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath: projectDir,
 		Branch:      "feat/agent",
@@ -251,13 +256,14 @@ func TestRestore_sameProviderNoConversion(t *testing.T) {
 		Summary:     "Same provider test",
 	}
 
-	store := &mockStore{sessionByBranch: sess}
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/same"] = sess
 	importingProvider := &mockImportProvider{name: session.ProviderOpenCode}
 	reg := provider.NewRegistry(importingProvider)
 	conv := converter.New()
 	svc := NewServiceWithConverter(reg, store, conv)
 
-	projectDir := t.TempDir()
 	result, err := svc.Restore(Request{
 		ProjectPath:  projectDir,
 		Branch:       "feat/same",
@@ -274,47 +280,6 @@ func TestRestore_sameProviderNoConversion(t *testing.T) {
 }
 
 // --- Mocks ---
-
-type mockStore struct {
-	sessionByID     *session.Session
-	sessionByBranch *session.Session
-}
-
-func (m *mockStore) Save(_ *session.Session) error { return nil }
-func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
-	if m.sessionByID != nil {
-		return m.sessionByID, nil
-	}
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) GetLatestByBranch(_ string, _ string) (*session.Session, error) {
-	if m.sessionByBranch != nil {
-		return m.sessionByBranch, nil
-	}
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	return nil, nil
-}
-func (m *mockStore) Delete(_ session.ID) error { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error {
-	return nil
-}
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
-func (m *mockStore) Close() error                                   { return nil }
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
 
 type mockProvider struct {
 	name         session.ProviderName

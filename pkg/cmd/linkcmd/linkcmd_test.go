@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/service"
@@ -15,77 +14,14 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
-// mockStore for link tests.
-type mockStore struct {
-	sessions map[session.ID]*session.Session
-	byBranch map[string]*session.Session
-	links    []session.Link
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{
-		sessions: make(map[session.ID]*session.Session),
-		byBranch: make(map[string]*session.Session),
-	}
-}
-
-func (m *mockStore) Save(s *session.Session) error {
-	m.sessions[s.ID] = s
-	key := s.ProjectPath + ":" + s.Branch
-	m.byBranch[key] = s
-	return nil
-}
-
-func (m *mockStore) Get(id session.ID) (*session.Session, error) {
-	s, ok := m.sessions[id]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-
-func (m *mockStore) GetLatestByBranch(projectPath, branch string) (*session.Session, error) {
-	key := projectPath + ":" + branch
-	s, ok := m.byBranch[key]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
-func (m *mockStore) Delete(_ session.ID) error                             { return nil }
-
-func (m *mockStore) AddLink(_ session.ID, link session.Link) error {
-	m.links = append(m.links, link)
-	return nil
-}
-
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
-func (m *mockStore) Close() error                                   { return nil }
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
-
-func testFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams, string) {
+func testFactory(t *testing.T, store *testutil.MockStore) (*cmdutil.Factory, *iostreams.IOStreams, string) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 	gitClient := git.NewClient(repoDir)
 
 	if store == nil {
-		store = newMockStore()
+		store = testutil.NewMockStore()
 	}
 
 	f := &cmdutil.Factory{
@@ -94,7 +30,7 @@ func testFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.I
 		StoreFunc: func() (storage.Store, error) {
 			return store, nil
 		},
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store: store,
 				Git:   gitClient,
@@ -106,7 +42,7 @@ func testFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.I
 }
 
 func TestLink_withPR(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("link-001")
 	_ = store.Save(sess)
@@ -130,19 +66,19 @@ func TestLink_withPR(t *testing.T) {
 		t.Error("expected 'PR #42' in output")
 	}
 
-	if len(store.links) != 1 {
-		t.Fatalf("expected 1 link, got %d", len(store.links))
+	if len(store.LinksList) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(store.LinksList))
 	}
-	if store.links[0].LinkType != session.LinkPR {
-		t.Errorf("link type = %q, want %q", store.links[0].LinkType, session.LinkPR)
+	if store.LinksList[0].LinkType != session.LinkPR {
+		t.Errorf("link type = %q, want %q", store.LinksList[0].LinkType, session.LinkPR)
 	}
-	if store.links[0].Ref != "42" {
-		t.Errorf("link ref = %q, want %q", store.links[0].Ref, "42")
+	if store.LinksList[0].Ref != "42" {
+		t.Errorf("link ref = %q, want %q", store.LinksList[0].Ref, "42")
 	}
 }
 
 func TestLink_withCommit(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	sess := testutil.NewSession("link-002")
 	_ = store.Save(sess)
@@ -166,16 +102,16 @@ func TestLink_withCommit(t *testing.T) {
 		t.Error("expected 'commit abc1234' in output")
 	}
 
-	if len(store.links) != 1 {
-		t.Fatalf("expected 1 link, got %d", len(store.links))
+	if len(store.LinksList) != 1 {
+		t.Fatalf("expected 1 link, got %d", len(store.LinksList))
 	}
-	if store.links[0].LinkType != session.LinkCommit {
-		t.Errorf("link type = %q, want %q", store.links[0].LinkType, session.LinkCommit)
+	if store.LinksList[0].LinkType != session.LinkCommit {
+		t.Errorf("link type = %q, want %q", store.LinksList[0].LinkType, session.LinkCommit)
 	}
 }
 
 func TestLink_byBranch(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	f, ios, repoDir := testFactory(t, store)
 
 	// Store a session matching the repo's branch
@@ -221,7 +157,7 @@ func TestLink_noTarget(t *testing.T) {
 }
 
 func TestLink_sessionNotFound(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	f, ios, _ := testFactory(t, store)
 
 	opts := &Options{

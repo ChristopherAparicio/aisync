@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
@@ -16,84 +15,6 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
-
-// mockStore for comment tests.
-type mockStore struct {
-	sessions map[session.ID]*session.Session
-	byBranch map[string]*session.Session
-	links    map[string][]session.Summary
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{
-		sessions: make(map[session.ID]*session.Session),
-		byBranch: make(map[string]*session.Session),
-		links:    make(map[string][]session.Summary),
-	}
-}
-
-func (m *mockStore) Save(s *session.Session) error {
-	m.sessions[s.ID] = s
-	key := s.ProjectPath + ":" + s.Branch
-	m.byBranch[key] = s
-	return nil
-}
-
-func (m *mockStore) Get(id session.ID) (*session.Session, error) {
-	s, ok := m.sessions[id]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-
-func (m *mockStore) GetLatestByBranch(projectPath, branch string) (*session.Session, error) {
-	key := projectPath + ":" + branch
-	s, ok := m.byBranch[key]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
-func (m *mockStore) Delete(_ session.ID) error                             { return nil }
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)              { return 0, nil }
-func (m *mockStore) Close() error                                          { return nil }
-
-func (m *mockStore) AddLink(sessionID session.ID, link session.Link) error {
-	key := string(link.LinkType) + ":" + link.Ref
-	s, ok := m.sessions[sessionID]
-	if !ok {
-		return session.ErrSessionNotFound
-	}
-	summary := session.Summary{
-		ID:       s.ID,
-		Provider: s.Provider,
-		Branch:   s.Branch,
-	}
-	m.links[key] = append(m.links[key], summary)
-	return nil
-}
-
-func (m *mockStore) GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error) {
-	key := string(linkType) + ":" + ref
-	summaries, ok := m.links[key]
-	if !ok || len(summaries) == 0 {
-		return nil, session.ErrSessionNotFound
-	}
-	return summaries, nil
-}
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
 
 // mockPlatform for comment tests.
 type mockPlatform struct {
@@ -159,13 +80,13 @@ func (m *mockPlatform) ListComments(prNumber int) ([]session.PRComment, error) {
 	return m.comments[prNumber], nil
 }
 
-func commentTestFactory(t *testing.T, store *mockStore, plat *mockPlatform) (*cmdutil.Factory, *iostreams.IOStreams, string) {
+func commentTestFactory(t *testing.T, store *testutil.MockStore, plat *mockPlatform) (*cmdutil.Factory, *iostreams.IOStreams, string) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 
 	if store == nil {
-		store = newMockStore()
+		store = testutil.NewMockStore()
 	}
 	gitClient := git.NewClient(repoDir)
 
@@ -176,7 +97,7 @@ func commentTestFactory(t *testing.T, store *mockStore, plat *mockPlatform) (*cm
 		GitFunc:      func() (*git.Client, error) { return gitClient, nil },
 		StoreFunc:    func() (storage.Store, error) { return store, nil },
 		PlatformFunc: func() (platform.Platform, error) { return plat, nil },
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store:    store,
 				Registry: registry,
@@ -203,7 +124,7 @@ func TestNewCmdComment_flags(t *testing.T) {
 }
 
 func TestComment_newComment(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	plat := newMockPlatform()
 
 	f, ios, repoDir := commentTestFactory(t, store, plat)
@@ -261,7 +182,7 @@ func TestComment_newComment(t *testing.T) {
 }
 
 func TestComment_updateExisting(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	plat := newMockPlatform()
 
 	f, ios, repoDir := commentTestFactory(t, store, plat)
@@ -313,7 +234,7 @@ func TestComment_updateExisting(t *testing.T) {
 }
 
 func TestComment_withSessionFlag(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	plat := newMockPlatform()
 
 	sess := testutil.NewSession("explicit-session")
@@ -349,7 +270,7 @@ func TestComment_withSessionFlag(t *testing.T) {
 }
 
 func TestComment_noPR(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	plat := newMockPlatform()
 	// No PRs set up
 

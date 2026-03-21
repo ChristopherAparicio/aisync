@@ -15,73 +15,13 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
-// mockStore for stats tests.
-type mockStore struct {
-	sessions  map[session.ID]*session.Session
-	summaries []session.Summary
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{
-		sessions: make(map[session.ID]*session.Session),
-	}
-}
-
-func (m *mockStore) Save(s *session.Session) error {
-	m.sessions[s.ID] = s
-	m.summaries = append(m.summaries, session.Summary{
-		ID:           s.ID,
-		Provider:     s.Provider,
-		Branch:       s.Branch,
-		MessageCount: len(s.Messages),
-		TotalTokens:  s.TokenUsage.TotalTokens,
-		CreatedAt:    s.CreatedAt,
-	})
-	return nil
-}
-
-func (m *mockStore) Get(id session.ID) (*session.Session, error) {
-	s, ok := m.sessions[id]
-	if !ok {
-		return nil, session.ErrSessionNotFound
-	}
-	return s, nil
-}
-
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	return m.summaries, nil
-}
-
-func (m *mockStore) Delete(_ session.ID) error                  { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)   { return 0, nil }
-func (m *mockStore) Close() error                               { return nil }
-
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
-
-func statsTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
+func statsTestFactory(t *testing.T, store *testutil.MockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 
 	if store == nil {
-		store = newMockStore()
+		store = testutil.NewMockStore()
 	}
 	gitClient := git.NewClient(repoDir)
 
@@ -89,7 +29,7 @@ func statsTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostre
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
 		StoreFunc: func() (storage.Store, error) { return store, nil },
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store: store,
 				Git:   gitClient,
@@ -114,7 +54,7 @@ func TestNewCmdStats_flags(t *testing.T) {
 }
 
 func TestStats_noSessions(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	f, ios := statsTestFactory(t, store)
 
 	opts := &Options{
@@ -134,7 +74,7 @@ func TestStats_noSessions(t *testing.T) {
 }
 
 func TestStats_withSessions(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 
 	// Save sessions with file changes
 	s1 := &session.Session{

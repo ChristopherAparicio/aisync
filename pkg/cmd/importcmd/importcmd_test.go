@@ -12,44 +12,10 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
+	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
-
-type mockStore struct {
-	saved []*session.Session
-}
-
-func (m *mockStore) Save(s *session.Session) error {
-	m.saved = append(m.saved, s)
-	return nil
-}
-func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	return nil, nil
-}
-func (m *mockStore) Delete(_ session.ID) error                  { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
-func (m *mockStore) Close() error                                   { return nil }
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
 
 func testSession() *session.Session {
 	return &session.Session{
@@ -91,7 +57,7 @@ func writeTestFile(t *testing.T, name string, data []byte) string {
 
 func importTestFactory(store storage.Store) *cmdutil.Factory {
 	return &cmdutil.Factory{
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store: store,
 			}), nil
@@ -104,7 +70,7 @@ func importTestFactory(store storage.Store) *cmdutil.Factory {
 
 func TestImport_AisyncJSON(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 
 	sess := testSession()
 	data, err := json.MarshalIndent(sess, "", "  ")
@@ -132,17 +98,17 @@ func TestImport_AisyncJSON(t *testing.T) {
 	if !strings.Contains(output, "Stored session") {
 		t.Errorf("expected 'Stored session' in output, got: %s", output)
 	}
-	if len(store.saved) != 1 {
-		t.Fatalf("expected 1 saved session, got %d", len(store.saved))
+	if store.SaveCount != 1 {
+		t.Fatalf("expected 1 saved session, got %d", store.SaveCount)
 	}
-	if store.saved[0].Summary != "Session for import test" {
-		t.Errorf("saved summary = %q, want 'Session for import test'", store.saved[0].Summary)
+	if store.LastSaved.Summary != "Session for import test" {
+		t.Errorf("saved summary = %q, want 'Session for import test'", store.LastSaved.Summary)
 	}
 }
 
 func TestImport_ClaudeJSONL(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 
 	jsonl := `{"type":"summary","summary":"Imported from Claude"}
 {"type":"user","uuid":"u1","timestamp":"2026-02-17T09:00:00Z","sessionId":"sess1","gitBranch":"main","cwd":"/tmp","message":{"role":"user","content":"Hello"},"isSidechain":false}
@@ -165,20 +131,20 @@ func TestImport_ClaudeJSONL(t *testing.T) {
 		t.Fatalf("runImport() error: %v", err)
 	}
 
-	if len(store.saved) != 1 {
-		t.Fatalf("expected 1 saved session, got %d", len(store.saved))
+	if store.SaveCount != 1 {
+		t.Fatalf("expected 1 saved session, got %d", store.SaveCount)
 	}
-	if store.saved[0].Summary != "Imported from Claude" {
-		t.Errorf("saved summary = %q, want 'Imported from Claude'", store.saved[0].Summary)
+	if store.LastSaved.Summary != "Imported from Claude" {
+		t.Errorf("saved summary = %q, want 'Imported from Claude'", store.LastSaved.Summary)
 	}
-	if store.saved[0].Provider != session.ProviderClaudeCode {
-		t.Errorf("provider = %q, want claude-code", store.saved[0].Provider)
+	if store.LastSaved.Provider != session.ProviderClaudeCode {
+		t.Errorf("provider = %q, want claude-code", store.LastSaved.Provider)
 	}
 }
 
 func TestImport_EmptyFile(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 
 	filePath := writeTestFile(t, "empty.json", []byte{})
 
@@ -201,7 +167,7 @@ func TestImport_EmptyFile(t *testing.T) {
 
 func TestImport_NonexistentFile(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 
 	f := importTestFactory(store)
 	f.IOStreams = ios
@@ -219,7 +185,7 @@ func TestImport_NonexistentFile(t *testing.T) {
 
 func TestImport_UnknownFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 
 	filePath := writeTestFile(t, "session.xml", []byte("<session/>"))
 
@@ -243,7 +209,7 @@ func TestImport_UnknownFormat(t *testing.T) {
 
 func TestImport_UnknownTarget(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 
 	sess := testSession()
 	data, _ := json.Marshal(sess)

@@ -127,6 +127,70 @@ func (c *Client) IsValidCommit(ref string) bool {
 	return err == nil
 }
 
+// CommitInfo represents a parsed git commit.
+type CommitInfo struct {
+	SHA       string
+	Message   string // first line (subject)
+	Author    string
+	Timestamp string // ISO 8601
+	Files     []string
+}
+
+// ListCommits returns commits on a branch within a time range.
+// If since or until are empty, they are not constrained.
+// Returns at most maxCount commits (0 = unlimited).
+func (c *Client) ListCommits(branch, since, until string, maxCount int) ([]CommitInfo, error) {
+	args := []string{"log", "--format=%H|%s|%an|%aI"}
+	if branch != "" {
+		args = append(args, branch)
+	}
+	if since != "" {
+		args = append(args, "--after="+since)
+	}
+	if until != "" {
+		args = append(args, "--before="+until)
+	}
+	if maxCount > 0 {
+		args = append(args, fmt.Sprintf("-n%d", maxCount))
+	}
+
+	out, err := c.run(args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing commits: %w", err)
+	}
+	if out == "" {
+		return nil, nil
+	}
+
+	var commits []CommitInfo
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) < 4 {
+			continue
+		}
+		commits = append(commits, CommitInfo{
+			SHA:       parts[0],
+			Message:   parts[1],
+			Author:    parts[2],
+			Timestamp: parts[3],
+		})
+	}
+
+	return commits, nil
+}
+
+// CommitFiles returns the list of files changed by a commit.
+func (c *Client) CommitFiles(sha string) ([]string, error) {
+	out, err := c.run("diff-tree", "--no-commit-id", "--name-only", "-r", sha)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // ParseSessionTrailer extracts the AI-Session trailer value from a commit message.
 // Returns empty string if no trailer is found.
 func ParseSessionTrailer(commitMessage string) string {

@@ -2,15 +2,88 @@ package web
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
+	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
+
+// Cache TTLs for dashboard statistics.
+const (
+	statsCacheTTL    = 30 * time.Second
+	forecastCacheTTL = 5 * time.Minute
+)
+
+// cachedStats returns Stats from cache if fresh, otherwise computes and caches.
+func (s *Server) cachedStats(req service.StatsRequest) (*service.StatsResult, error) {
+	cacheKey := "stats:" + req.ProjectPath + ":" + req.Branch
+
+	// 1. Try cache
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, statsCacheTTL); data != nil {
+			var result service.StatsResult
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
+	// 2. Compute
+	result, err := s.sessionSvc.Stats(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Cache
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return result, nil
+}
+
+// cachedForecast returns Forecast from cache if fresh, otherwise computes and caches.
+func (s *Server) cachedForecast(ctx context.Context, req service.ForecastRequest) (*session.ForecastResult, error) {
+	cacheKey := "forecast:" + req.ProjectPath + ":" + req.Period
+
+	// 1. Try cache
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, forecastCacheTTL); data != nil {
+			var result session.ForecastResult
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
+	// 2. Compute
+	result, err := s.sessionSvc.Forecast(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Cache
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return result, nil
+}
 
 // ── Shared ──
 
@@ -19,33 +92,209 @@ type branchStat struct {
 	SessionCount int
 	TotalTokens  int
 	TotalCost    float64
+	ActualCost   float64
+}
+
+// projectItem is a template-friendly project entry for the project selector.
+type projectItem struct {
+	Name     string
+	Path     string
+	Selected bool
+}
+
+// ── API: Projects ──
+
+// handleAPIProjects returns JSON list of projects for the project selector.
+func (s *Server) handleAPIProjects(w http.ResponseWriter, r *http.Request) {
+	type projectJSON struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+
+	var projects []projectJSON
+	if s.registrySvc != nil {
+		list, err := s.registrySvc.ListProjects()
+		if err == nil {
+			for _, p := range list {
+				projects = append(projects, projectJSON{
+					Name: p.Name,
+					Path: p.RootPath,
+				})
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(projects)
+}
+
+// buildProjectList returns projects for the template selector dropdown.
+func (s *Server) buildProjectList(selectedPath string) []projectItem {
+	if s.registrySvc == nil {
+		return nil
+	}
+
+	list, err := s.registrySvc.ListProjects()
+	if err != nil {
+		return nil
+	}
+
+	items := make([]projectItem, 0, len(list))
+	for _, p := range list {
+		items = append(items, projectItem{
+			Name:     p.Name,
+			Path:     p.RootPath,
+			Selected: p.RootPath == selectedPath,
+		})
+	}
+	return items
+}
+
+// ── Projects Page ──
+
+type projectsPage struct {
+	Nav      string
+	Projects []projectCard
+}
+
+type projectCard struct {
+	DisplayName  string
+	RemoteURL    string
+	ProjectPath  string
+	Provider     string
+	Category     string
+	SessionCount int
+	TotalTokens  int
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	data := projectsPage{Nav: "projects"}
+
+	groups, err := s.sessionSvc.ListProjects(ctx)
+	if err != nil {
+		s.logger.Printf("projects list error: %v", err)
+		s.render(w, "projects.html", data)
+		return
+	}
+
+	for _, g := range groups {
+		data.Projects = append(data.Projects, projectCard{
+			DisplayName:  g.DisplayName,
+			RemoteURL:    g.RemoteURL,
+			ProjectPath:  g.ProjectPath,
+			Provider:     string(g.Provider),
+			Category:     g.Category,
+			SessionCount: g.SessionCount,
+			TotalTokens:  g.TotalTokens,
+		})
+	}
+
+	s.render(w, "projects.html", data)
 }
 
 // ── Dashboard ──
 
+// capabilityStat is a template-friendly capability count.
+type capabilityStat struct {
+	Kind  string
+	Count int
+}
+
 type dashboardPage struct {
-	Nav            string
-	TotalSessions  int
-	TotalTokens    int
-	TotalCost      float64
-	TrendDir       string
-	RecentSessions []session.Summary
-	TopBranches    []branchStat
-	HasForecast    bool
-	Projected30d   float64
-	Projected90d   float64
-	TrendPerDay    float64
+	Nav              string
+	TotalSessions    int
+	TotalTokens      int
+	TotalCost        float64 // API-equivalent cost (estimated from token rates)
+	ActualCost       float64 // actual cost reported by providers
+	Savings          float64 // TotalCost - ActualCost
+	DeduplicatedCost float64 // cost after fork deduplication
+	ForkSavings      float64 // cost removed by deduplication
+	HasForkDedup     bool    // true if there are detected forks
+	BillingType      string  // "subscription", "api", "mixed", or ""
+	TrendDir         string
+	RecentSessions   []session.Summary
+	TopBranches      []branchStat
+	HasForecast      bool
+	Projected30d     float64
+	Projected90d     float64
+	TrendPerDay      float64
+
+	// Project filtering
+	Projects        []projectItem
+	SelectedProject string
+
+	// Error KPIs (aggregated from session summaries)
+	TotalErrors        int
+	SessionsWithErrors int
+	TotalToolCalls     int
+
+	// Weekly trends (current vs previous period)
+	HasTrends     bool
+	TrendVerdict  string // "improving", "stable", "degrading"
+	TrendSessions trendMetric
+	TrendTokens   trendMetric
+	TrendErrors   trendMetric
+
+	// Capability metrics (when a project is selected)
+	HasCapabilities bool
+	ProjectName     string
+	CapabilityStats []capabilityStat
+	MCPServerCount  int
+}
+
+// trendMetric holds current vs previous values for a single metric.
+type trendMetric struct {
+	Current    int
+	Previous   int
+	Delta      int     // absolute change
+	DeltaPct   float64 // percentage change
+	Direction  string  // "up", "down", "flat"
+	IsPositive bool    // true if this direction is good (e.g. errors going down)
+}
+
+// buildTrendMetric creates a trendMetric from raw values.
+// invertPositive means "down is good" (e.g. for errors).
+func buildTrendMetric(current, previous, delta int, deltaPct float64, invertPositive bool) trendMetric {
+	m := trendMetric{
+		Current:  current,
+		Previous: previous,
+		Delta:    delta,
+		DeltaPct: deltaPct,
+	}
+	switch {
+	case delta > 0:
+		m.Direction = "up"
+		m.IsPositive = invertPositive // errors going up is bad
+	case delta < 0:
+		m.Direction = "down"
+		m.IsPositive = !invertPositive // errors going down is good
+	default:
+		m.Direction = "flat"
+		m.IsPositive = true
+	}
+	// Compute percentage if not provided.
+	if deltaPct == 0 && previous > 0 {
+		m.DeltaPct = float64(delta) / float64(previous) * 100
+	}
+	return m
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	data := s.buildDashboardData(r.Context())
+	data := s.buildDashboardData(r)
 	s.render(w, "dashboard.html", data)
 }
 
-func (s *Server) buildDashboardData(ctx context.Context) dashboardPage {
-	data := dashboardPage{Nav: "dashboard"}
+func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
+	project := r.URL.Query().Get("project")
+	data := dashboardPage{
+		Nav:             "dashboard",
+		Projects:        s.buildProjectList(project),
+		SelectedProject: project,
+	}
 
-	stats, err := s.sessionSvc.Stats(service.StatsRequest{All: true})
+	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
+	stats, err := s.cachedStats(statsReq)
 	if err != nil {
 		s.logger.Printf("dashboard stats error: %v", err)
 		return data
@@ -54,6 +303,12 @@ func (s *Server) buildDashboardData(ctx context.Context) dashboardPage {
 	data.TotalSessions = stats.TotalSessions
 	data.TotalTokens = stats.TotalTokens
 	data.TotalCost = stats.TotalCost
+	data.ActualCost = stats.ActualCost
+	data.Savings = stats.Savings
+	data.DeduplicatedCost = stats.DeduplicatedCost
+	data.ForkSavings = stats.ForkSavings
+	data.HasForkDedup = stats.ForkSavings > 0
+	data.BillingType = stats.BillingType
 
 	limit := 8
 	if len(stats.PerBranch) < limit {
@@ -66,13 +321,24 @@ func (s *Server) buildDashboardData(ctx context.Context) dashboardPage {
 			SessionCount: bs.SessionCount,
 			TotalTokens:  bs.TotalTokens,
 			TotalCost:    bs.TotalCost,
+			ActualCost:   bs.ActualCost,
 		})
 	}
 
-	summaries, err := s.sessionSvc.List(service.ListRequest{All: true})
+	listReq := service.ListRequest{All: project == "", ProjectPath: project}
+	summaries, err := s.sessionSvc.List(listReq)
 	if err != nil {
 		s.logger.Printf("dashboard list error: %v", err)
 	} else {
+		// Aggregate error KPIs from all sessions.
+		for _, sm := range summaries {
+			data.TotalErrors += sm.ErrorCount
+			data.TotalToolCalls += sm.ToolCallCount
+			if sm.ErrorCount > 0 {
+				data.SessionsWithErrors++
+			}
+		}
+
 		limit := 10
 		if len(summaries) < limit {
 			limit = len(summaries)
@@ -80,7 +346,7 @@ func (s *Server) buildDashboardData(ctx context.Context) dashboardPage {
 		data.RecentSessions = summaries[:limit]
 	}
 
-	forecast, err := s.sessionSvc.Forecast(ctx, service.ForecastRequest{
+	forecast, err := s.cachedForecast(r.Context(), service.ForecastRequest{
 		Period: "weekly",
 		Days:   90,
 	})
@@ -96,6 +362,44 @@ func (s *Server) buildDashboardData(ctx context.Context) dashboardPage {
 		data.TrendDir = "stable"
 	}
 
+	// Weekly trends (current vs previous 7 days)
+	trends, trendsErr := s.sessionSvc.Trends(r.Context(), service.TrendRequest{
+		Period: 7 * 24 * time.Hour,
+	})
+	if trendsErr == nil && (trends.Current.SessionCount > 0 || trends.Previous.SessionCount > 0) {
+		data.HasTrends = true
+		data.TrendVerdict = trends.Delta.Verdict
+
+		data.TrendSessions = buildTrendMetric(
+			trends.Current.SessionCount, trends.Previous.SessionCount,
+			trends.Delta.SessionCountChange, 0, false,
+		)
+		data.TrendTokens = buildTrendMetric(
+			trends.Current.TotalTokens, trends.Previous.TotalTokens,
+			trends.Delta.TokensChange, trends.Delta.TokensChangePercent, false,
+		)
+		data.TrendErrors = buildTrendMetric(
+			trends.Current.TotalErrors, trends.Previous.TotalErrors,
+			trends.Delta.ErrorsChange, trends.Delta.ErrorsChangePercent, true,
+		)
+	}
+
+	// Capability metrics for selected project
+	if project != "" && s.registrySvc != nil {
+		proj, scanErr := s.registrySvc.ScanProject(project)
+		if scanErr == nil {
+			data.HasCapabilities = true
+			data.ProjectName = proj.Name
+			data.MCPServerCount = len(proj.MCPServers)
+			for _, cs := range proj.CapabilityStats() {
+				data.CapabilityStats = append(data.CapabilityStats, capabilityStat{
+					Kind:  string(cs.Kind),
+					Count: cs.Count,
+				})
+			}
+		}
+	}
+
 	return data
 }
 
@@ -103,16 +407,54 @@ func (s *Server) buildDashboardData(ctx context.Context) dashboardPage {
 
 const defaultPageSize = 25
 
+// columnDef describes a single column in the sessions table.
+type columnDef struct {
+	ID    string // config identifier ("id", "provider", etc.)
+	Label string // display header
+	Class string // CSS class for <th>/<td> ("", "text-right", etc.)
+}
+
+// sessionRow is a template-friendly row with pre-formatted cell values.
+type sessionRow struct {
+	ID    string // always present for link generation
+	Cells []sessionCell
+}
+
+// sessionCell holds a single cell's display value and optional CSS class/badge.
+type sessionCell struct {
+	Value   string
+	Class   string // extra CSS class for the <td>
+	IsLink  bool   // render as <a href="/sessions/...">
+	IsBadge bool   // wrap in <span class="badge badge-provider">
+	LinkID  string // session ID for the link target
+}
+
 type sessionsPage struct {
 	Nav string
 
 	// Filter state (echoed back for form pre-fill).
-	FilterKeyword  string
-	FilterBranch   string
-	FilterProvider string
+	FilterKeyword         string
+	FilterBranch          string
+	FilterProvider        string
+	FilterProject         string
+	FilterOwner           string
+	FilterSessionType     string
+	FilterProjectCategory string
+	FilterSince           string
+	FilterUntil           string
 
-	// Results.
-	Sessions   []session.Summary
+	// Sort state
+	SortBy    string
+	SortOrder string
+
+	// Project selector
+	Projects []projectItem
+
+	// Dynamic columns
+	Columns []columnDef
+
+	// Results (dynamic rows).
+	Rows       []sessionRow
 	TotalCount int
 	Page       int // 1-based
 	PageSize   int
@@ -138,13 +480,35 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 	keyword := q.Get("keyword")
 	branch := q.Get("branch")
 	provider := q.Get("provider")
+	project := q.Get("project")
+	owner := q.Get("owner")
+	sessionType := q.Get("session_type")
+	projectCategory := q.Get("project_category")
+	since := q.Get("since")
+	until := q.Get("until")
+	sortBy := q.Get("sort_by")
+	sortOrder := q.Get("sort_order")
+
+	// Apply config defaults for filters + sort when no query params are set.
+	if provider == "" && !q.Has("provider") && s.cfg != nil {
+		provider = s.cfg.GetDashboardDefaultProvider()
+	}
+	if branch == "" && !q.Has("branch") && s.cfg != nil {
+		branch = s.cfg.GetDashboardDefaultBranch()
+	}
+	if sortBy == "" {
+		sortBy = s.getDashboardSortBy()
+	}
+	if sortOrder == "" {
+		sortOrder = s.getDashboardSortOrder()
+	}
 
 	page := 1
 	if p, err := strconv.Atoi(q.Get("page")); err == nil && p > 0 {
 		page = p
 	}
 
-	pageSize := defaultPageSize
+	pageSize := s.getDashboardPageSize()
 	offset := (page - 1) * pageSize
 
 	var providerName session.ProviderName
@@ -156,15 +520,22 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 	}
 
 	result, err := s.sessionSvc.Search(service.SearchRequest{
-		Keyword:  keyword,
-		Branch:   branch,
-		Provider: providerName,
-		Limit:    pageSize,
-		Offset:   offset,
+		Keyword:         keyword,
+		Branch:          branch,
+		Provider:        providerName,
+		ProjectPath:     project,
+		OwnerID:         session.ID(owner),
+		SessionType:     sessionType,
+		ProjectCategory: projectCategory,
+		Since:           since,
+		Until:           until,
+		Limit:           pageSize,
+		Offset:          offset,
 	})
 	if err != nil {
 		s.logger.Printf("sessions search error: %v", err)
-		return sessionsPage{Nav: "sessions"}
+		cols := s.buildColumnDefs()
+		return sessionsPage{Nav: "sessions", Projects: s.buildProjectList(project), Columns: cols, SortBy: sortBy, SortOrder: sortOrder}
 	}
 
 	totalPages := (result.TotalCount + pageSize - 1) / pageSize
@@ -172,22 +543,238 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 		totalPages = 1
 	}
 
+	cols := s.buildColumnDefs()
+	rows := s.buildSessionRows(result.Sessions, cols)
+
 	return sessionsPage{
-		Nav:            "sessions",
-		FilterKeyword:  keyword,
-		FilterBranch:   branch,
-		FilterProvider: provider,
-		Sessions:       result.Sessions,
-		TotalCount:     result.TotalCount,
-		Page:           page,
-		PageSize:       pageSize,
-		TotalPages:     totalPages,
-		HasPrev:        page > 1,
-		HasNext:        page < totalPages,
+		Nav:                   "sessions",
+		FilterKeyword:         keyword,
+		FilterBranch:          branch,
+		FilterProvider:        provider,
+		FilterProject:         project,
+		FilterOwner:           owner,
+		FilterSessionType:     sessionType,
+		FilterProjectCategory: projectCategory,
+		FilterSince:           since,
+		FilterUntil:           until,
+		SortBy:                sortBy,
+		SortOrder:             sortOrder,
+		Projects:              s.buildProjectList(project),
+		Columns:               cols,
+		Rows:                  rows,
+		TotalCount:            result.TotalCount,
+		Page:                  page,
+		PageSize:              pageSize,
+		TotalPages:            totalPages,
+		HasPrev:               page > 1,
+		HasNext:               page < totalPages,
 	}
 }
 
+// getDashboardPrefs loads preferences from DB (user_preferences table), falling
+// back to config file, then system defaults. Pass empty userID for global defaults.
+func (s *Server) getDashboardPrefs() *session.DashboardPreferences {
+	// 1. Try DB preferences (global defaults = empty userID)
+	if s.store != nil {
+		if prefs, err := s.store.GetPreferences(""); err == nil && prefs != nil {
+			return &prefs.Dashboard
+		}
+	}
+	// 2. Not found → return nil (callers use config or system defaults)
+	return nil
+}
+
+// getDashboardPageSize returns the configured page size (or default 25).
+func (s *Server) getDashboardPageSize() int {
+	if p := s.getDashboardPrefs(); p != nil && p.PageSize > 0 {
+		return p.PageSize
+	}
+	if s.cfg != nil {
+		return s.cfg.GetDashboardPageSize()
+	}
+	return defaultPageSize
+}
+
+// getDashboardSortBy returns the configured sort field (or default "created_at").
+func (s *Server) getDashboardSortBy() string {
+	if p := s.getDashboardPrefs(); p != nil && p.SortBy != "" {
+		return p.SortBy
+	}
+	if s.cfg != nil {
+		return s.cfg.GetDashboardSortBy()
+	}
+	return "created_at"
+}
+
+// getDashboardSortOrder returns the configured sort order (or default "desc").
+func (s *Server) getDashboardSortOrder() string {
+	if p := s.getDashboardPrefs(); p != nil && p.SortOrder != "" {
+		return p.SortOrder
+	}
+	if s.cfg != nil {
+		return s.cfg.GetDashboardSortOrder()
+	}
+	return "desc"
+}
+
+// allColumnDefs maps column IDs to their display definitions.
+var allColumnDefs = map[string]columnDef{
+	"id":         {ID: "id", Label: "ID", Class: ""},
+	"provider":   {ID: "provider", Label: "Provider", Class: ""},
+	"agent":      {ID: "agent", Label: "Agent", Class: ""},
+	"branch":     {ID: "branch", Label: "Branch", Class: ""},
+	"summary":    {ID: "summary", Label: "Summary", Class: ""},
+	"messages":   {ID: "messages", Label: "Msgs", Class: "text-right"},
+	"tokens":     {ID: "tokens", Label: "Tokens", Class: "text-right"},
+	"cost":       {ID: "cost", Label: "Cost", Class: "text-right"},
+	"tools":      {ID: "tools", Label: "Tools", Class: "text-right"},
+	"errors":     {ID: "errors", Label: "Errs", Class: "text-right"},
+	"error_rate": {ID: "error_rate", Label: "Errs", Class: "text-right"}, // alias for "errors"
+	"when":       {ID: "when", Label: "When", Class: ""},
+}
+
+// providerShortName returns a compact display label for provider names.
+// "claude-code" → "CC", "opencode" → "OC", "cursor" → "CU".
+func providerShortName(p session.ProviderName) string {
+	switch p {
+	case session.ProviderClaudeCode:
+		return "CC"
+	case session.ProviderOpenCode:
+		return "OC"
+	case session.ProviderCursor:
+		return "CU"
+	case session.ProviderParlay:
+		return "PA"
+	case session.ProviderOllama:
+		return "OL"
+	default:
+		s := string(p)
+		if len(s) > 4 {
+			return strings.ToUpper(s[:2])
+		}
+		return strings.ToUpper(s)
+	}
+}
+
+// buildColumnDefs returns the ordered column definitions based on config.
+func (s *Server) buildColumnDefs() []columnDef {
+	var colIDs []string
+
+	// 1. Try DB preferences
+	if p := s.getDashboardPrefs(); p != nil && len(p.Columns) > 0 {
+		colIDs = p.Columns
+	}
+	// 2. Fall back to config file
+	if len(colIDs) == 0 && s.cfg != nil {
+		colIDs = s.cfg.GetDashboardColumns()
+	}
+	// 3. System defaults
+	if len(colIDs) == 0 {
+		colIDs = config.DefaultDashboardColumns
+	}
+
+	defs := make([]columnDef, 0, len(colIDs))
+	for _, id := range colIDs {
+		if d, ok := allColumnDefs[id]; ok {
+			defs = append(defs, d)
+		}
+	}
+	return defs
+}
+
+// estimateTokenCost gives a rough $/token estimate for the summary list.
+// It uses an average blended rate ($3/Mtoken) since Summary doesn't carry model info.
+func estimateTokenCost(totalTokens int) float64 {
+	const blendedRatePerMToken = 3.0 // rough average across models
+	return float64(totalTokens) * blendedRatePerMToken / 1_000_000
+}
+
+// buildSessionRows converts session summaries into template-friendly rows
+// with pre-formatted cell values for the configured columns.
+func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) []sessionRow {
+	rows := make([]sessionRow, 0, len(sessions))
+
+	for _, sess := range sessions {
+		row := sessionRow{ID: string(sess.ID)}
+		for _, col := range cols {
+			cell := sessionCell{}
+			switch col.ID {
+			case "id":
+				cell.Value = truncate(string(sess.ID), 8)
+				cell.IsLink = true
+				cell.LinkID = string(sess.ID)
+				cell.Class = "font-mono text-muted"
+			case "provider":
+				cell.Value = providerShortName(sess.Provider)
+				cell.IsBadge = true
+			case "agent":
+				if sess.Agent != "" {
+					cell.Value = sess.Agent
+				} else {
+					cell.Value = "—"
+					cell.Class = "text-muted"
+				}
+			case "branch":
+				if sess.Branch != "" {
+					cell.Value = truncate(sess.Branch, 20)
+				} else {
+					cell.Value = "—"
+					cell.Class = "text-muted"
+				}
+			case "summary":
+				if sess.Summary != "" {
+					cell.Value = truncate(sess.Summary, 60)
+					cell.IsLink = true
+					cell.LinkID = string(sess.ID)
+				} else {
+					cell.Value = truncate(string(sess.ID), 16)
+					cell.IsLink = true
+					cell.LinkID = string(sess.ID)
+					cell.Class = "text-muted font-mono"
+				}
+			case "messages":
+				cell.Value = strconv.Itoa(sess.MessageCount)
+				cell.Class = "text-right"
+			case "tokens":
+				cell.Value = formatTokens(sess.TotalTokens)
+				cell.Class = "text-right font-mono"
+			case "cost":
+				cost := estimateTokenCost(sess.TotalTokens)
+				cell.Value = "~" + formatCost(cost)
+				cell.Class = "text-right font-mono"
+			case "tools":
+				cell.Value = strconv.Itoa(sess.ToolCallCount)
+				cell.Class = "text-right"
+			case "errors", "error_rate":
+				cell.Value = strconv.Itoa(sess.ErrorCount)
+				cell.Class = "text-right"
+				if sess.ErrorCount > 0 {
+					cell.Class = "text-right text-error"
+				}
+			case "when":
+				cell.Value = timeAgo(sess.CreatedAt)
+				cell.Class = "text-muted"
+			}
+			row.Cells = append(row.Cells, cell)
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
 // ── Session Detail ──
+
+// toolUsageEntry is a template-friendly view of a tool usage entry.
+type toolUsageEntry struct {
+	Name         string
+	Calls        int
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+	AvgDuration  int
+	ErrorCount   int
+	Percentage   float64
+}
 
 type sessionDetailPage struct {
 	Nav           string
@@ -198,6 +785,121 @@ type sessionDetailPage struct {
 	ErrorCount    int
 	ErrorRate     float64 // 0-100 percentage
 	RestoreCmd    string
+
+	// Session objective (work description)
+	HasObjective bool
+	Objective    *objectiveView
+
+	// Tool usage breakdown (Step 6)
+	HasToolUsage bool
+	ToolUsage    []toolUsageEntry
+
+	// Activity bar (visual message flow)
+	ActivitySegments []activitySegment
+
+	// Fork tree
+	HasForks bool
+	ForkRels []forkRelView
+
+	// Session-to-session links (delegation, continuation, etc.)
+	HasSessionLinks bool
+	SessionLinks    []sessionLinkView
+
+	// Analysis (Step 9)
+	HasAnalysis  bool
+	CanAnalyze   bool // true when analysisSvc is wired
+	Analysis     *analysisView
+	AnalysisData analysisPartialData // pre-built data for the analysis_partial template
+}
+
+// objectiveView is a template-friendly view of a session's work objective.
+type objectiveView struct {
+	Intent       string
+	Outcome      string
+	Decisions    []string
+	Friction     []string
+	OpenItems    []string
+	ExplainShort string
+}
+
+// forkRelView is a template-friendly view of a fork relation.
+type forkRelView struct {
+	OriginalID     string
+	ForkID         string
+	ForkPoint      int
+	SharedMessages int
+	OverlapPct     int
+	Reason         string
+	Direction      string // "parent" (this session is the original) or "fork" (this session is the fork)
+	LinkedID       string // the OTHER session's ID (for link)
+}
+
+// activitySegment represents one message segment in the activity bar.
+type activitySegment struct {
+	Role     string  // "user", "assistant", "tool"
+	WidthPct float64 // percentage width (0-100)
+	Tokens   int
+	Index    int // 0-based message index
+}
+
+// sessionLinkView is a template-friendly view of a session-to-session link.
+type sessionLinkView struct {
+	ID              string
+	TargetSessionID string
+	LinkType        string
+	LinkTypeClass   string // CSS class: "delegated", "continuation", "related", "follow-up", "replay"
+	Description     string
+	Direction       string // "outgoing" or "incoming"
+}
+
+// analysisView is a template-friendly view of a SessionAnalysis.
+type analysisView struct {
+	ID                 string
+	Score              int
+	ScoreClass         string // "good", "warning", "poor"
+	Summary            string
+	Trigger            string
+	Adapter            string
+	DurationMs         int
+	CreatedAt          string // formatted time ago
+	Error              string
+	HasProblems        bool
+	Problems           []problemView
+	HasRecommendations bool
+	Recommendations    []recommendationView
+	HasSkills          bool
+	SkillSuggestions   []skillView
+
+	// Skill observation (available vs loaded vs missed)
+	HasSkillObservation  bool
+	SkillsAvailable      []string
+	SkillsRecommended    []string
+	SkillsLoaded         []string
+	SkillsMissed         []string
+	SkillsDiscovered     []string
+	SkillMissedCount     int
+	SkillDiscoveredCount int
+}
+
+type problemView struct {
+	Severity      string
+	SeverityClass string // "high", "medium", "low"
+	Description   string
+	ToolName      string
+}
+
+type recommendationView struct {
+	Category      string
+	CategoryClass string // CSS class for category badge
+	Title         string
+	Description   string
+	Priority      int
+}
+
+type skillView struct {
+	Name        string
+	Description string
+	Trigger     string
 }
 
 // handleSessionDetail renders a single session.
@@ -242,6 +944,143 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data.RestoreCmd = buildRestoreCmd(string(sess.ID), "", false)
+
+	// Session objective (work description).
+	if s.store != nil {
+		obj, objErr := s.store.GetObjective(sess.ID)
+		if objErr == nil && obj != nil {
+			data.HasObjective = true
+			data.Objective = &objectiveView{
+				Intent:       obj.Summary.Intent,
+				Outcome:      obj.Summary.Outcome,
+				Decisions:    obj.Summary.Decisions,
+				Friction:     obj.Summary.Friction,
+				OpenItems:    obj.Summary.OpenItems,
+				ExplainShort: obj.ExplainShort,
+			}
+		}
+	}
+
+	// Activity bar segments
+	if totalTokens := sess.TokenUsage.TotalTokens; totalTokens > 0 && len(sess.Messages) > 0 {
+		for i := range sess.Messages {
+			msg := &sess.Messages[i]
+			msgTokens := msg.InputTokens + msg.OutputTokens
+			if msgTokens == 0 {
+				msgTokens = 1 // minimum 1 for visibility
+			}
+			data.ActivitySegments = append(data.ActivitySegments, activitySegment{
+				Role:     string(msg.Role),
+				WidthPct: float64(msgTokens) / float64(totalTokens) * 100,
+				Tokens:   msgTokens,
+				Index:    i,
+			})
+		}
+	}
+
+	// Fork relations
+	var forkRels []session.ForkRelation
+	var forkErr error
+	if s.store != nil {
+		forkRels, forkErr = s.store.GetForkRelations(sess.ID)
+	}
+	if forkErr == nil && len(forkRels) > 0 {
+		data.HasForks = true
+		for _, rel := range forkRels {
+			view := forkRelView{
+				OriginalID:     string(rel.OriginalID),
+				ForkID:         string(rel.ForkID),
+				ForkPoint:      rel.ForkPoint,
+				SharedMessages: rel.SharedMessages,
+				OverlapPct:     int(rel.OverlapRatio * 100),
+				Reason:         rel.Reason,
+			}
+			if rel.OriginalID == sess.ID {
+				view.Direction = "parent"
+				view.LinkedID = string(rel.ForkID)
+			} else {
+				view.Direction = "fork"
+				view.LinkedID = string(rel.OriginalID)
+			}
+			if view.Reason == "" && rel.ForkContext != "" {
+				if len(rel.ForkContext) > 100 {
+					view.Reason = rel.ForkContext[:97] + "..."
+				} else {
+					view.Reason = rel.ForkContext
+				}
+			}
+			data.ForkRels = append(data.ForkRels, view)
+		}
+	}
+
+	// Tool usage breakdown
+	toolStats, tuErr := s.sessionSvc.ToolUsage(r.Context(), id)
+	if tuErr == nil && len(toolStats.Tools) > 0 {
+		data.HasToolUsage = true
+		for _, t := range toolStats.Tools {
+			data.ToolUsage = append(data.ToolUsage, toolUsageEntry{
+				Name:         t.Name,
+				Calls:        t.Calls,
+				InputTokens:  t.InputTokens,
+				OutputTokens: t.OutputTokens,
+				TotalTokens:  t.TotalTokens,
+				AvgDuration:  t.AvgDuration,
+				ErrorCount:   t.ErrorCount,
+				Percentage:   t.Percentage,
+			})
+		}
+	}
+
+	// Session-to-session links (delegation, continuation, etc.)
+	links, linksErr := s.sessionSvc.GetLinkedSessions(r.Context(), sess.ID)
+	if linksErr == nil && len(links) > 0 {
+		data.HasSessionLinks = true
+		for _, link := range links {
+			view := sessionLinkView{
+				ID:          string(link.ID),
+				LinkType:    string(link.LinkType),
+				Description: link.Description,
+			}
+			// Determine direction and target.
+			if link.SourceSessionID == sess.ID {
+				view.Direction = "outgoing"
+				view.TargetSessionID = string(link.TargetSessionID)
+			} else {
+				view.Direction = "incoming"
+				view.TargetSessionID = string(link.SourceSessionID)
+			}
+			// CSS class for link type badge.
+			switch link.LinkType {
+			case session.SessionLinkDelegatedTo, session.SessionLinkDelegatedFrom:
+				view.LinkTypeClass = "delegated"
+			case session.SessionLinkContinuation:
+				view.LinkTypeClass = "continuation"
+			case session.SessionLinkFollowUp:
+				view.LinkTypeClass = "follow-up"
+			case session.SessionLinkReplayOf:
+				view.LinkTypeClass = "replay"
+			default:
+				view.LinkTypeClass = "related"
+			}
+			data.SessionLinks = append(data.SessionLinks, view)
+		}
+	}
+
+	// Analysis
+	if s.analysisSvc != nil {
+		data.CanAnalyze = true
+		data.AnalysisData = analysisPartialData{
+			SessionID:  id,
+			CanAnalyze: true,
+		}
+		sa, aErr := s.analysisSvc.GetLatestAnalysis(id)
+		if aErr == nil && sa != nil {
+			data.HasAnalysis = true
+			data.Analysis = buildAnalysisView(sa)
+			data.AnalysisData.HasAnalysis = true
+			data.AnalysisData.Analysis = data.Analysis
+		}
+	}
 
 	s.render(w, "session_detail.html", data)
 }
@@ -288,21 +1127,25 @@ type branchData struct {
 }
 
 type branchExplorerPage struct {
-	Nav      string
-	Branches []branchData
+	Nav        string
+	Branches   []branchData
+	Projects   []projectItem
+	Objectives map[string]*objectiveView // session ID → objective (for inline display)
 }
 
 // handleBranches renders the branch explorer page.
 func (s *Server) handleBranches(w http.ResponseWriter, r *http.Request) {
-	data := s.buildBranchesData(r.Context())
+	data := s.buildBranchesData(r)
 	s.render(w, "branch_explorer.html", data)
 }
 
-func (s *Server) buildBranchesData(ctx context.Context) branchExplorerPage {
-	data := branchExplorerPage{Nav: "branches"}
+func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
+	project := r.URL.Query().Get("project")
+	data := branchExplorerPage{Nav: "branches", Projects: s.buildProjectList(project)}
 
-	// Get per-branch stats for the summary cards.
-	stats, err := s.sessionSvc.Stats(service.StatsRequest{All: true})
+	// Get per-branch stats (cached).
+	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
+	stats, err := s.cachedStats(statsReq)
 	if err != nil {
 		s.logger.Printf("branches stats error: %v", err)
 		return data
@@ -317,14 +1160,23 @@ func (s *Server) buildBranchesData(ctx context.Context) branchExplorerPage {
 		return stats.PerBranch[i].SessionCount > stats.PerBranch[j].SessionCount
 	})
 
+	// Collect all session IDs for objective lookup.
+	var allSessionIDs []session.ID
+
 	for _, bs := range stats.PerBranch {
-		tree, treeErr := s.sessionSvc.ListTree(ctx, service.ListRequest{
-			Branch: bs.Branch,
-			All:    true,
+		tree, treeErr := s.sessionSvc.ListTree(r.Context(), service.ListRequest{
+			Branch:      bs.Branch,
+			All:         project == "",
+			ProjectPath: project,
 		})
 		if treeErr != nil {
 			s.logger.Printf("branches tree %q: %v", bs.Branch, treeErr)
 			continue
+		}
+
+		// Collect session IDs from tree nodes.
+		for _, node := range tree {
+			allSessionIDs = append(allSessionIDs, node.Summary.ID)
 		}
 
 		data.Branches = append(data.Branches, branchData{
@@ -337,7 +1189,357 @@ func (s *Server) buildBranchesData(ctx context.Context) branchExplorerPage {
 		})
 	}
 
+	// Bulk-load objectives for all sessions in the branch explorer.
+	if s.store != nil && len(allSessionIDs) > 0 {
+		objs, objErr := s.store.ListObjectives(allSessionIDs)
+		if objErr == nil && len(objs) > 0 {
+			data.Objectives = make(map[string]*objectiveView, len(objs))
+			for id, obj := range objs {
+				data.Objectives[string(id)] = &objectiveView{
+					Intent:       obj.Summary.Intent,
+					Outcome:      obj.Summary.Outcome,
+					ExplainShort: obj.ExplainShort,
+				}
+			}
+		}
+	}
+
 	return data
+}
+
+// ── Branch Timeline ──
+
+type branchTimelinePage struct {
+	Nav        string
+	BranchName string
+	Entries    []timelineEntryView
+	HasEntries bool
+}
+
+type timelineEntryView struct {
+	Type            string // "session" or "commit"
+	TimeAgo         string
+	SessionID       string
+	SessionSummary  string
+	SessionType     string
+	SessionMessages int
+	SessionTokens   int
+	SessionProvider string
+	Intent          string
+	Outcome         string
+	ExplainShort    string
+	CommitSHA       string
+	CommitMessage   string
+	CommitAuthor    string
+	LinkedSessionID string
+}
+
+func (s *Server) handleBranchTimeline(w http.ResponseWriter, r *http.Request) {
+	branchName := r.PathValue("name")
+	if branchName == "" {
+		http.Redirect(w, r, "/branches", http.StatusFound)
+		return
+	}
+
+	data := branchTimelinePage{
+		Nav:        "branches",
+		BranchName: branchName,
+	}
+
+	entries, err := s.sessionSvc.BranchTimeline(r.Context(), service.TimelineRequest{
+		Branch: branchName,
+		Limit:  50,
+	})
+	if err != nil {
+		s.logger.Printf("branch timeline error: %v", err)
+		s.render(w, "branch_timeline.html", data)
+		return
+	}
+
+	for _, e := range entries {
+		view := timelineEntryView{
+			Type:    e.Type,
+			TimeAgo: timeAgoString(e.Timestamp),
+		}
+
+		if e.Session != nil {
+			view.SessionID = string(e.Session.ID)
+			view.SessionSummary = e.Session.Summary
+			view.SessionType = e.Session.SessionType
+			view.SessionMessages = e.Session.MessageCount
+			view.SessionTokens = e.Session.TotalTokens
+			view.SessionProvider = string(e.Session.Provider)
+		}
+
+		if e.Objective != nil {
+			view.Intent = e.Objective.Summary.Intent
+			view.Outcome = e.Objective.Summary.Outcome
+			view.ExplainShort = e.Objective.ExplainShort
+		}
+
+		if e.Commit != nil {
+			view.CommitSHA = e.Commit.ShortSHA
+			view.CommitMessage = e.Commit.Message
+			view.CommitAuthor = e.Commit.Author
+		}
+
+		view.LinkedSessionID = string(e.LinkedSessionID)
+		data.Entries = append(data.Entries, view)
+	}
+	data.HasEntries = len(data.Entries) > 0
+
+	s.render(w, "branch_timeline.html", data)
+}
+
+// timeAgoString converts a timestamp to a human-readable "X ago" string.
+func timeAgoString(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+// ── Token Usage ──
+
+type usagePage struct {
+	Nav           string
+	HasData       bool
+	Projects      []projectItem
+	Hours         []string
+	HeatmapRows   []heatmapRow
+	BarChartData  []barChartBar
+	PeakHour      int
+	NightTokens   int
+	DayTokens     int
+	EveningTokens int
+	NightPct      int
+	DayPct        int
+	EveningPct    int
+
+	// Breakdown by time of day
+	NightToolCalls    int
+	DayToolCalls      int
+	EveningToolCalls  int
+	NightImages       int
+	DayImages         int
+	EveningImages     int
+	NightUserMsgs     int
+	DayUserMsgs       int
+	EveningUserMsgs   int
+	NightAssistMsgs   int
+	DayAssistMsgs     int
+	EveningAssistMsgs int
+	TotalToolCalls    int
+	TotalImages       int
+}
+
+type heatmapRow struct {
+	DayLabel string
+	Cells    []heatmapCell
+}
+
+type heatmapCell struct {
+	Color string
+	Label string
+}
+
+type barChartBar struct {
+	Hour      string
+	HeightPct int
+	Label     string
+}
+
+// ── Analytics (combined view) ──
+
+type analyticsPage struct {
+	Nav            string
+	TotalSessions  int
+	TotalTokens    int
+	TotalCost      float64
+	TotalToolCalls int
+	TotalErrors    int
+	BillingType    string
+}
+
+func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
+	data := analyticsPage{Nav: "analytics"}
+
+	stats, err := s.cachedStats(service.StatsRequest{All: true})
+	if err == nil {
+		data.TotalSessions = stats.TotalSessions
+		data.TotalTokens = stats.TotalTokens
+		data.TotalCost = stats.TotalCost
+		data.BillingType = stats.BillingType
+	}
+
+	s.render(w, "analytics.html", data)
+}
+
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	data := usagePage{Nav: "usage"}
+	data.Hours = make([]string, 24)
+	for i := 0; i < 24; i++ {
+		data.Hours[i] = fmt.Sprintf("%d", i)
+	}
+
+	now := time.Now()
+	since := now.AddDate(0, 0, -7)
+	buckets, err := s.sessionSvc.QueryTokenUsage(r.Context(), service.QueryTokenUsageRequest{
+		Granularity: "1h",
+		Since:       since,
+		Until:       now,
+		ProjectPath: project,
+	})
+	if err != nil || len(buckets) == 0 {
+		s.render(w, "usage.html", data)
+		return
+	}
+
+	data.HasData = true
+
+	type dayHour struct{ day, hour int }
+	cells := make(map[dayHour]int)
+	var maxTokens int
+
+	for _, b := range buckets {
+		daysAgo := int(now.Sub(b.BucketStart).Hours() / 24)
+		if daysAgo < 0 || daysAgo > 6 {
+			continue
+		}
+		hour := b.BucketStart.Hour()
+		key := dayHour{day: daysAgo, hour: hour}
+		total := b.InputTokens + b.OutputTokens
+		cells[key] += total
+		if cells[key] > maxTokens {
+			maxTokens = cells[key]
+		}
+	}
+
+	dayNames := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+	for d := 6; d >= 0; d-- {
+		day := now.AddDate(0, 0, -d)
+		row := heatmapRow{DayLabel: dayNames[day.Weekday()], Cells: make([]heatmapCell, 24)}
+		for h := 0; h < 24; h++ {
+			tokens := cells[dayHour{day: d, hour: h}]
+			intensity := 0.0
+			if maxTokens > 0 {
+				intensity = float64(tokens) / float64(maxTokens)
+			}
+			row.Cells[h] = heatmapCell{
+				Color: heatmapColor(intensity),
+				Label: fmt.Sprintf("%s %02d:00 — %s tokens", dayNames[day.Weekday()], h, formatTokensInt(tokens)),
+			}
+		}
+		data.HeatmapRows = append(data.HeatmapRows, row)
+	}
+
+	hourlyTotals := make([]int, 24)
+	for _, b := range buckets {
+		hourlyTotals[b.BucketStart.Hour()] += b.InputTokens + b.OutputTokens
+	}
+	maxHourly := 1
+	for _, t := range hourlyTotals {
+		if avg := t / 7; avg > maxHourly {
+			maxHourly = avg
+		}
+	}
+
+	var peakHour, totalAll, nightTotal, dayTotal, eveningTotal int
+	for h := 0; h < 24; h++ {
+		avg := hourlyTotals[h] / 7
+		pct := 0
+		if maxHourly > 0 {
+			pct = avg * 100 / maxHourly
+		}
+		data.BarChartData = append(data.BarChartData, barChartBar{
+			Hour:      fmt.Sprintf("%d", h),
+			HeightPct: pct,
+			Label:     fmt.Sprintf("%02d:00 avg: %s tokens", h, formatTokensInt(avg)),
+		})
+		totalAll += hourlyTotals[h]
+		if h < 6 {
+			nightTotal += hourlyTotals[h]
+		} else if h < 18 {
+			dayTotal += hourlyTotals[h]
+		} else {
+			eveningTotal += hourlyTotals[h]
+		}
+		if hourlyTotals[h] > hourlyTotals[peakHour] {
+			peakHour = h
+		}
+	}
+
+	data.PeakHour = peakHour
+	data.NightTokens = nightTotal
+	data.DayTokens = dayTotal
+	data.EveningTokens = eveningTotal
+	if totalAll > 0 {
+		data.NightPct = nightTotal * 100 / totalAll
+		data.DayPct = dayTotal * 100 / totalAll
+		data.EveningPct = eveningTotal * 100 / totalAll
+	}
+
+	// Aggregate tool calls, images, messages by time of day.
+	for _, b := range buckets {
+		h := b.BucketStart.Hour()
+		data.TotalToolCalls += b.ToolCallCount
+		data.TotalImages += b.ImageCount
+		if h < 6 {
+			data.NightToolCalls += b.ToolCallCount
+			data.NightImages += b.ImageCount
+			data.NightUserMsgs += b.UserMsgCount
+			data.NightAssistMsgs += b.AssistMsgCount
+		} else if h < 18 {
+			data.DayToolCalls += b.ToolCallCount
+			data.DayImages += b.ImageCount
+			data.DayUserMsgs += b.UserMsgCount
+			data.DayAssistMsgs += b.AssistMsgCount
+		} else {
+			data.EveningToolCalls += b.ToolCallCount
+			data.EveningImages += b.ImageCount
+			data.EveningUserMsgs += b.UserMsgCount
+			data.EveningAssistMsgs += b.AssistMsgCount
+		}
+	}
+
+	s.render(w, "usage.html", data)
+}
+
+func heatmapColor(intensity float64) string {
+	if intensity <= 0 {
+		return "var(--bg-card)"
+	}
+	if intensity < 0.25 {
+		return "rgba(108,126,225,0.2)"
+	}
+	if intensity < 0.5 {
+		return "rgba(108,126,225,0.4)"
+	}
+	if intensity < 0.75 {
+		return "rgba(108,126,225,0.6)"
+	}
+	return "rgba(108,126,225,0.9)"
+}
+
+func formatTokensInt(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 // slugify converts a branch name like "feature/my-branch" to "feature-my-branch".
@@ -368,7 +1570,11 @@ type branchCostEntry struct {
 type costDashboardPage struct {
 	Nav           string
 	HasData       bool
-	TotalCost     float64
+	Projects      []projectItem
+	TotalCost     float64 // API-equivalent cost
+	ActualCost    float64 // actual cost from providers
+	Savings       float64 // TotalCost - ActualCost
+	BillingType   string  // "subscription", "api", "mixed"
 	TotalSessions int
 	AvgPerSession float64
 
@@ -392,15 +1598,17 @@ type costDashboardPage struct {
 
 // handleCosts renders the cost dashboard.
 func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
-	data := s.buildCostsData(r.Context())
+	data := s.buildCostsData(r)
 	s.render(w, "cost_dashboard.html", data)
 }
 
-func (s *Server) buildCostsData(ctx context.Context) costDashboardPage {
-	data := costDashboardPage{Nav: "costs"}
+func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
+	project := r.URL.Query().Get("project")
+	data := costDashboardPage{Nav: "costs", Projects: s.buildProjectList(project)}
 
-	// Stats for totals + per-branch.
-	stats, err := s.sessionSvc.Stats(service.StatsRequest{All: true})
+	// Stats for totals + per-branch (cached).
+	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
+	stats, err := s.cachedStats(statsReq)
 	if err != nil {
 		s.logger.Printf("costs stats error: %v", err)
 		return data
@@ -412,6 +1620,9 @@ func (s *Server) buildCostsData(ctx context.Context) costDashboardPage {
 
 	data.HasData = true
 	data.TotalCost = stats.TotalCost
+	data.ActualCost = stats.ActualCost
+	data.Savings = stats.Savings
+	data.BillingType = stats.BillingType
 	data.TotalSessions = stats.TotalSessions
 	if stats.TotalSessions > 0 {
 		data.AvgPerSession = stats.TotalCost / float64(stats.TotalSessions)
@@ -431,8 +1642,8 @@ func (s *Server) buildCostsData(ctx context.Context) costDashboardPage {
 		})
 	}
 
-	// Forecast for trend + model breakdown + time buckets.
-	forecast, fErr := s.sessionSvc.Forecast(ctx, service.ForecastRequest{
+	// Forecast for trend + model breakdown + time buckets (cached).
+	forecast, fErr := s.cachedForecast(r.Context(), service.ForecastRequest{
 		Period: "weekly",
 		Days:   90,
 	})
@@ -476,4 +1687,196 @@ func (s *Server) buildCostsData(ctx context.Context) costDashboardPage {
 	}
 
 	return data
+}
+
+// capabilityKindLabel returns a human-friendly label for a capability kind.
+func capabilityKindLabel(kind string) string {
+	switch registry.CapabilityKind(kind) {
+	case registry.KindAgent:
+		return "Agents"
+	case registry.KindCommand:
+		return "Commands"
+	case registry.KindSkill:
+		return "Skills"
+	case registry.KindTool:
+		return "Tools"
+	case registry.KindPlugin:
+		return "Plugins"
+	default:
+		if len(kind) == 0 {
+			return "Unknown"
+		}
+		return strings.ToUpper(kind[:1]) + kind[1:] + "s"
+	}
+}
+
+// capabilityKindIcon returns an emoji/symbol for a capability kind.
+func capabilityKindIcon(kind string) string {
+	switch registry.CapabilityKind(kind) {
+	case registry.KindAgent:
+		return "A"
+	case registry.KindCommand:
+		return "C"
+	case registry.KindSkill:
+		return "S"
+	case registry.KindTool:
+		return "T"
+	case registry.KindPlugin:
+		return "P"
+	default:
+		return "?"
+	}
+}
+
+// projectBaseName returns just the basename from a project path.
+func projectBaseName(path string) string {
+	return filepath.Base(path)
+}
+
+// ── Analysis ──
+
+// analysisPartialData is the data structure for the analysis HTMX partial.
+type analysisPartialData struct {
+	SessionID   string
+	HasAnalysis bool
+	CanAnalyze  bool
+	Analysis    *analysisView
+}
+
+// handleAnalysisPartial renders the analysis section partial (HTMX GET).
+func (s *Server) handleAnalysisPartial(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	data := analysisPartialData{SessionID: id}
+
+	if s.analysisSvc != nil {
+		data.CanAnalyze = true
+		sa, err := s.analysisSvc.GetLatestAnalysis(id)
+		if err == nil && sa != nil {
+			data.HasAnalysis = true
+			data.Analysis = buildAnalysisView(sa)
+		}
+	}
+
+	s.renderPartial(w, "analysis_partial", data)
+}
+
+// handleRunAnalysis triggers a manual analysis and returns the updated partial (HTMX POST).
+func (s *Server) handleRunAnalysis(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	if s.analysisSvc == nil {
+		http.Error(w, "Analysis not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Run analysis synchronously — the UI shows a spinner via htmx-indicator.
+	_, err := s.analysisSvc.Analyze(r.Context(), service.AnalysisRequest{
+		SessionID: session.ID(id),
+		Trigger:   analysis.TriggerManual,
+	})
+	if err != nil {
+		s.logger.Printf("analysis for %s: %v", id, err)
+		// Even on error, the analysis entity is persisted (with error field set).
+		// Fall through to render whatever is stored.
+	}
+
+	// Return the updated partial.
+	data := analysisPartialData{
+		SessionID:  id,
+		CanAnalyze: true,
+	}
+	sa, aErr := s.analysisSvc.GetLatestAnalysis(id)
+	if aErr == nil && sa != nil {
+		data.HasAnalysis = true
+		data.Analysis = buildAnalysisView(sa)
+	}
+
+	s.renderPartial(w, "analysis_partial", data)
+}
+
+// buildAnalysisView converts a domain SessionAnalysis to a template-friendly view.
+func buildAnalysisView(sa *analysis.SessionAnalysis) *analysisView {
+	v := &analysisView{
+		ID:         sa.ID,
+		Score:      sa.Report.Score,
+		ScoreClass: scoreClass(sa.Report.Score),
+		Summary:    sa.Report.Summary,
+		Trigger:    string(sa.Trigger),
+		Adapter:    string(sa.Adapter),
+		DurationMs: sa.DurationMs,
+		CreatedAt:  timeAgo(sa.CreatedAt),
+		Error:      sa.Error,
+	}
+
+	if len(sa.Report.Problems) > 0 {
+		v.HasProblems = true
+		for _, p := range sa.Report.Problems {
+			v.Problems = append(v.Problems, problemView{
+				Severity:      string(p.Severity),
+				SeverityClass: string(p.Severity), // "high", "medium", "low" map directly to CSS classes
+				Description:   p.Description,
+				ToolName:      p.ToolName,
+			})
+		}
+	}
+
+	if len(sa.Report.Recommendations) > 0 {
+		v.HasRecommendations = true
+		for _, rec := range sa.Report.Recommendations {
+			v.Recommendations = append(v.Recommendations, recommendationView{
+				Category:      string(rec.Category),
+				CategoryClass: string(rec.Category),
+				Title:         rec.Title,
+				Description:   rec.Description,
+				Priority:      rec.Priority,
+			})
+		}
+	}
+
+	if len(sa.Report.SkillSuggestions) > 0 {
+		v.HasSkills = true
+		for _, sk := range sa.Report.SkillSuggestions {
+			v.SkillSuggestions = append(v.SkillSuggestions, skillView{
+				Name:        sk.Name,
+				Description: sk.Description,
+				Trigger:     sk.Trigger,
+			})
+		}
+	}
+
+	if obs := sa.Report.SkillObservation; obs != nil {
+		if len(obs.Available)+len(obs.Recommended)+len(obs.Loaded)+len(obs.Missed)+len(obs.Discovered) > 0 {
+			v.HasSkillObservation = true
+			v.SkillsAvailable = obs.Available
+			v.SkillsRecommended = obs.Recommended
+			v.SkillsLoaded = obs.Loaded
+			v.SkillsMissed = obs.Missed
+			v.SkillsDiscovered = obs.Discovered
+			v.SkillMissedCount = len(obs.Missed)
+			v.SkillDiscoveredCount = len(obs.Discovered)
+		}
+	}
+
+	return v
+}
+
+// scoreClass returns a CSS class based on the analysis score.
+func scoreClass(score int) string {
+	switch {
+	case score >= 70:
+		return "good"
+	case score >= 40:
+		return "warning"
+	default:
+		return "poor"
+	}
 }

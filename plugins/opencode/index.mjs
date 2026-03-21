@@ -1,125 +1,136 @@
 /**
- * opencode-aisync — OpenCode plugin for automatic session capture.
+ * opencode-aisync — OpenCode plugin for automatic session capture & monitoring.
  *
- * Listens to OpenCode's event stream and triggers `aisync capture`
- * at the right moments:
- *
- *   - session.idle     → capture the full session (main trigger)
- *   - session.error    → capture immediately (session may not reach idle)
- *   - session.created  → log for diagnostics (no capture yet)
- *
- * The plugin is intentionally minimal: all analysis (error rates, cost,
- * token counts) happens post-capture inside aisync itself. The plugin's
- * only job is to trigger capture at the right moment with the right
- * session ID.
+ * Hooks into OpenCode's plugin API to provide:
+ *   - session.idle/error → capture
+ *   - chat.message → incremental capture + message tracking
+ *   - tool.execute.after → tool error detection
+ *   - session.compacting → re-capture before compaction
  *
  * Install:
  *   ln -s /path/to/aisync/plugins/opencode ~/.config/opencode/plugins/opencode-aisync
  *
  * Requires: `aisync` binary in PATH.
- *
- * @see https://opencode.ai/docs/plugins for the Plugin API
  */
 
-// Env config. AISYNC_CAPTURE_MODE defaults to "compact".
 const CAPTURE_MODE = process.env.AISYNC_CAPTURE_MODE || "compact";
 const DEBUG = Boolean(process.env.AISYNC_PLUGIN_DEBUG);
+const INCREMENTAL_INTERVAL = parseInt(process.env.AISYNC_INCREMENTAL_INTERVAL || "0", 10);
 
-/**
- * @param {import("@opencode-ai/plugin").PluginInput} ctx
- * @returns {Promise<import("@opencode-ai/plugin").Hooks>}
- */
 const AisyncPlugin = async (ctx) => {
   const { $, worktree } = ctx;
-
-  // Track which sessions we've already captured within this OpenCode process
-  // to avoid duplicate captures (idle can fire multiple times per session).
   const captured = new Set();
+  const messageCounters = new Map();
+  const toolErrors = new Map();
 
   const log = (msg) => {
     if (DEBUG) console.log(`[aisync] ${msg}`);
   };
 
-  /**
-   * Resolve the current git branch. Returns "" if not in a git repo.
-   */
   const currentBranch = async () => {
     try {
-      const result =
-        await $`git -C ${worktree} rev-parse --abbrev-ref HEAD 2>/dev/null`.text();
+      const result = await $`git -C ${worktree} rev-parse --abbrev-ref HEAD 2>/dev/null`.text();
       return result.trim();
     } catch {
       return "";
     }
   };
 
-  /**
-   * Run aisync capture for a specific session.
-   * Swallows all errors — capture failure must never break the agent.
-   */
-  const captureSession = async (sessionId) => {
+  const captureSession = async (sessionId, reason) => {
     if (!sessionId) return;
-    if (captured.has(sessionId)) {
-      log(`session ${sessionId} already captured, skipping`);
+    if (captured.has(sessionId) && reason !== "incremental" && reason !== "compacted") {
+      log(`session ${sessionId} already captured, skipping (reason=${reason || "duplicate"})`);
       return;
     }
 
     const branch = await currentBranch();
-    log(
-      `capturing session=${sessionId} branch=${branch || "(none)"} mode=${CAPTURE_MODE}`,
-    );
+    log(`capturing session=${sessionId} branch=${branch || "(none)"} mode=${CAPTURE_MODE} reason=${reason || "idle"}`);
 
     try {
       await $`aisync capture --provider opencode --session-id ${sessionId} --mode ${CAPTURE_MODE} --auto`;
       captured.add(sessionId);
       log(`capture complete: ${sessionId}`);
     } catch (err) {
-      // Never let capture failure affect the agent.
-      log(`capture failed: ${err.message || err}`);
+      log(`capture failed: ${err?.message || err}`);
     }
   };
 
   return {
-    /**
-     * The `event` hook receives ALL OpenCode events.
-     * We filter for session lifecycle events and dispatch accordingly.
-     *
-     * Event types we care about:
-     *   - session.created  → { properties: { info: { id } } }
-     *   - session.idle     → { properties: { sessionID } }
-     *   - session.error    → { properties: { sessionID, error } }
-     */
     event: async ({ event }) => {
       try {
         switch (event.type) {
           case "session.created": {
             const sessionId = event.properties?.info?.id;
             const branch = await currentBranch();
-            log(
-              `session started: ${sessionId || "unknown"} on branch=${branch || "(none)"}`,
-            );
+            log(`session started: ${sessionId || "unknown"} on branch=${branch || "(none)"}`);
+            if (sessionId) {
+              messageCounters.set(sessionId, 0);
+              toolErrors.set(sessionId, 0);
+            }
             break;
           }
-
           case "session.idle": {
             const sessionId = event.properties?.sessionID;
-            await captureSession(sessionId);
+            await captureSession(sessionId, "idle");
             break;
           }
-
           case "session.error": {
             const sessionId = event.properties?.sessionID;
             const error = event.properties?.error;
-            log(
-              `session error: ${sessionId || "unknown"} — ${error?.message || JSON.stringify(error) || "unknown"}`,
-            );
-            await captureSession(sessionId);
+            log(`session error: ${sessionId || "unknown"} — ${error?.message || JSON.stringify(error) || "unknown"}`);
+            await captureSession(sessionId, "error");
             break;
           }
         }
       } catch (err) {
-        // Absolute safety net — never crash the agent.
-        log(`event handler error: ${err.message || err}`);
+        log(`event handler error: ${err?.message || err}`);
+      }
+    },
+
+    "chat.message": async (input, output) => {
+      try {
+        const { sessionID } = input;
+        if (!sessionID) return;
+
+        const count = (messageCounters.get(sessionID) || 0) + 1;
+        messageCounters.set(sessionID, count);
+        log(`message #${count} in session ${sessionID}`);
+
+        if (INCREMENTAL_INTERVAL > 0 && count % INCREMENTAL_INTERVAL === 0) {
+          log(`incremental capture at message #${count}`);
+          await captureSession(sessionID, "incremental");
+        }
+      } catch (err) {
+        log(`chat.message handler error: ${err?.message || err}`);
+      }
+    },
+
+    "tool.execute.after": async (input, output) => {
+      try {
+        const { tool, sessionID } = input;
+        const isError =
+          output.title?.toLowerCase().includes("error") ||
+          output.title?.toLowerCase().includes("failed") ||
+          output.output?.startsWith("Error:") ||
+          output.output?.startsWith("error:");
+
+        if (isError) {
+          const errors = (toolErrors.get(sessionID) || 0) + 1;
+          toolErrors.set(sessionID, errors);
+          log(`tool error in session ${sessionID}: ${tool} (${errors} total errors)`);
+        }
+      } catch (err) {
+        log(`tool.execute.after handler error: ${err?.message || err}`);
+      }
+    },
+
+    "experimental.session.compacting": async (input, output) => {
+      try {
+        const { sessionID } = input;
+        log(`session compacting: ${sessionID} — re-capturing before compaction`);
+        await captureSession(sessionID, "compacted");
+      } catch (err) {
+        log(`compacting handler error: ${err?.message || err}`);
       }
     },
   };

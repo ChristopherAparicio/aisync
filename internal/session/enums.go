@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -17,12 +18,16 @@ const (
 	ProviderClaudeCode ProviderName = "claude-code"
 	ProviderOpenCode   ProviderName = "opencode"
 	ProviderCursor     ProviderName = "cursor"
+	ProviderParlay     ProviderName = "parlay"
+	ProviderOllama     ProviderName = "ollama"
 )
 
 var allProviders = []ProviderName{
 	ProviderClaudeCode,
 	ProviderOpenCode,
 	ProviderCursor,
+	ProviderParlay,
+	ProviderOllama,
 }
 
 // Valid reports whether p is a known provider name.
@@ -47,6 +52,49 @@ func ParseProviderName(s string) (ProviderName, error) {
 // String returns the string representation.
 func (p ProviderName) String() string {
 	return string(p)
+}
+
+// ── SessionStatus ──
+
+// SessionStatus represents the lifecycle state of a session.
+type SessionStatus string
+
+const (
+	// StatusActive means the session is currently being worked on
+	// (source updated within the last hour).
+	StatusActive SessionStatus = "active"
+
+	// StatusIdle means the session has no recent updates
+	// (last update between 1h and 7d ago).
+	StatusIdle SessionStatus = "idle"
+
+	// StatusArchived means the session has not been updated for a long time
+	// (last update > 7 days ago).
+	StatusArchived SessionStatus = "archived"
+)
+
+// DetectSessionStatus determines the status based on the source update time.
+// This is a heuristic — neither OpenCode nor Claude track session lifecycle state.
+func DetectSessionStatus(sourceUpdatedAt int64, lastCaptured time.Time) SessionStatus {
+	// Use the most recent timestamp available.
+	var lastActivity time.Time
+	if sourceUpdatedAt > 0 {
+		lastActivity = time.UnixMilli(sourceUpdatedAt)
+	} else if !lastCaptured.IsZero() {
+		lastActivity = lastCaptured
+	} else {
+		return StatusArchived
+	}
+
+	age := time.Since(lastActivity)
+	switch {
+	case age < 1*time.Hour:
+		return StatusActive
+	case age < 7*24*time.Hour:
+		return StatusIdle
+	default:
+		return StatusArchived
+	}
 }
 
 // ── StorageMode ──
@@ -261,6 +309,72 @@ func (l LinkType) String() string {
 	return string(l)
 }
 
+// ── SessionLinkType ──
+
+// SessionLinkType describes how two sessions are related.
+type SessionLinkType string
+
+// Known session-to-session link types.
+const (
+	SessionLinkDelegatedTo   SessionLinkType = "delegated_to"   // this session delegated work to the target
+	SessionLinkDelegatedFrom SessionLinkType = "delegated_from" // this session was delegated from the source
+	SessionLinkRelated       SessionLinkType = "related"        // generic relationship
+	SessionLinkContinuation  SessionLinkType = "continuation"   // target continues the work of source
+	SessionLinkFollowUp      SessionLinkType = "follow_up"      // target is a follow-up to source
+	SessionLinkReplayOf      SessionLinkType = "replay_of"      // this session is a replay of the source
+)
+
+var allSessionLinkTypes = []SessionLinkType{
+	SessionLinkDelegatedTo,
+	SessionLinkDelegatedFrom,
+	SessionLinkRelated,
+	SessionLinkContinuation,
+	SessionLinkFollowUp,
+	SessionLinkReplayOf,
+}
+
+// Valid reports whether l is a known session link type.
+func (l SessionLinkType) Valid() bool {
+	for _, v := range allSessionLinkTypes {
+		if l == v {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseSessionLinkType converts a raw string to a validated SessionLinkType.
+func ParseSessionLinkType(s string) (SessionLinkType, error) {
+	l := SessionLinkType(strings.ToLower(strings.TrimSpace(s)))
+	if !l.Valid() {
+		return "", fmt.Errorf("unknown session link type %q: valid values are %v", s, allSessionLinkTypes)
+	}
+	return l, nil
+}
+
+// String returns the string representation.
+func (l SessionLinkType) String() string {
+	return string(l)
+}
+
+// Inverse returns the complementary link type for bidirectional linking.
+// For example, DelegatedTo → DelegatedFrom and vice versa.
+// Returns the same type for symmetric relationships (Related).
+func (l SessionLinkType) Inverse() SessionLinkType {
+	switch l {
+	case SessionLinkDelegatedTo:
+		return SessionLinkDelegatedFrom
+	case SessionLinkDelegatedFrom:
+		return SessionLinkDelegatedTo
+	case SessionLinkContinuation:
+		return SessionLinkFollowUp
+	case SessionLinkFollowUp:
+		return SessionLinkContinuation
+	default:
+		return l // symmetric
+	}
+}
+
 // ── ToolState ──
 
 // ToolState represents the lifecycle state of a tool call.
@@ -345,6 +459,53 @@ func ParsePlatformName(s string) (PlatformName, error) {
 // String returns the string representation.
 func (p PlatformName) String() string {
 	return string(p)
+}
+
+// ── SessionType ──
+
+// DefaultSessionTypes is the built-in list of session classification tags.
+var DefaultSessionTypes = []string{
+	"feature",
+	"bug",
+	"refactor",
+	"exploration",
+	"review",
+	"devops",
+	"other",
+}
+
+// ValidSessionType reports whether t is a known default session type.
+func ValidSessionType(t string) bool {
+	for _, st := range DefaultSessionTypes {
+		if st == t {
+			return true
+		}
+	}
+	return false
+}
+
+// ── ProjectCategory ──
+
+// DefaultProjectCategories is the built-in list of project classification categories.
+var DefaultProjectCategories = []string{
+	"backend",
+	"frontend",
+	"fullstack",
+	"ops",
+	"data",
+	"mobile",
+	"library",
+	"docs",
+}
+
+// ValidProjectCategory reports whether c is a known default project category.
+func ValidProjectCategory(c string) bool {
+	for _, pc := range DefaultProjectCategories {
+		if pc == c {
+			return true
+		}
+	}
+	return false
 }
 
 // ── ID ──

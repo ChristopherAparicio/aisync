@@ -72,8 +72,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // ── Middleware ──
 
 // withMiddleware wraps the mux with common middleware.
+// Order: logging → auth → handler
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
-	return s.loggingMiddleware(next)
+	return s.loggingMiddleware(s.authMiddleware(next))
 }
 
 // loggingMiddleware logs each request with method, path, status, and duration.

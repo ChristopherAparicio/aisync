@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
@@ -47,43 +46,12 @@ func (m *mockProvider) Export(_ session.ID, _ session.StorageMode) (*session.Ses
 func (m *mockProvider) CanImport() bool                 { return false }
 func (m *mockProvider) Import(_ *session.Session) error { return session.ErrImportNotSupported }
 
-// mockStore saves sessions in memory.
-type mockStore struct {
-	saved []*session.Session
-}
-
-func (m *mockStore) Save(s *session.Session) error { m.saved = append(m.saved, s); return nil }
-func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error)                { return 0, nil }
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
-func (m *mockStore) Delete(_ session.ID) error                             { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error            { return nil }
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error)       { return 0, nil }
-func (m *mockStore) Close() error                                   { return nil }
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
-
-func testFactory(t *testing.T, prov *mockProvider) (*cmdutil.Factory, *iostreams.IOStreams, *mockStore) {
+func testFactory(t *testing.T, prov *mockProvider) (*cmdutil.Factory, *iostreams.IOStreams, *testutil.MockStore) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 	gitClient := git.NewClient(repoDir)
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 
 	registry := provider.NewRegistry()
 	if prov != nil {
@@ -99,7 +67,7 @@ func testFactory(t *testing.T, prov *mockProvider) (*cmdutil.Factory, *iostreams
 		RegistryFunc: func() *provider.Registry {
 			return registry
 		},
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store:    store,
 				Registry: registry,
@@ -137,8 +105,8 @@ func TestCapture_success(t *testing.T) {
 		t.Error("expected provider name in output")
 	}
 
-	if len(store.saved) != 1 {
-		t.Fatalf("expected 1 saved session, got %d", len(store.saved))
+	if store.SaveCount != 1 {
+		t.Fatalf("expected 1 saved session, got %d", store.SaveCount)
 	}
 }
 
@@ -161,11 +129,11 @@ func TestCapture_withMessage(t *testing.T) {
 		t.Fatalf("runCapture() error = %v", err)
 	}
 
-	if len(store.saved) != 1 {
+	if store.SaveCount != 1 {
 		t.Fatal("expected 1 saved session")
 	}
-	if store.saved[0].Summary != "Custom summary" {
-		t.Errorf("Summary = %q, want 'Custom summary'", store.saved[0].Summary)
+	if store.LastSaved.Summary != "Custom summary" {
+		t.Errorf("Summary = %q, want 'Custom summary'", store.LastSaved.Summary)
 	}
 }
 

@@ -9,14 +9,26 @@ import (
 // templateFuncs returns the FuncMap used by all web templates.
 func templateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"formatTokens":   formatTokens,
-		"formatCost":     formatCost,
-		"formatDuration": formatDuration,
-		"timeAgo":        timeAgo,
-		"truncate":       truncate,
-		"pct":            pct,
-		"add":            func(a, b int) int { return a + b },
-		"sub":            func(a, b int) int { return a - b },
+		"formatTokens":     formatTokens,
+		"formatCost":       formatCost,
+		"formatDuration":   formatDuration,
+		"timeAgo":          timeAgo,
+		"truncate":         truncate,
+		"pct":              pct,
+		"add":              func(a, b int) int { return a + b },
+		"sub":              func(a, b int) int { return a - b },
+		"kindLabel":        capabilityKindLabel,
+		"kindIcon":         capabilityKindIcon,
+		"projectBaseName":  projectBaseName,
+		"formatPercentage": formatPercentage,
+		"absInt":           absInt,
+		"toFloat":          func(n int) float64 { return float64(n) },
+		"divFloat": func(a, b float64) float64 {
+			if b == 0 {
+				return 0
+			}
+			return a / b
+		},
 	}
 }
 
@@ -106,4 +118,21 @@ func formatDuration(ms int) string {
 
 func pct(fraction float64) string {
 	return fmt.Sprintf("%.1f%%", fraction)
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+func formatPercentage(v float64) string {
+	if v == 0 {
+		return "0%"
+	}
+	if v < 1 {
+		return fmt.Sprintf("%.1f%%", v)
+	}
+	return fmt.Sprintf("%.0f%%", v)
 }

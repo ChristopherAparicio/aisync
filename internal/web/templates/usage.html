@@ -1,0 +1,176 @@
+{{define "usage.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Token Usage — aisync{{end}}
+
+{{define "content"}}
+<h1 class="page-title">Token Usage</h1>
+
+{{if .Projects}}
+<div class="filter-bar" style="margin-bottom:1rem">
+  <select class="filter-select" onchange="if(this.value){location.href='/usage?project='+encodeURIComponent(this.value)}else{location.href='/usage'}">
+    <option value="">All projects</option>
+    {{range .Projects}}
+    <option value="{{.Path}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+    {{end}}
+  </select>
+</div>
+{{end}}
+
+{{if not .HasData}}
+<div class="empty-state">
+  <p>No usage data available yet.</p>
+  <p class="hint">Usage data is computed nightly. Run <code>aisync usage compute</code> for an immediate scan.</p>
+</div>
+{{else}}
+
+<!-- View Toggle -->
+<div class="usage-toggle">
+  <button class="usage-btn active" onclick="showView('heatmap', this)">Heatmap</button>
+  <button class="usage-btn" onclick="showView('barchart', this)">Bar Chart</button>
+</div>
+
+<!-- Heatmap View -->
+<div id="view-heatmap" class="section">
+  <h2 class="section-title">Weekly Heatmap <span class="text-muted">(last 7 days, hourly)</span></h2>
+  <div class="heatmap-container">
+    <div class="heatmap-labels">
+      <div class="heatmap-label"></div>
+      {{range .Hours}}<div class="heatmap-hour-label">{{.}}</div>{{end}}
+    </div>
+    {{range .HeatmapRows}}
+    <div class="heatmap-row">
+      <div class="heatmap-day-label">{{.DayLabel}}</div>
+      {{range .Cells}}
+      <div class="heatmap-cell" style="background-color: {{.Color}}" title="{{.Label}}"></div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  <div class="heatmap-legend">
+    <span class="text-muted">Less</span>
+    <div class="heatmap-cell-legend" style="background:var(--bg-card)"></div>
+    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.2)"></div>
+    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.4)"></div>
+    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.6)"></div>
+    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.9)"></div>
+    <span class="text-muted">More</span>
+  </div>
+</div>
+
+<!-- Bar Chart View -->
+<div id="view-barchart" class="section" style="display:none">
+  <h2 class="section-title">Hourly Average <span class="text-muted">(tokens per hour of day)</span></h2>
+  <div class="barchart-container">
+    {{range .BarChartData}}
+    <div class="barchart-bar-wrap">
+      <div class="barchart-bar" style="height:{{.HeightPct}}%" title="{{.Label}}"></div>
+      <div class="barchart-hour">{{.Hour}}</div>
+    </div>
+    {{end}}
+  </div>
+</div>
+
+<!-- Summary Stats -->
+<div class="section">
+  <h2 class="section-title">Summary</h2>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Peak Hour</div>
+      <div class="value">{{.PeakHour}}:00</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Night Usage (0-6h)</div>
+      <div class="value">{{formatTokens .NightTokens}}</div>
+      <div class="sub text-muted">{{.NightPct}}% of total</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Day Usage (6-18h)</div>
+      <div class="value">{{formatTokens .DayTokens}}</div>
+      <div class="sub text-muted">{{.DayPct}}% of total</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Evening Usage (18-0h)</div>
+      <div class="value">{{formatTokens .EveningTokens}}</div>
+      <div class="sub text-muted">{{.EveningPct}}% of total</div>
+    </div>
+  </div>
+</div>
+
+<!-- Detailed Breakdown: Night vs Day vs Evening -->
+<div class="section">
+  <h2 class="section-title">Activity Breakdown <span class="text-muted">(night vs day vs evening)</span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th class="text-right">Night (0-6h)</th>
+          <th class="text-right">Day (6-18h)</th>
+          <th class="text-right">Evening (18-0h)</th>
+          <th class="text-right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Tokens</td>
+          <td class="text-right font-mono">{{formatTokens .NightTokens}}</td>
+          <td class="text-right font-mono">{{formatTokens .DayTokens}}</td>
+          <td class="text-right font-mono">{{formatTokens .EveningTokens}}</td>
+          <td class="text-right font-mono">{{formatTokens (add .NightTokens (add .DayTokens .EveningTokens))}}</td>
+        </tr>
+        <tr>
+          <td>Tool Calls</td>
+          <td class="text-right font-mono">{{.NightToolCalls}}</td>
+          <td class="text-right font-mono">{{.DayToolCalls}}</td>
+          <td class="text-right font-mono">{{.EveningToolCalls}}</td>
+          <td class="text-right font-mono">{{.TotalToolCalls}}</td>
+        </tr>
+        <tr>
+          <td>Images</td>
+          <td class="text-right font-mono">{{.NightImages}}</td>
+          <td class="text-right font-mono">{{.DayImages}}</td>
+          <td class="text-right font-mono">{{.EveningImages}}</td>
+          <td class="text-right font-mono">{{.TotalImages}}</td>
+        </tr>
+        <tr>
+          <td>User Messages</td>
+          <td class="text-right font-mono">{{.NightUserMsgs}}</td>
+          <td class="text-right font-mono">{{.DayUserMsgs}}</td>
+          <td class="text-right font-mono">{{.EveningUserMsgs}}</td>
+          <td class="text-right font-mono">{{add .NightUserMsgs (add .DayUserMsgs .EveningUserMsgs)}}</td>
+        </tr>
+        <tr>
+          <td>Assistant Messages</td>
+          <td class="text-right font-mono">{{.NightAssistMsgs}}</td>
+          <td class="text-right font-mono">{{.DayAssistMsgs}}</td>
+          <td class="text-right font-mono">{{.EveningAssistMsgs}}</td>
+          <td class="text-right font-mono">{{add .NightAssistMsgs (add .DayAssistMsgs .EveningAssistMsgs)}}</td>
+        </tr>
+        <tr>
+          <td>Human Interaction Ratio</td>
+          <td class="text-right font-mono">{{if .NightAssistMsgs}}{{printf "%.1f" (divFloat (toFloat .NightUserMsgs) (toFloat .NightAssistMsgs))}}:1{{else}}—{{end}}</td>
+          <td class="text-right font-mono">{{if .DayAssistMsgs}}{{printf "%.1f" (divFloat (toFloat .DayUserMsgs) (toFloat .DayAssistMsgs))}}:1{{else}}—{{end}}</td>
+          <td class="text-right font-mono">{{if .EveningAssistMsgs}}{{printf "%.1f" (divFloat (toFloat .EveningUserMsgs) (toFloat .EveningAssistMsgs))}}:1{{else}}—{{end}}</td>
+          <td class="text-right text-muted">user:assistant</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="hint text-muted" style="margin-top:0.5rem;font-size:0.75rem;">
+    A low human interaction ratio (e.g. 0.1:1) indicates autonomous agent activity. A higher ratio (e.g. 1:5) indicates interactive human+AI collaboration.
+  </div>
+</div>
+
+{{end}}
+
+<script>
+function showView(view, btn) {
+  document.getElementById('view-heatmap').style.display = view === 'heatmap' ? '' : 'none';
+  document.getElementById('view-barchart').style.display = view === 'barchart' ? '' : 'none';
+  document.querySelectorAll('.usage-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+{{end}}

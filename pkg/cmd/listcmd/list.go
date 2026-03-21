@@ -4,10 +4,14 @@ package listcmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
@@ -24,6 +28,9 @@ type Options struct {
 	Tree     bool
 	OffTopic bool
 	PRFlag   int
+	User     string // filter by owner ID
+	Me       bool   // filter by current authenticated user
+	Similar  string // session ID to find similar sessions by file overlap
 }
 
 // NewCmdList creates the `aisync list` command.
@@ -47,6 +54,9 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().IntVar(&opts.PRFlag, "pr", 0, "List sessions linked to this PR number")
 	cmd.Flags().BoolVar(&opts.Tree, "tree", false, "Show sessions as a tree (grouped by parent/child forks)")
 	cmd.Flags().BoolVar(&opts.OffTopic, "off-topic", false, "Detect sessions with low file overlap on the current branch")
+	cmd.Flags().StringVar(&opts.User, "user", "", "Filter sessions by owner ID")
+	cmd.Flags().BoolVar(&opts.Me, "me", false, "Filter sessions by current authenticated user")
+	cmd.Flags().StringVar(&opts.Similar, "similar", "", "Find sessions with similar file changes to this session ID")
 
 	return cmd
 }
@@ -76,10 +86,21 @@ func runList(opts *Options) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
+	// Resolve --me to owner ID via auth token.
+	ownerID := opts.User
+	if opts.Me {
+		if resolved, meErr := resolveMe(opts.Factory); meErr == nil {
+			ownerID = resolved
+		} else {
+			return fmt.Errorf("--me requires authentication: %w", meErr)
+		}
+	}
+
 	// List sessions
 	summaries, err := svc.List(service.ListRequest{
 		ProjectPath: topLevel,
 		Branch:      branch,
+		OwnerID:     ownerID,
 		PRNumber:    opts.PRFlag,
 		All:         opts.All,
 	})
@@ -90,6 +111,11 @@ func runList(opts *Options) error {
 	// Off-topic detection mode.
 	if opts.OffTopic {
 		return runListOffTopic(opts, svc, topLevel, branch)
+	}
+
+	// Similar sessions mode.
+	if opts.Similar != "" {
+		return runListSimilar(opts, svc, topLevel)
 	}
 
 	// Tree mode: show sessions as parent/child tree.
@@ -137,7 +163,7 @@ func runList(opts *Options) error {
 	return nil
 }
 
-func runListOffTopic(opts *Options, svc *service.SessionService, projectPath, branch string) error {
+func runListOffTopic(opts *Options, svc service.SessionServicer, projectPath, branch string) error {
 	out := opts.IO.Out
 
 	result, err := svc.DetectOffTopic(context.Background(), service.OffTopicRequest{
@@ -197,7 +223,121 @@ func runListOffTopic(opts *Options, svc *service.SessionService, projectPath, br
 	return nil
 }
 
-func runListTree(opts *Options, svc *service.SessionService, projectPath, branch string) error {
+// similarEntry holds a session with its computed similarity score.
+type similarEntry struct {
+	ID         session.ID
+	Provider   session.ProviderName
+	Similarity float64
+	Summary    string
+}
+
+func runListSimilar(opts *Options, svc service.SessionServicer, projectPath string) error {
+	out := opts.IO.Out
+
+	// Get the target session's file set.
+	target, err := svc.Get(opts.Similar)
+	if err != nil {
+		return fmt.Errorf("session %q not found: %w", opts.Similar, err)
+	}
+
+	targetFiles := make(map[string]bool, len(target.FileChanges))
+	for _, fc := range target.FileChanges {
+		targetFiles[fc.FilePath] = true
+	}
+
+	if len(targetFiles) == 0 {
+		fmt.Fprintf(out, "Session %s has no file changes — cannot compute similarity.\n", truncate(opts.Similar, 12))
+		return nil
+	}
+
+	// Get all sessions.
+	summaries, err := svc.List(service.ListRequest{ProjectPath: projectPath, All: true})
+	if err != nil {
+		return err
+	}
+
+	// Compute Jaccard similarity for each session.
+	var results []similarEntry
+	for _, sm := range summaries {
+		if sm.ID == target.ID {
+			continue // skip self
+		}
+		sess, getErr := svc.Get(string(sm.ID))
+		if getErr != nil {
+			continue
+		}
+
+		otherFiles := make(map[string]bool, len(sess.FileChanges))
+		for _, fc := range sess.FileChanges {
+			otherFiles[fc.FilePath] = true
+		}
+		if len(otherFiles) == 0 {
+			continue
+		}
+
+		// Jaccard = |intersection| / |union|
+		var intersection int
+		union := make(map[string]bool)
+		for f := range targetFiles {
+			union[f] = true
+			if otherFiles[f] {
+				intersection++
+			}
+		}
+		for f := range otherFiles {
+			union[f] = true
+		}
+
+		similarity := float64(intersection) / float64(len(union))
+		if similarity > 0 {
+			results = append(results, similarEntry{
+				ID:         sm.ID,
+				Provider:   sm.Provider,
+				Similarity: similarity,
+				Summary:    sm.Summary,
+			})
+		}
+	}
+
+	// Sort by similarity descending.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Similarity > results[j].Similarity
+	})
+
+	// Cap at 10.
+	if len(results) > 10 {
+		results = results[:10]
+	}
+
+	if len(results) == 0 {
+		fmt.Fprintf(out, "No similar sessions found for %s.\n", truncate(opts.Similar, 12))
+		return nil
+	}
+
+	fmt.Fprintf(out, "Sessions similar to %s (%d files):\n\n",
+		truncate(opts.Similar, 12), len(targetFiles))
+	fmt.Fprintf(out, "%-12s  %-12s  %10s  %s\n", "ID", "PROVIDER", "SIMILARITY", "SUMMARY")
+	fmt.Fprintf(out, "%-12s  %-12s  %10s  %s\n", "----", "--------", "----------", "-------")
+
+	for _, r := range results {
+		summary := r.Summary
+		if summary == "" {
+			summary = "(no summary)"
+		}
+		if len(summary) > 40 {
+			summary = summary[:37] + "..."
+		}
+		fmt.Fprintf(out, "%-12s  %-12s  %9.0f%%  %s\n",
+			truncate(string(r.ID), 12),
+			truncate(string(r.Provider), 12),
+			r.Similarity*100,
+			summary)
+	}
+
+	return nil
+}
+
+func runListTree(opts *Options, svc service.SessionServicer, projectPath, branch string) error {
 	out := opts.IO.Out
 
 	tree, err := svc.ListTree(context.Background(), service.ListRequest{
@@ -313,3 +453,17 @@ func timeAgo(t time.Time) string {
 
 // Summary aliases session.Summary for test accessibility within this package.
 type Summary = session.Summary
+
+// resolveMe extracts the current authenticated user's ID from the stored JWT token.
+func resolveMe(f *cmdutil.Factory) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home directory: %w", err)
+	}
+	configDir := filepath.Join(home, ".aisync")
+	token := auth.LoadToken(configDir)
+	if token == "" {
+		return "", fmt.Errorf("not logged in (no token found in %s)", configDir)
+	}
+	return auth.ParseTokenUserID(token)
+}

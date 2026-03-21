@@ -625,6 +625,55 @@ func (h *handlers) handleForecast(ctx context.Context, req mcp.CallToolRequest) 
 	return toolJSON(result)
 }
 
+// ── Ingest ──
+
+func (h *handlers) handleIngest(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		Provider               string `json:"provider"`
+		MessagesJSON           string `json:"messages_json"`
+		Agent                  string `json:"agent"`
+		ProjectPath            string `json:"project_path"`
+		Branch                 string `json:"branch"`
+		Summary                string `json:"summary"`
+		SessionID              string `json:"session_id"`
+		RemoteURL              string `json:"remote_url"`
+		DelegatedFromSessionID string `json:"delegated_from_session_id"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	if args.Provider == "" {
+		return toolError(fmt.Errorf("provider is required")), nil
+	}
+	if args.MessagesJSON == "" {
+		return toolError(fmt.Errorf("messages_json is required")), nil
+	}
+
+	// Parse the messages JSON array.
+	var messages []service.IngestMessage
+	if err := json.Unmarshal([]byte(args.MessagesJSON), &messages); err != nil {
+		return toolError(fmt.Errorf("invalid messages_json: %w", err)), nil
+	}
+
+	result, err := h.sessionSvc.Ingest(ctx, service.IngestRequest{
+		Provider:               args.Provider,
+		Messages:               messages,
+		Agent:                  args.Agent,
+		ProjectPath:            args.ProjectPath,
+		Branch:                 args.Branch,
+		Summary:                args.Summary,
+		SessionID:              args.SessionID,
+		RemoteURL:              args.RemoteURL,
+		DelegatedFromSessionID: args.DelegatedFromSessionID,
+	})
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	return toolJSON(result)
+}
+
 // ── Helpers ──
 
 // toolError returns an MCP error result from any error.

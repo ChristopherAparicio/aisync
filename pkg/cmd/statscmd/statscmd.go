@@ -5,9 +5,12 @@ package statscmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
@@ -27,6 +30,8 @@ type Options struct {
 	Forecast     bool
 	ForecastDays int
 	Period       string
+	User         string // filter by owner ID
+	Me           bool   // filter by current authenticated user
 }
 
 // NewCmdStats creates the `aisync stats` command.
@@ -53,6 +58,8 @@ func NewCmdStats(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Forecast, "forecast", false, "Show cost forecast and model recommendations")
 	cmd.Flags().IntVar(&opts.ForecastDays, "forecast-days", 90, "Look-back window in days for forecast")
 	cmd.Flags().StringVar(&opts.Period, "period", "weekly", "Bucketing period for forecast: daily or weekly")
+	cmd.Flags().StringVar(&opts.User, "user", "", "Filter stats by owner ID")
+	cmd.Flags().BoolVar(&opts.Me, "me", false, "Filter stats by current authenticated user")
 
 	return cmd
 }
@@ -87,6 +94,16 @@ func runStats(opts *Options) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
+	// Resolve --me to owner ID via auth token.
+	ownerID := opts.User
+	if opts.Me {
+		if resolved, meErr := resolveMe(opts.Factory); meErr == nil {
+			ownerID = resolved
+		} else {
+			return fmt.Errorf("--me requires authentication: %w", meErr)
+		}
+	}
+
 	// Forecast mode
 	if opts.Forecast {
 		return runForecast(opts, svc, topLevel)
@@ -97,6 +114,7 @@ func runStats(opts *Options) error {
 		ProjectPath:  topLevel,
 		Branch:       opts.BranchFlag,
 		Provider:     providerName,
+		OwnerID:      ownerID,
 		All:          opts.All,
 		IncludeTools: opts.ShowTools,
 	})
@@ -214,7 +232,7 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-1] + "…"
 }
 
-func runForecast(opts *Options, svc *service.SessionService, projectPath string) error {
+func runForecast(opts *Options, svc service.SessionServicer, projectPath string) error {
 	out := opts.IO.Out
 
 	result, err := svc.Forecast(context.Background(), service.ForecastRequest{
@@ -297,4 +315,18 @@ func runForecast(opts *Options, svc *service.SessionService, projectPath string)
 	}
 
 	return nil
+}
+
+// resolveMe extracts the current authenticated user's ID from the stored JWT token.
+func resolveMe(f *cmdutil.Factory) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home directory: %w", err)
+	}
+	configDir := filepath.Join(home, ".aisync")
+	token := auth.LoadToken(configDir)
+	if token == "" {
+		return "", fmt.Errorf("not logged in (no token found in %s)", configDir)
+	}
+	return auth.ParseTokenUserID(token)
 }

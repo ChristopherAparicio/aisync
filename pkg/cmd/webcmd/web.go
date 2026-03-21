@@ -1,21 +1,19 @@
 // Package webcmd implements the `aisync web` CLI command.
-// It launches the aisync web dashboard on a local HTTP server.
+// It is a convenience alias for `aisync serve --web-only`.
 package webcmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
-	"github.com/ChristopherAparicio/aisync/internal/web"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
 
-const defaultAddr = "127.0.0.1:8372"
-
 // NewCmdWeb creates the `aisync web` command.
+// It delegates to `aisync serve --web-only` so that the web dashboard
+// runs on the same unified server infrastructure.
 func NewCmdWeb(f *cmdutil.Factory) *cobra.Command {
-	var addr string
+	serveCmd := servecmd.NewCmdServe(f)
 
 	cmd := &cobra.Command{
 		Use:   "web",
@@ -23,27 +21,27 @@ func NewCmdWeb(f *cmdutil.Factory) *cobra.Command {
 		Long: `Launch a local web dashboard for browsing sessions, viewing statistics,
 and analyzing AI coding costs.
 
-The dashboard runs at http://127.0.0.1:8372 by default and shuts down
+This is equivalent to running: aisync serve --web-only
+
+The dashboard listens on 127.0.0.1:8371 by default and shuts down
 gracefully on Ctrl+C.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sessionSvc, err := f.SessionService()
-			if err != nil {
-				return err
-			}
-
-			srv, err := web.New(web.Config{
-				SessionService: sessionSvc,
-				Addr:           addr,
-			})
-			if err != nil {
-				return fmt.Errorf("initializing web server: %w", err)
-			}
-
-			return srv.ListenAndServe()
+			// Set --web-only flag before delegating to serve.
+			_ = serveCmd.Flags().Set("web-only", "true")
+			return serveCmd.RunE(serveCmd, args)
 		},
 	}
 
-	cmd.Flags().StringVar(&addr, "addr", defaultAddr, "Address to listen on (host:port)")
+	cmd.Flags().StringP("addr", "", "127.0.0.1:8371", "Address to listen on (host:port)")
+
+	// Sync the addr flag with the serve command's flag.
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("addr") {
+			addr, _ := cmd.Flags().GetString("addr")
+			return serveCmd.Flags().Set("addr", addr)
+		}
+		return nil
+	}
 
 	return cmd
 }

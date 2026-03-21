@@ -55,7 +55,7 @@ func NewCmdRestore(f *cmdutil.Factory) *cobra.Command {
 }
 
 // pickSession lists sessions on the current branch and prompts the user to pick one.
-func pickSession(opts *Options, svc *service.SessionService, projectPath, branch string) (session.ID, error) {
+func pickSession(opts *Options, svc service.SessionServicer, projectPath, branch string) (session.ID, error) {
 	out := opts.IO.Out
 
 	summaries, err := svc.List(service.ListRequest{

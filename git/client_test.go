@@ -233,6 +233,426 @@ func TestCommitMessage_and_IsValidCommit(t *testing.T) {
 	}
 }
 
+// ── Checkout ──
+
+func TestCheckout_success(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	// Create a file so we can test checkout restoring it
+	filePath := filepath.Join(dir, "hello.txt")
+	if err := os.WriteFile(filePath, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "hello.txt")
+	runGit(t, dir, "commit", "-m", "add hello")
+
+	// Modify the file in the working tree (unstaged)
+	if err := os.WriteFile(filePath, []byte("modified"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Checkout should restore the file
+	if err := client.Checkout("hello.txt"); err != nil {
+		t.Fatalf("Checkout() error: %v", err)
+	}
+
+	got, _ := os.ReadFile(filePath)
+	if string(got) != "original" {
+		t.Errorf("after Checkout, file content = %q, want %q", got, "original")
+	}
+}
+
+func TestCheckout_error(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	// Checkout a non-existent file should error
+	err := client.Checkout("nonexistent-file-that-does-not-exist.txt")
+	if err == nil {
+		t.Fatal("expected error from Checkout on nonexistent file")
+	}
+}
+
+// ── UserName / UserEmail ──
+
+func TestUserName(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	name := client.UserName()
+	if name != "Test" {
+		t.Errorf("UserName() = %q, want %q", name, "Test")
+	}
+}
+
+func TestUserName_notConfigured(t *testing.T) {
+	dir := t.TempDir()
+	// Init repo without setting user.name
+	runGit(t, dir, "init")
+
+	client := NewClient(dir)
+	name := client.UserName()
+	// Should return empty string without error (may return global config value)
+	_ = name // no panic is the assertion
+}
+
+func TestUserEmail(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	email := client.UserEmail()
+	if email != "test@test.com" {
+		t.Errorf("UserEmail() = %q, want %q", email, "test@test.com")
+	}
+}
+
+func TestUserEmail_notConfigured(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+
+	client := NewClient(dir)
+	email := client.UserEmail()
+	_ = email
+}
+
+// ── HasRemote / RemoteURL ──
+
+func TestHasRemote_false(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	if client.HasRemote("origin") {
+		t.Error("HasRemote(origin) = true, want false (no remote configured)")
+	}
+}
+
+func TestHasRemote_true(t *testing.T) {
+	dir := initTestRepo(t)
+	// Add a fake remote
+	runGit(t, dir, "remote", "add", "origin", "https://example.com/repo.git")
+	client := NewClient(dir)
+
+	if !client.HasRemote("origin") {
+		t.Error("HasRemote(origin) = false, want true")
+	}
+}
+
+func TestRemoteURL_noRemote(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	url := client.RemoteURL("origin")
+	if url != "" {
+		t.Errorf("RemoteURL(origin) = %q, want empty string", url)
+	}
+}
+
+func TestRemoteURL_withRemote(t *testing.T) {
+	dir := initTestRepo(t)
+	runGit(t, dir, "remote", "add", "origin", "https://example.com/repo.git")
+	client := NewClient(dir)
+
+	url := client.RemoteURL("origin")
+	if url != "https://example.com/repo.git" {
+		t.Errorf("RemoteURL(origin) = %q, want %q", url, "https://example.com/repo.git")
+	}
+}
+
+// ── SyncBranch operations ──
+
+func TestSyncBranchExists_false(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	if client.SyncBranchExists() {
+		t.Error("SyncBranchExists() = true, want false")
+	}
+}
+
+func TestInitSyncBranch_and_SyncBranchExists(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	if err := client.InitSyncBranch(); err != nil {
+		t.Fatalf("InitSyncBranch() error: %v", err)
+	}
+
+	if !client.SyncBranchExists() {
+		t.Error("SyncBranchExists() = false after InitSyncBranch()")
+	}
+}
+
+func TestListSyncFiles_empty(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	// Without sync branch, should return nil
+	files, err := client.ListSyncFiles()
+	if err != nil {
+		t.Fatalf("ListSyncFiles() error: %v", err)
+	}
+	if files != nil {
+		t.Errorf("ListSyncFiles() = %v, want nil", files)
+	}
+}
+
+func TestWriteSyncFiles_and_ReadSyncFile(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	if err := client.InitSyncBranch(); err != nil {
+		t.Fatalf("InitSyncBranch() error: %v", err)
+	}
+
+	// Write files
+	files := map[string][]byte{
+		"sessions/abc.json": []byte(`{"id":"abc","title":"test"}`),
+		"sessions/def.json": []byte(`{"id":"def","title":"other"}`),
+	}
+	if err := client.WriteSyncFiles(files, "add test sessions"); err != nil {
+		t.Fatalf("WriteSyncFiles() error: %v", err)
+	}
+
+	// Read back
+	data, err := client.ReadSyncFile("sessions/abc.json")
+	if err != nil {
+		t.Fatalf("ReadSyncFile() error: %v", err)
+	}
+	if string(data) != `{"id":"abc","title":"test"}` {
+		t.Errorf("ReadSyncFile() = %q, want %q", data, `{"id":"abc","title":"test"}`)
+	}
+
+	// Read non-existent file
+	data, err = client.ReadSyncFile("nonexistent.json")
+	if err != nil {
+		t.Fatalf("ReadSyncFile(nonexistent) error: %v", err)
+	}
+	if data != nil {
+		t.Errorf("ReadSyncFile(nonexistent) = %v, want nil", data)
+	}
+}
+
+func TestWriteSyncFiles_emptyMap(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	// Empty map should be a no-op
+	err := client.WriteSyncFiles(map[string][]byte{}, "nothing")
+	if err != nil {
+		t.Fatalf("WriteSyncFiles(empty) error: %v", err)
+	}
+}
+
+func TestListSyncFiles_withFiles(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	if err := client.InitSyncBranch(); err != nil {
+		t.Fatal(err)
+	}
+
+	files := map[string][]byte{
+		"a.json": []byte("a"),
+		"b.json": []byte("b"),
+	}
+	if err := client.WriteSyncFiles(files, "add files"); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := client.ListSyncFiles()
+	if err != nil {
+		t.Fatalf("ListSyncFiles() error: %v", err)
+	}
+	if len(list) != 2 {
+		t.Errorf("ListSyncFiles() returned %d files, want 2", len(list))
+	}
+}
+
+// ── Push/Pull SyncBranch ──
+
+func TestPushSyncBranch_noRemote(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	err := client.PushSyncBranch("")
+	if err == nil {
+		t.Fatal("expected error pushing without remote")
+	}
+}
+
+func TestPullSyncBranch_noRemote(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	err := client.PullSyncBranch("")
+	if err == nil {
+		t.Fatal("expected error pulling without remote")
+	}
+}
+
+func TestPushPullSyncBranch_withLocalRemote(t *testing.T) {
+	// Create a bare "remote" repo
+	remoteDir := t.TempDir()
+	runGit(t, remoteDir, "init", "--bare")
+
+	// Create a local repo with origin pointing to the bare remote
+	dir := initTestRepo(t)
+	runGit(t, dir, "remote", "add", "origin", remoteDir)
+
+	client := NewClient(dir)
+
+	// Init sync branch and write something
+	if err := client.InitSyncBranch(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WriteSyncFiles(map[string][]byte{"test.json": []byte("hello")}, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Push should succeed
+	if err := client.PushSyncBranch("origin"); err != nil {
+		t.Fatalf("PushSyncBranch() error: %v", err)
+	}
+
+	// Create another local clone from the bare repo to test pull
+	dir2 := t.TempDir()
+	cmd := exec.Command("git", "clone", remoteDir, dir2)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git clone failed: %v\n%s", err, out)
+	}
+
+	client2 := NewClient(dir2)
+	if err := client2.PullSyncBranch("origin"); err != nil {
+		t.Fatalf("PullSyncBranch() error: %v", err)
+	}
+
+	// Verify the data is there
+	data, err := client2.ReadSyncFile("test.json")
+	if err != nil {
+		t.Fatalf("ReadSyncFile() error: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("ReadSyncFile() = %q, want %q", data, "hello")
+	}
+}
+
+// ── HooksPath with custom core.hooksPath ──
+
+func TestHooksPath_customAbsolute(t *testing.T) {
+	dir := initTestRepo(t)
+	customPath := filepath.Join(dir, "custom-hooks")
+	runGit(t, dir, "config", "core.hooksPath", customPath)
+
+	client := NewClient(dir)
+	got, err := client.HooksPath()
+	if err != nil {
+		t.Fatalf("HooksPath() error: %v", err)
+	}
+	if got != customPath {
+		t.Errorf("HooksPath() = %q, want %q", got, customPath)
+	}
+}
+
+func TestHooksPath_customRelative(t *testing.T) {
+	dir := initTestRepo(t)
+	runGit(t, dir, "config", "core.hooksPath", "my-hooks")
+
+	client := NewClient(dir)
+	got, err := client.HooksPath()
+	if err != nil {
+		t.Fatalf("HooksPath() error: %v", err)
+	}
+	expected := filepath.Join(dir, "my-hooks")
+	if got != expected {
+		t.Errorf("HooksPath() = %q, want %q", got, expected)
+	}
+}
+
+// ── Error paths (non-repo directory) ──
+
+func TestCurrentBranch_notARepo(t *testing.T) {
+	dir := t.TempDir()
+	client := NewClient(dir)
+
+	_, err := client.CurrentBranch()
+	if err == nil {
+		t.Fatal("expected error from CurrentBranch on non-repo")
+	}
+}
+
+func TestTopLevel_notARepo(t *testing.T) {
+	dir := t.TempDir()
+	client := NewClient(dir)
+
+	_, err := client.TopLevel()
+	if err == nil {
+		t.Fatal("expected error from TopLevel on non-repo")
+	}
+}
+
+func TestHeadCommitSHA_notARepo(t *testing.T) {
+	dir := t.TempDir()
+	client := NewClient(dir)
+
+	_, err := client.HeadCommitSHA()
+	if err == nil {
+		t.Fatal("expected error from HeadCommitSHA on non-repo")
+	}
+}
+
+func TestCommitMessage_notARepo(t *testing.T) {
+	dir := t.TempDir()
+	client := NewClient(dir)
+
+	_, err := client.CommitMessage("HEAD")
+	if err == nil {
+		t.Fatal("expected error from CommitMessage on non-repo")
+	}
+}
+
+func TestAddNote_notARepo(t *testing.T) {
+	dir := t.TempDir()
+	client := NewClient(dir)
+
+	err := client.AddNote("abc123", "content")
+	if err == nil {
+		t.Fatal("expected error from AddNote on non-repo")
+	}
+}
+
+func TestHooksPath_notARepo(t *testing.T) {
+	dir := t.TempDir()
+	client := NewClient(dir)
+
+	_, err := client.HooksPath()
+	if err == nil {
+		t.Fatal("expected error from HooksPath on non-repo")
+	}
+}
+
+func TestHookExists_notARepo(t *testing.T) {
+	dir := t.TempDir()
+	client := NewClient(dir)
+
+	// Should return false without panic
+	if client.HookExists("pre-commit") {
+		t.Error("HookExists on non-repo should return false")
+	}
+}
+
+// ── helper ──
+
+// runGit is a test helper that runs a git command in a directory.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
 // initTestRepo creates a temporary git repository for testing.
 func initTestRepo(t *testing.T) string {
 	t.Helper()

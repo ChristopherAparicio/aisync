@@ -4,7 +4,46 @@
 
 {{define "title"}}aisync — Dashboard{{end}}
 
+{{define "project-selector"}}
+{{if .Projects}}
+<div class="project-selector">
+  <select class="project-select" onchange="if(this.value){location.href='/?project='+encodeURIComponent(this.value)}else{location.href='/'}">
+    <option value="">All projects</option>
+    {{range .Projects}}
+    <option value="{{.Path}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+    {{end}}
+  </select>
+</div>
+{{end}}
+{{end}}
+
 {{define "content"}}
+{{if .HasCapabilities}}
+<!-- Capability Metrics Bar -->
+<div class="capability-bar">
+  <div class="capability-bar-title">
+    <span class="capability-project-name">{{.ProjectName}}</span>
+    <span class="text-muted">capabilities</span>
+  </div>
+  <div class="capability-stats">
+    {{range .CapabilityStats}}
+    <div class="capability-stat">
+      <span class="capability-icon capability-icon-{{.Kind}}">{{kindIcon .Kind}}</span>
+      <span class="capability-count">{{.Count}}</span>
+      <span class="capability-label">{{kindLabel .Kind}}</span>
+    </div>
+    {{end}}
+    {{if gt .MCPServerCount 0}}
+    <div class="capability-stat">
+      <span class="capability-icon capability-icon-mcp">M</span>
+      <span class="capability-count">{{.MCPServerCount}}</span>
+      <span class="capability-label">MCP Servers</span>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
 {{if eq .TotalSessions 0}}
   <div class="empty-state">
     <p>No sessions captured yet.</p>
@@ -22,8 +61,18 @@
       <div class="value">{{formatTokens .TotalTokens}}</div>
     </div>
     <div class="kpi-card">
-      <div class="label">Total Cost</div>
+      <div class="label">API Cost {{if eq .BillingType "subscription"}}<span class="badge badge-billing">subscription</span>{{else if eq .BillingType "api"}}<span class="badge badge-billing-api">pay-per-token</span>{{end}}</div>
+      {{if .HasForkDedup}}
+      <div class="value">{{formatCost .DeduplicatedCost}}</div>
+      <div class="sub text-muted"><s>{{formatCost .TotalCost}}</s> before fork dedup</div>
+      {{else}}
       <div class="value">{{formatCost .TotalCost}}</div>
+      {{end}}
+      {{if eq .BillingType "subscription"}}
+      <div class="sub kpi-savings-inline text-muted">theoretical — you pay a flat subscription</div>
+      {{else}}
+      <div class="sub kpi-savings-inline">↓ {{formatCost .Savings}} saved</div>
+      {{end}}
     </div>
     <div class="kpi-card">
       <div class="label">Trend</div>
@@ -35,7 +84,66 @@
       <div class="sub">{{formatCost .TrendPerDay}}/day</div>
       {{end}}
     </div>
+    <div class="kpi-card">
+      <div class="label">Tool Calls</div>
+      <div class="value">{{formatTokens .TotalToolCalls}}</div>
+    </div>
+    <div class="kpi-card {{if gt .TotalErrors 0}}kpi-error{{end}}">
+      <div class="label">Errors</div>
+      <div class="value">{{.TotalErrors}}</div>
+      {{if gt .SessionsWithErrors 0}}
+      <div class="sub">in {{.SessionsWithErrors}} sessions</div>
+      {{end}}
+    </div>
   </div>
+
+  {{if .HasTrends}}
+  <!-- Weekly Trends -->
+  <div class="section">
+    <h2 class="section-title">
+      Weekly Trends
+      <span class="badge badge-verdict-{{.TrendVerdict}}">{{.TrendVerdict}}</span>
+    </h2>
+    <div class="trend-grid">
+      <div class="trend-card">
+        <div class="trend-label">Sessions</div>
+        <div class="trend-values">
+          <span class="trend-current">{{.TrendSessions.Current}}</span>
+          <span class="text-muted">vs {{.TrendSessions.Previous}}</span>
+        </div>
+        <div class="trend-delta {{if .TrendSessions.IsPositive}}trend-positive{{else}}trend-negative{{end}}">
+          {{if eq .TrendSessions.Direction "up"}}↑{{else if eq .TrendSessions.Direction "down"}}↓{{else}}→{{end}}
+          {{if ne .TrendSessions.Delta 0}}{{absInt .TrendSessions.Delta}}{{end}}
+          {{if ne .TrendSessions.DeltaPct 0.0}}<span class="trend-pct">({{printf "%+.0f" .TrendSessions.DeltaPct}}%)</span>{{end}}
+        </div>
+      </div>
+      <div class="trend-card">
+        <div class="trend-label">Tokens</div>
+        <div class="trend-values">
+          <span class="trend-current">{{formatTokens .TrendTokens.Current}}</span>
+          <span class="text-muted">vs {{formatTokens .TrendTokens.Previous}}</span>
+        </div>
+        <div class="trend-delta {{if .TrendTokens.IsPositive}}trend-positive{{else}}trend-negative{{end}}">
+          {{if eq .TrendTokens.Direction "up"}}↑{{else if eq .TrendTokens.Direction "down"}}↓{{else}}→{{end}}
+          {{if ne .TrendTokens.Delta 0}}{{formatTokens (absInt .TrendTokens.Delta)}}{{end}}
+          {{if ne .TrendTokens.DeltaPct 0.0}}<span class="trend-pct">({{printf "%+.0f" .TrendTokens.DeltaPct}}%)</span>{{end}}
+        </div>
+      </div>
+      <div class="trend-card">
+        <div class="trend-label">Errors</div>
+        <div class="trend-values">
+          <span class="trend-current">{{.TrendErrors.Current}}</span>
+          <span class="text-muted">vs {{.TrendErrors.Previous}}</span>
+        </div>
+        <div class="trend-delta {{if .TrendErrors.IsPositive}}trend-positive{{else}}trend-negative{{end}}">
+          {{if eq .TrendErrors.Direction "up"}}↑{{else if eq .TrendErrors.Direction "down"}}↓{{else}}→{{end}}
+          {{if ne .TrendErrors.Delta 0}}{{absInt .TrendErrors.Delta}}{{end}}
+          {{if ne .TrendErrors.DeltaPct 0.0}}<span class="trend-pct">({{printf "%+.0f" .TrendErrors.DeltaPct}}%)</span>{{end}}
+        </div>
+      </div>
+    </div>
+  </div>
+  {{end}}
 
   {{if .HasForecast}}
   <!-- Projections -->
@@ -55,29 +163,24 @@
     <!-- Recent Sessions -->
     <div class="section">
       <h2 class="section-title">Recent Sessions</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Provider</th>
-              <th>Branch</th>
-              <th class="text-right">Tokens</th>
-              <th>When</th>
-            </tr>
-          </thead>
-          <tbody>
-            {{range .RecentSessions}}
-            <tr>
-              <td class="font-mono">{{truncate .ID 10}}</td>
-              <td><span class="badge badge-provider">{{.Provider}}</span></td>
-              <td>{{truncate .Branch 25}}</td>
-              <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
-              <td class="text-muted">{{timeAgo .CreatedAt}}</td>
-            </tr>
-            {{end}}
-          </tbody>
-        </table>
+      <div class="recent-sessions-list">
+        {{range .RecentSessions}}
+        <a href="/sessions/{{.ID}}" class="recent-session-card">
+          <div class="recent-session-top">
+            <span class="badge badge-provider">{{.Provider}}</span>
+            {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
+            {{if .Status}}<span class="badge badge-status-{{.Status}}">{{.Status}}</span>{{end}}
+            <span class="recent-session-when text-muted">{{timeAgo .CreatedAt}}</span>
+          </div>
+          <div class="recent-session-title">{{if .Summary}}{{truncate .Summary 60}}{{else}}{{truncate .ID 16}}{{end}}</div>
+          <div class="recent-session-meta text-muted">
+            <span class="font-mono">{{formatTokens .TotalTokens}}</span>
+            <span>·</span>
+            <span>{{.MessageCount}} msgs</span>
+            {{if gt .ErrorCount 0}}<span>·</span><span class="recent-session-errors">{{.ErrorCount}} errors</span>{{end}}
+          </div>
+        </a>
+        {{end}}
       </div>
     </div>
 
@@ -97,7 +200,7 @@
           <tbody>
             {{range .TopBranches}}
             <tr>
-              <td>{{truncate .Branch 30}}</td>
+              <td>{{if .Branch}}{{truncate .Branch 30}}{{else}}<span class="text-muted">unknown</span>{{end}}</td>
               <td class="text-right">{{.SessionCount}}</td>
               <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
               <td class="text-right font-mono">{{formatCost .TotalCost}}</td>

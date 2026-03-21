@@ -15,65 +15,13 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
-// mockStore for list tests — stores sessions in memory.
-type mockStore struct {
-	links    map[string][]session.Summary
-	sessions []session.Summary
-}
-
-func newMockStore() *mockStore {
-	return &mockStore{
-		links: make(map[string][]session.Summary),
-	}
-}
-
-func (m *mockStore) Save(_ *session.Session) error { return nil }
-func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error)   { return 0, nil }
-func (m *mockStore) Delete(_ session.ID) error                { return nil }
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
-func (m *mockStore) Close() error                             { return nil }
-
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	return m.sessions, nil
-}
-
-func (m *mockStore) AddLink(_ session.ID, link session.Link) error {
-	key := string(link.LinkType) + ":" + link.Ref
-	m.links[key] = append(m.links[key], session.Summary{})
-	return nil
-}
-
-func (m *mockStore) GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error) {
-	key := string(linkType) + ":" + ref
-	summaries, ok := m.links[key]
-	if !ok || len(summaries) == 0 {
-		return nil, session.ErrSessionNotFound
-	}
-	return summaries, nil
-}
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
-
-func listTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
+func listTestFactory(t *testing.T, store *testutil.MockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 
 	if store == nil {
-		store = newMockStore()
+		store = testutil.NewMockStore()
 	}
 	gitClient := git.NewClient(repoDir)
 
@@ -81,7 +29,7 @@ func listTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostrea
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
 		StoreFunc: func() (storage.Store, error) { return store, nil },
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store: store,
 				Git:   gitClient,
@@ -177,7 +125,7 @@ func TestNewCmdList_flags(t *testing.T) {
 }
 
 func TestList_emptyBranch(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	f, ios := listTestFactory(t, store)
 
 	opts := &Options{
@@ -197,8 +145,8 @@ func TestList_emptyBranch(t *testing.T) {
 }
 
 func TestList_withSessions(t *testing.T) {
-	store := newMockStore()
-	store.sessions = []session.Summary{
+	store := testutil.NewMockStore()
+	store.Summaries = []session.Summary{
 		{
 			ID:           "test-session-1",
 			Provider:     session.ProviderClaudeCode,
@@ -232,8 +180,8 @@ func TestList_withSessions(t *testing.T) {
 }
 
 func TestList_quiet(t *testing.T) {
-	store := newMockStore()
-	store.sessions = []session.Summary{
+	store := testutil.NewMockStore()
+	store.Summaries = []session.Summary{
 		{
 			ID:       "quiet-session-1",
 			Provider: session.ProviderClaudeCode,
@@ -265,9 +213,9 @@ func TestList_quiet(t *testing.T) {
 }
 
 func TestList_byPR(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	// Pre-populate the link data
-	store.links["pr:42"] = []session.Summary{
+	store.Links["pr:42"] = []session.Summary{
 		{
 			ID:           "pr-linked-session",
 			Provider:     session.ProviderClaudeCode,
@@ -299,7 +247,7 @@ func TestList_byPR(t *testing.T) {
 }
 
 func TestList_byPR_notFound(t *testing.T) {
-	store := newMockStore()
+	store := testutil.NewMockStore()
 	f, ios := listTestFactory(t, store)
 
 	opts := &Options{
@@ -319,8 +267,8 @@ func TestList_byPR_notFound(t *testing.T) {
 }
 
 func TestList_byPR_quiet(t *testing.T) {
-	store := newMockStore()
-	store.links["pr:10"] = []session.Summary{
+	store := testutil.NewMockStore()
+	store.Links["pr:10"] = []session.Summary{
 		{
 			ID:       "pr-quiet-session",
 			Provider: session.ProviderOpenCode,
@@ -348,5 +296,107 @@ func TestList_byPR_quiet(t *testing.T) {
 	}
 	if strings.Contains(output, "PROVIDER") {
 		t.Error("quiet mode should not contain table headers")
+	}
+}
+
+func TestList_similar(t *testing.T) {
+	store := testutil.NewMockStore()
+
+	s1 := &session.Session{
+		ID:       "target",
+		Provider: session.ProviderClaudeCode,
+		Branch:   "main",
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"},
+			{FilePath: "main.go"},
+			{FilePath: "config.go"},
+		},
+		CreatedAt: time.Now(),
+	}
+	s2 := &session.Session{
+		ID:       "similar-1",
+		Provider: session.ProviderOpenCode,
+		Branch:   "main",
+		Summary:  "similar session",
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go"},
+			{FilePath: "main.go"},
+		},
+		CreatedAt: time.Now(),
+	}
+	s3 := &session.Session{
+		ID:       "different",
+		Provider: session.ProviderClaudeCode,
+		Branch:   "main",
+		Summary:  "different session",
+		FileChanges: []session.FileChange{
+			{FilePath: "api.go"},
+			{FilePath: "handler.go"},
+		},
+		CreatedAt: time.Now(),
+	}
+	_ = store.Save(s1)
+	_ = store.Save(s2)
+	_ = store.Save(s3)
+
+	store.Summaries = []session.Summary{
+		{ID: "target", Provider: session.ProviderClaudeCode, Branch: "main"},
+		{ID: "similar-1", Provider: session.ProviderOpenCode, Branch: "main", Summary: "similar session"},
+		{ID: "different", Provider: session.ProviderClaudeCode, Branch: "main", Summary: "different session"},
+	}
+
+	f, ios := listTestFactory(t, store)
+
+	opts := &Options{
+		IO:      ios,
+		Factory: f,
+		Similar: "target",
+	}
+
+	err := runList(opts)
+	if err != nil {
+		t.Fatalf("runList() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "similar-1") {
+		t.Error("expected similar-1 in output")
+	}
+	if strings.Contains(output, "different") {
+		t.Error("session 'different' should not appear (no file overlap)")
+	}
+	if !strings.Contains(output, "SIMILARITY") {
+		t.Error("expected SIMILARITY header")
+	}
+}
+
+func TestList_similar_noFiles(t *testing.T) {
+	store := testutil.NewMockStore()
+
+	s1 := &session.Session{
+		ID:        "no-files",
+		Provider:  session.ProviderClaudeCode,
+		Branch:    "main",
+		CreatedAt: time.Now(),
+	}
+	_ = store.Save(s1)
+	store.Summaries = []session.Summary{{ID: "no-files", Provider: session.ProviderClaudeCode, Branch: "main"}}
+
+	f, ios := listTestFactory(t, store)
+
+	opts := &Options{
+		IO:      ios,
+		Factory: f,
+		Similar: "no-files",
+	}
+
+	err := runList(opts)
+	if err != nil {
+		t.Fatalf("runList() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "no file changes") {
+		t.Error("expected 'no file changes' message")
 	}
 }

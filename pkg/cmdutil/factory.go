@@ -22,16 +22,18 @@ type Factory struct {
 	IOStreams *iostreams.IOStreams
 
 	// Lazy initializers — set by the composition root (default.go).
-	ConfigFunc         func() (*config.Config, error)
-	StoreFunc          func() (storage.Store, error)
-	GitFunc            func() (*git.Client, error)
-	RegistryFunc       func() *provider.Registry
-	ScannerFunc        func() *secrets.Scanner
-	PlatformFunc       func() (platform.Platform, error)
-	ConverterFunc      func() *converter.Converter
-	HooksManagerFunc   func() (*hooks.Manager, error)
-	SessionServiceFunc func() (*service.SessionService, error)
-	SyncServiceFunc    func() (*service.SyncService, error)
+	ConfigFunc          func() (*config.Config, error)
+	StoreFunc           func() (storage.Store, error)
+	GitFunc             func() (*git.Client, error)
+	RegistryFunc        func() *provider.Registry
+	ScannerFunc         func() *secrets.Scanner
+	PlatformFunc        func() (platform.Platform, error)
+	ConverterFunc       func() *converter.Converter
+	HooksManagerFunc    func() (*hooks.Manager, error)
+	SessionServiceFunc  func() (service.SessionServicer, error)
+	SyncServiceFunc     func() (*service.SyncService, error)
+	RegistryServiceFunc func() (*service.RegistryService, error)
+	AnalysisServiceFunc func() (service.AnalysisServicer, error)
 
 	// CloseFunc releases resources (e.g., database connections).
 	// Set by the composition root, called by main on exit.
@@ -105,7 +107,9 @@ func (f *Factory) HooksManager() (*hooks.Manager, error) {
 }
 
 // SessionService returns the session service for business logic operations.
-func (f *Factory) SessionService() (*service.SessionService, error) {
+// Returns a SessionServicer interface — either a local (*SessionService) or
+// remote (*remote.SessionService) implementation depending on configuration.
+func (f *Factory) SessionService() (service.SessionServicer, error) {
 	if f.SessionServiceFunc == nil {
 		return nil, session.ErrConfigNotFound
 	}
@@ -118,6 +122,22 @@ func (f *Factory) SyncService() (*service.SyncService, error) {
 		return nil, session.ErrConfigNotFound
 	}
 	return f.SyncServiceFunc()
+}
+
+// RegistryService returns the registry service for agent capability discovery.
+func (f *Factory) RegistryService() (*service.RegistryService, error) {
+	if f.RegistryServiceFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.RegistryServiceFunc()
+}
+
+// AnalysisService returns the analysis service for session analysis operations.
+func (f *Factory) AnalysisService() (service.AnalysisServicer, error) {
+	if f.AnalysisServiceFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.AnalysisServiceFunc()
 }
 
 // Close releases all resources held by lazy-initialized dependencies.

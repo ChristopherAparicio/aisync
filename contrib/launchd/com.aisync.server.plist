@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.aisync.server</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/aisync</string>
+		<string>serve</string>
+		<string>--addr</string>
+		<string>127.0.0.1:8371</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>/tmp/aisync.out.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>/tmp/aisync.err.log</string>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
+	</dict>
+</dict>
+</plist>

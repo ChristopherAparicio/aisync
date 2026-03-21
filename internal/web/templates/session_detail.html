@@ -90,6 +90,93 @@
   </div>
 </div>
 
+<!-- ── Work Objective ── -->
+{{if .HasObjective}}
+<div class="section">
+  <h2 class="section-title">Work Objective</h2>
+  <div class="objective-card">
+    {{if .Objective.Intent}}
+    <div class="objective-row">
+      <span class="objective-label">Intent</span>
+      <span class="objective-value">{{.Objective.Intent}}</span>
+    </div>
+    {{end}}
+    {{if .Objective.Outcome}}
+    <div class="objective-row">
+      <span class="objective-label">Outcome</span>
+      <span class="objective-value">{{.Objective.Outcome}}</span>
+    </div>
+    {{end}}
+    {{if .Objective.ExplainShort}}
+    <div class="objective-explain">{{.Objective.ExplainShort}}</div>
+    {{end}}
+    {{if .Objective.Decisions}}
+    <div class="objective-list">
+      <span class="objective-label">Decisions</span>
+      <ul>{{range .Objective.Decisions}}<li>{{.}}</li>{{end}}</ul>
+    </div>
+    {{end}}
+    {{if .Objective.Friction}}
+    <div class="objective-list">
+      <span class="objective-label">Friction</span>
+      <ul>{{range .Objective.Friction}}<li>{{.}}</li>{{end}}</ul>
+    </div>
+    {{end}}
+    {{if .Objective.OpenItems}}
+    <div class="objective-list">
+      <span class="objective-label">Open Items</span>
+      <ul>{{range .Objective.OpenItems}}<li>{{.}}</li>{{end}}</ul>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+<!-- ── Analysis ── -->
+{{if or .HasAnalysis .CanAnalyze}}
+<div class="section" id="analysis-container">
+  {{template "analysis_partial" .AnalysisData}}
+</div>
+{{end}}
+
+<!-- ── Tool Usage Breakdown ── -->
+{{if .HasToolUsage}}
+<div class="section">
+  <h2 class="section-title">Tool Usage</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th class="text-right">Calls</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Avg Duration</th>
+          <th class="text-right">Errors</th>
+          <th class="text-right">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ToolUsage}}
+        <tr>
+          <td class="font-mono">{{.Name}}</td>
+          <td class="text-right">{{.Calls}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right text-muted">{{if gt .AvgDuration 0}}{{formatDuration .AvgDuration}}{{else}}—{{end}}</td>
+          <td class="text-right{{if gt .ErrorCount 0}} tool-usage-error{{end}}">{{.ErrorCount}}</td>
+          <td class="text-right">
+            <div class="tool-share">
+              <div class="tool-share-bar" style="width: {{printf "%.0f" .Percentage}}%"></div>
+              <span class="tool-share-label">{{formatPercentage .Percentage}}</span>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
 <!-- ── Cost Breakdown ── -->
 {{if .CostBreakdown}}
 <div class="section">
@@ -151,37 +238,130 @@
 </div>
 {{end}}
 
+<!-- ── Fork Tree ── -->
+{{if .HasForks}}
+<div class="section">
+  <h2 class="section-title">Fork Tree <span class="text-muted">({{len .ForkRels}} relation{{if gt (len .ForkRels) 1}}s{{end}})</span></h2>
+  <div class="fork-tree">
+    {{range .ForkRels}}
+    <div class="fork-entry">
+      <div class="fork-entry-icon">
+        {{if eq .Direction "parent"}}
+        <span class="fork-arrow fork-arrow-out" title="This session was forked into another">↳</span>
+        {{else}}
+        <span class="fork-arrow fork-arrow-in" title="This session is a fork">↰</span>
+        {{end}}
+      </div>
+      <div class="fork-entry-content">
+        <div class="fork-entry-header">
+          {{if eq .Direction "parent"}}
+          <span class="text-muted">Forked at msg #{{.ForkPoint}} →</span>
+          <a href="/sessions/{{.LinkedID}}" class="font-mono">{{truncate .LinkedID 12}}</a>
+          {{else}}
+          <span class="text-muted">Fork of</span>
+          <a href="/sessions/{{.LinkedID}}" class="font-mono">{{truncate .LinkedID 12}}</a>
+          <span class="text-muted">at msg #{{.ForkPoint}}</span>
+          {{end}}
+          <span class="badge">{{.OverlapPct}}% shared</span>
+        </div>
+        {{if .Reason}}
+        <div class="fork-entry-reason">{{.Reason}}</div>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+<!-- ── Session Links (delegation, continuation, etc.) ── -->
+{{if .HasSessionLinks}}
+<div class="section">
+  <h2 class="section-title">Session Links <span class="text-muted">({{len .SessionLinks}})</span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Direction</th>
+          <th>Linked Session</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .SessionLinks}}
+        <tr>
+          <td><span class="badge badge-link-{{.LinkTypeClass}}">{{.LinkType}}</span></td>
+          <td>{{if eq .Direction "outgoing"}}<span class="text-muted">&rarr; outgoing</span>{{else}}<span class="text-muted">&larr; incoming</span>{{end}}</td>
+          <td class="font-mono"><a href="/sessions/{{.TargetSessionID}}">{{truncate .TargetSessionID 12}}</a></td>
+          <td>{{if .Description}}{{.Description}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
 <!-- ── Conversation ── -->
 {{if .Session.Messages}}
 <div class="section">
   <h2 class="section-title">Conversation <span class="text-muted">({{len .Session.Messages}} messages)</span></h2>
-  <div class="chat">
-    {{range .Session.Messages}}
-    <div class="chat-msg chat-{{.Role}}">
+
+  {{if .ActivitySegments}}
+  <div class="activity-bar" title="Message flow: each segment = 1 message, width = relative token usage">
+    {{range .ActivitySegments}}<div class="activity-seg activity-seg-{{.Role}}" style="width:{{printf "%.2f" .WidthPct}}%" title="{{.Role}} #{{.Index}} ({{formatTokens .Tokens}} tokens)"></div>{{end}}
+  </div>
+  <div class="activity-legend">
+    <span class="activity-legend-item"><span class="activity-dot activity-seg-user"></span>User</span>
+    <span class="activity-legend-item"><span class="activity-dot activity-seg-assistant"></span>Assistant</span>
+    <span class="activity-legend-item"><span class="activity-dot activity-seg-tool"></span>Tool</span>
+  </div>
+  {{end}}
+
+  <!-- Conversation Filters -->
+  <div class="conv-filters">
+    <button class="conv-btn active" onclick="filterMessages('all', this)">All</button>
+    <button class="conv-btn" onclick="filterMessages('user', this)">User only</button>
+    <button class="conv-btn conv-btn-error" onclick="filterMessages('errors', this)">Errors ({{.ErrorCount}})</button>
+    <button class="conv-btn" onclick="filterMessages('tools', this)">Tool calls</button>
+  </div>
+
+  <!-- Pagination controls -->
+  <div class="conv-pagination" id="conv-pagination-top">
+    <span class="conv-page-info" id="conv-page-info"></span>
+    <button class="conv-btn" id="conv-prev" onclick="prevPage()">← Prev</button>
+    <button class="conv-btn" id="conv-next" onclick="nextPage()">Next →</button>
+  </div>
+
+  <div class="chat" id="chat-container">
+    {{range $i, $msg := .Session.Messages}}
+    <div class="chat-msg chat-{{$msg.Role}} {{if $msg.ToolCalls}}has-tools{{end}}" data-role="{{$msg.Role}}" data-idx="{{$i}}" data-has-error="{{range $msg.ToolCalls}}{{if eq .State "error"}}true{{end}}{{end}}">
       <div class="chat-header">
-        <span class="chat-role">{{.Role}}</span>
-        {{if .Model}}<span class="chat-model font-mono">{{.Model}}</span>{{end}}
-        <span class="chat-time text-muted">{{timeAgo .Timestamp}}</span>
-        {{if or .InputTokens .OutputTokens}}
-        <span class="chat-tokens text-muted font-mono">{{formatTokens .InputTokens}}→{{formatTokens .OutputTokens}}</span>
+        <span class="chat-idx text-muted">#{{$i}}</span>
+        <span class="chat-role">{{$msg.Role}}</span>
+        {{if $msg.Model}}<span class="chat-model font-mono">{{$msg.Model}}</span>{{end}}
+        <span class="chat-time text-muted">{{timeAgo $msg.Timestamp}}</span>
+        {{if or $msg.InputTokens $msg.OutputTokens}}
+        <span class="chat-tokens text-muted font-mono">{{formatTokens $msg.InputTokens}}→{{formatTokens $msg.OutputTokens}}</span>
         {{end}}
       </div>
 
-      {{if .Content}}
-      <div class="chat-content">{{.Content}}</div>
+      {{if $msg.Content}}
+      <div class="chat-content">{{truncate $msg.Content 500}}</div>
       {{end}}
 
-      {{if .Thinking}}
+      {{if $msg.Thinking}}
       <details class="chat-thinking">
         <summary>Thinking</summary>
-        <div class="chat-thinking-content">{{.Thinking}}</div>
+        <div class="chat-thinking-content">{{truncate $msg.Thinking 1000}}</div>
       </details>
       {{end}}
 
-      {{if .ToolCalls}}
+      {{if $msg.ToolCalls}}
       <div class="chat-tools">
-        {{range .ToolCalls}}
-        <details class="tool-call tool-{{.State}}">
+        {{range $msg.ToolCalls}}
+        <details class="tool-call tool-{{.State}}" {{if eq .State "error"}}open{{end}}>
           <summary class="tool-summary">
             <span class="tool-name font-mono">{{.Name}}</span>
             <span class="tool-state badge">{{.State}}</span>
@@ -191,13 +371,13 @@
             {{if .Input}}
             <div class="tool-section">
               <div class="tool-section-label">Input</div>
-              <pre class="tool-pre">{{truncate .Input 2000}}</pre>
+              <pre class="tool-pre">{{truncate .Input 1000}}</pre>
             </div>
             {{end}}
             {{if .Output}}
             <div class="tool-section">
               <div class="tool-section-label">Output</div>
-              <pre class="tool-pre">{{truncate .Output 2000}}</pre>
+              <pre class="tool-pre">{{truncate .Output 1000}}</pre>
             </div>
             {{end}}
           </div>
@@ -208,7 +388,77 @@
     </div>
     {{end}}
   </div>
+
+  <!-- Bottom pagination -->
+  <div class="conv-pagination" id="conv-pagination-bottom">
+    <button class="conv-btn" onclick="prevPage()">← Prev</button>
+    <span class="conv-page-info" id="conv-page-info-bottom"></span>
+    <button class="conv-btn" onclick="nextPage()">Next →</button>
+  </div>
 </div>
+
+<script>
+(function() {
+  const PAGE_SIZE = 50;
+  let currentPage = 0;
+  let currentFilter = 'all';
+  const container = document.getElementById('chat-container');
+  const allMsgs = Array.from(container.querySelectorAll('.chat-msg'));
+
+  function getFiltered() {
+    return allMsgs.filter(function(el) {
+      if (currentFilter === 'all') return true;
+      if (currentFilter === 'user') return el.dataset.role === 'user';
+      if (currentFilter === 'errors') return el.dataset.hasError === 'true';
+      if (currentFilter === 'tools') return el.classList.contains('has-tools');
+      return true;
+    });
+  }
+
+  function render() {
+    var filtered = getFiltered();
+    var totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    if (currentPage >= totalPages) currentPage = totalPages - 1;
+    var start = currentPage * PAGE_SIZE;
+    var end = Math.min(start + PAGE_SIZE, filtered.length);
+
+    // Hide all, show only current page
+    allMsgs.forEach(function(el) { el.style.display = 'none'; });
+    for (var i = start; i < end; i++) {
+      filtered[i].style.display = '';
+    }
+
+    // Update info
+    var info = 'Showing ' + (start+1) + '-' + end + ' of ' + filtered.length;
+    if (currentFilter !== 'all') info += ' (' + currentFilter + ')';
+    var el1 = document.getElementById('conv-page-info');
+    var el2 = document.getElementById('conv-page-info-bottom');
+    if (el1) el1.textContent = info;
+    if (el2) el2.textContent = info;
+  }
+
+  window.filterMessages = function(filter, btn) {
+    currentFilter = filter;
+    currentPage = 0;
+    document.querySelectorAll('.conv-btn').forEach(function(b) { b.classList.remove('active'); });
+    if (btn) btn.classList.add('active');
+    render();
+  };
+
+  window.nextPage = function() {
+    var filtered = getFiltered();
+    var totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+    if (currentPage < totalPages - 1) { currentPage++; render(); }
+  };
+
+  window.prevPage = function() {
+    if (currentPage > 0) { currentPage--; render(); }
+  };
+
+  // Initial render
+  render();
+})();
+</script>
 {{end}}
 
 <!-- ── Children ── -->

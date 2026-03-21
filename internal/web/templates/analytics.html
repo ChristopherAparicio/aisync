@@ -1,0 +1,42 @@
+{{define "analytics.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Analytics — aisync{{end}}
+
+{{define "content"}}
+<h1 class="page-title">Analytics</h1>
+
+<!-- Sub-navigation -->
+<div class="analytics-tabs">
+  <a href="/costs" class="analytics-tab">Costs</a>
+  <a href="/usage" class="analytics-tab">Usage Heatmap</a>
+  <a href="/branches" class="analytics-tab">Branches</a>
+  <a href="/projects" class="analytics-tab">Projects</a>
+</div>
+
+<!-- KPIs -->
+<div class="kpi-grid">
+  <div class="kpi-card">
+    <div class="label">Total Sessions</div>
+    <div class="value">{{.TotalSessions}}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label">Total Tokens</div>
+    <div class="value">{{formatTokens .TotalTokens}}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="label">API Cost {{if eq .BillingType "subscription"}}<span class="badge badge-billing">subscription</span>{{end}}</div>
+    <div class="value">{{formatCost .TotalCost}}</div>
+    {{if eq .BillingType "subscription"}}
+    <div class="sub text-muted">theoretical — flat subscription</div>
+    {{end}}
+  </div>
+  <div class="kpi-card">
+    <div class="label">Tool Calls</div>
+    <div class="value">{{.TotalToolCalls}}</div>
+    {{if gt .TotalErrors 0}}<div class="sub" style="color:var(--red,#ef4444)">{{.TotalErrors}} errors</div>{{end}}
+  </div>
+</div>
+
+{{end}}

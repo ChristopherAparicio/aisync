@@ -10,47 +10,10 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
+	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
-
-type mockStore struct {
-	sessions []*session.Session
-}
-
-func (m *mockStore) Save(_ *session.Session) error              { return nil }
-func (m *mockStore) Delete(_ session.ID) error                  { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
-func (m *mockStore) Close() error                             { return nil }
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error) { return 0, nil }
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) {
-	return nil, nil
-}
-
-func (m *mockStore) Get(id session.ID) (*session.Session, error) {
-	for _, s := range m.sessions {
-		if s.ID == id {
-			return s, nil
-		}
-	}
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) SaveUser(_ *session.User) error                 { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return nil, nil
-}
 
 func testSession() *session.Session {
 	return &session.Session{
@@ -85,7 +48,7 @@ func testSession() *session.Session {
 
 func exportTestFactory(store storage.Store) *cmdutil.Factory {
 	return &cmdutil.Factory{
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store: store,
 			}), nil
@@ -98,7 +61,7 @@ func exportTestFactory(store storage.Store) *cmdutil.Factory {
 
 func TestExport_AisyncFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*session.Session{testSession()}}
+	store := testutil.NewMockStore(testSession())
 
 	f := exportTestFactory(store)
 	f.IOStreams = ios
@@ -134,7 +97,7 @@ func TestExport_AisyncFormat(t *testing.T) {
 
 func TestExport_ClaudeFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*session.Session{testSession()}}
+	store := testutil.NewMockStore(testSession())
 
 	f := exportTestFactory(store)
 	f.IOStreams = ios
@@ -167,7 +130,7 @@ func TestExport_ClaudeFormat(t *testing.T) {
 
 func TestExport_OpenCodeFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*session.Session{testSession()}}
+	store := testutil.NewMockStore(testSession())
 
 	f := exportTestFactory(store)
 	f.IOStreams = ios
@@ -192,7 +155,7 @@ func TestExport_OpenCodeFormat(t *testing.T) {
 
 func TestExport_ContextMDFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*session.Session{testSession()}}
+	store := testutil.NewMockStore(testSession())
 
 	f := exportTestFactory(store)
 	f.IOStreams = ios
@@ -220,7 +183,7 @@ func TestExport_ContextMDFormat(t *testing.T) {
 
 func TestExport_UnknownFormat(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: []*session.Session{testSession()}}
+	store := testutil.NewMockStore(testSession())
 
 	f := exportTestFactory(store)
 	f.IOStreams = ios
@@ -243,7 +206,7 @@ func TestExport_UnknownFormat(t *testing.T) {
 
 func TestExport_SessionNotFound(t *testing.T) {
 	ios := iostreams.Test()
-	store := &mockStore{sessions: nil}
+	store := testutil.NewMockStore()
 
 	f := exportTestFactory(store)
 	f.IOStreams = ios

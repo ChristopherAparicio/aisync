@@ -1,7 +1,7 @@
 // Package opencode implements the OpenCode provider for aisync.
-// It reads sessions from OpenCode's file-based storage located at
-// ~/.local/share/opencode/storage/ with JSON files distributed across
-// project/, session/, message/, and part/ subdirectories.
+// It reads sessions from OpenCode's SQLite database (opencode.db) or falls
+// back to the legacy file-based storage at ~/.local/share/opencode/storage/
+// when the database is unavailable.
 package opencode
 
 import (
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/google/uuid"
 )
@@ -30,15 +31,27 @@ const (
 type Provider struct {
 	// dataHome overrides the default data directory (for testing).
 	dataHome string
+	// reader abstracts the storage backend (SQLite DB or JSON files).
+	reader reader
 }
 
 // New creates an OpenCode provider.
 // If dataHome is empty, it defaults to the XDG data directory.
+// It tries to open the SQLite database first, falling back to file-based reading.
 func New(dataHome string) *Provider {
 	if dataHome == "" {
 		dataHome = defaultDataHome()
 	}
-	return &Provider{dataHome: dataHome}
+	p := &Provider{dataHome: dataHome}
+
+	// Try DB reader first; fall back to file reader.
+	if dbr, err := newDBReader(dataHome); err == nil {
+		p.reader = dbr
+	} else {
+		p.reader = newFileReader(dataHome)
+	}
+
+	return p
 }
 
 // Name returns the provider identifier.
@@ -46,49 +59,44 @@ func (p *Provider) Name() session.ProviderName {
 	return session.ProviderOpenCode
 }
 
+// SessionFreshness returns the message count and last-updated timestamp
+// for a session, enabling the skip-if-unchanged optimization.
+// Implements provider.FreshnessChecker.
+func (p *Provider) SessionFreshness(sessionID session.ID) (*provider.Freshness, error) {
+	count := p.reader.countMessages(string(sessionID))
+	updated := p.reader.sessionUpdatedAt(string(sessionID))
+	if count == 0 && updated == 0 {
+		return nil, session.ErrSessionNotFound
+	}
+	return &provider.Freshness{
+		MessageCount: count,
+		UpdatedAt:    updated,
+	}, nil
+}
+
 // Detect finds sessions matching the given project and branch.
 // OpenCode doesn't track branches natively, so we return all sessions
 // for the matching project and let the caller filter.
 func (p *Provider) Detect(projectPath string, _ string) ([]session.Summary, error) {
-	projectID, err := p.findProjectID(projectPath)
+	projectID, err := p.reader.findProjectID(projectPath)
 	if err != nil {
 		return nil, err
 	}
 
-	sessionsPath := filepath.Join(p.storagePath(), sessionDir, projectID)
-	entries, err := os.ReadDir(sessionsPath)
+	sessions, err := p.reader.listSessions(projectID)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading sessions directory: %w", err)
+		return nil, err
 	}
 
 	var summaries []session.Summary
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-
-		data, readErr := os.ReadFile(filepath.Join(sessionsPath, entry.Name()))
-		if readErr != nil {
-			continue
-		}
-
-		var sess ocSession
-		if unmarshalErr := json.Unmarshal(data, &sess); unmarshalErr != nil {
-			continue
-		}
-
-		// Skip child sessions (sub-agents) — they'll be attached as children
+	for _, sess := range sessions {
+		// Skip child sessions (sub-agents) — they'll be attached as children.
 		if sess.ParentID != "" {
 			continue
 		}
 
 		created := time.UnixMilli(sess.Time.Created)
-
-		// Count messages for this session
-		msgCount := countMessages(p.storagePath(), sess.ID)
+		msgCount := p.reader.countMessages(sess.ID)
 
 		agent := "coder" // default OpenCode agent
 		summaries = append(summaries, session.Summary{
@@ -101,7 +109,7 @@ func (p *Provider) Detect(projectPath string, _ string) ([]session.Summary, erro
 		})
 	}
 
-	// Sort by created_at descending (most recent first)
+	// Sort by created_at descending (most recent first).
 	sort.Slice(summaries, func(i, j int) bool {
 		return summaries[i].CreatedAt.After(summaries[j].CreatedAt)
 	})
@@ -111,30 +119,31 @@ func (p *Provider) Detect(projectPath string, _ string) ([]session.Summary, erro
 
 // Export reads a session and converts it to the unified Session model.
 func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error) {
-	sess, err := p.readSession(sessionID)
+	sess, err := p.reader.readSession(string(sessionID))
 	if err != nil {
 		return nil, err
 	}
 
 	result := &session.Session{
-		ID:          sessionID,
-		Provider:    session.ProviderOpenCode,
-		StorageMode: mode,
-		Summary:     sess.Title,
-		ProjectPath: sess.Directory,
-		Version:     1,
-		ExportedBy:  exportedByLabel,
-		ExportedAt:  time.Now(),
-		CreatedAt:   time.UnixMilli(sess.Time.Created),
+		ID:              sessionID,
+		Provider:        session.ProviderOpenCode,
+		StorageMode:     mode,
+		Summary:         sess.Title,
+		ProjectPath:     sess.Directory,
+		Version:         1,
+		ExportedBy:      exportedByLabel,
+		ExportedAt:      time.Now(),
+		CreatedAt:       time.UnixMilli(sess.Time.Created),
+		SourceUpdatedAt: sess.Time.Updated,
 	}
 
-	// Load messages
-	messages, err := p.loadMessages(string(sessionID))
+	// Load messages.
+	messages, err := p.reader.loadMessages(string(sessionID))
 	if err != nil {
 		return nil, fmt.Errorf("loading messages: %w", err)
 	}
 
-	// Set agent from the first message
+	// Set agent from the first message.
 	for _, msg := range messages {
 		if msg.Agent != "" {
 			result.Agent = msg.Agent
@@ -145,33 +154,43 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		result.Agent = "coder"
 	}
 
-	// Summary mode: no messages
+	// Summary mode: no messages.
 	if mode == session.StorageModeSummary {
 		result.TokenUsage = sumTokens(messages)
 		return result, nil
 	}
 
-	// Build domain messages from OpenCode messages + their parts
+	// Build domain messages from OpenCode messages + their parts.
 	var (
-		totalInput  int
-		totalOutput int
+		totalInput      int
+		totalOutput     int
+		totalCacheRead  int
+		totalCacheWrite int
 	)
 
-	// Sort messages by creation time
+	// Sort messages by creation time.
 	sort.Slice(messages, func(i, j int) bool {
 		return messages[i].Time.Created < messages[j].Time.Created
 	})
 
 	for _, msg := range messages {
-		parts, partErr := p.loadParts(msg.ID)
+		parts, partErr := p.reader.loadParts(msg.ID)
 		if partErr != nil {
 			continue
 		}
 
+		// Resolve providerID: top-level field takes precedence, fallback to nested model.
+		providerID := msg.ProviderID
+		if providerID == "" {
+			providerID = msg.Model.ProviderID
+		}
+
 		domainMsg := session.Message{
-			ID:        msg.ID,
-			Model:     msg.ModelID,
-			Timestamp: time.UnixMilli(msg.Time.Created),
+			ID:           msg.ID,
+			Model:        msg.ModelID,
+			ProviderID:   providerID,
+			ProviderCost: msg.Cost,
+			Timestamp:    time.UnixMilli(msg.Time.Created),
 		}
 
 		switch msg.Role {
@@ -183,7 +202,7 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 			domainMsg.Role = session.RoleSystem
 		}
 
-		// Process parts
+		// Process parts.
 		var textParts []string
 		for _, part := range parts {
 			switch part.Type {
@@ -195,7 +214,7 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 					tc := convertToolPart(part)
 					domainMsg.ToolCalls = append(domainMsg.ToolCalls, tc)
 
-					// Track file changes
+					// Track file changes.
 					trackFileChange(part, result)
 				}
 
@@ -203,16 +222,42 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 				if mode == session.StorageModeFull {
 					domainMsg.Thinking = part.Text
 				}
+
+			case "image", "file":
+				// Image parts: extract metadata (don't store actual image data).
+				if part.MediaType != "" && isImageMediaType(part.MediaType) {
+					img := session.ImageMeta{
+						MediaType: part.MediaType,
+						Source:    part.Type,
+						FileName:  part.FileName,
+					}
+					if part.DataLen > 0 {
+						img.SizeBytes = part.DataLen
+						img.TokensEstimate = part.DataLen / 750
+						if img.TokensEstimate < 85 {
+							img.TokensEstimate = 85
+						}
+					}
+					domainMsg.Images = append(domainMsg.Images, img)
+				}
 			}
 		}
 
 		domainMsg.Content = strings.Join(textParts, "\n")
 
-		// Tokens from assistant messages
+		// Tokens from assistant messages.
 		if msg.Tokens.Input > 0 || msg.Tokens.Output > 0 {
-			totalInput += msg.Tokens.Input + msg.Tokens.Cache.Read + msg.Tokens.Cache.Write
+			// Separate raw input from cache tokens for accurate cost estimation.
+			// Cache reads are 10x cheaper than raw input at API pricing.
+			rawInput := msg.Tokens.Input
+			cacheRead := msg.Tokens.Cache.Read
+			cacheWrite := msg.Tokens.Cache.Write
+			totalInput += rawInput
+			totalCacheRead += cacheRead
+			totalCacheWrite += cacheWrite
 			totalOutput += msg.Tokens.Output
-			domainMsg.InputTokens = msg.Tokens.Input + msg.Tokens.Cache.Read + msg.Tokens.Cache.Write
+			// Per-message: store the total (raw + cache) for display purposes.
+			domainMsg.InputTokens = rawInput + cacheRead + cacheWrite
 			domainMsg.OutputTokens = msg.Tokens.Output
 		}
 
@@ -220,18 +265,39 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 	}
 
 	result.TokenUsage = session.TokenUsage{
-		InputTokens:  totalInput,
+		InputTokens:  totalInput + totalCacheRead + totalCacheWrite,
 		OutputTokens: totalOutput,
-		TotalTokens:  totalInput + totalOutput,
+		TotalTokens:  totalInput + totalCacheRead + totalCacheWrite + totalOutput,
+		CacheRead:    totalCacheRead,
+		CacheWrite:   totalCacheWrite,
 	}
 
-	// Load child sessions (sub-agents)
-	children, err := p.findChildSessions(string(sessionID), mode)
+	// Load child sessions (sub-agents).
+	children, err := p.loadChildSessionsFull(string(sessionID), mode)
 	if err == nil && len(children) > 0 {
 		result.Children = children
 	}
 
 	return result, nil
+}
+
+// loadChildSessionsFull recursively exports child sessions.
+func (p *Provider) loadChildSessionsFull(parentID string, mode session.StorageMode) ([]session.Session, error) {
+	childSessions, err := p.reader.findChildSessions(parentID)
+	if err != nil {
+		return nil, err
+	}
+
+	var children []session.Session
+	for _, cs := range childSessions {
+		child, exportErr := p.Export(session.ID(cs.ID), mode)
+		if exportErr != nil {
+			continue
+		}
+		child.ParentID = session.ID(parentID)
+		children = append(children, *child)
+	}
+	return children, nil
 }
 
 // CanImport reports that OpenCode supports session import.
@@ -242,6 +308,7 @@ func (p *Provider) CanImport() bool {
 // Import writes a session back to OpenCode's native format.
 // It creates the project, session, message, and part JSON files
 // in the appropriate subdirectories under storage/.
+// Import always uses the file-based writer regardless of reader backend.
 func (p *Provider) Import(sess *session.Session) error {
 	if sess == nil {
 		return fmt.Errorf("session is nil")
@@ -252,30 +319,30 @@ func (p *Provider) Import(sess *session.Session) error {
 		return fmt.Errorf("session has no project path")
 	}
 
-	// Generate IDs if missing
+	// Generate IDs if missing.
 	sessionID := string(sess.ID)
 	if sessionID == "" {
 		sessionID = "ses_" + uuid.New().String()[:8]
 		sess.ID = session.ID(sessionID)
 	}
 
-	// Step 1: Ensure or find the project
+	// Step 1: Ensure or find the project.
 	projectID, err := p.ensureProject(projectPath)
 	if err != nil {
 		return fmt.Errorf("ensuring project: %w", err)
 	}
 
-	// Step 2: Write session file
+	// Step 2: Write session file.
 	if err := p.writeSession(sess, projectID); err != nil {
 		return fmt.Errorf("writing session: %w", err)
 	}
 
-	// Step 3: Write messages and their parts
+	// Step 3: Write messages and their parts.
 	if err := p.writeMessages(sess); err != nil {
 		return fmt.Errorf("writing messages: %w", err)
 	}
 
-	// Step 4: Import child sessions
+	// Step 4: Import child sessions.
 	for i := range sess.Children {
 		child := &sess.Children[i]
 		child.ProjectPath = projectPath
@@ -293,13 +360,14 @@ func (p *Provider) Import(sess *session.Session) error {
 // ensureProject finds or creates the project entry for the given path.
 // Returns the project ID.
 func (p *Provider) ensureProject(worktreePath string) (string, error) {
-	// Try to find existing project
-	existingID, err := p.findProjectID(worktreePath)
+	// Try to find existing project via file reader (import always uses files).
+	fr := newFileReader(p.dataHome)
+	existingID, err := fr.findProjectID(worktreePath)
 	if err == nil {
 		return existingID, nil
 	}
 
-	// Create new project entry
+	// Create new project entry.
 	projectID := uuid.New().String()[:12]
 	projectsPath := filepath.Join(p.storagePath(), projectDir)
 	if err := os.MkdirAll(projectsPath, 0o755); err != nil {
@@ -411,7 +479,7 @@ func (p *Provider) writeMessages(sess *session.Session) error {
 			return fmt.Errorf("writing message file: %w", err)
 		}
 
-		// Write parts for this message
+		// Write parts for this message.
 		if err := p.writeParts(msgID, sessionID, msg); err != nil {
 			return fmt.Errorf("writing parts for message %s: %w", msgID, err)
 		}
@@ -429,7 +497,7 @@ func (p *Provider) writeParts(msgID, sessionID string, msg session.Message) erro
 
 	partIndex := 0
 
-	// Text part
+	// Text part.
 	if msg.Content != "" {
 		partID := fmt.Sprintf("prt_%s_%03d", msgID, partIndex)
 		part := ocPart{
@@ -450,7 +518,7 @@ func (p *Provider) writeParts(msgID, sessionID string, msg session.Message) erro
 		partIndex++
 	}
 
-	// Thinking/reasoning part
+	// Thinking/reasoning part.
 	if msg.Thinking != "" {
 		partID := fmt.Sprintf("prt_%s_%03d", msgID, partIndex)
 		part := ocPart{
@@ -471,7 +539,7 @@ func (p *Provider) writeParts(msgID, sessionID string, msg session.Message) erro
 		partIndex++
 	}
 
-	// Tool call parts
+	// Tool call parts.
 	for _, tc := range msg.ToolCalls {
 		partID := tc.ID
 		if partID == "" {
@@ -622,7 +690,7 @@ func MarshalJSON(sess *session.Session) ([]byte, error) {
 			},
 		}
 
-		// Text part
+		// Text part.
 		if msg.Content != "" {
 			ocMsg.Parts = append(ocMsg.Parts, ExportPart{
 				ID:   msg.ID + "-text",
@@ -631,7 +699,7 @@ func MarshalJSON(sess *session.Session) ([]byte, error) {
 			})
 		}
 
-		// Thinking part
+		// Thinking part.
 		if msg.Thinking != "" {
 			ocMsg.Parts = append(ocMsg.Parts, ExportPart{
 				ID:   msg.ID + "-reasoning",
@@ -640,7 +708,7 @@ func MarshalJSON(sess *session.Session) ([]byte, error) {
 			})
 		}
 
-		// Tool call parts
+		// Tool call parts.
 		for _, tc := range msg.ToolCalls {
 			var input interface{}
 			if tc.Input != "" && json.Valid([]byte(tc.Input)) {
@@ -716,7 +784,7 @@ func UnmarshalJSON(data []byte) (*session.Session, error) {
 		domainMsg.InputTokens = msg.Tokens.Input
 		domainMsg.OutputTokens = msg.Tokens.Output
 
-		// Process parts
+		// Process parts.
 		var textParts []string
 		for _, part := range msg.Parts {
 			switch part.Type {
@@ -780,204 +848,13 @@ func (p *Provider) storagePath() string {
 	return filepath.Join(p.dataHome, storageDir)
 }
 
-// findProjectID finds the project ID for a given worktree path.
-// The project ID is the first root commit hash of the git repository,
-// cached in the project JSON files.
-func (p *Provider) findProjectID(worktreePath string) (string, error) {
-	projectsPath := filepath.Join(p.storagePath(), projectDir)
-	entries, err := os.ReadDir(projectsPath)
-	if err != nil {
-		return "", fmt.Errorf("reading projects directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		if entry.Name() == "global.json" {
-			continue
-		}
-
-		data, readErr := os.ReadFile(filepath.Join(projectsPath, entry.Name()))
-		if readErr != nil {
-			continue
-		}
-
-		var proj ocProject
-		if unmarshalErr := json.Unmarshal(data, &proj); unmarshalErr != nil {
-			continue
-		}
-
-		if proj.Worktree == worktreePath {
-			return proj.ID, nil
-		}
-	}
-
-	return "", session.ErrSessionNotFound
-}
-
-func (p *Provider) readSession(sessionID session.ID) (*ocSession, error) {
-	// Find the session file across all project directories
-	sessionsRoot := filepath.Join(p.storagePath(), sessionDir)
-	projectDirs, err := os.ReadDir(sessionsRoot)
-	if err != nil {
-		return nil, fmt.Errorf("reading session root: %w", err)
-	}
-
-	fileName := string(sessionID) + ".json"
-	for _, dir := range projectDirs {
-		if !dir.IsDir() {
-			continue
-		}
-		path := filepath.Join(sessionsRoot, dir.Name(), fileName)
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			continue
-		}
-
-		var sess ocSession
-		if unmarshalErr := json.Unmarshal(data, &sess); unmarshalErr != nil {
-			continue
-		}
-		return &sess, nil
-	}
-
-	return nil, session.ErrSessionNotFound
-}
-
-func (p *Provider) loadMessages(sessionID string) ([]ocMessage, error) {
-	messagesPath := filepath.Join(p.storagePath(), messageDir, sessionID)
-	entries, err := os.ReadDir(messagesPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading messages directory: %w", err)
-	}
-
-	var messages []ocMessage
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-
-		data, readErr := os.ReadFile(filepath.Join(messagesPath, entry.Name()))
-		if readErr != nil {
-			continue
-		}
-
-		var msg ocMessage
-		if unmarshalErr := json.Unmarshal(data, &msg); unmarshalErr != nil {
-			continue
-		}
-		messages = append(messages, msg)
-	}
-
-	return messages, nil
-}
-
-func (p *Provider) loadParts(messageID string) ([]ocPart, error) {
-	partsPath := filepath.Join(p.storagePath(), partDir, messageID)
-	entries, err := os.ReadDir(partsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading parts directory: %w", err)
-	}
-
-	var parts []ocPart
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-
-		data, readErr := os.ReadFile(filepath.Join(partsPath, entry.Name()))
-		if readErr != nil {
-			continue
-		}
-
-		var part ocPart
-		if unmarshalErr := json.Unmarshal(data, &part); unmarshalErr != nil {
-			continue
-		}
-		parts = append(parts, part)
-	}
-
-	return parts, nil
-}
-
-func (p *Provider) findChildSessions(parentID string, mode session.StorageMode) ([]session.Session, error) {
-	// Search all project session directories for sessions with this parentID
-	sessionsRoot := filepath.Join(p.storagePath(), sessionDir)
-	projectDirs, err := os.ReadDir(sessionsRoot)
-	if err != nil {
-		return nil, err
-	}
-
-	var children []session.Session
-	for _, dir := range projectDirs {
-		if !dir.IsDir() {
-			continue
-		}
-		dirPath := filepath.Join(sessionsRoot, dir.Name())
-		entries, readErr := os.ReadDir(dirPath)
-		if readErr != nil {
-			continue
-		}
-
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-
-			data, fileErr := os.ReadFile(filepath.Join(dirPath, entry.Name()))
-			if fileErr != nil {
-				continue
-			}
-
-			var sess ocSession
-			if unmarshalErr := json.Unmarshal(data, &sess); unmarshalErr != nil {
-				continue
-			}
-
-			if sess.ParentID == parentID {
-				// Recursively export the child
-				child, exportErr := p.Export(session.ID(sess.ID), mode)
-				if exportErr != nil {
-					continue
-				}
-				child.ParentID = session.ID(parentID)
-				children = append(children, *child)
-			}
-		}
-	}
-
-	return children, nil
-}
-
-func countMessages(storagePath, sessionID string) int {
-	messagesPath := filepath.Join(storagePath, messageDir, sessionID)
-	entries, err := os.ReadDir(messagesPath)
-	if err != nil {
-		return 0
-	}
-	count := 0
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-			count++
-		}
-	}
-	return count
-}
-
 func convertToolPart(part ocPart) session.ToolCall {
 	tc := session.ToolCall{
 		ID:   part.CallID,
 		Name: part.Tool,
 	}
 
-	// Extract input as JSON string
+	// Extract input as JSON string.
 	if part.State.Input != nil {
 		inputBytes, _ := json.Marshal(part.State.Input)
 		tc.Input = string(inputBytes)
@@ -989,7 +866,7 @@ func convertToolPart(part ocPart) session.ToolCall {
 	tc.InputTokens = roughTokenEstimate(len(tc.Input))
 	tc.OutputTokens = roughTokenEstimate(len(tc.Output))
 
-	// Map status to domain ToolState
+	// Map status to domain ToolState.
 	switch part.State.Status {
 	case "completed":
 		tc.State = session.ToolStateCompleted
@@ -1001,7 +878,7 @@ func convertToolPart(part ocPart) session.ToolCall {
 		tc.State = session.ToolStatePending
 	}
 
-	// Duration
+	// Duration.
 	if part.State.Time.Start > 0 && part.State.Time.End > 0 {
 		tc.DurationMs = int(part.State.Time.End - part.State.Time.Start)
 	}
@@ -1023,7 +900,7 @@ func trackFileChange(part ocPart, sess *session.Session) {
 		return
 	}
 
-	// Try to extract file_path from the tool input
+	// Try to extract file_path from the tool input.
 	if part.State.Input == nil {
 		return
 	}
@@ -1044,7 +921,7 @@ func trackFileChange(part ocPart, sess *session.Session) {
 		changeType = session.ChangeModified
 	}
 
-	// Avoid duplicates
+	// Avoid duplicates.
 	for _, fc := range sess.FileChanges {
 		if fc.FilePath == input.FilePath {
 			return
@@ -1104,13 +981,15 @@ type ocTime struct {
 }
 
 type ocMessage struct {
-	Model   ocModel   `json:"model"`
-	ID      string    `json:"id"`
-	Role    string    `json:"role"`
-	Agent   string    `json:"agent"`
-	ModelID string    `json:"modelID"`
-	Tokens  ocTokens  `json:"tokens"`
-	Time    ocMsgTime `json:"time"`
+	Model      ocModel   `json:"model"`
+	ID         string    `json:"id"`
+	Role       string    `json:"role"`
+	Agent      string    `json:"agent"`
+	ModelID    string    `json:"modelID"`
+	ProviderID string    `json:"providerID"` // e.g. "anthropic", "amazon-bedrock", "opencode"
+	Tokens     ocTokens  `json:"tokens"`
+	Time       ocMsgTime `json:"time"`
+	Cost       float64   `json:"cost"` // actual cost reported by provider (0 for subscriptions)
 }
 
 type ocMsgTime struct {
@@ -1139,11 +1018,14 @@ type ocPart struct {
 	ID        string      `json:"id"`
 	SessionID string      `json:"sessionID"`
 	MessageID string      `json:"messageID"`
-	Type      string      `json:"type"`
+	Type      string      `json:"type"` // "text", "tool", "reasoning", "image", "file"
 	Text      string      `json:"text"`
 	CallID    string      `json:"callID"`
 	Tool      string      `json:"tool"`
 	State     ocToolState `json:"state"`
+	MediaType string      `json:"mediaType,omitempty"` // e.g. "image/png" for image/file parts
+	FileName  string      `json:"filename,omitempty"`  // original filename if available
+	DataLen   int         `json:"dataLen,omitempty"`   // size of the data in bytes (we don't store the actual data)
 }
 
 type ocToolState struct {
@@ -1158,4 +1040,9 @@ type ocToolState struct {
 type ocPartTime struct {
 	Start int64 `json:"start"`
 	End   int64 `json:"end"`
+}
+
+// isImageMediaType checks if a MIME type is an image type.
+func isImageMediaType(mediaType string) bool {
+	return strings.HasPrefix(mediaType, "image/")
 }

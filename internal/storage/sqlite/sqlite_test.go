@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
 func mustOpenStore(t *testing.T) *Store {
@@ -1213,5 +1216,1086 @@ func TestDeleteOlderThan_cascadesLinksAndFiles(t *testing.T) {
 	_, err = store.GetByLink(session.LinkPR, "42")
 	if !errors.Is(err, session.ErrSessionNotFound) {
 		t.Errorf("expected ErrSessionNotFound for link after cascade, got %v", err)
+	}
+}
+
+// ── User Preferences Tests ──
+
+func TestPreferences_SaveAndGet(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Initially no preferences — should return nil.
+	prefs, err := store.GetPreferences("")
+	if err != nil {
+		t.Fatalf("GetPreferences() error = %v", err)
+	}
+	if prefs != nil {
+		t.Fatalf("expected nil prefs for new store, got %+v", prefs)
+	}
+
+	// Save global defaults (empty user ID).
+	err = store.SavePreferences(&session.UserPreferences{
+		Dashboard: session.DashboardPreferences{
+			PageSize:  50,
+			Columns:   []string{"id", "provider", "cost", "when"},
+			SortBy:    "tokens",
+			SortOrder: "asc",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SavePreferences() error = %v", err)
+	}
+
+	// Read back.
+	prefs, err = store.GetPreferences("")
+	if err != nil {
+		t.Fatalf("GetPreferences() error = %v", err)
+	}
+	if prefs == nil {
+		t.Fatal("expected non-nil prefs after save")
+	}
+	if prefs.Dashboard.PageSize != 50 {
+		t.Errorf("PageSize = %d, want 50", prefs.Dashboard.PageSize)
+	}
+	if len(prefs.Dashboard.Columns) != 4 {
+		t.Errorf("Columns count = %d, want 4", len(prefs.Dashboard.Columns))
+	}
+	if prefs.Dashboard.SortBy != "tokens" {
+		t.Errorf("SortBy = %q, want %q", prefs.Dashboard.SortBy, "tokens")
+	}
+	if prefs.Dashboard.SortOrder != "asc" {
+		t.Errorf("SortOrder = %q, want %q", prefs.Dashboard.SortOrder, "asc")
+	}
+}
+
+func TestPreferences_UserOverride(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Save global defaults.
+	_ = store.SavePreferences(&session.UserPreferences{
+		Dashboard: session.DashboardPreferences{PageSize: 25},
+	})
+
+	// Save user-specific preferences.
+	_ = store.SavePreferences(&session.UserPreferences{
+		UserID:    "user-alice",
+		Dashboard: session.DashboardPreferences{PageSize: 100},
+	})
+
+	// Global should still be 25.
+	global, _ := store.GetPreferences("")
+	if global.Dashboard.PageSize != 25 {
+		t.Errorf("global PageSize = %d, want 25", global.Dashboard.PageSize)
+	}
+
+	// Alice should be 100.
+	alice, _ := store.GetPreferences("user-alice")
+	if alice.Dashboard.PageSize != 100 {
+		t.Errorf("alice PageSize = %d, want 100", alice.Dashboard.PageSize)
+	}
+
+	// Unknown user should return nil (fall back to defaults).
+	unknown, _ := store.GetPreferences("user-bob")
+	if unknown != nil {
+		t.Errorf("expected nil for unknown user, got %+v", unknown)
+	}
+}
+
+func TestPreferences_Upsert(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Save once.
+	_ = store.SavePreferences(&session.UserPreferences{
+		Dashboard: session.DashboardPreferences{PageSize: 25},
+	})
+
+	// Update (upsert).
+	_ = store.SavePreferences(&session.UserPreferences{
+		Dashboard: session.DashboardPreferences{PageSize: 75, SortBy: "cost"},
+	})
+
+	prefs, _ := store.GetPreferences("")
+	if prefs.Dashboard.PageSize != 75 {
+		t.Errorf("PageSize after upsert = %d, want 75", prefs.Dashboard.PageSize)
+	}
+	if prefs.Dashboard.SortBy != "cost" {
+		t.Errorf("SortBy after upsert = %q, want %q", prefs.Dashboard.SortBy, "cost")
+	}
+}
+
+// ── Cache Tests ──
+
+func TestCache_MissAndPopulate(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Miss — returns nil.
+	data, err := store.GetCache("stats:all", 30*time.Second)
+	if err != nil {
+		t.Fatalf("GetCache error = %v", err)
+	}
+	if data != nil {
+		t.Fatalf("expected nil on miss, got %d bytes", len(data))
+	}
+
+	// Set.
+	payload := []byte(`{"total_sessions":42}`)
+	if err := store.SetCache("stats:all", payload); err != nil {
+		t.Fatalf("SetCache error = %v", err)
+	}
+
+	// Hit.
+	data, err = store.GetCache("stats:all", 30*time.Second)
+	if err != nil {
+		t.Fatalf("GetCache error = %v", err)
+	}
+	if string(data) != string(payload) {
+		t.Errorf("got %q, want %q", string(data), string(payload))
+	}
+}
+
+func TestCache_TTLExpiry(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_ = store.SetCache("stats:all", []byte(`{}`))
+
+	// With very short TTL, it should be treated as expired immediately.
+	// We use 0 duration to simulate "already expired".
+	data, _ := store.GetCache("stats:all", 0)
+	if data != nil {
+		t.Error("expected nil for expired cache entry")
+	}
+
+	// With long TTL, it should still be valid.
+	data, _ = store.GetCache("stats:all", 1*time.Hour)
+	if data == nil {
+		t.Error("expected non-nil for valid cache entry")
+	}
+}
+
+func TestCache_InvalidateByPrefix(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_ = store.SetCache("stats:projectA", []byte(`{"a":1}`))
+	_ = store.SetCache("stats:projectB", []byte(`{"b":2}`))
+	_ = store.SetCache("forecast:projectA", []byte(`{"f":3}`))
+
+	// Invalidate only stats:*
+	if err := store.InvalidateCache("stats:"); err != nil {
+		t.Fatalf("InvalidateCache error = %v", err)
+	}
+
+	// stats entries should be gone.
+	data, _ := store.GetCache("stats:projectA", 1*time.Hour)
+	if data != nil {
+		t.Error("expected nil for invalidated stats:projectA")
+	}
+	data, _ = store.GetCache("stats:projectB", 1*time.Hour)
+	if data != nil {
+		t.Error("expected nil for invalidated stats:projectB")
+	}
+
+	// forecast should still be there.
+	data, _ = store.GetCache("forecast:projectA", 1*time.Hour)
+	if data == nil {
+		t.Error("expected non-nil for forecast:projectA (not invalidated)")
+	}
+}
+
+func TestCache_InvalidateAll(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_ = store.SetCache("stats:all", []byte(`{}`))
+	_ = store.SetCache("forecast:all", []byte(`{}`))
+
+	// Invalidate everything.
+	if err := store.InvalidateCache(""); err != nil {
+		t.Fatalf("InvalidateCache error = %v", err)
+	}
+
+	data, _ := store.GetCache("stats:all", 1*time.Hour)
+	if data != nil {
+		t.Error("expected nil after full invalidation")
+	}
+	data, _ = store.GetCache("forecast:all", 1*time.Hour)
+	if data != nil {
+		t.Error("expected nil after full invalidation")
+	}
+}
+
+func TestCache_InvalidatedOnSave(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Populate cache.
+	_ = store.SetCache("stats:all", []byte(`{"cached":true}`))
+
+	// Save a session — should auto-invalidate cache.
+	sess := &session.Session{
+		ID:       "cache-test-1",
+		Provider: "opencode",
+		Messages: []session.Message{
+			{ID: "m1", Role: "user", Content: "hello"},
+		},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	// Cache should be invalidated.
+	data, _ := store.GetCache("stats:all", 1*time.Hour)
+	if data != nil {
+		t.Error("expected cache invalidated after Save()")
+	}
+}
+
+func TestCache_Upsert(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_ = store.SetCache("stats:all", []byte(`{"v":1}`))
+	_ = store.SetCache("stats:all", []byte(`{"v":2}`))
+
+	data, _ := store.GetCache("stats:all", 1*time.Hour)
+	if string(data) != `{"v":2}` {
+		t.Errorf("expected upserted value, got %q", string(data))
+	}
+}
+
+// ── Session Analysis Tests ──
+
+func testAnalysis(id, sessionID string) *analysis.SessionAnalysis {
+	return &analysis.SessionAnalysis{
+		ID:         id,
+		SessionID:  sessionID,
+		CreatedAt:  time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+		Trigger:    analysis.TriggerManual,
+		Adapter:    analysis.AdapterLLM,
+		Model:      "gpt-4o",
+		TokensUsed: 500,
+		DurationMs: 1200,
+		Report: analysis.AnalysisReport{
+			Score:   85,
+			Summary: "Good session overall",
+			Problems: []analysis.Problem{
+				{Severity: analysis.SeverityLow, Description: "Minor style issue"},
+			},
+			Recommendations: []analysis.Recommendation{
+				{Category: analysis.CategorySkill, Title: "Use structured output", Description: "Consider using JSON mode", Priority: 3},
+			},
+		},
+	}
+}
+
+func TestSaveAndGetAnalysis(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Save a session first (required for foreign key)
+	sess := testSession("analysis-sess-1")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save session error = %v", err)
+	}
+
+	a := testAnalysis("analysis-1", "analysis-sess-1")
+	if err := store.SaveAnalysis(a); err != nil {
+		t.Fatalf("SaveAnalysis() error = %v", err)
+	}
+
+	got, err := store.GetAnalysis("analysis-1")
+	if err != nil {
+		t.Fatalf("GetAnalysis() error = %v", err)
+	}
+
+	if got.ID != "analysis-1" {
+		t.Errorf("ID = %q, want %q", got.ID, "analysis-1")
+	}
+	if got.SessionID != "analysis-sess-1" {
+		t.Errorf("SessionID = %q, want %q", got.SessionID, "analysis-sess-1")
+	}
+	if got.Trigger != analysis.TriggerManual {
+		t.Errorf("Trigger = %q, want %q", got.Trigger, analysis.TriggerManual)
+	}
+	if got.Adapter != analysis.AdapterLLM {
+		t.Errorf("Adapter = %q, want %q", got.Adapter, analysis.AdapterLLM)
+	}
+	if got.Model != "gpt-4o" {
+		t.Errorf("Model = %q, want %q", got.Model, "gpt-4o")
+	}
+	if got.TokensUsed != 500 {
+		t.Errorf("TokensUsed = %d, want 500", got.TokensUsed)
+	}
+	if got.DurationMs != 1200 {
+		t.Errorf("DurationMs = %d, want 1200", got.DurationMs)
+	}
+	if got.Report.Score != 85 {
+		t.Errorf("Report.Score = %d, want 85", got.Report.Score)
+	}
+	if got.Report.Summary != "Good session overall" {
+		t.Errorf("Report.Summary = %q, want %q", got.Report.Summary, "Good session overall")
+	}
+	if len(got.Report.Problems) != 1 {
+		t.Errorf("Report.Problems count = %d, want 1", len(got.Report.Problems))
+	}
+	if len(got.Report.Recommendations) != 1 {
+		t.Errorf("Report.Recommendations count = %d, want 1", len(got.Report.Recommendations))
+	}
+}
+
+func TestGetAnalysis_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_, err := store.GetAnalysis("nonexistent")
+	if !errors.Is(err, storage.ErrAnalysisNotFound) {
+		t.Errorf("GetAnalysis(nonexistent) error = %v, want ErrAnalysisNotFound", err)
+	}
+}
+
+func TestSaveAnalysis_Upsert(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("upsert-analysis-sess")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save session error = %v", err)
+	}
+
+	a := testAnalysis("upsert-analysis", "upsert-analysis-sess")
+	if err := store.SaveAnalysis(a); err != nil {
+		t.Fatalf("SaveAnalysis(1) error = %v", err)
+	}
+
+	// Update the analysis
+	a.Report.Score = 95
+	a.Report.Summary = "Updated analysis"
+	if err := store.SaveAnalysis(a); err != nil {
+		t.Fatalf("SaveAnalysis(2) error = %v", err)
+	}
+
+	got, err := store.GetAnalysis("upsert-analysis")
+	if err != nil {
+		t.Fatalf("GetAnalysis() error = %v", err)
+	}
+	if got.Report.Score != 95 {
+		t.Errorf("Report.Score = %d, want 95 (upserted)", got.Report.Score)
+	}
+	if got.Report.Summary != "Updated analysis" {
+		t.Errorf("Report.Summary = %q, want %q", got.Report.Summary, "Updated analysis")
+	}
+}
+
+func TestSaveAnalysis_WithError(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("error-analysis-sess")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save session error = %v", err)
+	}
+
+	a := &analysis.SessionAnalysis{
+		ID:        "error-analysis",
+		SessionID: "error-analysis-sess",
+		CreatedAt: time.Now().UTC(),
+		Trigger:   analysis.TriggerAuto,
+		Adapter:   analysis.AdapterLLM,
+		Error:     "LLM request failed: rate limited",
+	}
+	if err := store.SaveAnalysis(a); err != nil {
+		t.Fatalf("SaveAnalysis() error = %v", err)
+	}
+
+	got, err := store.GetAnalysis("error-analysis")
+	if err != nil {
+		t.Fatalf("GetAnalysis() error = %v", err)
+	}
+	if got.Error != "LLM request failed: rate limited" {
+		t.Errorf("Error = %q, want error string", got.Error)
+	}
+}
+
+func TestGetAnalysisBySession(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("multi-analysis-sess")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save session error = %v", err)
+	}
+
+	// Save two analyses for the same session (different times)
+	a1 := testAnalysis("multi-a1", "multi-analysis-sess")
+	a1.CreatedAt = time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	a1.Report.Summary = "First analysis"
+	if err := store.SaveAnalysis(a1); err != nil {
+		t.Fatalf("SaveAnalysis(1) error = %v", err)
+	}
+
+	a2 := testAnalysis("multi-a2", "multi-analysis-sess")
+	a2.CreatedAt = time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
+	a2.Report.Summary = "Second analysis"
+	if err := store.SaveAnalysis(a2); err != nil {
+		t.Fatalf("SaveAnalysis(2) error = %v", err)
+	}
+
+	// GetAnalysisBySession returns the most recent
+	got, err := store.GetAnalysisBySession("multi-analysis-sess")
+	if err != nil {
+		t.Fatalf("GetAnalysisBySession() error = %v", err)
+	}
+	if got.ID != "multi-a2" {
+		t.Errorf("ID = %q, want %q (most recent)", got.ID, "multi-a2")
+	}
+	if got.Report.Summary != "Second analysis" {
+		t.Errorf("Summary = %q, want %q", got.Report.Summary, "Second analysis")
+	}
+}
+
+func TestGetAnalysisBySession_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_, err := store.GetAnalysisBySession("nonexistent-session")
+	if !errors.Is(err, storage.ErrAnalysisNotFound) {
+		t.Errorf("GetAnalysisBySession(nonexistent) error = %v, want ErrAnalysisNotFound", err)
+	}
+}
+
+func TestListAnalyses(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("list-analysis-sess")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save session error = %v", err)
+	}
+
+	// Save 3 analyses
+	for i := 1; i <= 3; i++ {
+		a := testAnalysis(fmt.Sprintf("list-a%d", i), "list-analysis-sess")
+		a.CreatedAt = time.Date(2026, 3, i, 10, 0, 0, 0, time.UTC)
+		a.Report.Summary = fmt.Sprintf("Analysis #%d", i)
+		if err := store.SaveAnalysis(a); err != nil {
+			t.Fatalf("SaveAnalysis(%d) error = %v", i, err)
+		}
+	}
+
+	results, err := store.ListAnalyses("list-analysis-sess")
+	if err != nil {
+		t.Fatalf("ListAnalyses() error = %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("ListAnalyses() count = %d, want 3", len(results))
+	}
+	// Ordered by created_at DESC
+	if results[0].ID != "list-a3" {
+		t.Errorf("results[0].ID = %q, want list-a3 (most recent)", results[0].ID)
+	}
+	if results[2].ID != "list-a1" {
+		t.Errorf("results[2].ID = %q, want list-a1 (oldest)", results[2].ID)
+	}
+}
+
+func TestListAnalyses_Empty(t *testing.T) {
+	store := mustOpenStore(t)
+
+	results, err := store.ListAnalyses("nonexistent-session")
+	if err != nil {
+		t.Fatalf("ListAnalyses() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("ListAnalyses() count = %d, want 0", len(results))
+	}
+}
+
+// ── Session-to-Session Links Tests ──
+
+func TestLinkSessions(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("link-source")
+	s2 := testSession("link-target")
+	for _, s := range []*session.Session{s1, s2} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	link := session.SessionLink{
+		SourceSessionID: "link-source",
+		TargetSessionID: "link-target",
+		LinkType:        session.SessionLinkDelegatedTo,
+		Description:     "Delegated auth work",
+	}
+	if err := store.LinkSessions(link); err != nil {
+		t.Fatalf("LinkSessions() error = %v", err)
+	}
+
+	// Source should have forward link
+	links, err := store.GetLinkedSessions("link-source")
+	if err != nil {
+		t.Fatalf("GetLinkedSessions(source) error = %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("source links count = %d, want 1", len(links))
+	}
+	if links[0].LinkType != session.SessionLinkDelegatedTo {
+		t.Errorf("source link type = %q, want %q", links[0].LinkType, session.SessionLinkDelegatedTo)
+	}
+	if links[0].TargetSessionID != "link-target" {
+		t.Errorf("source link target = %q, want %q", links[0].TargetSessionID, "link-target")
+	}
+	if links[0].Description != "Delegated auth work" {
+		t.Errorf("description = %q, want %q", links[0].Description, "Delegated auth work")
+	}
+
+	// Target should have inverse link
+	inverseLinks, err := store.GetLinkedSessions("link-target")
+	if err != nil {
+		t.Fatalf("GetLinkedSessions(target) error = %v", err)
+	}
+	if len(inverseLinks) != 1 {
+		t.Fatalf("target links count = %d, want 1", len(inverseLinks))
+	}
+	if inverseLinks[0].LinkType != session.SessionLinkDelegatedFrom {
+		t.Errorf("inverse link type = %q, want %q", inverseLinks[0].LinkType, session.SessionLinkDelegatedFrom)
+	}
+}
+
+func TestLinkSessions_SessionNotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("link-exists")
+	if err := store.Save(s1); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	// Target doesn't exist
+	link := session.SessionLink{
+		SourceSessionID: "link-exists",
+		TargetSessionID: "nonexistent",
+		LinkType:        session.SessionLinkRelated,
+	}
+	if err := store.LinkSessions(link); err == nil {
+		t.Error("LinkSessions() should fail when target doesn't exist")
+	}
+
+	// Source doesn't exist
+	link2 := session.SessionLink{
+		SourceSessionID: "nonexistent",
+		TargetSessionID: "link-exists",
+		LinkType:        session.SessionLinkRelated,
+	}
+	if err := store.LinkSessions(link2); err == nil {
+		t.Error("LinkSessions() should fail when source doesn't exist")
+	}
+}
+
+func TestLinkSessions_DuplicateIgnored(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("dup-source")
+	s2 := testSession("dup-target")
+	for _, s := range []*session.Session{s1, s2} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	link := session.SessionLink{
+		SourceSessionID: "dup-source",
+		TargetSessionID: "dup-target",
+		LinkType:        session.SessionLinkRelated,
+	}
+	// First call should succeed
+	if err := store.LinkSessions(link); err != nil {
+		t.Fatalf("LinkSessions(1) error = %v", err)
+	}
+	// Second call with same link should not error (ON CONFLICT DO NOTHING)
+	if err := store.LinkSessions(link); err != nil {
+		t.Fatalf("LinkSessions(2) error = %v (should be idempotent)", err)
+	}
+}
+
+func TestGetLinkedSessions_Empty(t *testing.T) {
+	store := mustOpenStore(t)
+
+	links, err := store.GetLinkedSessions("nonexistent")
+	if err != nil {
+		t.Fatalf("GetLinkedSessions() error = %v", err)
+	}
+	if len(links) != 0 {
+		t.Errorf("expected 0 links, got %d", len(links))
+	}
+}
+
+func TestDeleteSessionLink(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("del-link-source")
+	s2 := testSession("del-link-target")
+	for _, s := range []*session.Session{s1, s2} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	link := session.SessionLink{
+		SourceSessionID: "del-link-source",
+		TargetSessionID: "del-link-target",
+		LinkType:        session.SessionLinkContinuation,
+	}
+	if err := store.LinkSessions(link); err != nil {
+		t.Fatalf("LinkSessions() error = %v", err)
+	}
+
+	// Get the link ID
+	links, err := store.GetLinkedSessions("del-link-source")
+	if err != nil || len(links) == 0 {
+		t.Fatalf("GetLinkedSessions() error = %v, count = %d", err, len(links))
+	}
+	linkID := links[0].ID
+
+	// Delete it
+	if err := store.DeleteSessionLink(linkID); err != nil {
+		t.Fatalf("DeleteSessionLink() error = %v", err)
+	}
+
+	// Verify it's gone
+	afterLinks, err := store.GetLinkedSessions("del-link-source")
+	if err != nil {
+		t.Fatalf("GetLinkedSessions() after delete error = %v", err)
+	}
+	if len(afterLinks) != 0 {
+		t.Errorf("expected 0 links after delete, got %d", len(afterLinks))
+	}
+}
+
+func TestDeleteSessionLink_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	err := store.DeleteSessionLink("nonexistent-link-id")
+	if err == nil {
+		t.Error("DeleteSessionLink(nonexistent) should return error")
+	}
+}
+
+// ── GetFreshness Tests ──
+
+func TestGetFreshness(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("freshness-1")
+	sess.SourceUpdatedAt = 1700000000
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	msgCount, sourceUpdatedAt, err := store.GetFreshness("freshness-1")
+	if err != nil {
+		t.Fatalf("GetFreshness() error = %v", err)
+	}
+	if msgCount != 1 { // testSession has 1 message
+		t.Errorf("messageCount = %d, want 1", msgCount)
+	}
+	if sourceUpdatedAt != 1700000000 {
+		t.Errorf("sourceUpdatedAt = %d, want 1700000000", sourceUpdatedAt)
+	}
+}
+
+func TestGetFreshness_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	msgCount, sourceUpdatedAt, err := store.GetFreshness("nonexistent")
+	if err != nil {
+		t.Fatalf("GetFreshness(nonexistent) error = %v", err)
+	}
+	if msgCount != 0 || sourceUpdatedAt != 0 {
+		t.Errorf("expected (0, 0) for nonexistent, got (%d, %d)", msgCount, sourceUpdatedAt)
+	}
+}
+
+// ── GetByLink additional tests ──
+
+func TestGetByLink_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_, err := store.GetByLink(session.LinkPR, "999")
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("GetByLink(nonexistent) error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestGetByLink_MultipleResults(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("bylink-1")
+	s1.Links = []session.Link{{LinkType: session.LinkPR, Ref: "42"}}
+	s2 := testSession("bylink-2")
+	s2.Links = []session.Link{{LinkType: session.LinkPR, Ref: "42"}}
+
+	for _, s := range []*session.Session{s1, s2} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	summaries, err := store.GetByLink(session.LinkPR, "42")
+	if err != nil {
+		t.Fatalf("GetByLink() error = %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Errorf("GetByLink() count = %d, want 2", len(summaries))
+	}
+}
+
+// ── AddLink edge case ──
+
+func TestAddLink_SessionNotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	err := store.AddLink("nonexistent", session.Link{LinkType: session.LinkPR, Ref: "42"})
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("AddLink(nonexistent) error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+// ── GetUser not found ──
+
+func TestGetUser_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	got, err := store.GetUser("nonexistent-user")
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil for nonexistent user, got %+v", got)
+	}
+}
+
+// ── List by provider filter ──
+
+func TestList_FilterByProvider(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("prov-list-1")
+	s1.Provider = session.ProviderClaudeCode
+	s2 := testSession("prov-list-2")
+	s2.Provider = session.ProviderOpenCode
+	s3 := testSession("prov-list-3")
+	s3.Provider = session.ProviderClaudeCode
+
+	for _, s := range []*session.Session{s1, s2, s3} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	summaries, err := store.List(session.ListOptions{
+		All:      true,
+		Provider: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Errorf("List(provider=opencode) count = %d, want 1", len(summaries))
+	}
+}
+
+// ── Tool call counting ──
+
+func TestSave_ToolCallCounting(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("tool-count")
+	sess.Messages = []session.Message{
+		{
+			ID:   "m1",
+			Role: session.RoleAssistant,
+			ToolCalls: []session.ToolCall{
+				{ID: "tc1", Name: "read_file", State: session.ToolStateCompleted},
+				{ID: "tc2", Name: "write_file", State: session.ToolStateError},
+			},
+		},
+		{
+			ID:   "m2",
+			Role: session.RoleAssistant,
+			ToolCalls: []session.ToolCall{
+				{ID: "tc3", Name: "bash", State: session.ToolStateCompleted},
+			},
+		},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Verify via List (which reads tool_call_count, error_count columns)
+	summaries, err := store.List(session.ListOptions{All: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("List() count = %d, want 1", len(summaries))
+	}
+	if summaries[0].ToolCallCount != 3 {
+		t.Errorf("ToolCallCount = %d, want 3", summaries[0].ToolCallCount)
+	}
+	if summaries[0].ErrorCount != 1 {
+		t.Errorf("ErrorCount = %d, want 1", summaries[0].ErrorCount)
+	}
+}
+
+// ── Auth Users ──
+
+func TestCreateAndGetAuthUser(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user, err := auth.NewUser("alice", "secure-password-123", auth.RoleUser)
+	if err != nil {
+		t.Fatalf("NewUser() error = %v", err)
+	}
+
+	if err := store.CreateAuthUser(user); err != nil {
+		t.Fatalf("CreateAuthUser() error = %v", err)
+	}
+
+	// Get by ID.
+	got, err := store.GetAuthUser(user.ID)
+	if err != nil {
+		t.Fatalf("GetAuthUser() error = %v", err)
+	}
+	if got.Username != "alice" {
+		t.Errorf("Username = %q, want %q", got.Username, "alice")
+	}
+	if got.Role != auth.RoleUser {
+		t.Errorf("Role = %q, want %q", got.Role, auth.RoleUser)
+	}
+	if !got.Active {
+		t.Error("Active should be true")
+	}
+	if got.PasswordHash == "" {
+		t.Error("PasswordHash should be preserved")
+	}
+
+	// Get by username.
+	got2, err := store.GetAuthUserByUsername("alice")
+	if err != nil {
+		t.Fatalf("GetAuthUserByUsername() error = %v", err)
+	}
+	if got2.ID != user.ID {
+		t.Errorf("ID = %q, want %q", got2.ID, user.ID)
+	}
+}
+
+func TestCreateAuthUser_Duplicate(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user1, _ := auth.NewUser("bob", "password-123456", auth.RoleUser)
+	user2, _ := auth.NewUser("bob", "different-pass-123", auth.RoleAdmin)
+
+	if err := store.CreateAuthUser(user1); err != nil {
+		t.Fatalf("first CreateAuthUser() error = %v", err)
+	}
+
+	err := store.CreateAuthUser(user2)
+	if !errors.Is(err, auth.ErrUserExists) {
+		t.Fatalf("second CreateAuthUser() error = %v, want ErrUserExists", err)
+	}
+}
+
+func TestGetAuthUser_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_, err := store.GetAuthUser("nonexistent")
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Fatalf("GetAuthUser() error = %v, want ErrUserNotFound", err)
+	}
+}
+
+func TestGetAuthUserByUsername_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_, err := store.GetAuthUserByUsername("nobody")
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Fatalf("GetAuthUserByUsername() error = %v, want ErrUserNotFound", err)
+	}
+}
+
+func TestUpdateAuthUser(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user, _ := auth.NewUser("charlie", "password-123456", auth.RoleUser)
+	if err := store.CreateAuthUser(user); err != nil {
+		t.Fatalf("CreateAuthUser() error = %v", err)
+	}
+
+	// Promote to admin and deactivate.
+	user.Role = auth.RoleAdmin
+	user.Active = false
+	user.UpdatedAt = time.Now().UTC()
+
+	if err := store.UpdateAuthUser(user); err != nil {
+		t.Fatalf("UpdateAuthUser() error = %v", err)
+	}
+
+	got, _ := store.GetAuthUser(user.ID)
+	if got.Role != auth.RoleAdmin {
+		t.Errorf("Role = %q, want admin", got.Role)
+	}
+	if got.Active {
+		t.Error("Active should be false after update")
+	}
+}
+
+func TestListAuthUsers(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user1, _ := auth.NewUser("alpha", "password-123456", auth.RoleAdmin)
+	user2, _ := auth.NewUser("beta", "password-123456", auth.RoleUser)
+	_ = store.CreateAuthUser(user1)
+	_ = store.CreateAuthUser(user2)
+
+	users, err := store.ListAuthUsers()
+	if err != nil {
+		t.Fatalf("ListAuthUsers() error = %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(users))
+	}
+}
+
+func TestCountAuthUsers(t *testing.T) {
+	store := mustOpenStore(t)
+
+	count, _ := store.CountAuthUsers()
+	if count != 0 {
+		t.Fatalf("expected 0 users, got %d", count)
+	}
+
+	user, _ := auth.NewUser("delta", "password-123456", auth.RoleUser)
+	_ = store.CreateAuthUser(user)
+
+	count, _ = store.CountAuthUsers()
+	if count != 1 {
+		t.Fatalf("expected 1 user, got %d", count)
+	}
+}
+
+// ── Auth API Keys ──
+
+func TestCreateAndGetAPIKey(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Need a user first.
+	user, _ := auth.NewUser("keyowner", "password-123456", auth.RoleUser)
+	_ = store.CreateAuthUser(user)
+
+	key, rawKey, err := auth.NewAPIKey(user.ID, "CI key")
+	if err != nil {
+		t.Fatalf("NewAPIKey() error = %v", err)
+	}
+
+	if err := store.CreateAPIKey(key); err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+
+	// Look up by hash (the way the middleware would).
+	got, err := store.GetAPIKeyByHash(key.KeyHash)
+	if err != nil {
+		t.Fatalf("GetAPIKeyByHash() error = %v", err)
+	}
+	if got.ID != key.ID {
+		t.Errorf("ID = %q, want %q", got.ID, key.ID)
+	}
+	if got.UserID != user.ID {
+		t.Errorf("UserID = %q, want %q", got.UserID, user.ID)
+	}
+	if got.Name != "CI key" {
+		t.Errorf("Name = %q, want %q", got.Name, "CI key")
+	}
+	if !got.Active {
+		t.Error("Active should be true")
+	}
+
+	// Verify the raw key matches.
+	if !got.MatchesKey(rawKey) {
+		t.Error("stored key should match the raw key")
+	}
+}
+
+func TestGetAPIKeyByHash_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	_, err := store.GetAPIKeyByHash("nonexistent-hash")
+	if !errors.Is(err, auth.ErrAPIKeyNotFound) {
+		t.Fatalf("GetAPIKeyByHash() error = %v, want ErrAPIKeyNotFound", err)
+	}
+}
+
+func TestListAPIKeysByUser(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user, _ := auth.NewUser("keylister", "password-123456", auth.RoleUser)
+	_ = store.CreateAuthUser(user)
+
+	key1, _, _ := auth.NewAPIKey(user.ID, "key 1")
+	key2, _, _ := auth.NewAPIKey(user.ID, "key 2")
+	_ = store.CreateAPIKey(key1)
+	_ = store.CreateAPIKey(key2)
+
+	keys, err := store.ListAPIKeysByUser(user.ID)
+	if err != nil {
+		t.Fatalf("ListAPIKeysByUser() error = %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(keys))
+	}
+}
+
+func TestUpdateAPIKey_Revoke(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user, _ := auth.NewUser("revoker", "password-123456", auth.RoleUser)
+	_ = store.CreateAuthUser(user)
+
+	key, _, _ := auth.NewAPIKey(user.ID, "revoke me")
+	_ = store.CreateAPIKey(key)
+
+	// Revoke the key.
+	key.Active = false
+	now := time.Now().UTC()
+	key.LastUsedAt = &now
+
+	if err := store.UpdateAPIKey(key); err != nil {
+		t.Fatalf("UpdateAPIKey() error = %v", err)
+	}
+
+	got, _ := store.GetAPIKeyByHash(key.KeyHash)
+	if got.Active {
+		t.Error("Active should be false after revocation")
+	}
+	if got.LastUsedAt == nil {
+		t.Error("LastUsedAt should be set")
+	}
+}
+
+func TestDeleteAPIKey(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user, _ := auth.NewUser("deleter", "password-123456", auth.RoleUser)
+	_ = store.CreateAuthUser(user)
+
+	key, _, _ := auth.NewAPIKey(user.ID, "delete me")
+	_ = store.CreateAPIKey(key)
+
+	if err := store.DeleteAPIKey(key.ID); err != nil {
+		t.Fatalf("DeleteAPIKey() error = %v", err)
+	}
+
+	_, err := store.GetAPIKeyByHash(key.KeyHash)
+	if !errors.Is(err, auth.ErrAPIKeyNotFound) {
+		t.Fatalf("after delete, GetAPIKeyByHash() error = %v, want ErrAPIKeyNotFound", err)
+	}
+}
+
+func TestDeleteAPIKey_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	err := store.DeleteAPIKey("nonexistent")
+	if !errors.Is(err, auth.ErrAPIKeyNotFound) {
+		t.Fatalf("DeleteAPIKey() error = %v, want ErrAPIKeyNotFound", err)
 	}
 }

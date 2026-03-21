@@ -15,44 +15,13 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
 
-// mockStore for blame tests.
-type mockStore struct {
-	blameEntries []session.BlameEntry
-}
-
-func (m *mockStore) Save(_ *session.Session) error              { return nil }
-func (m *mockStore) Delete(_ session.ID) error                  { return nil }
-func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
-func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
-func (m *mockStore) Close() error                             { return nil }
-func (m *mockStore) Get(_ session.ID) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
-	return nil, session.ErrSessionNotFound
-}
-func (m *mockStore) CountByBranch(_, _ string) (int, error)                { return 0, nil }
-func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
-func (m *mockStore) SaveUser(_ *session.User) error                        { return nil }
-func (m *mockStore) GetUser(_ session.ID) (*session.User, error)           { return nil, nil }
-func (m *mockStore) GetUserByEmail(_ string) (*session.User, error)        { return nil, nil }
-func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
-	return &session.SearchResult{}, nil
-}
-func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntry, error) {
-	return m.blameEntries, nil
-}
-
-func blameTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
+func blameTestFactory(t *testing.T, store *testutil.MockStore) (*cmdutil.Factory, *iostreams.IOStreams) {
 	t.Helper()
 	ios := iostreams.Test()
 	repoDir := testutil.InitTestRepo(t)
 
 	if store == nil {
-		store = &mockStore{}
+		store = testutil.NewMockStore()
 	}
 	gitClient := git.NewClient(repoDir)
 
@@ -60,7 +29,7 @@ func blameTestFactory(t *testing.T, store *mockStore) (*cmdutil.Factory, *iostre
 		IOStreams: ios,
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
 		StoreFunc: func() (storage.Store, error) { return store, nil },
-		SessionServiceFunc: func() (*service.SessionService, error) {
+		SessionServiceFunc: func() (service.SessionServicer, error) {
 			return service.NewSessionService(service.SessionServiceConfig{
 				Store: store,
 				Git:   gitClient,
@@ -85,7 +54,7 @@ func TestNewCmdBlame_flags(t *testing.T) {
 }
 
 func TestBlame_noResults(t *testing.T) {
-	store := &mockStore{}
+	store := testutil.NewMockStore()
 	f, ios := blameTestFactory(t, store)
 
 	opts := &Options{
@@ -106,16 +75,15 @@ func TestBlame_noResults(t *testing.T) {
 }
 
 func TestBlame_tableOutput(t *testing.T) {
-	store := &mockStore{
-		blameEntries: []session.BlameEntry{
-			{
-				SessionID:  "sess-123",
-				Provider:   session.ProviderClaudeCode,
-				Branch:     "feat/auth",
-				ChangeType: session.ChangeModified,
-				Summary:    "Implement login handler",
-				CreatedAt:  time.Now(),
-			},
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{
+			SessionID:  "sess-123",
+			Provider:   session.ProviderClaudeCode,
+			Branch:     "feat/auth",
+			ChangeType: session.ChangeModified,
+			Summary:    "Implement login handler",
+			CreatedAt:  time.Now(),
 		},
 	}
 	f, ios := blameTestFactory(t, store)
@@ -147,11 +115,10 @@ func TestBlame_tableOutput(t *testing.T) {
 }
 
 func TestBlame_allFlag(t *testing.T) {
-	store := &mockStore{
-		blameEntries: []session.BlameEntry{
-			{SessionID: "sess-1", Provider: session.ProviderClaudeCode, Branch: "main", ChangeType: session.ChangeModified, CreatedAt: time.Now()},
-			{SessionID: "sess-2", Provider: session.ProviderOpenCode, Branch: "feat/a", ChangeType: session.ChangeCreated, CreatedAt: time.Now()},
-		},
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "sess-1", Provider: session.ProviderClaudeCode, Branch: "main", ChangeType: session.ChangeModified, CreatedAt: time.Now()},
+		{SessionID: "sess-2", Provider: session.ProviderOpenCode, Branch: "feat/a", ChangeType: session.ChangeCreated, CreatedAt: time.Now()},
 	}
 	f, ios := blameTestFactory(t, store)
 
@@ -177,10 +144,9 @@ func TestBlame_allFlag(t *testing.T) {
 }
 
 func TestBlame_jsonOutput(t *testing.T) {
-	store := &mockStore{
-		blameEntries: []session.BlameEntry{
-			{SessionID: "json-sess", Provider: session.ProviderClaudeCode, Branch: "main", ChangeType: session.ChangeModified, CreatedAt: time.Now()},
-		},
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "json-sess", Provider: session.ProviderClaudeCode, Branch: "main", ChangeType: session.ChangeModified, CreatedAt: time.Now()},
 	}
 	f, ios := blameTestFactory(t, store)
 
@@ -203,11 +169,10 @@ func TestBlame_jsonOutput(t *testing.T) {
 }
 
 func TestBlame_quietOutput(t *testing.T) {
-	store := &mockStore{
-		blameEntries: []session.BlameEntry{
-			{SessionID: "quiet-1", Provider: session.ProviderClaudeCode, CreatedAt: time.Now()},
-			{SessionID: "quiet-2", Provider: session.ProviderOpenCode, CreatedAt: time.Now()},
-		},
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "quiet-1", Provider: session.ProviderClaudeCode, CreatedAt: time.Now()},
+		{SessionID: "quiet-2", Provider: session.ProviderOpenCode, CreatedAt: time.Now()},
 	}
 	f, ios := blameTestFactory(t, store)
 
