@@ -1211,3 +1211,142 @@ The telemetry framework is implemented (`internal/telemetry/`) with a `Collector
 | **Homebrew formula** | `brew install aisync` |
 | **APT/RPM packages** | Linux distribution packages |
 | **VS Code extension** | Session browser, inline analysis, cost indicators |
+
+---
+
+## UX Redesign v2 — "Find & Act" Layout
+
+### Problem
+
+The current dashboard is monitor-first (KPIs, trends, charts) but the primary user need is **find a session quickly and act on it** (restore, analyze, investigate). The dashboard should be action-first, monitor-second.
+
+### Design: GitHub-inspired project-centric layout
+
+#### Global Layout
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  aisync           [Search sessions...]       [Settings] │
+├──────────────┬──────────────────────────────────────────┤
+│              │                                          │
+│  PROJECTS    │  Content area (changes based on context) │
+│  sidebar     │                                          │
+│              │                                          │
+│  ● project1  │                                          │
+│  ● project2  │                                          │
+│  ● project3  │                                          │
+│              │                                          │
+└──────────────┴──────────────────────────────────────────┘
+```
+
+**Sidebar (always visible):**
+- List of all synced projects (repositories/directories)
+- Each project shows: name, provider icon, session count badge
+- Clicking a project filters everything to that project
+- "All projects" option at the top
+
+**Search bar (always visible in navbar):**
+- Global search across all sessions (by title, branch, content)
+- Autocomplete suggestions
+- Keyboard shortcut (Ctrl+K)
+
+#### Home Page (no project selected)
+
+```
+Recent Activity                    Quick Stats
+─────────────                      ───────────
+📌 3min ago — aisync               Sessions: 585
+   "Fix fork detection"            This week: 166 (+29%)
+   feature · 42 msgs · 15.2M tok   Tokens: 13B
+   [Restore] [Analyze] [View]      Errors: 899 (1.5%)
+
+📌 1h ago — omogen                 Top Projects
+   "Criteria deep assessment"      ─────────────
+   feature · 2966 msgs · 587M tok  omogen: 340 sessions
+   [Restore] [Analyze] [View]      aisync: 120 sessions
+                                   cycloplan: 85 sessions
+📌 2h ago — cycloplan
+   "iOS Import Riding"
+   bug · 124 msgs · 19.8M tok
+   [Restore] [Analyze] [View]
+```
+
+**Key principles:**
+- Recent sessions first (most likely what user needs)
+- Quick action buttons inline (Restore, Analyze, View)
+- Compact stats on the side (not dominating)
+- Session type badges (feature/bug/refactor)
+- Project name on each session (context)
+
+#### Project Page (project selected)
+
+```
+omogen                                         [Settings]
+────────────────────────────────────────────────────────
+
+KPIs: 340 sessions | 4.2B tokens | $12,878 API cost (subscription)
+      This week: 45 sessions (+15%) | Errors: 2.1%
+
+Tabs: [Sessions] [Branches] [Usage] [Costs] [Analysis]
+
+Sessions (default tab):
+┌──────────────────────────────────────────────────────┐
+│ Filter: [Branch ▾] [Type ▾] [Status ▾] [Search...]  │
+├──────────────────────────────────────────────────────┤
+│ 📌 "Criteria deep assessment"          3h ago        │
+│    feature · main · 2966 msgs · 587M tokens          │
+│    Intent: Add criteria assessment functionality     │
+│    Outcome: Assessment pipeline complete             │
+│    3 forks · 39 sub-agents                           │
+│    [Restore] [Analyze] [Fork Tree]                   │
+├──────────────────────────────────────────────────────┤
+│ 📌 "[PR] Blue-green deployment"        1d ago        │
+│    ops · main · 1583 msgs · 190M tokens              │
+│    Intent: Set up blue-green deployment              │
+│    [Restore] [Analyze]                               │
+└──────────────────────────────────────────────────────┘
+```
+
+**Per-project tabs:**
+- **Sessions** (default): filterable list with inline actions
+- **Branches**: branch explorer with timeline
+- **Usage**: heatmap + bar chart filtered to this project
+- **Costs**: cost breakdown for this project only
+- **Analysis**: aggregated analysis/quality metrics
+
+#### Session Detail Page
+
+Keep current layout but add:
+- **Breadcrumb**: aisync > omogen > main > ses_322e5df
+- **Quick actions bar**: [Restore to OpenCode] [Analyze] [Export] [Compare]
+- **Fork tree** (if forks exist)
+- **Work Objective** (intent/outcome)
+- **Activity bar** (message flow)
+- **Conversation** (existing)
+
+### Navigation Structure
+
+```
+Navbar:  [aisync logo] [Search...] [Settings]
+Sidebar: Projects list (always visible)
+Content: Context-dependent (home/project/session)
+
+URL structure:
+  /                          → home (recent activity)
+  /projects/{name}           → project overview (sessions tab)
+  /projects/{name}/branches  → branches for this project
+  /projects/{name}/usage     → usage for this project
+  /projects/{name}/costs     → costs for this project
+  /sessions/{id}             → session detail
+```
+
+### Implementation Plan
+
+1. **Layout refactor**: Add sidebar + content area (CSS grid)
+2. **Projects sidebar**: Always-visible project list with badges
+3. **Home page**: Recent activity feed + compact stats
+4. **Project page**: KPIs + tabbed content (sessions/branches/usage/costs)
+5. **Search**: Global search bar in navbar
+6. **Quick actions**: Inline buttons on session cards
+7. **Breadcrumbs**: Context navigation
+8. **URL routing**: Project-scoped routes
