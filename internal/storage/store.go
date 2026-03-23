@@ -53,6 +53,9 @@ type SessionWriter interface {
 	// Returns ErrSessionNotFound if the session does not exist.
 	Delete(id session.ID) error
 
+	// UpdateSummary updates only the summary column (avoids full payload re-write).
+	UpdateSummary(id session.ID, summary string) error
+
 	// UpdateSessionType sets the session_type tag for a session.
 	UpdateSessionType(id session.ID, sessionType string) error
 

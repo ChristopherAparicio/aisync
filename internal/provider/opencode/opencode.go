@@ -173,10 +173,19 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		return messages[i].Time.Created < messages[j].Time.Created
 	})
 
+	// Batch-load ALL parts for this session in one query (fixes N+1 problem).
+	allParts, batchErr := p.reader.loadAllPartsForSession(string(result.ID))
+	if batchErr != nil {
+		allParts = nil // fallback to per-message loading below
+	}
+
 	for _, msg := range messages {
-		parts, partErr := p.reader.loadParts(msg.ID)
-		if partErr != nil {
-			continue
+		var parts []ocPart
+		if allParts != nil {
+			parts = allParts[msg.ID]
+		} else {
+			// Fallback: per-message loading (for file reader or if batch failed).
+			parts, _ = p.reader.loadParts(msg.ID)
 		}
 
 		// Resolve providerID: top-level field takes precedence, fallback to nested model.

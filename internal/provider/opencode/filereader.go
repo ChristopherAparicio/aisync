@@ -146,6 +146,11 @@ func (r *fileReader) loadMessages(sessionID string) ([]ocMessage, error) {
 	return messages, nil
 }
 
+func (r *fileReader) loadAllPartsForSession(sessionID string) (map[string][]ocPart, error) {
+	// File reader doesn't support batch loading — fall back to per-message loading.
+	return nil, nil
+}
+
 func (r *fileReader) loadParts(messageID string) ([]ocPart, error) {
 	partsPath := filepath.Join(r.storagePath, partDir, messageID)
 	entries, err := os.ReadDir(partsPath)

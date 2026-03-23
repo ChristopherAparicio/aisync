@@ -405,6 +405,18 @@ func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
 	return summaries, rows.Err()
 }
 
+// UpdateSummary updates only the summary column without re-writing the payload.
+func (s *Store) UpdateSummary(id session.ID, summary string) error {
+	result, err := s.db.Exec("UPDATE sessions SET summary = ? WHERE id = ?", summary, id)
+	if err != nil {
+		return fmt.Errorf("updating summary: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
 // UpdateSessionType sets the session_type classification tag.
 func (s *Store) UpdateSessionType(id session.ID, sessionType string) error {
 	result, err := s.db.Exec("UPDATE sessions SET session_type = ? WHERE id = ?", sessionType, id)
@@ -1682,16 +1694,15 @@ func (s *Store) GetFreshness(id session.ID) (int, int64, error) {
 func (s *Store) ListProjects() ([]session.ProjectGroup, error) {
 	rows, err := s.db.Query(`
 		SELECT
-			COALESCE(remote_url, '') AS remote_url,
-			project_path,
-			provider,
+			COALESCE(MAX(remote_url), '') AS remote_url,
+			MIN(project_path) AS project_path,
+			MAX(provider) AS provider,
 			COALESCE(MAX(project_category), '') AS category,
 			COUNT(*) AS session_count,
 			COALESCE(SUM(total_tokens), 0) AS total_tokens
 		FROM sessions
 		GROUP BY
-			CASE WHEN remote_url != '' THEN remote_url ELSE project_path END,
-			provider
+			CASE WHEN remote_url != '' THEN remote_url ELSE project_path END
 		ORDER BY session_count DESC
 	`)
 	if err != nil {

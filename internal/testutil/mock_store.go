@@ -152,6 +152,15 @@ func (m *MockStore) List(opts session.ListOptions) ([]session.Summary, error) {
 	return result, nil
 }
 
+func (m *MockStore) UpdateSummary(id session.ID, summary string) error {
+	s, ok := m.Sessions[id]
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	s.Summary = summary
+	return nil
+}
+
 func (m *MockStore) UpdateSessionType(id session.ID, sessionType string) error {
 	s, ok := m.Sessions[id]
 	if !ok {

@@ -10,7 +10,8 @@ import (
 // ComputeObjectiveRequest specifies which session to compute an objective for.
 type ComputeObjectiveRequest struct {
 	SessionID string
-	FullMode  bool // if true, also compute the full explain (costs more tokens)
+	Session   *session.Session // optional: pass session directly to avoid DB re-load
+	FullMode  bool             // if true, also compute the full explain (costs more tokens)
 }
 
 // ComputeObjective generates and persists a work objective for a session.
@@ -18,9 +19,13 @@ type ComputeObjectiveRequest struct {
 //
 // This is idempotent — calling it again overwrites the previous objective.
 func (s *SessionService) ComputeObjective(ctx context.Context, req ComputeObjectiveRequest) (*session.SessionObjective, error) {
-	sess, err := s.store.Get(session.ID(req.SessionID))
-	if err != nil {
-		return nil, fmt.Errorf("loading session: %w", err)
+	sess := req.Session
+	if sess == nil {
+		var err error
+		sess, err = s.store.Get(session.ID(req.SessionID))
+		if err != nil {
+			return nil, fmt.Errorf("loading session: %w", err)
+		}
 	}
 
 	if len(sess.Messages) < 2 {

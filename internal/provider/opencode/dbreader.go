@@ -165,6 +165,36 @@ func (r *dbReader) loadMessages(sessionID string) ([]ocMessage, error) {
 	return messages, rows.Err()
 }
 
+func (r *dbReader) loadAllPartsForSession(sessionID string) (map[string][]ocPart, error) {
+	rows, err := r.db.Query(
+		`SELECT id, message_id, session_id, data FROM part
+		 WHERE session_id = ?
+		 ORDER BY message_id, time_created ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying all parts: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]ocPart)
+	for rows.Next() {
+		var id, msgID, sessID, dataStr string
+		if err := rows.Scan(&id, &msgID, &sessID, &dataStr); err != nil {
+			continue
+		}
+		var part ocPart
+		if err := json.Unmarshal([]byte(dataStr), &part); err != nil {
+			continue
+		}
+		part.ID = id
+		part.SessionID = sessID
+		part.MessageID = msgID
+		result[msgID] = append(result[msgID], part)
+	}
+	return result, rows.Err()
+}
+
 func (r *dbReader) loadParts(messageID string) ([]ocPart, error) {
 	rows, err := r.db.Query(
 		`SELECT id, message_id, session_id, data FROM part

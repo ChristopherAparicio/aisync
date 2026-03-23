@@ -21,6 +21,10 @@ type reader interface {
 	// loadParts returns all parts for a message.
 	loadParts(messageID string) ([]ocPart, error)
 
+	// loadAllPartsForSession loads ALL parts for a session in one query,
+	// grouped by message ID. This avoids the N+1 query problem.
+	loadAllPartsForSession(sessionID string) (map[string][]ocPart, error)
+
 	// countMessages returns the number of messages for a session.
 	countMessages(sessionID string) int
 

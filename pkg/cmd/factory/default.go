@@ -413,6 +413,7 @@ func New() *cmdutil.Factory {
 							if svcErr == nil {
 								_, _ = sessionSvcLocal.ComputeObjective(context.Background(), service.ComputeObjectiveRequest{
 									SessionID: string(sess.ID),
+									Session:   sess,
 								})
 							}
 						}

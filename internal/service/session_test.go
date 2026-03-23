@@ -869,6 +869,7 @@ func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
 func (m *mockStore) CountByBranch(_, _ string) (int, error)                { return 0, nil }
 func (m *mockStore) List(_ session.ListOptions) ([]session.Summary, error) { return nil, nil }
 func (m *mockStore) Delete(_ session.ID) error                             { return nil }
+func (m *mockStore) UpdateSummary(_ session.ID, _ string) error            { return nil }
 func (m *mockStore) UpdateSessionType(_ session.ID, _ string) error        { return nil }
 func (m *mockStore) UpdateProjectCategory(_ string, _ string) (int, error) { return 0, nil }
 func (m *mockStore) SetProjectCategory(_ session.ID, _ string) error       { return nil }
