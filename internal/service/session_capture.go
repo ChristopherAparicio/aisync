@@ -68,6 +68,26 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 		Skipped:      result.Skipped,
 	}
 
+	// Save child sessions (sub-agents) as separate rows in the store.
+	// This makes them searchable, listable, and visible in the dashboard.
+	if len(result.Session.Children) > 0 {
+		for i := range result.Session.Children {
+			child := &result.Session.Children[i]
+			child.ParentID = result.Session.ID
+			// Inherit project metadata from parent if not set.
+			if child.ProjectPath == "" {
+				child.ProjectPath = result.Session.ProjectPath
+			}
+			if child.RemoteURL == "" {
+				child.RemoteURL = result.Session.RemoteURL
+			}
+			if child.Branch == "" {
+				child.Branch = result.Session.Branch
+			}
+			_ = s.store.Save(child)
+		}
+	}
+
 	// If skipped (unchanged), return immediately — no summarization or hooks needed.
 	if result.Skipped {
 		return captureResult, nil
@@ -134,6 +154,25 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 		if r.Session.RemoteURL == "" {
 			r.Session.RemoteURL = remoteURL
 		}
+
+		// Save child sessions (sub-agents) as separate rows.
+		if len(r.Session.Children) > 0 {
+			for i := range r.Session.Children {
+				child := &r.Session.Children[i]
+				child.ParentID = r.Session.ID
+				if child.ProjectPath == "" {
+					child.ProjectPath = r.Session.ProjectPath
+				}
+				if child.RemoteURL == "" {
+					child.RemoteURL = r.Session.RemoteURL
+				}
+				if child.Branch == "" {
+					child.Branch = r.Session.Branch
+				}
+				_ = s.store.Save(child)
+			}
+		}
+
 		captureResults = append(captureResults, &CaptureResult{
 			Session:      r.Session,
 			Provider:     r.Provider,
