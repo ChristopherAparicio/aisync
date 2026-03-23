@@ -345,7 +345,7 @@ func (s *Store) CountByBranch(projectPath string, branch string) (int, error) {
 
 // List returns session summaries matching the given options.
 func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
-	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, created_at, COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '') FROM sessions WHERE 1=1"
+	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, created_at, COALESCE(source_updated_at, 0), COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '') FROM sessions WHERE 1=1"
 	args := []interface{}{}
 
 	if opts.ProjectPath != "" {
@@ -396,8 +396,13 @@ func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
 	for rows.Next() {
 		var ss session.Summary
 		var createdAt string
-		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &createdAt, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType, &ss.ProjectCategory, &ss.Status); err != nil {
+		var updatedAtMs int64
+		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &createdAt, &updatedAtMs, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType, &ss.ProjectCategory, &ss.Status); err != nil {
 			return nil, fmt.Errorf("scanning session row: %w", err)
+		}
+		ss.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
+		if updatedAtMs > 0 {
+			ss.UpdatedAt = time.UnixMilli(updatedAtMs)
 		}
 		summaries = append(summaries, ss)
 	}

@@ -339,6 +339,19 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 			}
 		}
 
+		// Sort by last update time (most recently active first).
+		sort.Slice(summaries, func(i, j int) bool {
+			ti := summaries[i].UpdatedAt
+			if ti.IsZero() {
+				ti = summaries[i].CreatedAt
+			}
+			tj := summaries[j].UpdatedAt
+			if tj.IsZero() {
+				tj = summaries[j].CreatedAt
+			}
+			return ti.After(tj)
+		})
+
 		limit := 10
 		if len(summaries) < limit {
 			limit = len(summaries)

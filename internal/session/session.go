@@ -40,6 +40,7 @@ type Session struct {
 // Summary is a lightweight representation of a session for listings.
 type Summary struct {
 	CreatedAt       time.Time     `json:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at,omitempty"` // last update from source provider
 	ID              ID            `json:"id"`
 	ParentID        ID            `json:"parent_id,omitempty"`
 	OwnerID         ID            `json:"owner_id,omitempty"`

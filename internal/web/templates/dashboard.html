@@ -170,7 +170,7 @@
             <span class="badge badge-provider">{{.Provider}}</span>
             {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
             {{if .Status}}<span class="badge badge-status-{{.Status}}">{{.Status}}</span>{{end}}
-            <span class="recent-session-when text-muted">{{timeAgo .CreatedAt}}</span>
+            <span class="recent-session-when text-muted">{{if not .UpdatedAt.IsZero}}{{timeAgo .UpdatedAt}}{{else}}{{timeAgo .CreatedAt}}{{end}}</span>
           </div>
           <div class="recent-session-title">{{if .Summary}}{{truncate .Summary 60}}{{else}}{{truncate .ID 16}}{{end}}</div>
           <div class="recent-session-meta text-muted">
