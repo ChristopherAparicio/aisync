@@ -78,6 +78,7 @@ func New(cfg Config) (*Server, error) {
 		{"templates/branch_timeline.html"},
 		{"templates/usage.html"},
 		{"templates/analytics.html"},
+		{"templates/analytics_events.html"},
 	}
 
 	pages := make(map[string]*template.Template, len(pageSpecs))
@@ -96,6 +97,7 @@ func New(cfg Config) (*Server, error) {
 		"templates/sessions_table.html",
 		"templates/restore_command.html",
 		"templates/analysis_partial.html",
+		"templates/event_partials.html",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("parse partials: %w", err)
@@ -144,13 +146,15 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects", s.handleProjects)
 	mux.HandleFunc("GET /costs", s.handleCosts)
 	mux.HandleFunc("GET /usage", s.handleUsage)
-	// mux.HandleFunc("GET /analytics", s.handleAnalytics) // TODO: implement analytics page
+	mux.HandleFunc("GET /analytics", s.handleAnalytics)
 
 	// HTMX partials
 	mux.HandleFunc("GET /partials/sessions-table", s.handleSessionsTable)
 	mux.HandleFunc("GET /partials/restore-command/{id}", s.handleRestoreCommand)
 	mux.HandleFunc("GET /partials/analysis/{id}", s.handleAnalysisPartial)
 	mux.HandleFunc("POST /partials/analyze/{id}", s.handleRunAnalysis)
+	mux.HandleFunc("GET /partials/agent-detail", s.handleAgentDetailPartial)
+	mux.HandleFunc("GET /partials/session-events/{id}", s.handleSessionEventsPartial)
 
 	// API endpoints (JSON)
 	mux.HandleFunc("GET /api/projects", s.handleAPIProjects)

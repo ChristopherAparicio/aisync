@@ -1,0 +1,233 @@
+{{define "analytics_events.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Analytics — aisync{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4AC;</span> Sessions</a></li>
+      <li><a href="/analytics" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x1F4CA;</span> Analytics</a></li>
+      <li><a href="/costs" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4B0;</span> Costs</a></li>
+    </ul>
+  </div>
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/analytics?project={{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
+{{define "content"}}
+<h1 class="page-title">Analytics
+  {{if .SelectedProject}}<span class="text-muted" style="font-size:0.6em;font-weight:400">{{.SelectedProject}}</span>{{end}}
+</h1>
+
+<!-- Period selector -->
+<div class="analytics-tabs">
+  <a href="/analytics?days=7{{if .SelectedProject}}&project={{.SelectedProject}}{{end}}" class="analytics-tab {{if eq .PeriodLabel "7 days"}}active{{end}}">7 days</a>
+  <a href="/analytics?days=30{{if .SelectedProject}}&project={{.SelectedProject}}{{end}}" class="analytics-tab {{if eq .PeriodLabel "30 days"}}active{{end}}">30 days</a>
+  <a href="/analytics?days=90{{if .SelectedProject}}&project={{.SelectedProject}}{{end}}" class="analytics-tab {{if eq .PeriodLabel "90 days"}}active{{end}}">90 days</a>
+  <a href="/costs" class="analytics-tab">Costs</a>
+  <a href="/usage" class="analytics-tab">Usage Heatmap</a>
+</div>
+
+{{if not .HasData}}
+<div class="empty-state">
+  <p>No event data yet.</p>
+  <p class="hint">Events are extracted automatically when sessions are captured.<br>Run <code>aisync capture</code> to get started.</p>
+</div>
+{{else}}
+
+<!-- ── Level 1: Overview KPI Cards ── -->
+<div class="kpi-grid" style="margin-top:1rem">
+  <div class="kpi-card">
+    <div class="label">Sessions</div>
+    <div class="value">{{.TotalSessions}}</div>
+  </div>
+  <div class="kpi-card" style="cursor:pointer" onclick="document.getElementById('agents-section').scrollIntoView({behavior:'smooth'})">
+    <div class="label">Agents</div>
+    <div class="value">{{len .TopAgents}}</div>
+    <div class="sub">
+      {{range $i, $a := .TopAgents}}{{if lt $i 3}}{{if $i}}, {{end}}{{$a.Name}}{{end}}{{end}}
+    </div>
+  </div>
+  <div class="kpi-card" style="cursor:pointer" onclick="document.getElementById('tools-section').scrollIntoView({behavior:'smooth'})">
+    <div class="label">Tool Calls</div>
+    <div class="value">{{formatTokens .TotalToolCalls}}</div>
+    <div class="sub">{{.UniqueTools}} unique tools</div>
+  </div>
+  <div class="kpi-card" style="cursor:pointer" onclick="document.getElementById('skills-section').scrollIntoView({behavior:'smooth'})">
+    <div class="label">Skills Loaded</div>
+    <div class="value">{{.TotalSkillLoads}}</div>
+    <div class="sub">{{.UniqueSkills}} unique skills</div>
+  </div>
+  <div class="kpi-card" style="cursor:pointer" onclick="document.getElementById('commands-section').scrollIntoView({behavior:'smooth'})">
+    <div class="label">Commands</div>
+    <div class="value">{{formatTokens .TotalCommands}}</div>
+  </div>
+  {{if gt .TotalErrors 0}}
+  <div class="kpi-card">
+    <div class="label">Errors</div>
+    <div class="value" style="color:var(--red)">{{.TotalErrors}}</div>
+  </div>
+  {{end}}
+</div>
+
+<!-- ── Daily Activity Timeline ── -->
+{{if .DailyBuckets}}
+<div class="section" style="margin-top:1.5rem">
+  <h2 class="section-title">Daily Activity</h2>
+  <div class="table-wrap" style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Tool Calls</th>
+          <th class="text-right">Skills</th>
+          <th class="text-right">Commands</th>
+          <th class="text-right">Errors</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .DailyBuckets}}
+        <tr>
+          <td>{{.Date}}</td>
+          <td class="text-right">{{.Sessions}}</td>
+          <td class="text-right font-mono">{{.ToolCalls}}</td>
+          <td class="text-right">{{.Skills}}</td>
+          <td class="text-right">{{.Commands}}</td>
+          <td class="text-right {{if gt .Errors 0}}activity-card-errors{{end}}">{{.Errors}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Level 2: Agents Breakdown (click to drill down) ── -->
+<div class="section" id="agents-section" style="margin-top:1.5rem">
+  <h2 class="section-title">Agents</h2>
+  {{if .TopAgents}}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Share</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .TopAgents}}
+        <tr>
+          <td><strong>{{.Name}}</strong></td>
+          <td class="text-right">{{.Count}}</td>
+          <td class="text-right">{{printf "%.0f" .Pct}}%</td>
+          <td class="text-right">
+            <button class="action-btn action-btn--primary"
+                    hx-get="/partials/agent-detail?agent={{.Name}}{{if $.SelectedProject}}&project={{$.SelectedProject}}{{end}}"
+                    hx-target="#agent-detail-{{.Name}}"
+                    hx-swap="innerHTML">Details</button>
+          </td>
+        </tr>
+        <tr><td colspan="4" id="agent-detail-{{.Name}}"></td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="text-muted">No agent data yet.</p>
+  {{end}}
+</div>
+
+<!-- ── Tools Breakdown ── -->
+<div class="section" id="tools-section" style="margin-top:1.5rem">
+  <h2 class="section-title">Top Tools</h2>
+  {{if .TopTools}}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Tool</th><th class="text-right">Calls</th><th class="text-right">Share</th></tr>
+      </thead>
+      <tbody>
+        {{range .TopTools}}
+        <tr>
+          <td class="font-mono">{{.Name}}</td>
+          <td class="text-right">{{.Count}}</td>
+          <td class="text-right">{{printf "%.0f" .Pct}}%</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+
+<!-- ── Skills Breakdown ── -->
+<div class="section" id="skills-section" style="margin-top:1.5rem">
+  <h2 class="section-title">Skills</h2>
+  {{if .TopSkills}}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Skill</th><th class="text-right">Loads</th><th class="text-right">Share</th></tr>
+      </thead>
+      <tbody>
+        {{range .TopSkills}}
+        <tr>
+          <td class="font-mono">{{.Name}}</td>
+          <td class="text-right">{{.Count}}</td>
+          <td class="text-right">{{printf "%.0f" .Pct}}%</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="text-muted">No skills loaded in this period.</p>
+  {{end}}
+</div>
+
+<!-- ── Commands Breakdown ── -->
+<div class="section" id="commands-section" style="margin-top:1.5rem">
+  <h2 class="section-title">Top Commands</h2>
+  {{if .TopCommands}}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Command</th><th class="text-right">Executions</th><th class="text-right">Share</th></tr>
+      </thead>
+      <tbody>
+        {{range .TopCommands}}
+        <tr>
+          <td class="font-mono">{{.Name}}</td>
+          <td class="text-right">{{.Count}}</td>
+          <td class="text-right">{{printf "%.0f" .Pct}}%</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+
+{{end}}
+{{end}}

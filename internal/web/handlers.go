@@ -1428,19 +1428,8 @@ type analyticsPage struct {
 	BillingType    string
 }
 
-func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
-	data := analyticsPage{Nav: "analytics"}
-
-	stats, err := s.cachedStats(service.StatsRequest{All: true})
-	if err == nil {
-		data.TotalSessions = stats.TotalSessions
-		data.TotalTokens = stats.TotalTokens
-		data.TotalCost = stats.TotalCost
-		data.BillingType = stats.BillingType
-	}
-
-	s.render(w, "analytics.html", data)
-}
+// handleAnalytics is now in event_handlers.go — this placeholder remains for
+// the analytics.html page (basic stats tab).
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")

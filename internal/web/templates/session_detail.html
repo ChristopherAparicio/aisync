@@ -90,6 +90,18 @@
   </div>
 </div>
 
+<!-- ── Session Events (HTMX drill-down) ── -->
+<div class="section" style="margin-top:1rem">
+  <h2 class="section-title">
+    Events
+    <button class="action-btn action-btn--primary" style="margin-left:0.5rem;font-size:0.75rem"
+            hx-get="/partials/session-events/{{.Session.ID}}"
+            hx-target="#session-events-panel"
+            hx-swap="innerHTML">Load Events</button>
+  </h2>
+  <div id="session-events-panel"></div>
+</div>
+
 <!-- ── Work Objective ── -->
 {{if .HasObjective}}
 <div class="section">

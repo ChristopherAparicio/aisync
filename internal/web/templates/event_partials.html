@@ -1,0 +1,178 @@
+{{define "agent_detail_partial"}}
+<div class="agent-detail-panel" style="background:var(--bg-card);border-radius:8px;padding:1rem;margin:0.5rem 0">
+  <div style="display:flex;gap:1rem;align-items:center;margin-bottom:0.75rem">
+    <h3 style="margin:0">{{.AgentName}}</h3>
+    <span class="badge badge-provider">{{.SessionCount}} sessions</span>
+    <span class="text-muted">last {{.PeriodLabel}}</span>
+  </div>
+
+  <!-- Mini KPIs -->
+  <div class="kpi-strip" style="margin-bottom:1rem">
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value">{{formatTokens .ToolCalls}}</span>
+      <span class="kpi-strip-label">tool calls</span>
+    </div>
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value">{{.SkillLoads}}</span>
+      <span class="kpi-strip-label">skills loaded</span>
+    </div>
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value">{{.Commands}}</span>
+      <span class="kpi-strip-label">commands</span>
+    </div>
+    {{if gt .Errors 0}}
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value" style="color:var(--red)">{{.Errors}}</span>
+      <span class="kpi-strip-label">errors</span>
+    </div>
+    {{end}}
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:1rem">
+    <!-- Top tools for this agent -->
+    {{if .TopTools}}
+    <div>
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Top Tools</h4>
+      {{range .TopTools}}
+      <div style="display:flex;justify-content:space-between;padding:2px 0">
+        <span class="font-mono" style="font-size:0.85rem">{{.Name}}</span>
+        <span class="text-muted" style="font-size:0.85rem">{{.Count}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    <!-- Top skills for this agent -->
+    {{if .TopSkills}}
+    <div>
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Skills Used</h4>
+      {{range .TopSkills}}
+      <div style="display:flex;justify-content:space-between;padding:2px 0">
+        <span class="font-mono" style="font-size:0.85rem">{{.Name}}</span>
+        <span class="text-muted" style="font-size:0.85rem">{{.Count}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    <!-- Top commands for this agent -->
+    {{if .TopCommands}}
+    <div>
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Top Commands</h4>
+      {{range .TopCommands}}
+      <div style="display:flex;justify-content:space-between;padding:2px 0">
+        <span class="font-mono" style="font-size:0.85rem">{{.Name}}</span>
+        <span class="text-muted" style="font-size:0.85rem">{{.Count}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  <!-- Recent sessions -->
+  {{if .Sessions}}
+  <h4 style="margin:1rem 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Recent Sessions</h4>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Session</th><th>Summary</th><th class="text-right">Tokens</th><th class="text-right">When</th></tr>
+      </thead>
+      <tbody>
+        {{range .Sessions}}
+        <tr>
+          <td><a href="/sessions/{{.ID}}" class="font-mono">{{truncate .ID 10}}</a></td>
+          <td>{{if .Summary}}{{truncate .Summary 50}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right">{{timeAgo .CreatedAt}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "session_events_partial"}}
+{{if not .HasData}}
+<div class="text-muted" style="padding:0.5rem">No event data for this session.</div>
+{{else}}
+<div style="background:var(--bg-card);border-radius:8px;padding:1rem;margin:0.5rem 0">
+  <h3 style="margin:0 0 0.75rem 0">Session Events</h3>
+
+  <!-- Mini KPIs -->
+  <div class="kpi-strip" style="margin-bottom:1rem">
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value">{{.Summary.TotalEvents}}</span>
+      <span class="kpi-strip-label">total events</span>
+    </div>
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value">{{.Summary.ToolCallCount}}</span>
+      <span class="kpi-strip-label">tool calls ({{.Summary.UniqueToolCount}} unique)</span>
+    </div>
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value">{{.Summary.SkillLoadCount}}</span>
+      <span class="kpi-strip-label">skills loaded</span>
+    </div>
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value">{{.Summary.CommandCount}}</span>
+      <span class="kpi-strip-label">commands</span>
+    </div>
+    {{if gt .Summary.ErrorCount 0}}
+    <div class="kpi-strip-item">
+      <span class="kpi-strip-value" style="color:var(--red)">{{.Summary.ErrorCount}}</span>
+      <span class="kpi-strip-label">errors</span>
+    </div>
+    {{end}}
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:1rem">
+    <!-- Tool breakdown -->
+    {{if .Summary.ToolBreakdown}}
+    <div>
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Tool Calls</h4>
+      {{range $name, $count := .Summary.ToolBreakdown}}
+      <div style="display:flex;justify-content:space-between;padding:2px 0">
+        <span class="font-mono" style="font-size:0.85rem">{{$name}}</span>
+        <span class="text-muted" style="font-size:0.85rem">{{$count}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    <!-- Skills loaded -->
+    {{if .Summary.SkillsLoaded}}
+    <div>
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Skills Loaded</h4>
+      {{range .Summary.SkillsLoaded}}
+      <div style="padding:2px 0">
+        <span class="font-mono" style="font-size:0.85rem">{{.}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    <!-- Command breakdown -->
+    {{if .Summary.CommandBreakdown}}
+    <div>
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Commands</h4>
+      {{range $name, $count := .Summary.CommandBreakdown}}
+      <div style="display:flex;justify-content:space-between;padding:2px 0">
+        <span class="font-mono" style="font-size:0.85rem">{{$name}}</span>
+        <span class="text-muted" style="font-size:0.85rem">{{$count}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  <!-- Models used -->
+  {{if .Summary.Models}}
+  <div style="margin-top:0.75rem">
+    <span style="font-size:0.85rem;color:var(--text-muted)">Models: </span>
+    {{range $i, $m := .Summary.Models}}{{if $i}}, {{end}}<span class="font-mono" style="font-size:0.85rem">{{$m}}</span>{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}
