@@ -40,7 +40,8 @@ type PushResult struct {
 
 // PullResult contains the outcome of a pull operation.
 type PullResult struct {
-	Pulled int // number of sessions imported from the sync branch
+	Pulled    int          // number of sessions imported from the sync branch
+	PulledIDs []session.ID // IDs of the sessions that were pulled (for post-processing)
 }
 
 // Service orchestrates session sync via the git branch.
@@ -191,6 +192,7 @@ func (s *Service) Pull(pullRemote bool) (*PullResult, error) {
 
 	// Import sessions that we don't already have
 	var pulled int
+	var pulledIDs []session.ID
 	for _, entry := range idx.Entries {
 		// Check if we already have this session
 		if _, getErr := s.store.Get(entry.ID); getErr == nil {
@@ -213,9 +215,10 @@ func (s *Service) Pull(pullRemote bool) (*PullResult, error) {
 			continue
 		}
 		pulled++
+		pulledIDs = append(pulledIDs, sess.ID)
 	}
 
-	return &PullResult{Pulled: pulled}, nil
+	return &PullResult{Pulled: pulled, PulledIDs: pulledIDs}, nil
 }
 
 // readIndex reads the index.json from the sync branch.

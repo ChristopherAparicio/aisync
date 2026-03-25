@@ -27,6 +27,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/llmfactory"
 	"github.com/ChristopherAparicio/aisync/internal/llmqueue"
+	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/replay"
 	"github.com/ChristopherAparicio/aisync/internal/scheduler"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
@@ -410,6 +411,26 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 
 	logger.Printf("listening on http://%s", ln.Addr())
 
+	// ── LiteLLM Auto-Refresh (background) ──
+	// If the LiteLLM price cache is stale (>7 days), refresh in background.
+	go func() {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		cacheDir := filepath.Join(homeDir, ".aisync")
+		info := pricing.CacheInfo(cacheDir)
+		if info.Stale || !info.Exists {
+			logger.Printf("LiteLLM price cache is stale (age: %s), refreshing in background...", info.Age.Round(time.Hour))
+			count, err := pricing.UpdateCache(pricing.LiteLLMCatalogConfig{CacheDir: cacheDir})
+			if err != nil {
+				logger.Printf("LiteLLM auto-refresh failed: %v", err)
+			} else {
+				logger.Printf("LiteLLM price cache refreshed (%d models)", count)
+			}
+		}
+	}()
+
 	// ── LLM Queue (serializes Ollama/LLM calls) ──
 	llmQ := llmqueue.New(llmqueue.Config{
 		MaxConcurrency: 1, // single GPU — one at a time
@@ -563,6 +584,36 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			})
 		}
 	}
+
+	// ── Manual backfill trigger ──
+	mux.HandleFunc("POST /api/v1/backfill/remote-url", func(w http.ResponseWriter, r *http.Request) {
+		result, err := sessionSvc.BackfillRemoteURLs(r.Context())
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			data, _ := json.Marshal(map[string]string{"error": err.Error()})
+			w.Write(data)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		data, _ := json.Marshal(result)
+		w.Write(data)
+	})
+
+	// ── Manual fork detection trigger ──
+	mux.HandleFunc("POST /api/v1/backfill/forks", func(w http.ResponseWriter, r *http.Request) {
+		result, err := sessionSvc.DetectForksBatch(r.Context())
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			data, _ := json.Marshal(map[string]string{"error": err.Error()})
+			w.Write(data)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		data, _ := json.Marshal(result)
+		w.Write(data)
+	})
 
 	// Serve in background.
 	errCh := make(chan error, 1)

@@ -167,6 +167,12 @@ func (s *SessionService) Ingest(_ context.Context, req IngestRequest) (*IngestRe
 		return nil, fmt.Errorf("storing ingested session: %w", err)
 	}
 
+	// Post-capture hook: extract events, classify errors, fire webhooks, etc.
+	// Non-blocking: errors are swallowed (same contract as Capture).
+	if s.postCapture != nil {
+		s.postCapture(sess)
+	}
+
 	// Delegate detection: creates session-to-session links non-blocking.
 	// Errors are silently swallowed — link creation is best-effort.
 	s.detectAndLinkDelegation(sess, req.DelegatedFromSessionID)

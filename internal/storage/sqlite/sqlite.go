@@ -278,7 +278,10 @@ func (s *Store) Save(session *session.Session) error {
 // Get retrieves a session by its ID.
 func (s *Store) Get(id session.ID) (*session.Session, error) {
 	var payload []byte
-	err := s.db.QueryRow("SELECT payload FROM sessions WHERE id = ?", id).Scan(&payload)
+	var remoteURL, sessionType, projectCategory, status string
+	err := s.db.QueryRow(
+		"SELECT payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '') FROM sessions WHERE id = ?", id,
+	).Scan(&payload, &remoteURL, &sessionType, &projectCategory, &status)
 	if err == sql.ErrNoRows {
 		return nil, session.ErrSessionNotFound
 	}
@@ -291,9 +294,24 @@ func (s *Store) Get(id session.ID) (*session.Session, error) {
 		return nil, fmt.Errorf("decompressing session payload: %w", err)
 	}
 
-	var session session.Session
-	if unmarshalErr := json.Unmarshal(payload, &session); unmarshalErr != nil {
+	var sess session.Session
+	if unmarshalErr := json.Unmarshal(payload, &sess); unmarshalErr != nil {
 		return nil, fmt.Errorf("unmarshaling session: %w", unmarshalErr)
+	}
+
+	// Overlay mutable columns that may have been updated after the payload was saved.
+	// These columns can be changed via UpdateRemoteURL, UpdateSessionType, etc.
+	if remoteURL != "" && sess.RemoteURL == "" {
+		sess.RemoteURL = remoteURL
+	}
+	if sessionType != "" && sess.SessionType == "" {
+		sess.SessionType = sessionType
+	}
+	if projectCategory != "" && sess.ProjectCategory == "" {
+		sess.ProjectCategory = projectCategory
+	}
+	if status != "" && sess.Status == "" {
+		sess.Status = session.SessionStatus(status)
 	}
 
 	// Load links from DB (they may have been added after save)
@@ -301,16 +319,16 @@ func (s *Store) Get(id session.ID) (*session.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	session.Links = links
+	sess.Links = links
 
 	// Load file changes from DB
 	fileChanges, err := s.loadFileChanges(id)
 	if err != nil {
 		return nil, err
 	}
-	session.FileChanges = fileChanges
+	sess.FileChanges = fileChanges
 
-	return &session, nil
+	return &sess, nil
 }
 
 // GetLatestByBranch retrieves the most recent session for a project and branch.
@@ -456,6 +474,51 @@ func (s *Store) SetProjectCategory(id session.ID, category string) error {
 		return session.ErrSessionNotFound
 	}
 	return nil
+}
+
+// UpdateRemoteURL sets the remote_url for a single session by ID.
+func (s *Store) UpdateRemoteURL(id session.ID, remoteURL string) error {
+	result, err := s.db.Exec("UPDATE sessions SET remote_url = ? WHERE id = ?", remoteURL, id)
+	if err != nil {
+		return fmt.Errorf("updating remote_url: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return session.ErrSessionNotFound
+	}
+	// Invalidate project/stats cache since project grouping may change.
+	_ = s.InvalidateCache("stats:")
+	return nil
+}
+
+// ListSessionsWithEmptyRemoteURL returns sessions that need their remote_url
+// resolved. Only returns sessions with a non-empty project_path (candidates
+// for git remote resolution). Results are ordered by created_at DESC (newest first).
+func (s *Store) ListSessionsWithEmptyRemoteURL(limit int) ([]session.BackfillCandidate, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.Query(`
+		SELECT id, project_path FROM sessions
+		WHERE (remote_url = '' OR remote_url IS NULL)
+		  AND project_path != ''
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions with empty remote_url: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var candidates []session.BackfillCandidate
+	for rows.Next() {
+		var c session.BackfillCandidate
+		if err := rows.Scan(&c.ID, &c.ProjectPath); err != nil {
+			return nil, fmt.Errorf("scanning backfill candidate: %w", err)
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates, rows.Err()
 }
 
 // Delete removes a session by its ID.

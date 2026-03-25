@@ -155,6 +155,12 @@ func (m *mockSessionService) GetLinkedSessions(_ context.Context, _ session.ID) 
 func (m *mockSessionService) DeleteSessionLink(_ context.Context, _ session.ID) error {
 	return nil
 }
+func (m *mockSessionService) BackfillRemoteURLs(_ context.Context) (*service.BackfillResult, error) {
+	return &service.BackfillResult{}, nil
+}
+func (m *mockSessionService) DetectForksBatch(_ context.Context) (*service.ForkDetectionResult, error) {
+	return &service.ForkDetectionResult{}, nil
+}
 
 // Compile-time check.
 var _ service.SessionServicer = (*mockSessionService)(nil)

@@ -2479,3 +2479,99 @@ func TestDeleteAPIKey_NotFound(t *testing.T) {
 		t.Fatalf("DeleteAPIKey() error = %v, want ErrAPIKeyNotFound", err)
 	}
 }
+
+// ── UpdateRemoteURL Tests ──
+
+func TestUpdateRemoteURL_Success(t *testing.T) {
+	store := mustOpenStore(t)
+	sess := testSession("remote-1")
+	sess.ProjectPath = "/Users/test/dev/myproject"
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	err := store.UpdateRemoteURL("remote-1", "github.com/org/repo")
+	if err != nil {
+		t.Fatalf("UpdateRemoteURL() error = %v", err)
+	}
+
+	got, err := store.Get("remote-1")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.RemoteURL != "github.com/org/repo" {
+		t.Errorf("RemoteURL = %q, want %q", got.RemoteURL, "github.com/org/repo")
+	}
+}
+
+func TestUpdateRemoteURL_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+	err := store.UpdateRemoteURL("nonexistent", "github.com/org/repo")
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Fatalf("UpdateRemoteURL() error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestListSessionsWithEmptyRemoteURL(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Session WITH remote_url — should NOT be returned.
+	s1 := testSession("has-remote")
+	s1.RemoteURL = "github.com/org/repo"
+	s1.ProjectPath = "/path/a"
+	if err := store.Save(s1); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Session WITHOUT remote_url — should be returned.
+	s2 := testSession("no-remote")
+	s2.RemoteURL = ""
+	s2.ProjectPath = "/path/b"
+	if err := store.Save(s2); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Session without project_path — should NOT be returned (can't resolve git).
+	s3 := testSession("no-path")
+	s3.RemoteURL = ""
+	s3.ProjectPath = ""
+	if err := store.Save(s3); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	candidates, err := store.ListSessionsWithEmptyRemoteURL(0)
+	if err != nil {
+		t.Fatalf("ListSessionsWithEmptyRemoteURL() error = %v", err)
+	}
+
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates, want 1", len(candidates))
+	}
+	if candidates[0].ID != "no-remote" {
+		t.Errorf("candidate ID = %q, want %q", candidates[0].ID, "no-remote")
+	}
+	if candidates[0].ProjectPath != "/path/b" {
+		t.Errorf("candidate ProjectPath = %q, want %q", candidates[0].ProjectPath, "/path/b")
+	}
+}
+
+func TestListSessionsWithEmptyRemoteURL_Limit(t *testing.T) {
+	store := mustOpenStore(t)
+
+	for i := 0; i < 5; i++ {
+		s := testSession(fmt.Sprintf("empty-%d", i))
+		s.RemoteURL = ""
+		s.ProjectPath = fmt.Sprintf("/path/%d", i)
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+	}
+
+	candidates, err := store.ListSessionsWithEmptyRemoteURL(3)
+	if err != nil {
+		t.Fatalf("ListSessionsWithEmptyRemoteURL() error = %v", err)
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("got %d candidates, want 3", len(candidates))
+	}
+}

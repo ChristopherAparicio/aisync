@@ -94,6 +94,13 @@ type SessionWriter interface {
 	// GetLastBucketComputeTime returns the most recent compute timestamp.
 	GetLastBucketComputeTime(granularity string) (time.Time, error)
 
+	// UpdateRemoteURL sets the remote_url for a single session by ID.
+	UpdateRemoteURL(id session.ID, remoteURL string) error
+
+	// ListSessionsWithEmptyRemoteURL returns session IDs and project paths
+	// for sessions that have no remote_url set. Used by the backfill task.
+	ListSessionsWithEmptyRemoteURL(limit int) ([]session.BackfillCandidate, error)
+
 	// DeleteOlderThan removes sessions created before the given time.
 	// Returns the number of deleted sessions.
 	DeleteOlderThan(before time.Time) (int, error)

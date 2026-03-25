@@ -270,6 +270,13 @@ type EfficiencyReport struct {
 // ProjectGroup represents a project (grouping key for sessions).
 // Projects are grouped primarily by git remote URL (e.g. "github.com/org/repo"),
 // then by provider-specific project path for non-git projects.
+// BackfillCandidate represents a session that needs its remote_url resolved.
+// Used by the backfill task to efficiently batch-resolve git remotes.
+type BackfillCandidate struct {
+	ID          ID     `json:"id"`
+	ProjectPath string `json:"project_path"`
+}
+
 type ProjectGroup struct {
 	RemoteURL    string       `json:"remote_url,omitempty"` // normalized git remote URL (empty if not a git repo)
 	ProjectPath  string       `json:"project_path"`         // local filesystem path

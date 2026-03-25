@@ -874,7 +874,11 @@ func (m *mockStore) UpdateSummary(_ session.ID, _ string) error            { ret
 func (m *mockStore) UpdateSessionType(_ session.ID, _ string) error        { return nil }
 func (m *mockStore) UpdateProjectCategory(_ string, _ string) (int, error) { return 0, nil }
 func (m *mockStore) SetProjectCategory(_ session.ID, _ string) error       { return nil }
-func (m *mockStore) SaveForkRelation(_ session.ForkRelation) error         { return nil }
+func (m *mockStore) UpdateRemoteURL(_ session.ID, _ string) error          { return nil }
+func (m *mockStore) ListSessionsWithEmptyRemoteURL(_ int) ([]session.BackfillCandidate, error) {
+	return nil, nil
+}
+func (m *mockStore) SaveForkRelation(_ session.ForkRelation) error { return nil }
 func (m *mockStore) GetForkRelations(_ session.ID) ([]session.ForkRelation, error) {
 	return nil, nil
 }

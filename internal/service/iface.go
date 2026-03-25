@@ -112,6 +112,15 @@ type SessionManager interface {
 	GarbageCollect(ctx context.Context, req GCRequest) (*GCResult, error)
 	Diff(ctx context.Context, req DiffRequest) (*session.DiffResult, error)
 	DetectOffTopic(ctx context.Context, req OffTopicRequest) (*session.OffTopicResult, error)
+
+	// BackfillRemoteURLs resolves and persists git remote URLs for sessions
+	// that have an empty remote_url. Returns the number of sessions updated.
+	BackfillRemoteURLs(ctx context.Context) (*BackfillResult, error)
+
+	// DetectForksBatch runs fork detection on all sessions and persists
+	// the results to the session_forks table. Returns the number of fork
+	// relations detected.
+	DetectForksBatch(ctx context.Context) (*ForkDetectionResult, error)
 }
 
 // SessionIngester handles externally-pushed sessions and session-to-session links.

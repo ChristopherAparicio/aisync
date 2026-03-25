@@ -535,6 +535,20 @@ func New() *cmdutil.Factory {
 				return
 			}
 			cachedSyncSvc = service.NewSyncService(gitClient, store)
+
+			// Wire PostPull so that synced sessions get event extraction,
+			// error classification, etc. — reuses the same PostCaptureFunc
+			// from SessionService (resolved lazily to avoid circular init).
+			cachedSyncSvc.SetPostPull(func(sess *session.Session) {
+				// Resolve SessionService lazily (it may not be initialized yet).
+				sessionSvc, svcErr := f.SessionService()
+				if svcErr != nil {
+					return
+				}
+				if local, ok := sessionSvc.(*service.SessionService); ok {
+					local.RunPostCapture(sess)
+				}
+			})
 		})
 		return cachedSyncSvc, syncSvcErr
 	}

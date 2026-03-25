@@ -60,6 +60,11 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 	if result.Session.RemoteURL == "" {
 		result.Session.RemoteURL = s.resolveRemoteURL()
 	}
+	// Fallback: try resolving from the session's own project path.
+	// This handles OpenCode worktrees where the server CWD differs from the session directory.
+	if result.Session.RemoteURL == "" && result.Session.ProjectPath != "" {
+		result.Session.RemoteURL = resolveRemoteURLForPath(result.Session.ProjectPath)
+	}
 
 	captureResult := &CaptureResult{
 		Session:      result.Session,
@@ -85,6 +90,10 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 				child.Branch = result.Session.Branch
 			}
 			_ = s.store.Save(child)
+			// Post-capture hook for child: extract events, classify errors, etc.
+			if s.postCapture != nil {
+				s.postCapture(child)
+			}
 		}
 	}
 
@@ -154,6 +163,10 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 		if r.Session.RemoteURL == "" {
 			r.Session.RemoteURL = remoteURL
 		}
+		// Fallback: try resolving from the session's own project path.
+		if r.Session.RemoteURL == "" && r.Session.ProjectPath != "" {
+			r.Session.RemoteURL = resolveRemoteURLForPath(r.Session.ProjectPath)
+		}
 
 		// Save child sessions (sub-agents) as separate rows.
 		if len(r.Session.Children) > 0 {
@@ -170,6 +183,10 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 					child.Branch = r.Session.Branch
 				}
 				_ = s.store.Save(child)
+				// Post-capture hook for child: extract events, classify errors, etc.
+				if s.postCapture != nil {
+					s.postCapture(child)
+				}
 			}
 		}
 
@@ -215,6 +232,10 @@ func (s *SessionService) CaptureByID(req CaptureRequest, sessionID session.ID) (
 
 	if result.Session.RemoteURL == "" {
 		result.Session.RemoteURL = s.resolveRemoteURL()
+	}
+	// Fallback: try resolving from the session's own project path.
+	if result.Session.RemoteURL == "" && result.Session.ProjectPath != "" {
+		result.Session.RemoteURL = resolveRemoteURLForPath(result.Session.ProjectPath)
 	}
 
 	captureResult := &CaptureResult{

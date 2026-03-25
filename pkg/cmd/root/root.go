@@ -9,6 +9,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/agentscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/analyzecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/authcmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/backfillcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/blamecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/capture"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/commentcmd"
@@ -40,6 +41,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/synccmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/toolusagecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/tuicmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/usagecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/validatecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/webcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
@@ -98,6 +100,8 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(validatecmd.NewCmdValidate(f))
 	cmd.AddCommand(errorscmd.NewCmdErrors(f))
 	cmd.AddCommand(pricescmd.NewCmdUpdatePrices(f))
+	cmd.AddCommand(backfillcmd.NewCmdBackfill(f))
+	cmd.AddCommand(usagecmd.NewCmdUsage(f))
 
 	return cmd
 }

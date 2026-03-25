@@ -41,6 +41,16 @@ type SessionService struct {
 	postCapture PostCaptureFunc
 }
 
+// RunPostCapture invokes the post-capture callback for a session.
+// This is exposed publicly so that non-capture pipelines (sync pull, import)
+// can trigger the same processing (event extraction, error classification, etc.).
+// It is a no-op if no PostCaptureFunc was configured.
+func (s *SessionService) RunPostCapture(sess *session.Session) {
+	if s.postCapture != nil && sess != nil {
+		s.postCapture(sess)
+	}
+}
+
 // SessionServiceConfig holds all dependencies for creating a SessionService.
 type SessionServiceConfig struct {
 	Store       storage.Store
@@ -132,6 +142,22 @@ func (s *SessionService) resolveRemoteURL() string {
 		return ""
 	}
 	raw := s.git.RemoteURL("origin")
+	return NormalizeRemoteURL(raw)
+}
+
+// resolveRemoteURLForPath attempts to resolve the git remote URL for a given
+// directory path. This is used when the session's ProjectPath differs from the
+// server's working directory (e.g. OpenCode worktree sessions).
+// Falls back to the server's git client if the path is not a git repo.
+func resolveRemoteURLForPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	g := git.NewClient(path)
+	if !g.IsRepo() {
+		return ""
+	}
+	raw := g.RemoteURL("origin")
 	return NormalizeRemoteURL(raw)
 }
 

@@ -191,6 +191,31 @@ func (m *MockStore) SetProjectCategory(id session.ID, category string) error {
 	return nil
 }
 
+func (m *MockStore) UpdateRemoteURL(id session.ID, remoteURL string) error {
+	s, ok := m.Sessions[id]
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	s.RemoteURL = remoteURL
+	return nil
+}
+
+func (m *MockStore) ListSessionsWithEmptyRemoteURL(limit int) ([]session.BackfillCandidate, error) {
+	var candidates []session.BackfillCandidate
+	for _, s := range m.Sessions {
+		if s.RemoteURL == "" && s.ProjectPath != "" {
+			candidates = append(candidates, session.BackfillCandidate{
+				ID:          s.ID,
+				ProjectPath: s.ProjectPath,
+			})
+		}
+	}
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates, nil
+}
+
 func (m *MockStore) SaveForkRelation(_ session.ForkRelation) error { return nil }
 func (m *MockStore) GetForkRelations(_ session.ID) ([]session.ForkRelation, error) {
 	return nil, nil

@@ -493,6 +493,16 @@ func (r *SessionService) DetectOffTopic(_ context.Context, req service.OffTopicR
 	return &result, nil
 }
 
+// BackfillRemoteURLs is not supported in remote mode — backfill must run locally.
+func (r *SessionService) BackfillRemoteURLs(_ context.Context) (*service.BackfillResult, error) {
+	return nil, fmt.Errorf("backfill remote URLs is only available in local mode")
+}
+
+// DetectForksBatch is not supported in remote mode — fork detection must run locally.
+func (r *SessionService) DetectForksBatch(_ context.Context) (*service.ForkDetectionResult, error) {
+	return nil, fmt.Errorf("fork detection batch is only available in local mode")
+}
+
 // ── Ingest ──
 
 func (r *SessionService) Ingest(_ context.Context, req service.IngestRequest) (*service.IngestResult, error) {
