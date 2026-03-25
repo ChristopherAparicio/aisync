@@ -436,6 +436,12 @@ func (m *MockStore) UpsertEventBucket(_ sessionevent.EventBucket) error {
 func (m *MockStore) UpsertEventBuckets(_ []sessionevent.EventBucket) error {
 	return nil
 }
+func (m *MockStore) ReplaceEventBuckets(_ []sessionevent.EventBucket) error {
+	return nil
+}
+func (m *MockStore) DeleteEventBuckets(_ sessionevent.BucketQuery) error {
+	return nil
+}
 func (m *MockStore) QueryEventBuckets(_ sessionevent.BucketQuery) ([]sessionevent.EventBucket, error) {
 	return nil, nil
 }

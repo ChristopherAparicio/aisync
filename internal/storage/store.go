@@ -276,6 +276,14 @@ type SessionEventStore interface {
 	// Preferred for batch operations.
 	UpsertEventBuckets(buckets []sessionevent.EventBucket) error
 
+	// ReplaceEventBuckets deletes matching buckets and inserts new ones atomically.
+	// Solves double-counting on re-capture by fully replacing bucket contents.
+	ReplaceEventBuckets(buckets []sessionevent.EventBucket) error
+
+	// DeleteEventBuckets removes buckets matching the query criteria.
+	// Used to clean up stale buckets after session GC.
+	DeleteEventBuckets(query sessionevent.BucketQuery) error
+
 	// QueryEventBuckets returns aggregated buckets matching the given filters.
 	QueryEventBuckets(query sessionevent.BucketQuery) ([]sessionevent.EventBucket, error)
 }

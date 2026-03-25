@@ -21,11 +21,13 @@ func NewCmdBackfill(f *cmdutil.Factory) *cobra.Command {
 
 These commands fix historical data that may be incomplete:
   remote-url   Resolve git remote URLs for sessions missing them
-  forks        Detect fork relationships across all sessions`,
+  forks        Detect fork relationships across all sessions
+  events       Extract session events and recompute analytics buckets`,
 	}
 
 	cmd.AddCommand(newCmdBackfillRemoteURL(f))
 	cmd.AddCommand(newCmdBackfillForks(f))
+	cmd.AddCommand(newCmdBackfillEvents(f))
 
 	return cmd
 }

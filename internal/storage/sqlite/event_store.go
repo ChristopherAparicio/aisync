@@ -235,6 +235,109 @@ func (s *Store) UpsertEventBuckets(buckets []sessionevent.EventBucket) error {
 	return tx.Commit()
 }
 
+// ReplaceEventBuckets deletes existing buckets matching each bucket's key,
+// then inserts the new values. This replaces additive merge with full replacement,
+// solving the double-count problem on re-capture.
+func (s *Store) ReplaceEventBuckets(buckets []sessionevent.EventBucket) error {
+	if len(buckets) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Delete matching buckets first.
+	delStmt, err := tx.Prepare(`DELETE FROM event_buckets
+		WHERE bucket_start = ? AND granularity = ? AND project_path = ? AND provider = ?`)
+	if err != nil {
+		return fmt.Errorf("prepare delete: %w", err)
+	}
+	defer delStmt.Close()
+
+	// Insert fresh buckets.
+	insStmt, err := tx.Prepare(`INSERT INTO event_buckets (
+		bucket_start, granularity, project_path, remote_url, provider,
+		tool_call_count, tool_error_count, unique_tools, top_tools,
+		skill_load_count, unique_skills, top_skills,
+		session_count, agent_breakdown,
+		command_count, command_error_count, top_commands,
+		error_count, error_by_category,
+		image_count, image_tokens,
+		computed_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+	if err != nil {
+		return fmt.Errorf("prepare insert: %w", err)
+	}
+	defer insStmt.Close()
+
+	for _, b := range buckets {
+		startStr := b.BucketStart.Format(time.RFC3339)
+
+		// Delete old.
+		if _, err := delStmt.Exec(startStr, b.Granularity, b.ProjectPath, string(b.Provider)); err != nil {
+			return fmt.Errorf("delete bucket %s: %w", startStr, err)
+		}
+
+		// Insert new.
+		topToolsJSON, _ := json.Marshal(b.TopTools)
+		topSkillsJSON, _ := json.Marshal(b.TopSkills)
+		agentBreakdownJSON, _ := json.Marshal(b.AgentBreakdown)
+		topCommandsJSON, _ := json.Marshal(b.TopCommands)
+		errorByCategoryJSON, _ := json.Marshal(b.ErrorByCategory)
+
+		if _, err := insStmt.Exec(
+			startStr, b.Granularity, b.ProjectPath, b.RemoteURL, string(b.Provider),
+			b.ToolCallCount, b.ToolErrorCount, b.UniqueTools, string(topToolsJSON),
+			b.SkillLoadCount, b.UniqueSkills, string(topSkillsJSON),
+			b.SessionCount, string(agentBreakdownJSON),
+			b.CommandCount, b.CommandErrorCount, string(topCommandsJSON),
+			b.ErrorCount, string(errorByCategoryJSON),
+			b.ImageCount, b.ImageTokens,
+		); err != nil {
+			return fmt.Errorf("insert bucket %s: %w", startStr, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// DeleteEventBuckets removes buckets matching the query criteria.
+func (s *Store) DeleteEventBuckets(query sessionevent.BucketQuery) error {
+	var conditions []string
+	var args []interface{}
+
+	conditions = append(conditions, "granularity = ?")
+	args = append(args, query.Granularity)
+
+	if !query.Since.IsZero() {
+		conditions = append(conditions, "bucket_start >= ?")
+		args = append(args, query.Since.Format(time.RFC3339))
+	}
+	if !query.Until.IsZero() {
+		conditions = append(conditions, "bucket_start < ?")
+		args = append(args, query.Until.Format(time.RFC3339))
+	}
+	if query.ProjectPath != "" {
+		conditions = append(conditions, "project_path = ?")
+		args = append(args, query.ProjectPath)
+	}
+	if query.Provider != "" {
+		conditions = append(conditions, "provider = ?")
+		args = append(args, string(query.Provider))
+	}
+
+	sql := "DELETE FROM event_buckets"
+	if len(conditions) > 0 {
+		sql += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	_, err := s.db.Exec(sql, args...)
+	return err
+}
+
 // ── QueryEventBuckets ──
 
 // QueryEventBuckets returns buckets matching the given filters.

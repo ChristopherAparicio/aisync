@@ -1,6 +1,10 @@
 package sessionevent
 
-import "github.com/ChristopherAparicio/aisync/internal/session"
+import (
+	"time"
+
+	"github.com/ChristopherAparicio/aisync/internal/session"
+)
 
 // EventStore is the persistence interface for session events.
 // Implementations live in infrastructure (e.g. internal/storage/sqlite).
@@ -30,6 +34,15 @@ type BucketStore interface {
 	// Preferred for batch operations to avoid per-bucket transaction overhead.
 	UpsertEventBuckets(buckets []EventBucket) error
 
+	// ReplaceEventBuckets deletes all buckets matching the given keys and inserts new ones.
+	// This is the idempotent alternative to additive upsert — it fully replaces
+	// bucket contents instead of accumulating, solving the double-count problem.
+	ReplaceEventBuckets(buckets []EventBucket) error
+
+	// DeleteEventBuckets removes buckets matching the query criteria.
+	// Used to clean up stale buckets after session GC.
+	DeleteEventBuckets(query BucketQuery) error
+
 	// QueryEventBuckets returns buckets matching the given filters.
 	QueryEventBuckets(query BucketQuery) ([]EventBucket, error)
 }
@@ -38,4 +51,14 @@ type BucketStore interface {
 type Store interface {
 	EventStore
 	BucketStore
+}
+
+// RecomputeQuery defines the scope for bucket recomputation.
+type RecomputeQuery struct {
+	ProjectPath string
+	RemoteURL   string
+	Provider    session.ProviderName
+	Granularity string    // "1h" or "1d"
+	Since       time.Time // recompute from this time
+	Until       time.Time // recompute until this time
 }

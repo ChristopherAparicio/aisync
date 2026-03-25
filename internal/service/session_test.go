@@ -1028,9 +1028,11 @@ func (m *mockStore) GetSessionEvents(_ session.ID) ([]sessionevent.Event, error)
 func (m *mockStore) QueryEvents(_ sessionevent.EventQuery) ([]sessionevent.Event, error) {
 	return nil, nil
 }
-func (m *mockStore) DeleteSessionEvents(_ session.ID) error                { return nil }
-func (m *mockStore) UpsertEventBucket(_ sessionevent.EventBucket) error    { return nil }
-func (m *mockStore) UpsertEventBuckets(_ []sessionevent.EventBucket) error { return nil }
+func (m *mockStore) DeleteSessionEvents(_ session.ID) error                 { return nil }
+func (m *mockStore) UpsertEventBucket(_ sessionevent.EventBucket) error     { return nil }
+func (m *mockStore) UpsertEventBuckets(_ []sessionevent.EventBucket) error  { return nil }
+func (m *mockStore) ReplaceEventBuckets(_ []sessionevent.EventBucket) error { return nil }
+func (m *mockStore) DeleteEventBuckets(_ sessionevent.BucketQuery) error    { return nil }
 func (m *mockStore) QueryEventBuckets(_ sessionevent.BucketQuery) ([]sessionevent.EventBucket, error) {
 	return nil, nil
 }

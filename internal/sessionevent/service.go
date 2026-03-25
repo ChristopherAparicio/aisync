@@ -3,6 +3,7 @@ package sessionevent
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
@@ -77,21 +78,86 @@ func (s *Service) ProcessSession(sess *session.Session) error {
 		return fmt.Errorf("sessionevent: save events: %w", err)
 	}
 
-	// 4. Aggregate into buckets and batch-upsert.
-	// Combine hourly + daily into a single batch for fewer transactions.
-	hourlyBuckets := s.aggregator.AggregateForSession(sess, events, "1h")
-	dailyBuckets := s.aggregator.AggregateForSession(sess, events, "1d")
-	allBuckets := append(hourlyBuckets, dailyBuckets...)
-
-	if err := s.store.UpsertEventBuckets(allBuckets); err != nil {
-		s.logger.Warn("failed to upsert event buckets",
+	// 4. Recompute buckets for affected time windows.
+	// Instead of additive upsert (which double-counts on re-capture), we:
+	//   a) Query ALL events in the affected time windows (from all sessions)
+	//   b) Aggregate them into fresh buckets
+	//   c) Replace the old buckets entirely
+	// This makes ProcessSession fully idempotent.
+	if err := s.recomputeAffectedBuckets(events); err != nil {
+		s.logger.Warn("failed to recompute event buckets",
 			"session_id", sess.ID,
-			"bucket_count", len(allBuckets),
 			"error", err,
 		)
 	}
 
 	return nil
+}
+
+// recomputeAffectedBuckets rebuilds buckets for the time windows touched by the given events.
+// It queries ALL events in those windows (not just this session's) and replaces the buckets.
+func (s *Service) recomputeAffectedBuckets(events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	// Find the time range covered by these events.
+	var earliest, latest time.Time
+	for _, e := range events {
+		if e.OccurredAt.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || e.OccurredAt.Before(earliest) {
+			earliest = e.OccurredAt
+		}
+		if e.OccurredAt.After(latest) {
+			latest = e.OccurredAt
+		}
+	}
+	if earliest.IsZero() {
+		return nil
+	}
+
+	// Recompute for both granularities.
+	for _, gran := range []string{"1h", "1d"} {
+		since := truncateTime(earliest, gran)
+		until := advanceTime(truncateTime(latest, gran), gran)
+
+		// Query ALL events in this time window (from all sessions).
+		allEvents, err := s.store.QueryEvents(EventQuery{
+			Since: since,
+			Until: until,
+		})
+		if err != nil {
+			return fmt.Errorf("query events for recompute (%s): %w", gran, err)
+		}
+
+		// Aggregate into fresh buckets.
+		freshBuckets := s.aggregator.Aggregate(allEvents, gran)
+
+		// Count distinct sessions per bucket.
+		for i := range freshBuckets {
+			freshBuckets[i].SessionCount = countDistinctSessions(allEvents, freshBuckets[i].BucketStart, freshBuckets[i].BucketEnd)
+		}
+
+		// Delete old buckets in this range and insert fresh ones.
+		if err := s.store.ReplaceEventBuckets(freshBuckets); err != nil {
+			return fmt.Errorf("replace buckets (%s): %w", gran, err)
+		}
+	}
+
+	return nil
+}
+
+// countDistinctSessions counts unique session IDs for events within a time window.
+func countDistinctSessions(events []Event, start, end time.Time) int {
+	seen := make(map[session.ID]bool)
+	for _, e := range events {
+		if !e.OccurredAt.Before(start) && e.OccurredAt.Before(end) {
+			seen[e.SessionID] = true
+		}
+	}
+	return len(seen)
 }
 
 // ── Micro view: single session ──
@@ -135,4 +201,47 @@ func (s *Service) QueryBuckets(query BucketQuery) ([]EventBucket, error) {
 // Useful for backfilling after code changes to the processor.
 func (s *Service) ReprocessSession(sess *session.Session) error {
 	return s.ProcessSession(sess) // ProcessSession is already idempotent
+}
+
+// RecomputeAllBuckets deletes all event buckets and recomputes them from scratch
+// using the events stored in session_events. This fixes any staleness from
+// deleted sessions (GC) or any accumulated inaccuracies.
+func (s *Service) RecomputeAllBuckets() error {
+	s.logger.Info("recomputing all event buckets from events table")
+
+	// 1. Delete all existing buckets.
+	if err := s.store.DeleteEventBuckets(BucketQuery{Granularity: "1h"}); err != nil {
+		return fmt.Errorf("delete hourly buckets: %w", err)
+	}
+	if err := s.store.DeleteEventBuckets(BucketQuery{Granularity: "1d"}); err != nil {
+		return fmt.Errorf("delete daily buckets: %w", err)
+	}
+
+	// 2. Query ALL events.
+	allEvents, err := s.store.QueryEvents(EventQuery{})
+	if err != nil {
+		return fmt.Errorf("query all events: %w", err)
+	}
+
+	if len(allEvents) == 0 {
+		s.logger.Info("no events found, buckets cleared")
+		return nil
+	}
+
+	// 3. Aggregate into fresh buckets.
+	for _, gran := range []string{"1h", "1d"} {
+		buckets := s.aggregator.Aggregate(allEvents, gran)
+		// Count distinct sessions per bucket.
+		for i := range buckets {
+			buckets[i].SessionCount = countDistinctSessions(allEvents, buckets[i].BucketStart, buckets[i].BucketEnd)
+		}
+		if err := s.store.ReplaceEventBuckets(buckets); err != nil {
+			return fmt.Errorf("replace buckets (%s): %w", gran, err)
+		}
+	}
+
+	s.logger.Info("recomputed all event buckets",
+		"total_events", len(allEvents),
+	)
+	return nil
 }
