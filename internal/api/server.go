@@ -17,33 +17,36 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/replay"
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 )
 
 // Server is the aisync HTTP API server.
 type Server struct {
-	sessionSvc    service.SessionServicer
-	syncSvc       *service.SyncService           // optional — nil when git sync is unavailable
-	analysisSvc   service.AnalysisServicer       // optional — nil when analysis is unavailable
-	errorSvc      service.ErrorServicer          // optional — nil when error analysis is unavailable
-	replayEngine  *replay.Engine                 // optional — nil when replay is unavailable
-	skillResolver skillresolver.ResolverServicer // optional — nil when skill resolver is unavailable
-	authSvc       auth.Servicer                  // optional — nil disables authentication
-	httpServer    *http.Server
-	logger        *log.Logger
+	sessionSvc      service.SessionServicer
+	syncSvc         *service.SyncService           // optional — nil when git sync is unavailable
+	analysisSvc     service.AnalysisServicer       // optional — nil when analysis is unavailable
+	errorSvc        service.ErrorServicer          // optional — nil when error analysis is unavailable
+	sessionEventSvc *sessionevent.Service          // optional — nil when session event tracking is unavailable
+	replayEngine    *replay.Engine                 // optional — nil when replay is unavailable
+	skillResolver   skillresolver.ResolverServicer // optional — nil when skill resolver is unavailable
+	authSvc         auth.Servicer                  // optional — nil disables authentication
+	httpServer      *http.Server
+	logger          *log.Logger
 }
 
 // Config holds the configuration for creating a new Server.
 type Config struct {
-	SessionService  service.SessionServicer
-	SyncService     *service.SyncService           // optional
-	AnalysisService service.AnalysisServicer       // optional — nil disables analysis endpoints
-	ErrorService    service.ErrorServicer          // optional — nil disables error endpoints
-	ReplayEngine    *replay.Engine                 // optional — nil disables replay endpoint
-	SkillResolver   skillresolver.ResolverServicer // optional — nil disables skill resolver endpoint
-	AuthService     auth.Servicer                  // optional — nil disables authentication
-	Addr            string                         // e.g. ":8371" or "127.0.0.1:8371"
-	Logger          *log.Logger                    // optional — defaults to stderr
+	SessionService      service.SessionServicer
+	SyncService         *service.SyncService           // optional
+	AnalysisService     service.AnalysisServicer       // optional — nil disables analysis endpoints
+	ErrorService        service.ErrorServicer          // optional — nil disables error endpoints
+	SessionEventService *sessionevent.Service          // optional — nil disables session event endpoints
+	ReplayEngine        *replay.Engine                 // optional — nil disables replay endpoint
+	SkillResolver       skillresolver.ResolverServicer // optional — nil disables skill resolver endpoint
+	AuthService         auth.Servicer                  // optional — nil disables authentication
+	Addr                string                         // e.g. ":8371" or "127.0.0.1:8371"
+	Logger              *log.Logger                    // optional — defaults to stderr
 }
 
 // New creates a Server with the given configuration.
@@ -54,14 +57,15 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		sessionSvc:    cfg.SessionService,
-		syncSvc:       cfg.SyncService,
-		analysisSvc:   cfg.AnalysisService,
-		errorSvc:      cfg.ErrorService,
-		replayEngine:  cfg.ReplayEngine,
-		skillResolver: cfg.SkillResolver,
-		authSvc:       cfg.AuthService,
-		logger:        logger,
+		sessionSvc:      cfg.SessionService,
+		syncSvc:         cfg.SyncService,
+		analysisSvc:     cfg.AnalysisService,
+		errorSvc:        cfg.ErrorService,
+		sessionEventSvc: cfg.SessionEventService,
+		replayEngine:    cfg.ReplayEngine,
+		skillResolver:   cfg.SkillResolver,
+		authSvc:         cfg.AuthService,
+		logger:          logger,
 	}
 
 	mux := http.NewServeMux()

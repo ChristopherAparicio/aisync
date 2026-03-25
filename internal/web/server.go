@@ -19,6 +19,7 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
@@ -30,26 +31,28 @@ var staticFS embed.FS
 
 // Server is the aisync web dashboard server.
 type Server struct {
-	sessionSvc  service.SessionServicer
-	analysisSvc service.AnalysisServicer // optional — nil disables analysis features
-	registrySvc *service.RegistryService // optional — nil disables project/capability features
-	store       storage.Store            // optional — nil disables user preferences
-	cfg         *config.Config           // optional — nil uses defaults
-	httpServer  *http.Server
-	pages       map[string]*template.Template // page templates (layout + page)
-	partials    *template.Template            // standalone partials (no layout)
-	logger      *log.Logger
+	sessionSvc      service.SessionServicer
+	analysisSvc     service.AnalysisServicer // optional — nil disables analysis features
+	registrySvc     *service.RegistryService // optional — nil disables project/capability features
+	sessionEventSvc *sessionevent.Service    // optional — nil disables event analytics features
+	store           storage.Store            // optional — nil disables user preferences
+	cfg             *config.Config           // optional — nil uses defaults
+	httpServer      *http.Server
+	pages           map[string]*template.Template // page templates (layout + page)
+	partials        *template.Template            // standalone partials (no layout)
+	logger          *log.Logger
 }
 
 // Config holds the configuration for creating a new web Server.
 type Config struct {
-	SessionService  service.SessionServicer
-	AnalysisService service.AnalysisServicer // optional — nil disables analysis features
-	RegistryService *service.RegistryService // optional — nil disables project/capability features
-	Store           storage.Store            // optional — nil disables user preferences
-	AppConfig       *config.Config           // optional — nil uses defaults
-	Addr            string                   // e.g. ":8372" or "127.0.0.1:8372"
-	Logger          *log.Logger              // optional — defaults to stderr
+	SessionService      service.SessionServicer
+	AnalysisService     service.AnalysisServicer // optional — nil disables analysis features
+	RegistryService     *service.RegistryService // optional — nil disables project/capability features
+	SessionEventService *sessionevent.Service    // optional — nil disables event analytics features
+	Store               storage.Store            // optional — nil disables user preferences
+	AppConfig           *config.Config           // optional — nil uses defaults
+	Addr                string                   // e.g. ":8372" or "127.0.0.1:8372"
+	Logger              *log.Logger              // optional — defaults to stderr
 }
 
 // New creates a web Server with the given configuration.
@@ -99,14 +102,15 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		sessionSvc:  cfg.SessionService,
-		analysisSvc: cfg.AnalysisService,
-		registrySvc: cfg.RegistryService,
-		store:       cfg.Store,
-		cfg:         cfg.AppConfig,
-		pages:       pages,
-		partials:    partials,
-		logger:      logger,
+		sessionSvc:      cfg.SessionService,
+		analysisSvc:     cfg.AnalysisService,
+		registrySvc:     cfg.RegistryService,
+		sessionEventSvc: cfg.SessionEventService,
+		store:           cfg.Store,
+		cfg:             cfg.AppConfig,
+		pages:           pages,
+		partials:        partials,
+		logger:          logger,
 	}
 
 	mux := http.NewServeMux()

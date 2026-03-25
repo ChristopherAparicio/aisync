@@ -348,16 +348,20 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		// Get error service (optional — best-effort, nil if unavailable).
 		errorSvc, _ := f.ErrorService()
 
+		// Get session event service (optional — best-effort, nil if unavailable).
+		sessionEventSvc, _ := f.SessionEventService()
+
 		apiSrv := api.New(api.Config{
-			SessionService:  sessionSvc,
-			SyncService:     syncSvc,
-			AnalysisService: analysisSvcAPI,
-			ErrorService:    errorSvc,
-			ReplayEngine:    replayEngine,
-			SkillResolver:   skillResolver,
-			AuthService:     authSvc,
-			Addr:            addr, // not used for listen — just for internal reference
-			Logger:          logger,
+			SessionService:      sessionSvc,
+			SyncService:         syncSvc,
+			AnalysisService:     analysisSvcAPI,
+			ErrorService:        errorSvc,
+			SessionEventService: sessionEventSvc,
+			ReplayEngine:        replayEngine,
+			SkillResolver:       skillResolver,
+			AuthService:         authSvc,
+			Addr:                addr, // not used for listen — just for internal reference
+			Logger:              logger,
 		})
 		apiSrv.RegisterRoutes(mux)
 		logger.Println("API endpoints enabled at /api/v1/*")
@@ -372,15 +376,17 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 	analysisSvc, _ := f.AnalysisService()
 	appCfg, _ := f.Config()
 	store, _ := f.Store()
+	webSessionEventSvc, _ := f.SessionEventService()
 
 	webSrv, err := web.New(web.Config{
-		SessionService:  sessionSvc,
-		AnalysisService: analysisSvc,
-		RegistryService: registrySvc,
-		Store:           store,
-		AppConfig:       appCfg,
-		Addr:            addr, // not used for listen
-		Logger:          logger,
+		SessionService:      sessionSvc,
+		AnalysisService:     analysisSvc,
+		RegistryService:     registrySvc,
+		SessionEventService: webSessionEventSvc,
+		Store:               store,
+		AppConfig:           appCfg,
+		Addr:                addr, // not used for listen
+		Logger:              logger,
 	})
 	if err != nil {
 		return fmt.Errorf("web dashboard: %w", err)

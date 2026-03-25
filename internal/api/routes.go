@@ -85,6 +85,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/errors", s.handleGetSessionErrors)
 	mux.HandleFunc("GET /api/v1/errors/recent", s.handleListRecentErrors)
 
+	// Session events (optional — returns 404 if session event service is nil)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/events/summary", s.handleGetSessionEventSummary)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/events", s.handleGetSessionEvents)
+	mux.HandleFunc("GET /api/v1/events/buckets", s.handleQueryEventBuckets)
+	mux.HandleFunc("GET /api/v1/events/overview", s.handleGetProjectEventOverview)
+
 	// Authentication (optional — returns 404 if auth service is nil)
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleAuthRegister)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleAuthLogin)

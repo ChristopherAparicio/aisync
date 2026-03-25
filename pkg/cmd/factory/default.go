@@ -5,6 +5,7 @@ package factory
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/service/remote"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
 	"github.com/ChristopherAparicio/aisync/internal/tagger"
@@ -108,6 +110,10 @@ func New() *cmdutil.Factory {
 		cachedErrorSvc service.ErrorServicer
 		errorSvcOnce   sync.Once
 		errorSvcErr    error
+
+		cachedSessionEventSvc *sessionevent.Service
+		sessionEventSvcOnce   sync.Once
+		sessionEventSvcErr    error
 	)
 
 	// initCalc initializes the shared pricing calculator.
@@ -393,6 +399,16 @@ func New() *cmdutil.Factory {
 						}
 					}
 
+					// Session event extraction: extract tool calls, skills, agents, commands
+					// into events and aggregate into hourly/daily buckets.
+					// This is deterministic (no LLM), fast, and always runs.
+					{
+						sessionEventSvc, svcErr := f.SessionEventService()
+						if svcErr == nil {
+							_ = sessionEventSvc.ProcessSession(sess)
+						}
+					}
+
 					// Webhook: session.captured
 					if wantWebhooks {
 						whDispatcher.Fire(webhookspkg.EventSessionCaptured, map[string]any{
@@ -600,6 +616,18 @@ func New() *cmdutil.Factory {
 			})
 		})
 		return cachedErrorSvc, errorSvcErr
+	}
+
+	f.SessionEventServiceFunc = func() (*sessionevent.Service, error) {
+		sessionEventSvcOnce.Do(func() {
+			store, stErr := f.Store()
+			if stErr != nil {
+				sessionEventSvcErr = stErr
+				return
+			}
+			cachedSessionEventSvc = sessionevent.NewService(store, slog.Default())
+		})
+		return cachedSessionEventSvc, sessionEventSvcErr
 	}
 
 	f.CloseFunc = func() error {

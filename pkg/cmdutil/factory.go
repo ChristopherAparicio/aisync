@@ -11,6 +11,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -22,19 +23,20 @@ type Factory struct {
 	IOStreams *iostreams.IOStreams
 
 	// Lazy initializers — set by the composition root (default.go).
-	ConfigFunc          func() (*config.Config, error)
-	StoreFunc           func() (storage.Store, error)
-	GitFunc             func() (*git.Client, error)
-	RegistryFunc        func() *provider.Registry
-	ScannerFunc         func() *secrets.Scanner
-	PlatformFunc        func() (platform.Platform, error)
-	ConverterFunc       func() *converter.Converter
-	HooksManagerFunc    func() (*hooks.Manager, error)
-	SessionServiceFunc  func() (service.SessionServicer, error)
-	SyncServiceFunc     func() (*service.SyncService, error)
-	RegistryServiceFunc func() (*service.RegistryService, error)
-	AnalysisServiceFunc func() (service.AnalysisServicer, error)
-	ErrorServiceFunc    func() (service.ErrorServicer, error)
+	ConfigFunc              func() (*config.Config, error)
+	StoreFunc               func() (storage.Store, error)
+	GitFunc                 func() (*git.Client, error)
+	RegistryFunc            func() *provider.Registry
+	ScannerFunc             func() *secrets.Scanner
+	PlatformFunc            func() (platform.Platform, error)
+	ConverterFunc           func() *converter.Converter
+	HooksManagerFunc        func() (*hooks.Manager, error)
+	SessionServiceFunc      func() (service.SessionServicer, error)
+	SyncServiceFunc         func() (*service.SyncService, error)
+	RegistryServiceFunc     func() (*service.RegistryService, error)
+	AnalysisServiceFunc     func() (service.AnalysisServicer, error)
+	ErrorServiceFunc        func() (service.ErrorServicer, error)
+	SessionEventServiceFunc func() (*sessionevent.Service, error)
 
 	// CloseFunc releases resources (e.g., database connections).
 	// Set by the composition root, called by main on exit.
@@ -147,6 +149,14 @@ func (f *Factory) ErrorService() (service.ErrorServicer, error) {
 		return nil, session.ErrConfigNotFound
 	}
 	return f.ErrorServiceFunc()
+}
+
+// SessionEventService returns the session event service for event extraction and aggregation.
+func (f *Factory) SessionEventService() (*sessionevent.Service, error) {
+	if f.SessionEventServiceFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.SessionEventServiceFunc()
 }
 
 // Close releases all resources held by lazy-initialized dependencies.
