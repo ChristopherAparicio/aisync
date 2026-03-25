@@ -34,6 +34,7 @@ type Factory struct {
 	SyncServiceFunc     func() (*service.SyncService, error)
 	RegistryServiceFunc func() (*service.RegistryService, error)
 	AnalysisServiceFunc func() (service.AnalysisServicer, error)
+	ErrorServiceFunc    func() (service.ErrorServicer, error)
 
 	// CloseFunc releases resources (e.g., database connections).
 	// Set by the composition root, called by main on exit.
@@ -138,6 +139,14 @@ func (f *Factory) AnalysisService() (service.AnalysisServicer, error) {
 		return nil, session.ErrConfigNotFound
 	}
 	return f.AnalysisServiceFunc()
+}
+
+// ErrorService returns the error service for session error classification and querying.
+func (f *Factory) ErrorService() (service.ErrorServicer, error) {
+	if f.ErrorServiceFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.ErrorServiceFunc()
 }
 
 // Close releases all resources held by lazy-initialized dependencies.

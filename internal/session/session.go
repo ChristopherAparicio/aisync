@@ -10,31 +10,32 @@ import "time"
 
 // Session represents a captured AI coding session.
 type Session struct {
-	ExportedAt      time.Time     `json:"exported_at"`
-	CreatedAt       time.Time     `json:"created_at"`
-	ProjectPath     string        `json:"project_path"`
-	RemoteURL       string        `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
-	ExportedBy      string        `json:"exported_by,omitempty"`
-	ParentID        ID            `json:"parent_id,omitempty"`
-	OwnerID         ID            `json:"owner_id,omitempty"`
-	StorageMode     StorageMode   `json:"storage_mode"`
-	Summary         string        `json:"summary,omitempty"`
-	ID              ID            `json:"id"`
-	Provider        ProviderName  `json:"provider"`
-	Agent           string        `json:"agent"`
-	Branch          string        `json:"branch,omitempty"`
-	CommitSHA       string        `json:"commit_sha,omitempty"`
-	Messages        []Message     `json:"messages,omitempty"`
-	Children        []Session     `json:"children,omitempty"`
-	Links           []Link        `json:"links,omitempty"`
-	FileChanges     []FileChange  `json:"file_changes,omitempty"`
-	TokenUsage      TokenUsage    `json:"token_usage"`
-	SessionType     string        `json:"session_type,omitempty"`      // classification tag: feature, bug, refactor, etc.
-	ProjectCategory string        `json:"project_category,omitempty"`  // project-level category: backend, frontend, ops, etc.
-	ForkedAtMessage int           `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
-	Status          SessionStatus `json:"status,omitempty"`            // lifecycle status: active, idle, archived
-	Version         int           `json:"version"`
-	SourceUpdatedAt int64         `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
+	ExportedAt      time.Time      `json:"exported_at"`
+	CreatedAt       time.Time      `json:"created_at"`
+	ProjectPath     string         `json:"project_path"`
+	RemoteURL       string         `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
+	ExportedBy      string         `json:"exported_by,omitempty"`
+	ParentID        ID             `json:"parent_id,omitempty"`
+	OwnerID         ID             `json:"owner_id,omitempty"`
+	StorageMode     StorageMode    `json:"storage_mode"`
+	Summary         string         `json:"summary,omitempty"`
+	ID              ID             `json:"id"`
+	Provider        ProviderName   `json:"provider"`
+	Agent           string         `json:"agent"`
+	Branch          string         `json:"branch,omitempty"`
+	CommitSHA       string         `json:"commit_sha,omitempty"`
+	Messages        []Message      `json:"messages,omitempty"`
+	Children        []Session      `json:"children,omitempty"`
+	Links           []Link         `json:"links,omitempty"`
+	FileChanges     []FileChange   `json:"file_changes,omitempty"`
+	TokenUsage      TokenUsage     `json:"token_usage"`
+	SessionType     string         `json:"session_type,omitempty"`      // classification tag: feature, bug, refactor, etc.
+	ProjectCategory string         `json:"project_category,omitempty"`  // project-level category: backend, frontend, ops, etc.
+	ForkedAtMessage int            `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
+	Status          SessionStatus  `json:"status,omitempty"`            // lifecycle status: active, idle, archived
+	Errors          []SessionError `json:"errors,omitempty"`            // structured errors extracted from the session
+	Version         int            `json:"version"`
+	SourceUpdatedAt int64          `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
 }
 
 // Summary is a lightweight representation of a session for listings.
@@ -307,8 +308,10 @@ type SearchQuery struct {
 	Branch          string
 	Provider        ProviderName
 	OwnerID         ID
-	SessionType     string // filter by session type (e.g. "bug", "feature")
-	ProjectCategory string // filter by project category (e.g. "backend", "frontend")
+	SessionType     string        // filter by session type (e.g. "bug", "feature")
+	ProjectCategory string        // filter by project category (e.g. "backend", "frontend")
+	Status          SessionStatus // filter by lifecycle status ("active", "idle", "archived"); empty = no filter
+	HasErrors       *bool         // nil = no filter, true = error_count > 0, false = error_count = 0
 
 	// Time range filters (inclusive). Zero values are ignored.
 	Since time.Time

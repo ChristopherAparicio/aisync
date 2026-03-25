@@ -9,6 +9,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
@@ -363,6 +364,19 @@ func (m *MockStore) GetPreferences(_ session.ID) (*session.UserPreferences, erro
 }
 func (m *MockStore) SavePreferences(_ *session.UserPreferences) error { return nil }
 
+// ── Error Store (stubs) ──
+
+func (m *MockStore) SaveErrors(_ []session.SessionError) error { return nil }
+func (m *MockStore) GetErrors(_ session.ID) ([]session.SessionError, error) {
+	return nil, nil
+}
+func (m *MockStore) GetErrorSummary(_ session.ID) (*session.SessionErrorSummary, error) {
+	return nil, nil
+}
+func (m *MockStore) ListRecentErrors(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
+	return nil, nil
+}
+
 // ── Auth Store (stubs) ──
 
 func (m *MockStore) CreateAuthUser(_ *auth.User) error        { return nil }
@@ -380,6 +394,26 @@ func (m *MockStore) ListAPIKeysByUser(_ string) ([]*auth.APIKey, error) { return
 func (m *MockStore) UpdateAPIKey(_ *auth.APIKey) error                  { return nil }
 func (m *MockStore) DeleteAPIKey(_ string) error                        { return nil }
 func (m *MockStore) CountAuthUsers() (int, error)                       { return 0, nil }
+
+// ── Session Event Store (stubs) ──
+
+func (m *MockStore) SaveEvents(_ []sessionevent.Event) error { return nil }
+func (m *MockStore) GetSessionEvents(_ session.ID) ([]sessionevent.Event, error) {
+	return nil, nil
+}
+func (m *MockStore) QueryEvents(_ sessionevent.EventQuery) ([]sessionevent.Event, error) {
+	return nil, nil
+}
+func (m *MockStore) DeleteSessionEvents(_ session.ID) error { return nil }
+func (m *MockStore) UpsertEventBucket(_ sessionevent.EventBucket) error {
+	return nil
+}
+func (m *MockStore) UpsertEventBuckets(_ []sessionevent.EventBucket) error {
+	return nil
+}
+func (m *MockStore) QueryEventBuckets(_ sessionevent.BucketQuery) ([]sessionevent.EventBucket, error) {
+	return nil, nil
+}
 
 // ── Search Helper ──
 

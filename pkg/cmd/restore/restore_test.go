@@ -342,11 +342,177 @@ func TestNewCmdRestore_flags(t *testing.T) {
 	f := &cmdutil.Factory{IOStreams: ios}
 	cmd := NewCmdRestore(f)
 
-	flags := []string{"session", "provider", "agent", "as-context", "pr"}
+	flags := []string{"session", "provider", "agent", "as-context", "pr",
+		"clean-errors", "strip-empty", "redact-secrets", "exclude"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected --%s flag", name)
 		}
+	}
+}
+
+func TestParseExcludeFlag_indices(t *testing.T) {
+	f, err := parseExcludeFlag("0,3,5")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !f.Indices[0] || !f.Indices[3] || !f.Indices[5] {
+		t.Error("expected indices 0, 3, 5 to be set")
+	}
+	if len(f.Roles) != 0 {
+		t.Errorf("expected no roles, got %v", f.Roles)
+	}
+}
+
+func TestParseExcludeFlag_roles(t *testing.T) {
+	f, err := parseExcludeFlag("system")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.Roles) != 1 || f.Roles[0] != session.RoleSystem {
+		t.Errorf("expected [system], got %v", f.Roles)
+	}
+}
+
+func TestParseExcludeFlag_pattern(t *testing.T) {
+	f, err := parseExcludeFlag("/debug|trace/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.ContentPattern == nil {
+		t.Fatal("expected content pattern to be set")
+	}
+	if !f.ContentPattern.MatchString("debug info") {
+		t.Error("pattern should match 'debug info'")
+	}
+}
+
+func TestParseExcludeFlag_combined(t *testing.T) {
+	f, err := parseExcludeFlag("0,system,/error/,2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !f.Indices[0] || !f.Indices[2] {
+		t.Error("expected indices 0 and 2")
+	}
+	if len(f.Roles) != 1 || f.Roles[0] != session.RoleSystem {
+		t.Errorf("expected [system], got %v", f.Roles)
+	}
+	if f.ContentPattern == nil {
+		t.Error("expected content pattern")
+	}
+}
+
+func TestParseExcludeFlag_invalidRole(t *testing.T) {
+	_, err := parseExcludeFlag("invalid_role_name")
+	if err == nil {
+		t.Error("expected error for invalid role")
+	}
+}
+
+func TestParseExcludeFlag_invalidPattern(t *testing.T) {
+	_, err := parseExcludeFlag("/[invalid/")
+	if err == nil {
+		t.Error("expected error for invalid regex")
+	}
+}
+
+func TestParseExcludeFlag_negativeIndex(t *testing.T) {
+	_, err := parseExcludeFlag("-1")
+	if err == nil {
+		t.Error("expected error for negative index")
+	}
+}
+
+func TestBuildFilters_noFlags(t *testing.T) {
+	opts := &Options{}
+	filters, err := buildFilters(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(filters) != 0 {
+		t.Errorf("expected 0 filters, got %d", len(filters))
+	}
+}
+
+func TestBuildFilters_allFlags(t *testing.T) {
+	opts := &Options{
+		CleanErrors:   true,
+		StripEmpty:    true,
+		RedactSecrets: true,
+		ExcludeFlag:   "0,system",
+	}
+	filters, err := buildFilters(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(filters) != 4 {
+		t.Fatalf("expected 4 filters, got %d", len(filters))
+	}
+
+	// Verify order: exclude → empty → errors → secrets
+	names := make([]string, len(filters))
+	for i, f := range filters {
+		names[i] = f.Name()
+	}
+	if names[0] != "message-excluder" {
+		t.Errorf("first filter should be message-excluder, got %q", names[0])
+	}
+	if names[1] != "empty-message" {
+		t.Errorf("second filter should be empty-message, got %q", names[1])
+	}
+	if names[2] != "error-cleaner" {
+		t.Errorf("third filter should be error-cleaner, got %q", names[2])
+	}
+	if names[3] != "secret-redactor" {
+		t.Errorf("fourth filter should be secret-redactor, got %q", names[3])
+	}
+}
+
+func TestBuildFilters_invalidExclude(t *testing.T) {
+	opts := &Options{ExcludeFlag: "bogus_role"}
+	_, err := buildFilters(opts)
+	if err == nil {
+		t.Error("expected error for invalid exclude flag")
+	}
+}
+
+func TestRestore_withFilterFlags(t *testing.T) {
+	prov := &mockProvider{
+		name:      session.ProviderClaudeCode,
+		canImport: false,
+	}
+	store := testutil.NewMockStore()
+
+	sess := testutil.NewSession("restore-filter-test")
+	sess.Provider = session.ProviderClaudeCode
+	sess.Messages = []session.Message{
+		{ID: "m1", Role: session.RoleUser, Content: "fix bug"},
+		{ID: "m2", Role: session.RoleAssistant, Content: ""}, // empty
+		{ID: "m3", Role: session.RoleAssistant, Content: "Done!"},
+	}
+	_ = store.Save(sess)
+
+	f, ios, _ := testFactory(t, prov, store)
+
+	opts := &Options{
+		IO:          ios,
+		Factory:     f,
+		SessionFlag: "restore-filter-test",
+		StripEmpty:  true,
+	}
+
+	err := runRestore(opts)
+	if err != nil {
+		t.Fatalf("runRestore() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Smart Restore filters applied") {
+		t.Error("expected filter results in output")
+	}
+	if !strings.Contains(output, "empty-message") {
+		t.Error("expected empty-message filter name in output")
 	}
 }
 

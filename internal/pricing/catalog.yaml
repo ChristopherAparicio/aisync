@@ -1,0 +1,104 @@
+# Model pricing catalog for aisync.
+# Prices are in USD per 1 million tokens.
+# This file is embedded at compile time (go:embed) and serves as the
+# single source of truth for built-in model pricing.
+#
+# Tiers: some models charge more when cumulative input context exceeds a
+# threshold. Each tier entry specifies a token threshold and a multiplier
+# applied to the base input/output rates. Tiers are evaluated in order;
+# tokens up to the first threshold use the base rate, then subsequent
+# tiers apply their multiplier.
+#
+# Last updated: 2026-03-24
+
+models:
+  # ─── Claude (Anthropic) ───────────────────────────────────────────
+  - model: claude-opus-4
+    input_per_mtoken: 15.0
+    output_per_mtoken: 75.0
+    cache_read_per_mtoken: 1.50
+    cache_write_per_mtoken: 18.75
+    tiers:
+      - threshold_tokens: 200000
+        input_multiplier: 2.0
+        output_multiplier: 2.0
+
+  - model: claude-sonnet-4
+    input_per_mtoken: 3.0
+    output_per_mtoken: 15.0
+    cache_read_per_mtoken: 0.30
+    cache_write_per_mtoken: 3.75
+
+  - model: claude-haiku-4
+    input_per_mtoken: 0.80
+    output_per_mtoken: 4.0
+    cache_read_per_mtoken: 0.08
+    cache_write_per_mtoken: 1.0
+
+  - model: claude-haiku-3.5
+    input_per_mtoken: 0.80
+    output_per_mtoken: 4.0
+    cache_read_per_mtoken: 0.08
+    cache_write_per_mtoken: 1.0
+
+  # ─── GPT (OpenAI) ────────────────────────────────────────────────
+  - model: gpt-4o
+    input_per_mtoken: 2.50
+    output_per_mtoken: 10.0
+    cache_read_per_mtoken: 1.25
+
+  - model: gpt-4o-mini
+    input_per_mtoken: 0.15
+    output_per_mtoken: 0.60
+    cache_read_per_mtoken: 0.075
+
+  - model: gpt-4.1
+    input_per_mtoken: 2.0
+    output_per_mtoken: 8.0
+    cache_read_per_mtoken: 0.50
+
+  - model: gpt-4.1-mini
+    input_per_mtoken: 0.40
+    output_per_mtoken: 1.60
+    cache_read_per_mtoken: 0.10
+
+  - model: gpt-4.1-nano
+    input_per_mtoken: 0.10
+    output_per_mtoken: 0.40
+    cache_read_per_mtoken: 0.025
+
+  - model: o3
+    input_per_mtoken: 2.0
+    output_per_mtoken: 8.0
+    cache_read_per_mtoken: 0.50
+
+  - model: o3-mini
+    input_per_mtoken: 1.10
+    output_per_mtoken: 4.40
+    cache_read_per_mtoken: 0.275
+
+  - model: o4-mini
+    input_per_mtoken: 1.10
+    output_per_mtoken: 4.40
+    cache_read_per_mtoken: 0.275
+
+  # ─── Gemini (Google) ──────────────────────────────────────────────
+  - model: gemini-2.5-pro
+    input_per_mtoken: 1.25
+    output_per_mtoken: 10.0
+    tiers:
+      - threshold_tokens: 200000
+        input_multiplier: 2.0
+        output_multiplier: 2.0
+
+  - model: gemini-2.5-flash
+    input_per_mtoken: 0.15
+    output_per_mtoken: 0.60
+    tiers:
+      - threshold_tokens: 200000
+        input_multiplier: 2.0
+        output_multiplier: 2.0
+
+  - model: gemini-2.0-flash
+    input_per_mtoken: 0.10
+    output_per_mtoken: 0.40

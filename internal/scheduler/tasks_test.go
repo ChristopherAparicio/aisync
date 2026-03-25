@@ -390,6 +390,164 @@ func TestScheduler_AllNewTasks(t *testing.T) {
 	}
 }
 
+// ── Reclassify Task Tests ──
+
+// mockErrorService implements service.ErrorServicer for testing.
+type mockErrorService struct {
+	processResult *service.ProcessSessionResult
+	processErr    error
+	processCalled bool
+}
+
+func (m *mockErrorService) ProcessSession(sess *session.Session) (*service.ProcessSessionResult, error) {
+	m.processCalled = true
+	return m.processResult, m.processErr
+}
+func (m *mockErrorService) GetErrors(_ session.ID) ([]session.SessionError, error) { return nil, nil }
+func (m *mockErrorService) GetSummary(_ session.ID) (*session.SessionErrorSummary, error) {
+	return nil, nil
+}
+func (m *mockErrorService) ListRecent(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
+	return nil, nil
+}
+
+// mockErrorStore implements storage.ErrorStore for testing reclassify task.
+type mockErrorStore struct {
+	recentErrors []session.SessionError
+	listErr      error
+	savedErrors  []session.SessionError
+	saveErr      error
+}
+
+func (m *mockErrorStore) SaveErrors(errs []session.SessionError) error {
+	m.savedErrors = errs
+	return m.saveErr
+}
+func (m *mockErrorStore) GetErrors(_ session.ID) ([]session.SessionError, error) { return nil, nil }
+func (m *mockErrorStore) GetErrorSummary(_ session.ID) (*session.SessionErrorSummary, error) {
+	return nil, nil
+}
+func (m *mockErrorStore) ListRecentErrors(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
+	return m.recentErrors, m.listErr
+}
+
+func TestReclassifyTask_Name(t *testing.T) {
+	task := NewReclassifyTask(ReclassifyConfig{})
+	if got := task.Name(); got != "reclassify_errors" {
+		t.Errorf("Name() = %q, want %q", got, "reclassify_errors")
+	}
+}
+
+func TestReclassifyTask_NoUnknownErrors(t *testing.T) {
+	store := &mockErrorStore{recentErrors: nil}
+	errSvc := &mockErrorService{}
+	logger := log.New(log.Writer(), "", 0)
+
+	task := NewReclassifyTask(ReclassifyConfig{
+		ErrorService: errSvc,
+		Store:        store,
+		Logger:       logger,
+	})
+
+	err := task.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if errSvc.processCalled {
+		t.Error("ProcessSession should not be called when there are no unknown errors")
+	}
+}
+
+func TestReclassifyTask_ReclassifiesErrors(t *testing.T) {
+	unknowns := []session.SessionError{
+		{
+			ID:        "err-1",
+			SessionID: "sess-1",
+			Category:  session.ErrorCategoryUnknown,
+			Source:    session.ErrorSourceTool,
+			Message:   "some unknown error",
+		},
+		{
+			ID:        "err-2",
+			SessionID: "sess-1",
+			Category:  session.ErrorCategoryUnknown,
+			Source:    session.ErrorSourceTool,
+			Message:   "another unknown error",
+		},
+	}
+
+	store := &mockErrorStore{recentErrors: unknowns}
+	errSvc := &mockErrorService{
+		processResult: &service.ProcessSessionResult{
+			SessionID:  "sess-1",
+			Processed:  2,
+			ByCategory: map[session.ErrorCategory]int{session.ErrorCategoryToolError: 2},
+		},
+	}
+	logger := log.New(log.Writer(), "", 0)
+
+	task := NewReclassifyTask(ReclassifyConfig{
+		ErrorService: errSvc,
+		Store:        store,
+		Logger:       logger,
+	})
+
+	err := task.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !errSvc.processCalled {
+		t.Error("ProcessSession should have been called")
+	}
+}
+
+func TestReclassifyTask_StoreError(t *testing.T) {
+	store := &mockErrorStore{listErr: errors.New("db down")}
+	errSvc := &mockErrorService{}
+	logger := log.New(log.Writer(), "", 0)
+
+	task := NewReclassifyTask(ReclassifyConfig{
+		ErrorService: errSvc,
+		Store:        store,
+		Logger:       logger,
+	})
+
+	err := task.Run(context.Background())
+	if err == nil {
+		t.Error("expected error when store fails")
+	}
+}
+
+func TestReclassifyTask_ContextCancelled(t *testing.T) {
+	unknowns := []session.SessionError{
+		{ID: "err-1", SessionID: "sess-1", Category: session.ErrorCategoryUnknown},
+		{ID: "err-2", SessionID: "sess-2", Category: session.ErrorCategoryUnknown},
+	}
+
+	store := &mockErrorStore{recentErrors: unknowns}
+	errSvc := &mockErrorService{
+		processResult: &service.ProcessSessionResult{
+			Processed:  1,
+			ByCategory: map[session.ErrorCategory]int{session.ErrorCategoryToolError: 1},
+		},
+	}
+	logger := log.New(log.Writer(), "", 0)
+
+	task := NewReclassifyTask(ReclassifyConfig{
+		ErrorService: errSvc,
+		Store:        store,
+		Logger:       logger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	err := task.Run(ctx)
+	if err == nil {
+		t.Error("expected context cancellation error")
+	}
+}
+
 // Suppress unused import warnings — these types are used in the mock.
 var (
 	_ analysis.SessionAnalysis

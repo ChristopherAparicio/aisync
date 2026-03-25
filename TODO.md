@@ -1,40 +1,30 @@
 # aisync — Next Session TODO
 
-## Priority 1: Fix Data Quality
+> Last updated: 2026-03-25
 
-### 1.1 Worktree Deduplication
-OpenCode creates worktrees per session/branch (`~/.local/share/opencode/worktree/{hash}/{name}`).
-These all point to the same git repo but appear as separate "projects" in aisync.
+## Recently Completed
 
-**Problem:** 40+ "projects" shown when there are really 5-6 repos.
+### Pricing Catalog Refactoring + LiteLLM Integration (Phase 10.8)
+- [x] `Catalog` port interface with `Lookup(model)` and `List()` methods
+- [x] `EmbeddedCatalog` adapter: YAML source of truth (go:embed, 15 models, tiers)
+- [x] `OverrideCatalog` decorator: user config overrides on base catalog
+- [x] `LiteLLMCatalog` adapter: 2500+ models from GitHub JSON cache
+- [x] `FallbackCatalog`: chains LiteLLM → Embedded (first match wins)
+- [x] `aisync update-prices` CLI command with `--info` flag
+- [x] Tiered/dynamic pricing with multipliers (Opus 4, Gemini 2.5 Pro/Flash)
+- [x] Factory wiring: full chain with graceful degradation
+- [x] 88 pricing tests, 1761 total tests passing
 
-**Fix:**
-- In `ListProjects()` and storage layer: group by `remote_url` instead of `project_path`
-- When `remote_url` is empty, fall back to the **repo root** (resolve via `git rev-parse --show-toplevel` or check if multiple paths share the same `.git` origin)
-- The display name should be the repo name (e.g., "omogen/backend") not the worktree folder name ("sunny-wizard")
-- Store a `canonical_project_path` on capture that resolves worktrees to their source repo
-
-### 1.2 Branch Recovery
-Sessions captured with `--all` lost their branch info (all set to current branch at capture time).
-
-**Fix:**
-- For OpenCode: the worktree directory name often IS the branch name (e.g., `worktree/.../feat/assign-criteria-command`)
-- Parse the worktree path to extract the branch name when the session has no branch
-- Run a one-time backfill to fix existing sessions
-
-### 1.3 Search on Sessions Page
-The sessions page (`/sessions`) has filter dropdowns but no **text search** field for the session title/summary.
-
-**Fix:**
-- Add a keyword search input at the top of the sessions filter bar
-- Filter by session Summary (title) with case-insensitive LIKE query
-- Already supported in `SearchRequest.Keyword` — just needs to be wired in the UI
+### Error Classification (Phase 10.6)
+- [x] Domain model, deterministic classifier, OpenCode extraction
+- [x] SQLite store, API endpoints, CLI, MCP tool, scheduler task
+- [x] Dashboard filters: Status + HasErrors
 
 ---
 
-## Priority 2: GitHub-style Layout
+## Priority 1: UX Redesign v2 — GitHub-style Layout
 
-### 2.1 Home Page Redesign
+### 1.1 Home Page Redesign
 Current: KPI dashboard (monitor-first)
 Target: GitHub-style "find & act" layout
 
@@ -64,11 +54,11 @@ Target: GitHub-style "find & act" layout
 - Center: recent sessions feed with action buttons
 - Bottom/right: compact KPIs
 
-### 2.2 Project Page
+### 1.2 Project Page
 When you click a project in the sidebar → project-scoped view:
 
 ```
-omogen/backend                                    
+omogen/backend
 ───────────────────────────────────────────────────
 KPIs: 340 sessions | 2.1B tokens | subscription
 
@@ -88,32 +78,60 @@ Sessions (filterable):
 └─────────────────────────────────────────────────┘
 ```
 
-### 2.3 Global Search
+### 1.3 Global Search
 - Search bar always visible in navbar
 - Searches across session titles, branches, project names
 - Keyboard shortcut: Ctrl+K or /
 - Autocomplete suggestions from recent sessions
 
+### 1.4 Search on Sessions Page
+The sessions page has filter dropdowns but no **text search** field for the session title/summary.
+- Add a keyword search input at the top of the sessions filter bar
+- Filter by session Summary (title) with case-insensitive LIKE query
+- Already supported in `SearchRequest.Keyword` — just needs to be wired in the UI
+
 ---
 
-## Priority 3: Quick Actions
+## Priority 2: Quick Actions
 
-### 3.1 Restore Button
+### 2.1 Restore Button
 Add "Restore to OpenCode" button on session cards and session detail page.
 Generates and copies the `aisync restore <id>` command.
 
-### 3.2 Analyze on Demand  
+### 2.2 Analyze on Demand
 Add "Analyze" button that triggers `ComputeObjective()` for sessions without objectives.
 
-### 3.3 Fork Tree Navigation
+### 2.3 Fork Tree Navigation
 When a session has forks, show a clickable mini-tree directly in the session list.
 
 ---
 
-## Technical Debt
+## Priority 3: Data Quality (Partially Done)
 
-- [ ] Run fork detection on all 585 sessions and persist to `session_forks` table
+### 3.1 Worktree Deduplication ✅ DONE
+- [x] `ListProjects()` groups by `remote_url`
+- [x] Display name from repo name, not worktree folder
+
+### 3.2 Branch Recovery ✅ DONE
+- [x] Branches extracted from worktree paths
+- [x] One-time backfill completed
+
+### 3.3 Re-capture Sessions
+- [ ] Re-capture existing sessions to populate error data
+- [ ] Re-capture to populate ContentBlocks and ImageMeta
+
+## Priority 4: Future Error Analysis
+
+- [ ] LLM classifier for ambiguous tool errors (future, low priority)
+- [ ] `CompositeClassifier` — deterministic first, LLM fallback for "unknown"
+
+---
+
+## Priority 5: Technical Debt
+
+- [ ] Run fork detection on all 1085+ sessions and persist to `session_forks` table
 - [ ] Compute objectives for existing sessions (batch job)
 - [ ] Fix the analytics page (route commented out, handler missing)
 - [ ] Re-capture sessions to populate ContentBlocks and ImageMeta
 - [ ] Add `aisync usage compute` CLI command for on-demand bucket computation
+- [ ] Consider auto-refresh: when LiteLLM cache is stale (>7 days), optionally auto-refresh on startup in background

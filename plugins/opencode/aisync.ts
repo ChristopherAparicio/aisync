@@ -73,7 +73,17 @@ const AisyncPlugin: Plugin = async (ctx) => {
     )
 
     try {
-      await $`aisync capture --provider opencode --session-id ${sessionId} --mode ${CAPTURE_MODE} --auto`
+      const args = [
+        "capture",
+        "--provider", "opencode",
+        "--session-id", sessionId,
+        "--mode", CAPTURE_MODE,
+        "--auto",
+      ]
+      if (branch) {
+        args.push("--branch", branch)
+      }
+      await $`aisync ${args}`
       captured.add(sessionId)
       log(`capture complete: ${sessionId}`)
     } catch (err: any) {

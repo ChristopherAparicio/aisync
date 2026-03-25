@@ -281,6 +281,9 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		CacheWrite:   totalCacheWrite,
 	}
 
+	// Extract structured errors from messages.
+	result.Errors = ExtractErrors(sessionID, messages, result.Messages)
+
 	// Load child sessions (sub-agents).
 	children, err := p.loadChildSessionsFull(string(sessionID), mode)
 	if err == nil && len(children) > 0 {
@@ -990,15 +993,33 @@ type ocTime struct {
 }
 
 type ocMessage struct {
-	Model      ocModel   `json:"model"`
-	ID         string    `json:"id"`
-	Role       string    `json:"role"`
-	Agent      string    `json:"agent"`
-	ModelID    string    `json:"modelID"`
-	ProviderID string    `json:"providerID"` // e.g. "anthropic", "amazon-bedrock", "opencode"
-	Tokens     ocTokens  `json:"tokens"`
-	Time       ocMsgTime `json:"time"`
-	Cost       float64   `json:"cost"` // actual cost reported by provider (0 for subscriptions)
+	Model      ocModel     `json:"model"`
+	ID         string      `json:"id"`
+	Role       string      `json:"role"`
+	Agent      string      `json:"agent"`
+	ModelID    string      `json:"modelID"`
+	ProviderID string      `json:"providerID"` // e.g. "anthropic", "amazon-bedrock", "opencode"
+	Tokens     ocTokens    `json:"tokens"`
+	Time       ocMsgTime   `json:"time"`
+	Cost       float64     `json:"cost"`  // actual cost reported by provider (0 for subscriptions)
+	Error      *ocAPIError `json:"error"` // API-level error (e.g. HTTP 500 from Anthropic)
+}
+
+// ocAPIError represents an API-level error captured by OpenCode.
+// This is NOT a tool error — it's an HTTP error from the provider API.
+type ocAPIError struct {
+	Name string         `json:"name"` // e.g. "APIError"
+	Data ocAPIErrorData `json:"data"`
+}
+
+// ocAPIErrorData holds the detailed error data from the provider.
+type ocAPIErrorData struct {
+	Message         string            `json:"message"`    // e.g. "Internal server error"
+	StatusCode      int               `json:"statusCode"` // HTTP status code
+	IsRetryable     bool              `json:"isRetryable"`
+	ResponseHeaders map[string]string `json:"responseHeaders"` // rate limit headers, request-id, etc.
+	ResponseBody    string            `json:"responseBody"`    // raw response body
+	Metadata        map[string]string `json:"metadata"`        // e.g. {"url": "https://api.anthropic.com/v1/messages"}
 }
 
 type ocMsgTime struct {

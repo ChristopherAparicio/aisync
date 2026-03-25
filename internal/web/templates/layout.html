@@ -11,26 +11,43 @@
   <nav class="navbar">
     <a href="/" class="navbar-brand">ai<span>sync</span></a>
     {{block "project-selector" .}}{{end}}
+    <div class="navbar-search">
+      <span class="navbar-search-icon">&#x1F50D;</span>
+      <form action="/sessions" method="get" style="display:inline">
+        <input type="text" name="keyword" class="navbar-search-input" placeholder="Search sessions..." autocomplete="off">
+      </form>
+      <span class="navbar-search-kbd">/</span>
+    </div>
     <ul class="navbar-nav">
-      <li><a href="/" class="{{if eq .Nav "dashboard"}}active{{end}}">Dashboard</a></li>
+      <li><a href="/" class="{{if eq .Nav "dashboard"}}active{{end}}">Home</a></li>
       <li><a href="/sessions" class="{{if eq .Nav "sessions"}}active{{end}}">Sessions</a></li>
-      <li><a href="/projects" class="{{if eq .Nav "projects"}}active{{end}}">Projects</a></li>
       <li><a href="/branches" class="{{if eq .Nav "branches"}}active{{end}}">Branches</a></li>
-      <li><a href="/usage" class="{{if eq .Nav "usage"}}active{{end}}">Usage</a></li>
       <li><a href="/costs" class="{{if eq .Nav "costs"}}active{{end}}">Costs</a></li>
     </ul>
   </nav>
-  <main class="container">
-    {{block "content" .}}{{end}}
-  </main>
+  <div class="app-shell">
+    {{block "sidebar" .}}{{end}}
+    <div class="main-content">
+      {{block "content" .}}{{end}}
+    </div>
+  </div>
   <script>
   // Propagate ?project= filter across nav links.
   (function(){
     var p = new URLSearchParams(location.search).get('project');
-    if (!p) return;
-    var q = '?project=' + encodeURIComponent(p);
-    document.querySelectorAll('.navbar-nav a, .navbar-brand').forEach(function(a){
-      a.href = a.getAttribute('href') + q;
+    if (p) {
+      var q = '?project=' + encodeURIComponent(p);
+      document.querySelectorAll('.navbar-nav a, .navbar-brand').forEach(function(a){
+        a.href = a.getAttribute('href') + q;
+      });
+    }
+    // Global search shortcut: press / to focus search bar.
+    document.addEventListener('keydown', function(e){
+      if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+        e.preventDefault();
+        var inp = document.querySelector('.navbar-search-input');
+        if (inp) inp.focus();
+      }
     });
   })();
   </script>

@@ -19,13 +19,18 @@ type RestoreRequest struct {
 	ProviderName session.ProviderName
 	AsContext    bool
 	PRNumber     int // if > 0, look up session linked to this PR
+
+	// Filters is a chain of SessionFilter strategies applied before restore.
+	// Each filter transforms the session (e.g. clean errors, redact secrets).
+	Filters []session.SessionFilter
 }
 
 // RestoreResult contains the output of a restore operation.
 type RestoreResult struct {
-	Session     *session.Session
-	Method      string // "native", "converted", or "context"
-	ContextPath string
+	Session       *session.Session
+	Method        string // "native", "converted", or "context"
+	ContextPath   string
+	FilterResults []session.FilterResult // results from each applied filter
 }
 
 // Restore looks up a session and imports it into a target provider.
@@ -53,14 +58,16 @@ func (s *SessionService) Restore(req RestoreRequest) (*RestoreResult, error) {
 		ProviderName: req.ProviderName,
 		Agent:        req.Agent,
 		AsContext:    req.AsContext,
+		Filters:      req.Filters,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	return &RestoreResult{
-		Session:     result.Session,
-		Method:      result.Method,
-		ContextPath: result.ContextPath,
+		Session:       result.Session,
+		Method:        result.Method,
+		ContextPath:   result.ContextPath,
+		FilterResults: result.FilterResults,
 	}, nil
 }

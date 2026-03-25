@@ -12,6 +12,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/llm"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
 
 // ── Summarize ──
@@ -986,6 +987,18 @@ func (m *mockStore) DeleteSessionLink(id session.ID) error {
 	return nil
 }
 
+// Error store stubs.
+func (m *mockStore) SaveErrors(_ []session.SessionError) error { return nil }
+func (m *mockStore) GetErrors(_ session.ID) ([]session.SessionError, error) {
+	return nil, nil
+}
+func (m *mockStore) GetErrorSummary(_ session.ID) (*session.SessionErrorSummary, error) {
+	return nil, nil
+}
+func (m *mockStore) ListRecentErrors(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
+	return nil, nil
+}
+
 // Auth store stubs.
 func (m *mockStore) CreateAuthUser(_ *auth.User) error        { return nil }
 func (m *mockStore) GetAuthUser(_ string) (*auth.User, error) { return nil, auth.ErrUserNotFound }
@@ -1002,6 +1015,21 @@ func (m *mockStore) ListAPIKeysByUser(_ string) ([]*auth.APIKey, error) { return
 func (m *mockStore) UpdateAPIKey(_ *auth.APIKey) error                  { return nil }
 func (m *mockStore) DeleteAPIKey(_ string) error                        { return nil }
 func (m *mockStore) CountAuthUsers() (int, error)                       { return 0, nil }
+
+// Session event store stubs.
+func (m *mockStore) SaveEvents(_ []sessionevent.Event) error { return nil }
+func (m *mockStore) GetSessionEvents(_ session.ID) ([]sessionevent.Event, error) {
+	return nil, nil
+}
+func (m *mockStore) QueryEvents(_ sessionevent.EventQuery) ([]sessionevent.Event, error) {
+	return nil, nil
+}
+func (m *mockStore) DeleteSessionEvents(_ session.ID) error                { return nil }
+func (m *mockStore) UpsertEventBucket(_ sessionevent.EventBucket) error    { return nil }
+func (m *mockStore) UpsertEventBuckets(_ []sessionevent.EventBucket) error { return nil }
+func (m *mockStore) QueryEventBuckets(_ sessionevent.BucketQuery) ([]sessionevent.EventBucket, error) {
+	return nil, nil
+}
 
 // ── Garbage Collection tests ──
 

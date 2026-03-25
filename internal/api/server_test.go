@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/api"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
+	"github.com/ChristopherAparicio/aisync/internal/errorclass"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -1281,5 +1283,326 @@ func TestSkillResolveEndpoint_NoResolver(t *testing.T) {
 	resp := doRequest(t, handler, "POST", "/api/v1/sessions/any-id/skills/resolve", nil)
 	if resp.Code != http.StatusNotFound {
 		t.Errorf("expected 404 when skill resolver is nil, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// ── Error Endpoints ──
+
+// newTestServerWithErrors creates an API server with SessionService and ErrorService.
+func newTestServerWithErrors(t *testing.T) (http.Handler, *service.SessionService, *service.ErrorService) {
+	t.Helper()
+	store := testutil.MustOpenStore(t)
+
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+
+	errorSvc := service.NewErrorService(service.ErrorServiceConfig{
+		Store:      store,
+		Classifier: errorclass.NewDeterministicClassifier(),
+	})
+
+	srv := api.New(api.Config{
+		SessionService: sessionSvc,
+		ErrorService:   errorSvc,
+		Addr:           "127.0.0.1:0",
+	})
+
+	return srv.Handler(), sessionSvc, errorSvc
+}
+
+// seedSessionWithErrors creates a session via ingest, then processes errors for it.
+func seedSessionWithErrors(t *testing.T, handler http.Handler, errorSvc *service.ErrorService, errors []session.SessionError) string {
+	t.Helper()
+	sessID := ingestTestSession(t, handler, "parlay", "error-test-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+
+	// Build a session with errors so ProcessSession can classify and save them.
+	sess := &session.Session{
+		ID:     session.ID(sessID),
+		Errors: errors,
+	}
+	for i := range sess.Errors {
+		sess.Errors[i].SessionID = session.ID(sessID)
+	}
+
+	_, err := errorSvc.ProcessSession(sess)
+	if err != nil {
+		t.Fatalf("ProcessSession: %v", err)
+	}
+
+	return sessID
+}
+
+func TestGetSessionErrors(t *testing.T) {
+	handler, _, errorSvc := newTestServerWithErrors(t)
+
+	now := time.Now()
+	sessID := seedSessionWithErrors(t, handler, errorSvc, []session.SessionError{
+		{
+			ID:         "err-1",
+			RawError:   "Internal server error",
+			HTTPStatus: 500,
+			OccurredAt: now,
+		},
+		{
+			ID:         "err-2",
+			RawError:   "rate limit exceeded",
+			HTTPStatus: 429,
+			OccurredAt: now.Add(time.Second),
+		},
+	})
+
+	resp := doRequest(t, handler, "GET", fmt.Sprintf("/api/v1/sessions/%s/errors", sessID), nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var result map[string]any
+	decodeResponse(t, resp, &result)
+
+	count, ok := result["count"].(float64)
+	if !ok || int(count) != 2 {
+		t.Errorf("expected count=2, got %v", result["count"])
+	}
+
+	errors, ok := result["errors"].([]any)
+	if !ok || len(errors) != 2 {
+		t.Fatalf("expected 2 errors, got %v", result["errors"])
+	}
+
+	// Verify first error has expected fields.
+	first := errors[0].(map[string]any)
+	if first["id"] != "err-1" {
+		t.Errorf("expected id=err-1, got %v", first["id"])
+	}
+	if first["session_id"] != sessID {
+		t.Errorf("expected session_id=%s, got %v", sessID, first["session_id"])
+	}
+	// DeterministicClassifier should classify 500 as provider_error
+	if first["category"] != "provider_error" {
+		t.Errorf("expected category=provider_error, got %v", first["category"])
+	}
+	if first["source"] != "provider" {
+		t.Errorf("expected source=provider, got %v", first["source"])
+	}
+	// 500 should be external
+	if first["is_external"] != true {
+		t.Errorf("expected is_external=true, got %v", first["is_external"])
+	}
+}
+
+func TestGetSessionErrors_Empty(t *testing.T) {
+	handler, _, _ := newTestServerWithErrors(t)
+	sessID := ingestTestSession(t, handler, "parlay", "no-errors-session")
+
+	resp := doRequest(t, handler, "GET", fmt.Sprintf("/api/v1/sessions/%s/errors", sessID), nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var result map[string]any
+	decodeResponse(t, resp, &result)
+	count := result["count"].(float64)
+	if int(count) != 0 {
+		t.Errorf("expected count=0, got %v", result["count"])
+	}
+}
+
+func TestGetSessionErrors_NoErrorService(t *testing.T) {
+	// Standard test server has no ErrorService.
+	handler, _ := newTestServer(t)
+
+	resp := doRequest(t, handler, "GET", "/api/v1/sessions/any-id/errors", nil)
+	if resp.Code != http.StatusNotFound {
+		t.Errorf("expected 404 when error service is nil, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestGetSessionErrorSummary(t *testing.T) {
+	handler, _, errorSvc := newTestServerWithErrors(t)
+
+	now := time.Now()
+	sessID := seedSessionWithErrors(t, handler, errorSvc, []session.SessionError{
+		{
+			ID:         "sum-err-1",
+			RawError:   "Internal server error",
+			HTTPStatus: 500,
+			OccurredAt: now,
+		},
+		{
+			ID:         "sum-err-2",
+			RawError:   "rate limit exceeded",
+			HTTPStatus: 429,
+			OccurredAt: now.Add(time.Second),
+		},
+		{
+			ID:         "sum-err-3",
+			RawError:   "bash exit code 1: command not found",
+			ToolName:   "bash",
+			OccurredAt: now.Add(2 * time.Second),
+		},
+	})
+
+	resp := doRequest(t, handler, "GET", fmt.Sprintf("/api/v1/sessions/%s/errors/summary", sessID), nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var result map[string]any
+	decodeResponse(t, resp, &result)
+
+	if result["session_id"] != sessID {
+		t.Errorf("expected session_id=%s, got %v", sessID, result["session_id"])
+	}
+	total := result["total_errors"].(float64)
+	if int(total) != 3 {
+		t.Errorf("expected total_errors=3, got %v", result["total_errors"])
+	}
+	ext := result["external_errors"].(float64)
+	if int(ext) < 2 {
+		t.Errorf("expected at least 2 external errors (500+429), got %v", result["external_errors"])
+	}
+	byCategory, ok := result["by_category"].(map[string]any)
+	if !ok {
+		t.Fatal("expected by_category to be an object")
+	}
+	if len(byCategory) < 2 {
+		t.Errorf("expected at least 2 categories, got %d", len(byCategory))
+	}
+}
+
+func TestGetSessionErrorSummary_NoErrorService(t *testing.T) {
+	handler, _ := newTestServer(t)
+
+	resp := doRequest(t, handler, "GET", "/api/v1/sessions/any-id/errors/summary", nil)
+	if resp.Code != http.StatusNotFound {
+		t.Errorf("expected 404 when error service is nil, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestListRecentErrors(t *testing.T) {
+	handler, _, errorSvc := newTestServerWithErrors(t)
+
+	now := time.Now()
+	// Seed errors across two different sessions.
+	seedSessionWithErrors(t, handler, errorSvc, []session.SessionError{
+		{
+			ID:         "recent-err-1",
+			RawError:   "Internal server error",
+			HTTPStatus: 500,
+			OccurredAt: now,
+		},
+	})
+	seedSessionWithErrors(t, handler, errorSvc, []session.SessionError{
+		{
+			ID:         "recent-err-2",
+			RawError:   "rate limit exceeded",
+			HTTPStatus: 429,
+			OccurredAt: now.Add(time.Second),
+		},
+	})
+
+	resp := doRequest(t, handler, "GET", "/api/v1/errors/recent", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var result map[string]any
+	decodeResponse(t, resp, &result)
+	count := result["count"].(float64)
+	if int(count) < 2 {
+		t.Errorf("expected at least 2 recent errors, got %v", result["count"])
+	}
+}
+
+func TestListRecentErrors_WithCategoryFilter(t *testing.T) {
+	handler, _, errorSvc := newTestServerWithErrors(t)
+
+	now := time.Now()
+	seedSessionWithErrors(t, handler, errorSvc, []session.SessionError{
+		{
+			ID:         "filter-err-1",
+			RawError:   "Internal server error",
+			HTTPStatus: 500,
+			OccurredAt: now,
+		},
+		{
+			ID:         "filter-err-2",
+			RawError:   "rate limit exceeded",
+			HTTPStatus: 429,
+			OccurredAt: now.Add(time.Second),
+		},
+	})
+
+	// Filter by rate_limit only.
+	resp := doRequest(t, handler, "GET", "/api/v1/errors/recent?category=rate_limit", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var result map[string]any
+	decodeResponse(t, resp, &result)
+
+	errors, ok := result["errors"].([]any)
+	if !ok {
+		t.Fatal("expected errors to be an array")
+	}
+	for _, e := range errors {
+		errObj := e.(map[string]any)
+		if errObj["category"] != "rate_limit" {
+			t.Errorf("expected all errors to be rate_limit, got %v", errObj["category"])
+		}
+	}
+}
+
+func TestListRecentErrors_WithLimit(t *testing.T) {
+	handler, _, errorSvc := newTestServerWithErrors(t)
+
+	now := time.Now()
+	seedSessionWithErrors(t, handler, errorSvc, []session.SessionError{
+		{ID: "limit-err-1", RawError: "error 1", HTTPStatus: 500, OccurredAt: now},
+		{ID: "limit-err-2", RawError: "error 2", HTTPStatus: 500, OccurredAt: now.Add(time.Second)},
+		{ID: "limit-err-3", RawError: "error 3", HTTPStatus: 500, OccurredAt: now.Add(2 * time.Second)},
+	})
+
+	resp := doRequest(t, handler, "GET", "/api/v1/errors/recent?limit=2", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var result map[string]any
+	decodeResponse(t, resp, &result)
+	count := result["count"].(float64)
+	if int(count) > 2 {
+		t.Errorf("expected at most 2 errors with limit=2, got %v", result["count"])
+	}
+}
+
+func TestListRecentErrors_InvalidCategory(t *testing.T) {
+	handler, _, _ := newTestServerWithErrors(t)
+
+	resp := doRequest(t, handler, "GET", "/api/v1/errors/recent?category=invalid_cat", nil)
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid category, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestListRecentErrors_InvalidLimit(t *testing.T) {
+	handler, _, _ := newTestServerWithErrors(t)
+
+	resp := doRequest(t, handler, "GET", "/api/v1/errors/recent?limit=abc", nil)
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid limit, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestListRecentErrors_NoErrorService(t *testing.T) {
+	handler, _ := newTestServer(t)
+
+	resp := doRequest(t, handler, "GET", "/api/v1/errors/recent", nil)
+	if resp.Code != http.StatusNotFound {
+		t.Errorf("expected 404 when error service is nil, got %d: %s", resp.Code, resp.Body.String())
 	}
 }

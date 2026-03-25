@@ -4,6 +4,35 @@
 
 {{define "title"}}Token Usage — aisync{{end}}
 
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4AC;</span> Sessions</a></li>
+      <li><a href="/branches" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F33F;</span> Branches</a></li>
+      <li><a href="/usage" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x1F4CA;</span> Usage</a></li>
+      <li><a href="/costs" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4B0;</span> Costs</a></li>
+    </ul>
+  </div>
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Your Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/usage?project={{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
 {{define "content"}}
 <h1 class="page-title">Token Usage</h1>
 

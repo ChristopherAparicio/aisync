@@ -4,6 +4,35 @@
 
 {{define "title"}}aisync — Sessions{{end}}
 
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x1F4AC;</span> Sessions</a></li>
+      <li><a href="/branches" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F33F;</span> Branches</a></li>
+      <li><a href="/usage" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4CA;</span> Usage</a></li>
+      <li><a href="/costs" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4B0;</span> Costs</a></li>
+    </ul>
+  </div>
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Your Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/sessions?project={{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
 {{define "project-selector"}}
 {{if .Projects}}
 <div class="project-selector">
@@ -62,6 +91,17 @@
         <option value="frontend" {{if eq .FilterProjectCategory "frontend"}}selected{{end}}>Frontend</option>
         <option value="fullstack" {{if eq .FilterProjectCategory "fullstack"}}selected{{end}}>Fullstack</option>
         <option value="ops" {{if eq .FilterProjectCategory "ops"}}selected{{end}}>Ops</option>
+      </select>
+      <select name="status" class="filter-select">
+        <option value="">All statuses</option>
+        <option value="active" {{if eq .FilterStatus "active"}}selected{{end}}>Active</option>
+        <option value="idle" {{if eq .FilterStatus "idle"}}selected{{end}}>Idle</option>
+        <option value="archived" {{if eq .FilterStatus "archived"}}selected{{end}}>Archived</option>
+      </select>
+      <select name="has_errors" class="filter-select">
+        <option value="">Any error state</option>
+        <option value="true" {{if eq .FilterHasErrors "true"}}selected{{end}}>Has errors</option>
+        <option value="false" {{if eq .FilterHasErrors "false"}}selected{{end}}>No errors</option>
       </select>
       <input type="text" name="branch" value="{{.FilterBranch}}"
              class="filter-input" placeholder="Branch..." style="max-width:150px;">

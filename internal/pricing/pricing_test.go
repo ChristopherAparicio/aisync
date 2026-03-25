@@ -12,7 +12,7 @@ func TestNewCalculator(t *testing.T) {
 	if c == nil {
 		t.Fatal("NewCalculator() returned nil")
 	}
-	if len(c.prices) == 0 {
+	if len(c.catalog.List()) == 0 {
 		t.Fatal("NewCalculator() has no prices loaded")
 	}
 }

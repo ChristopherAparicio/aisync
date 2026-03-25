@@ -26,9 +26,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/diff", s.handleDiff)
 	mux.HandleFunc("GET /api/v1/sessions/off-topic", s.handleOffTopic)
 
-	// Explain & Rewind
+	// Explain, Rewind & Validate
 	mux.HandleFunc("POST /api/v1/sessions/explain", s.handleExplain)
 	mux.HandleFunc("POST /api/v1/sessions/rewind", s.handleRewind)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/validate", s.handleValidate)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/validate", s.handleValidateWithFix)
 
 	// Blame
 	mux.HandleFunc("GET /api/v1/blame", s.handleBlame)
@@ -77,6 +79,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Skill resolver (optional — returns 404 if skill resolver is nil)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/skills/resolve", s.handleSkillResolve)
+
+	// Errors (optional — returns 404 if error service is nil)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/errors/summary", s.handleGetSessionErrorSummary)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/errors", s.handleGetSessionErrors)
+	mux.HandleFunc("GET /api/v1/errors/recent", s.handleListRecentErrors)
 
 	// Authentication (optional — returns 404 if auth service is nil)
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleAuthRegister)

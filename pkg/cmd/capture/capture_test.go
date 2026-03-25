@@ -237,12 +237,43 @@ func TestCapture_autoModeSilent(t *testing.T) {
 	}
 }
 
+func TestCapture_withBranchFlag(t *testing.T) {
+	// Simulate an OpenCode session with no branch (OpenCode doesn't track branches).
+	// The --branch flag should fill in the branch from the plugin.
+	sess := testutil.NewSession("cap-branch")
+	sess.Branch = "" // OpenCode Export() never sets Branch
+	prov := &mockProvider{
+		name:    session.ProviderOpenCode,
+		session: sess,
+	}
+	f, ios, store := testFactory(t, prov)
+
+	opts := &Options{
+		IO:           ios,
+		Factory:      f,
+		ProviderFlag: "opencode",
+		BranchFlag:   "fix/worktree-branch",
+	}
+
+	err := runCapture(opts)
+	if err != nil {
+		t.Fatalf("runCapture() error = %v", err)
+	}
+
+	if store.SaveCount != 1 {
+		t.Fatal("expected 1 saved session")
+	}
+	if store.LastSaved.Branch != "fix/worktree-branch" {
+		t.Errorf("Branch = %q, want 'fix/worktree-branch'", store.LastSaved.Branch)
+	}
+}
+
 func TestNewCmdCapture_flags(t *testing.T) {
 	ios := iostreams.Test()
 	f := &cmdutil.Factory{IOStreams: ios}
 	cmd := NewCmdCapture(f)
 
-	flags := []string{"provider", "mode", "message", "auto"}
+	flags := []string{"provider", "mode", "message", "branch", "auto", "session-id", "all"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected --%s flag", name)

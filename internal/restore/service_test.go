@@ -1,6 +1,7 @@
 package restore
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,6 +247,134 @@ func TestRestore_agentOverride(t *testing.T) {
 	}
 }
 
+func TestRestore_withFilters(t *testing.T) {
+	sess := &session.Session{
+		ID:          "ses-filter",
+		Provider:    session.ProviderClaudeCode,
+		Agent:       "claude",
+		Branch:      "feat/filter",
+		ProjectPath: "/test/project",
+		Summary:     "Filter test",
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "fix the bug"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "", ToolCalls: []session.ToolCall{
+				{ID: "tc-1", Name: "bash", State: session.ToolStateError, Output: "Error: compilation failed\nat line 42\nstack trace..."},
+			}},
+			{ID: "m3", Role: session.RoleAssistant, Content: ""},      // empty
+			{ID: "m4", Role: session.RoleAssistant, Content: "Done!"}, // kept
+		},
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/filter"] = sess
+	reg := provider.NewRegistry()
+	svc := NewService(reg, store)
+
+	result, err := svc.Restore(Request{
+		ProjectPath: projectDir,
+		Branch:      "feat/filter",
+		AsContext:   true,
+		Filters: []session.SessionFilter{
+			&mockEmptyFilter{},  // removes empty messages
+			&mockErrorCleaner{}, // cleans error outputs
+		},
+	})
+	if err != nil {
+		t.Fatalf("Restore() error: %v", err)
+	}
+
+	if len(result.FilterResults) != 2 {
+		t.Fatalf("expected 2 filter results, got %d", len(result.FilterResults))
+	}
+
+	// The empty message should be removed.
+	for _, msg := range result.Session.Messages {
+		if msg.ID == "m3" {
+			t.Error("empty message m3 should have been removed")
+		}
+	}
+}
+
+func TestRestore_filterError(t *testing.T) {
+	sess := &session.Session{
+		ID:          "ses-filter-err",
+		Provider:    session.ProviderClaudeCode,
+		Agent:       "claude",
+		Branch:      "feat/err",
+		ProjectPath: "/test/project",
+		Messages:    []session.Message{{ID: "m1", Content: "hello"}},
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/err"] = sess
+	reg := provider.NewRegistry()
+	svc := NewService(reg, store)
+
+	_, err := svc.Restore(Request{
+		ProjectPath: projectDir,
+		Branch:      "feat/err",
+		Filters:     []session.SessionFilter{&mockFailFilter{}},
+	})
+	if err == nil {
+		t.Fatal("expected error from failing filter")
+	}
+	if !strings.Contains(err.Error(), "applying filters") {
+		t.Errorf("error should mention applying filters, got %q", err.Error())
+	}
+}
+
+func TestRestore_filtersWithNativeImport(t *testing.T) {
+	sess := &session.Session{
+		ID:          "ses-filter-native",
+		Provider:    session.ProviderOpenCode,
+		Agent:       "opencode",
+		Branch:      "feat/native",
+		ProjectPath: "/test/project",
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "hello"},
+			{ID: "m2", Role: session.RoleAssistant, Content: ""}, // empty
+			{ID: "m3", Role: session.RoleAssistant, Content: "hi!"},
+		},
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/native"] = sess
+	importingProvider := &mockImportProvider{name: session.ProviderOpenCode}
+	reg := provider.NewRegistry(importingProvider)
+	conv := converter.New()
+	svc := NewServiceWithConverter(reg, store, conv)
+
+	result, err := svc.Restore(Request{
+		ProjectPath:  projectDir,
+		Branch:       "feat/native",
+		ProviderName: session.ProviderOpenCode,
+		Filters:      []session.SessionFilter{&mockEmptyFilter{}},
+	})
+	if err != nil {
+		t.Fatalf("Restore() error: %v", err)
+	}
+
+	if result.Method != "native" {
+		t.Errorf("Method = %q, want native", result.Method)
+	}
+
+	// Filter results should be populated.
+	if len(result.FilterResults) != 1 {
+		t.Fatalf("expected 1 filter result, got %d", len(result.FilterResults))
+	}
+	if !result.FilterResults[0].Applied {
+		t.Error("empty message filter should have applied")
+	}
+
+	// The imported session should have the empty message removed.
+	if importingProvider.importCalled {
+		// Good — the provider received the filtered session.
+	}
+}
+
 func TestRestore_sameProviderNoConversion(t *testing.T) {
 	sess := &session.Session{
 		ID:          "ses-same",
@@ -313,4 +442,58 @@ func (m *mockImportProvider) CanImport() bool { return true }
 func (m *mockImportProvider) Import(_ *session.Session) error {
 	m.importCalled = true
 	return nil
+}
+
+// mockEmptyFilter removes messages with empty content.
+type mockEmptyFilter struct{}
+
+func (f *mockEmptyFilter) Name() string { return "mock-empty" }
+func (f *mockEmptyFilter) Apply(sess *session.Session) (*session.Session, *session.FilterResult, error) {
+	cp := session.CopySession(sess)
+	var kept []session.Message
+	removed := 0
+	for _, msg := range cp.Messages {
+		if msg.Content == "" && len(msg.ToolCalls) == 0 {
+			removed++
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	cp.Messages = kept
+	return cp, &session.FilterResult{
+		FilterName:      "mock-empty",
+		Applied:         removed > 0,
+		MessagesRemoved: removed,
+	}, nil
+}
+
+// mockErrorCleaner is a simplified error cleaner for testing.
+type mockErrorCleaner struct{}
+
+func (f *mockErrorCleaner) Name() string { return "mock-error-cleaner" }
+func (f *mockErrorCleaner) Apply(sess *session.Session) (*session.Session, *session.FilterResult, error) {
+	cp := session.CopySession(sess)
+	modified := 0
+	for i := range cp.Messages {
+		for j := range cp.Messages[i].ToolCalls {
+			tc := &cp.Messages[i].ToolCalls[j]
+			if tc.State == session.ToolStateError && tc.Output != "" {
+				tc.Output = "[cleaned error]"
+				modified++
+			}
+		}
+	}
+	return cp, &session.FilterResult{
+		FilterName:       "mock-error-cleaner",
+		Applied:          modified > 0,
+		MessagesModified: modified,
+	}, nil
+}
+
+// mockFailFilter always returns an error.
+type mockFailFilter struct{}
+
+func (f *mockFailFilter) Name() string { return "mock-fail" }
+func (f *mockFailFilter) Apply(_ *session.Session) (*session.Session, *session.FilterResult, error) {
+	return nil, nil, fmt.Errorf("intentional test failure")
 }

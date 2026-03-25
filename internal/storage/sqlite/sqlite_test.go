@@ -877,6 +877,186 @@ func TestSearch_ResultFields(t *testing.T) {
 	}
 }
 
+func TestSearch_FilterByStatus(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("active-sess")
+	s1.Status = session.StatusActive
+	s1.Summary = "Active session"
+	if err := store.Save(s1); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	s2 := testSession("idle-sess")
+	s2.Status = session.StatusIdle
+	s2.Summary = "Idle session"
+	if err := store.Save(s2); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Filter by active
+	result, err := store.Search(session.SearchQuery{Status: session.StatusActive})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("expected 1 active session, got %d", len(result.Sessions))
+	}
+	if result.Sessions[0].ID != "active-sess" {
+		t.Errorf("ID = %s, want active-sess", result.Sessions[0].ID)
+	}
+	if result.Sessions[0].Status != session.StatusActive {
+		t.Errorf("Status = %s, want active", result.Sessions[0].Status)
+	}
+
+	// Filter by idle
+	result, err = store.Search(session.SearchQuery{Status: session.StatusIdle})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("expected 1 idle session, got %d", len(result.Sessions))
+	}
+	if result.Sessions[0].ID != "idle-sess" {
+		t.Errorf("ID = %s, want idle-sess", result.Sessions[0].ID)
+	}
+}
+
+func TestSearch_FilterByHasErrors(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Session with errors (tool call with error state)
+	s1 := testSession("error-sess")
+	s1.Summary = "Session with errors"
+	s1.Messages = append(s1.Messages, session.Message{
+		ID:   "msg-err",
+		Role: session.RoleAssistant,
+		ToolCalls: []session.ToolCall{
+			{Name: "bash", State: session.ToolStateError, Output: "exit code 1"},
+		},
+	})
+	if err := store.Save(s1); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Session without errors
+	s2 := testSession("clean-sess")
+	s2.Summary = "Clean session"
+	if err := store.Save(s2); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Filter: has errors
+	hasErrors := true
+	result, err := store.Search(session.SearchQuery{HasErrors: &hasErrors})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("expected 1 session with errors, got %d", len(result.Sessions))
+	}
+	if result.Sessions[0].ID != "error-sess" {
+		t.Errorf("ID = %s, want error-sess", result.Sessions[0].ID)
+	}
+
+	// Filter: no errors
+	noErrors := false
+	result, err = store.Search(session.SearchQuery{HasErrors: &noErrors})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("expected 1 session without errors, got %d", len(result.Sessions))
+	}
+	if result.Sessions[0].ID != "clean-sess" {
+		t.Errorf("ID = %s, want clean-sess", result.Sessions[0].ID)
+	}
+
+	// No filter: should return both
+	result, err = store.Search(session.SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Sessions) != 2 {
+		t.Errorf("expected 2 sessions with no filter, got %d", len(result.Sessions))
+	}
+}
+
+func TestSearch_StatusAndHasErrorsCombined(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s1 := testSession("active-error")
+	s1.Status = session.StatusActive
+	s1.Summary = "Active with errors"
+	s1.Messages = append(s1.Messages, session.Message{
+		ID: "msg-ae", Role: session.RoleAssistant,
+		ToolCalls: []session.ToolCall{{Name: "bash", State: session.ToolStateError}},
+	})
+	if err := store.Save(s1); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	s2 := testSession("active-clean")
+	s2.Status = session.StatusActive
+	s2.Summary = "Active no errors"
+	if err := store.Save(s2); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	s3 := testSession("idle-error")
+	s3.Status = session.StatusIdle
+	s3.Summary = "Idle with errors"
+	s3.Messages = append(s3.Messages, session.Message{
+		ID: "msg-ie", Role: session.RoleAssistant,
+		ToolCalls: []session.ToolCall{{Name: "bash", State: session.ToolStateError}},
+	})
+	if err := store.Save(s3); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Active + has errors = only s1
+	hasErrors := true
+	result, err := store.Search(session.SearchQuery{
+		Status:    session.StatusActive,
+		HasErrors: &hasErrors,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("expected 1, got %d", len(result.Sessions))
+	}
+	if result.Sessions[0].ID != "active-error" {
+		t.Errorf("ID = %s, want active-error", result.Sessions[0].ID)
+	}
+}
+
+func TestSearch_ProjectCategoryAndStatusInResults(t *testing.T) {
+	store := mustOpenStore(t)
+
+	s := testSession("full-fields")
+	s.ProjectCategory = "backend"
+	s.Status = session.StatusActive
+	s.Summary = "Full field test"
+	if err := store.Save(s); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	result, err := store.Search(session.SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("expected 1, got %d", len(result.Sessions))
+	}
+	if result.Sessions[0].ProjectCategory != "backend" {
+		t.Errorf("ProjectCategory = %q, want %q", result.Sessions[0].ProjectCategory, "backend")
+	}
+	if result.Sessions[0].Status != session.StatusActive {
+		t.Errorf("Status = %q, want %q", result.Sessions[0].Status, session.StatusActive)
+	}
+}
+
 func TestSessionWithOwnerID(t *testing.T) {
 	store := mustOpenStore(t)
 

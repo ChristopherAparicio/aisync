@@ -509,6 +509,76 @@ func (s *Server) handleRewind(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Validate ──
+
+func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "session ID is required")
+		return
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	result := session.Validate(sess)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleValidateWithFix(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "session ID is required")
+		return
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	result := session.Validate(sess)
+
+	// If no errors or no rewind suggestion, just return validation result
+	if result.Valid || result.SuggestedRewindTo == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"validation":  result,
+			"fix_applied": false,
+		})
+		return
+	}
+
+	// Auto-fix: rewind
+	sid, err := session.ParseID(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	rewindResult, err := s.sessionSvc.Rewind(r.Context(), service.RewindRequest{
+		SessionID: sid,
+		AtMessage: result.SuggestedRewindTo,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"validation":  result,
+		"fix_applied": true,
+		"fix": map[string]any{
+			"new_session_id":   rewindResult.NewSession.ID,
+			"truncated_at":     rewindResult.TruncatedAt,
+			"messages_removed": rewindResult.MessagesRemoved,
+		},
+	})
+}
+
 // ── Tool Usage ──
 
 func (s *Server) handleToolUsage(w http.ResponseWriter, r *http.Request) {

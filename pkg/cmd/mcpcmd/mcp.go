@@ -46,12 +46,14 @@ Tools:
 				return err
 			}
 
-			// SyncService is optional — MCP server works without it
+			// Optional services — MCP server works without them
 			syncSvc, _ := f.SyncService()
+			errorSvc, _ := f.ErrorService()
 
 			s := aisyncmcp.NewServer(aisyncmcp.Config{
 				SessionService: sessionSvc,
 				SyncService:    syncSvc,
+				ErrorService:   errorSvc,
 				Version:        cmd.Root().Version,
 			})
 

@@ -75,10 +75,348 @@ a:hover { text-decoration: underline; }
   text-decoration: none;
 }
 
+/* App shell: sidebar + main content */
+.app-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: calc(100vh - 56px);
+}
+
+.app-shell--no-sidebar {
+  grid-template-columns: 1fr;
+}
+
+/* ── Sidebar ── */
+
+.sidebar {
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  padding: 1.25rem 0;
+  position: sticky;
+  top: 56px;
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.sidebar-section {
+  margin-bottom: 1.5rem;
+}
+
+.sidebar-title {
+  padding: 0 1rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-decoration: none;
+  transition: background 0.12s, color 0.12s;
+  border-left: 3px solid transparent;
+}
+
+.sidebar-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar-item.active {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-left-color: var(--accent);
+}
+
+.sidebar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.sidebar-item-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.sidebar-item-count {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-nav {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-decoration: none;
+  transition: background 0.12s, color 0.12s;
+  border-left: 3px solid transparent;
+}
+
+.sidebar-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar-nav-item.active {
+  color: var(--text);
+  border-left-color: var(--accent);
+}
+
+.sidebar-nav-icon {
+  font-size: 0.85rem;
+  width: 18px;
+  text-align: center;
+}
+
+/* ── Global Search ── */
+
+.navbar-search {
+  margin-left: auto;
+  margin-right: 1rem;
+  position: relative;
+}
+
+.navbar-search-input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.75rem 0.35rem 2rem;
+  font-size: 0.8rem;
+  width: 220px;
+  outline: none;
+  transition: border-color 0.15s, width 0.2s;
+}
+
+.navbar-search-input:focus {
+  border-color: var(--accent);
+  width: 300px;
+}
+
+.navbar-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.navbar-search-icon {
+  position: absolute;
+  left: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.navbar-search-kbd {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  pointer-events: none;
+}
+
+/* ── Main content area within app shell ── */
+
 .container {
   max-width: 1200px;
   margin: 0 auto;
   padding: 1.5rem 2rem;
+}
+
+.main-content {
+  padding: 1.5rem 2rem;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/* ── Session action buttons ── */
+
+.session-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.12s;
+}
+
+.action-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.action-btn--primary {
+  border-color: var(--accent);
+  color: var(--accent-light);
+}
+
+.action-btn--primary:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ── Compact KPI strip (for home page) ── */
+
+.kpi-strip {
+  display: flex;
+  gap: 2rem;
+  padding: 1rem 1.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1.5rem;
+}
+
+.kpi-strip-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.kpi-strip-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-strip-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Recent activity feed (home page) ── */
+
+.activity-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.activity-card {
+  display: block;
+  padding: 0.85rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+
+.activity-card:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.activity-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+
+.activity-card-project {
+  font-size: 0.7rem;
+  color: var(--accent-light);
+  font-weight: 600;
+}
+
+.activity-card-when {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.activity-card-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.activity-card-errors {
+  color: var(--red);
+}
+
+@media (max-width: 768px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    display: none;
+  }
+  .navbar-search-input {
+    width: 150px;
+  }
+  .navbar-search-input:focus {
+    width: 200px;
+  }
 }
 
 /* ── KPI Cards ── */

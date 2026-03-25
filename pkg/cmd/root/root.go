@@ -15,6 +15,7 @@ import (
 	configcmd "github.com/ChristopherAparicio/aisync/pkg/cmd/config"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/diffcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/efficiencycmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/errorscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/explaincmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/export"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/gccmd"
@@ -24,6 +25,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/linkcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/listcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/mcpcmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/pricescmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/replaycmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/restore"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd"
@@ -38,6 +40,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/synccmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/toolusagecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/tuicmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/validatecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/webcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
@@ -92,6 +95,9 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(replaycmd.NewCmdReplay(f))
 	cmd.AddCommand(skillscmd.NewCmdSkills(f))
 	cmd.AddCommand(authcmd.NewCmdAuth(f))
+	cmd.AddCommand(validatecmd.NewCmdValidate(f))
+	cmd.AddCommand(errorscmd.NewCmdErrors(f))
+	cmd.AddCommand(pricescmd.NewCmdUpdatePrices(f))
 
 	return cmd
 }

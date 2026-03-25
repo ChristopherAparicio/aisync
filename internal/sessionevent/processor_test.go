@@ -1,0 +1,578 @@
+package sessionevent
+
+import (
+	"testing"
+	"time"
+
+	"github.com/ChristopherAparicio/aisync/internal/session"
+)
+
+// ── Processor tests ──
+
+func TestProcessor_ExtractAll_EmptySession(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-empty",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	// Should still get agent detection event even with no messages.
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (agent detection), got %d", len(events))
+	}
+	if events[0].Type != EventAgentDetection {
+		t.Fatalf("expected agent_detection event, got %s", events[0].Type)
+	}
+	if summary.TotalEvents != 1 {
+		t.Fatalf("expected total_events=1, got %d", summary.TotalEvents)
+	}
+}
+
+func TestProcessor_ExtractAll_ToolCalls(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:          "test-tools",
+		Provider:    session.ProviderClaudeCode,
+		Agent:       "claude",
+		ProjectPath: "/home/user/project",
+		RemoteURL:   "github.com/org/repo",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{
+						ID:         "tc-1",
+						Name:       "Read",
+						State:      session.ToolStateCompleted,
+						DurationMs: 100,
+					},
+					{
+						ID:         "tc-2",
+						Name:       "bash",
+						Input:      `{"command": "git status"}`,
+						State:      session.ToolStateCompleted,
+						DurationMs: 500,
+					},
+					{
+						ID:    "tc-3",
+						Name:  "file_edit",
+						State: session.ToolStateError,
+					},
+				},
+			},
+		},
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	// Should have: 1 agent + 3 tool_call + 1 command (from bash) = 5
+	if summary.ToolCallCount != 3 {
+		t.Errorf("expected tool_call_count=3, got %d", summary.ToolCallCount)
+	}
+	if summary.CommandCount != 1 {
+		t.Errorf("expected command_count=1, got %d", summary.CommandCount)
+	}
+	if summary.UniqueToolCount != 3 {
+		t.Errorf("expected unique_tool_count=3, got %d", summary.UniqueToolCount)
+	}
+
+	// Check command details.
+	var cmdEvents []Event
+	for _, e := range events {
+		if e.Type == EventCommand {
+			cmdEvents = append(cmdEvents, e)
+		}
+	}
+	if len(cmdEvents) != 1 {
+		t.Fatalf("expected 1 command event, got %d", len(cmdEvents))
+	}
+	if cmdEvents[0].Command.BaseCommand != "git" {
+		t.Errorf("expected base_command=git, got %s", cmdEvents[0].Command.BaseCommand)
+	}
+
+	// Check project context is propagated.
+	for _, e := range events {
+		if e.ProjectPath != "/home/user/project" {
+			t.Errorf("event %s missing project_path", e.ID)
+		}
+		if e.RemoteURL != "github.com/org/repo" {
+			t.Errorf("event %s missing remote_url", e.ID)
+		}
+	}
+}
+
+func TestProcessor_ExtractAll_SkillsViaToolCall(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-skills-tc",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{
+						ID:    "tc-1",
+						Name:  "load_skill",
+						Input: `{"name": "replay-tester"}`,
+						State: session.ToolStateCompleted,
+					},
+					{
+						ID:     "tc-2",
+						Name:   "skill",
+						Input:  `{"name": "opencode-sessions"}`,
+						Output: "skill loaded",
+						State:  session.ToolStateCompleted,
+					},
+				},
+			},
+		},
+	}
+
+	_, summary := p.ExtractAll(sess)
+
+	if summary.SkillLoadCount != 2 {
+		t.Errorf("expected skill_load_count=2, got %d", summary.SkillLoadCount)
+	}
+	if len(summary.SkillsLoaded) != 2 {
+		t.Errorf("expected 2 unique skills, got %d", len(summary.SkillsLoaded))
+	}
+
+	// Verify skill names are correct.
+	skillSet := make(map[string]bool)
+	for _, s := range summary.SkillsLoaded {
+		skillSet[s] = true
+	}
+	if !skillSet["replay-tester"] {
+		t.Error("expected replay-tester in skills_loaded")
+	}
+	if !skillSet["opencode-sessions"] {
+		t.Error("expected opencode-sessions in skills_loaded")
+	}
+}
+
+func TestProcessor_ExtractAll_SkillsViaContentTag(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-skills-tag",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				Content:   `Here is the skill content: <skill_content name="my-skill">some content</skill_content> and <skill_content name="other-skill">more</skill_content>`,
+			},
+		},
+	}
+
+	_, summary := p.ExtractAll(sess)
+
+	if summary.SkillLoadCount != 2 {
+		t.Errorf("expected skill_load_count=2, got %d", summary.SkillLoadCount)
+	}
+
+	skillSet := make(map[string]bool)
+	for _, s := range summary.SkillsLoaded {
+		skillSet[s] = true
+	}
+	if !skillSet["my-skill"] {
+		t.Error("expected my-skill in skills_loaded")
+	}
+	if !skillSet["other-skill"] {
+		t.Error("expected other-skill in skills_loaded")
+	}
+}
+
+func TestProcessor_ExtractAll_Errors(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-errors",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Errors: []session.SessionError{
+			{
+				ID:         "err-1",
+				SessionID:  "test-errors",
+				Category:   session.ErrorCategoryRateLimit,
+				Source:     session.ErrorSourceProvider,
+				Message:    "rate limit exceeded",
+				HTTPStatus: 429,
+				OccurredAt: time.Now(),
+			},
+			{
+				ID:         "err-2",
+				SessionID:  "test-errors",
+				Category:   session.ErrorCategoryToolError,
+				Source:     session.ErrorSourceTool,
+				Message:    "file not found",
+				ToolName:   "file_edit",
+				OccurredAt: time.Now(),
+			},
+		},
+	}
+
+	_, summary := p.ExtractAll(sess)
+
+	if summary.ErrorCount != 2 {
+		t.Errorf("expected error_count=2, got %d", summary.ErrorCount)
+	}
+	if summary.ErrorByCategory[session.ErrorCategoryRateLimit] != 1 {
+		t.Error("expected 1 rate_limit error")
+	}
+	if summary.ErrorByCategory[session.ErrorCategoryToolError] != 1 {
+		t.Error("expected 1 tool_error")
+	}
+	if summary.ErrorBySource[session.ErrorSourceProvider] != 1 {
+		t.Error("expected 1 provider error")
+	}
+}
+
+func TestProcessor_ExtractAll_Images(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-images",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleUser,
+				Images: []session.ImageMeta{
+					{MediaType: "image/png", SizeBytes: 1024, TokensEstimate: 100, Source: "base64"},
+					{MediaType: "image/jpeg", SizeBytes: 2048, TokensEstimate: 200, Source: "file"},
+				},
+			},
+		},
+	}
+
+	_, summary := p.ExtractAll(sess)
+
+	if summary.ImageCount != 2 {
+		t.Errorf("expected image_count=2, got %d", summary.ImageCount)
+	}
+}
+
+func TestProcessor_ExtractAll_Models(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-models",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{ID: "msg-1", Timestamp: time.Now(), Role: session.RoleAssistant, Model: "claude-sonnet-4-20250514"},
+			{ID: "msg-2", Timestamp: time.Now(), Role: session.RoleAssistant, Model: "claude-sonnet-4-20250514"}, // duplicate
+			{ID: "msg-3", Timestamp: time.Now(), Role: session.RoleAssistant, Model: "claude-opus-4-20250514"},
+		},
+	}
+
+	_, summary := p.ExtractAll(sess)
+
+	if len(summary.Models) != 2 {
+		t.Errorf("expected 2 unique models, got %d: %v", len(summary.Models), summary.Models)
+	}
+}
+
+func TestProcessor_ExtractAll_ComplexSession(t *testing.T) {
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:          "test-complex",
+		Provider:    session.ProviderOpenCode,
+		Agent:       "jarvis",
+		ProjectPath: "/home/user/aisync",
+		RemoteURL:   "github.com/org/aisync",
+		CreatedAt:   now,
+		Messages: []session.Message{
+			{
+				ID: "msg-1", Timestamp: now, Role: session.RoleUser,
+				Content: "Please help me fix the login bug",
+				Images:  []session.ImageMeta{{MediaType: "image/png", SizeBytes: 1024}},
+			},
+			{
+				ID: "msg-2", Timestamp: now.Add(time.Minute), Role: session.RoleAssistant,
+				Model:   "claude-sonnet-4-20250514",
+				Content: `Let me load a skill: <skill_content name="replay-tester">content here</skill_content>`,
+				ToolCalls: []session.ToolCall{
+					{ID: "tc-1", Name: "Read", Input: `{"path": "main.go"}`, State: session.ToolStateCompleted, DurationMs: 50},
+					{ID: "tc-2", Name: "bash", Input: `{"command": "go test ./..."}`, State: session.ToolStateError, DurationMs: 3000},
+					{ID: "tc-3", Name: "load_skill", Input: `{"name": "replay-tester"}`, State: session.ToolStateCompleted},
+				},
+			},
+			{
+				ID: "msg-3", Timestamp: now.Add(2 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-sonnet-4-20250514",
+				ToolCalls: []session.ToolCall{
+					{ID: "tc-4", Name: "file_edit", State: session.ToolStateCompleted, DurationMs: 200},
+					{ID: "tc-5", Name: "bash", Input: `{"command": "go test ./..."}`, State: session.ToolStateCompleted, DurationMs: 2000},
+				},
+			},
+		},
+		Errors: []session.SessionError{
+			{
+				ID: "err-1", SessionID: "test-complex",
+				Category: session.ErrorCategoryToolError, Source: session.ErrorSourceTool,
+				Message: "exit code 1", ToolName: "bash", OccurredAt: now.Add(time.Minute),
+			},
+		},
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	// Verify comprehensive extraction.
+	if summary.ToolCallCount != 5 {
+		t.Errorf("tool_call_count: expected 5, got %d", summary.ToolCallCount)
+	}
+	if summary.UniqueToolCount != 4 {
+		t.Errorf("unique_tool_count: expected 4 (Read, bash, file_edit, load_skill), got %d", summary.UniqueToolCount)
+	}
+	if summary.CommandCount != 2 {
+		t.Errorf("command_count: expected 2, got %d", summary.CommandCount)
+	}
+	if summary.CommandErrorCount != 1 {
+		t.Errorf("command_error_count: expected 1, got %d", summary.CommandErrorCount)
+	}
+	// Skills: 1 via tool call + 1 via content tag = 2, but same skill name → might be 1 unique
+	// Actually the skill "replay-tester" appears both ways, but detector generates separate events
+	if summary.SkillLoadCount < 1 {
+		t.Errorf("skill_load_count: expected >= 1, got %d", summary.SkillLoadCount)
+	}
+	if summary.ErrorCount != 1 {
+		t.Errorf("error_count: expected 1, got %d", summary.ErrorCount)
+	}
+	if summary.ImageCount != 1 {
+		t.Errorf("image_count: expected 1, got %d", summary.ImageCount)
+	}
+	if summary.Provider != session.ProviderOpenCode {
+		t.Errorf("provider: expected opencode, got %s", summary.Provider)
+	}
+	if summary.Agent != "jarvis" {
+		t.Errorf("agent: expected jarvis, got %s", summary.Agent)
+	}
+	if len(summary.Models) != 1 {
+		t.Errorf("models: expected 1, got %d: %v", len(summary.Models), summary.Models)
+	}
+
+	// Verify all events have session context.
+	for _, e := range events {
+		if e.SessionID != "test-complex" {
+			t.Errorf("event %s has wrong session_id: %s", e.ID, e.SessionID)
+		}
+		if e.ID == "" {
+			t.Error("event has empty ID")
+		}
+	}
+}
+
+// ── Bucket tests ──
+
+func TestBucketAggregator_HourlyBuckets(t *testing.T) {
+	agg := NewBucketAggregator()
+	now := time.Date(2025, 3, 25, 14, 30, 0, 0, time.UTC) // 14:30 UTC
+
+	events := []Event{
+		{Type: EventToolCall, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "bash", State: session.ToolStateCompleted}},
+		{Type: EventToolCall, OccurredAt: now.Add(10 * time.Minute), ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "Read", State: session.ToolStateCompleted}},
+		{Type: EventToolCall, OccurredAt: now.Add(90 * time.Minute), ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "bash", State: session.ToolStateError}},
+		{Type: EventSkillLoad, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			SkillLoad: &SkillLoadDetail{SkillName: "replay-tester"}},
+		{Type: EventCommand, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			Command: &CommandDetail{BaseCommand: "git", State: session.ToolStateCompleted}},
+	}
+
+	buckets := agg.Aggregate(events, "1h")
+
+	// Should have 2 buckets: 14:00-15:00 and 16:00-17:00
+	if len(buckets) != 2 {
+		t.Fatalf("expected 2 hourly buckets, got %d", len(buckets))
+	}
+
+	// Find the 14:00 bucket.
+	var bucket14 *EventBucket
+	for i := range buckets {
+		if buckets[i].BucketStart.Hour() == 14 {
+			bucket14 = &buckets[i]
+			break
+		}
+	}
+	if bucket14 == nil {
+		t.Fatal("14:00 bucket not found")
+	}
+
+	if bucket14.ToolCallCount != 2 {
+		t.Errorf("14:00 bucket tool_call_count: expected 2, got %d", bucket14.ToolCallCount)
+	}
+	if bucket14.SkillLoadCount != 1 {
+		t.Errorf("14:00 bucket skill_load_count: expected 1, got %d", bucket14.SkillLoadCount)
+	}
+	if bucket14.CommandCount != 1 {
+		t.Errorf("14:00 bucket command_count: expected 1, got %d", bucket14.CommandCount)
+	}
+	if bucket14.UniqueTools != 2 {
+		t.Errorf("14:00 bucket unique_tools: expected 2, got %d", bucket14.UniqueTools)
+	}
+}
+
+func TestBucketAggregator_DailyBuckets(t *testing.T) {
+	agg := NewBucketAggregator()
+	day1 := time.Date(2025, 3, 24, 10, 0, 0, 0, time.UTC)
+	day2 := time.Date(2025, 3, 25, 15, 0, 0, 0, time.UTC)
+
+	events := []Event{
+		{Type: EventToolCall, OccurredAt: day1, ProjectPath: "/p", Provider: "claude-code",
+			ToolCall: &ToolCallDetail{ToolName: "bash"}},
+		{Type: EventToolCall, OccurredAt: day2, ProjectPath: "/p", Provider: "claude-code",
+			ToolCall: &ToolCallDetail{ToolName: "Read"}},
+		{Type: EventToolCall, OccurredAt: day2, ProjectPath: "/p", Provider: "claude-code",
+			ToolCall: &ToolCallDetail{ToolName: "bash"}},
+	}
+
+	buckets := agg.Aggregate(events, "1d")
+
+	if len(buckets) != 2 {
+		t.Fatalf("expected 2 daily buckets, got %d", len(buckets))
+	}
+}
+
+func TestMergeBuckets(t *testing.T) {
+	existing := &EventBucket{
+		ToolCallCount:  5,
+		SkillLoadCount: 1,
+		SessionCount:   2,
+		TopTools:       map[string]int{"bash": 3, "Read": 2},
+		TopSkills:      map[string]int{"replay-tester": 1},
+		AgentBreakdown: map[string]int{"claude": 2},
+		TopCommands:    map[string]int{"git": 2, "npm": 1},
+		ErrorByCategory: map[session.ErrorCategory]int{
+			session.ErrorCategoryToolError: 1,
+		},
+	}
+
+	incoming := &EventBucket{
+		ToolCallCount:  3,
+		SkillLoadCount: 2,
+		SessionCount:   1,
+		TopTools:       map[string]int{"bash": 1, "file_edit": 2},
+		TopSkills:      map[string]int{"replay-tester": 1, "opencode-sessions": 1},
+		AgentBreakdown: map[string]int{"jarvis": 1},
+		TopCommands:    map[string]int{"git": 1},
+		ErrorByCategory: map[session.ErrorCategory]int{
+			session.ErrorCategoryRateLimit: 1,
+		},
+	}
+
+	MergeBuckets(existing, incoming)
+
+	if existing.ToolCallCount != 8 {
+		t.Errorf("tool_call_count: expected 8, got %d", existing.ToolCallCount)
+	}
+	if existing.SkillLoadCount != 3 {
+		t.Errorf("skill_load_count: expected 3, got %d", existing.SkillLoadCount)
+	}
+	if existing.SessionCount != 3 {
+		t.Errorf("session_count: expected 3, got %d", existing.SessionCount)
+	}
+	if existing.TopTools["bash"] != 4 {
+		t.Errorf("top_tools[bash]: expected 4, got %d", existing.TopTools["bash"])
+	}
+	if existing.UniqueTools != 3 {
+		t.Errorf("unique_tools: expected 3, got %d", existing.UniqueTools)
+	}
+	if existing.UniqueSkills != 2 {
+		t.Errorf("unique_skills: expected 2, got %d", existing.UniqueSkills)
+	}
+	if existing.AgentBreakdown["claude"] != 2 || existing.AgentBreakdown["jarvis"] != 1 {
+		t.Errorf("agent_breakdown unexpected: %v", existing.AgentBreakdown)
+	}
+}
+
+// ── Domain tests ──
+
+func TestEventType_Valid(t *testing.T) {
+	tests := []struct {
+		t    EventType
+		want bool
+	}{
+		{EventToolCall, true},
+		{EventSkillLoad, true},
+		{EventAgentDetection, true},
+		{EventError, true},
+		{EventCommand, true},
+		{EventImageUsage, true},
+		{"unknown_type", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		if got := tt.t.Valid(); got != tt.want {
+			t.Errorf("EventType(%q).Valid() = %v, want %v", tt.t, got, tt.want)
+		}
+	}
+}
+
+func TestNewSessionEventSummary_Empty(t *testing.T) {
+	summary := NewSessionEventSummary("test-id", nil)
+
+	if summary.SessionID != "test-id" {
+		t.Errorf("expected session_id=test-id, got %s", summary.SessionID)
+	}
+	if summary.TotalEvents != 0 {
+		t.Errorf("expected total_events=0, got %d", summary.TotalEvents)
+	}
+}
+
+// ── Helper tests ──
+
+func TestExtractSkillName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`{"name": "replay-tester"}`, "replay-tester"},
+		{`{"skill_name": "my-skill"}`, "my-skill"},
+		{`{"skill": "another"}`, "another"},
+		{`"plain-name"`, "plain-name"},
+		{`simple-name`, "simple-name"},
+		{``, ""},
+		{`{"other": "value"}`, ""},
+		{`has spaces`, ""},
+	}
+
+	for _, tt := range tests {
+		got := extractSkillName(tt.input)
+		if got != tt.want {
+			t.Errorf("extractSkillName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestExtractSkillContentTags(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{`No skills here`, 0},
+		{`<skill_content name="one">content</skill_content>`, 1},
+		{`<skill_content name="a">x</skill_content> and <skill_content name="b">y</skill_content>`, 2},
+		{`<skill_content name="">empty`, 0},
+	}
+
+	for _, tt := range tests {
+		got := extractSkillContentTags(tt.input)
+		if len(got) != tt.want {
+			t.Errorf("extractSkillContentTags(%q) returned %d names, want %d", tt.input, len(got), tt.want)
+		}
+	}
+}

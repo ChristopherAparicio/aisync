@@ -25,6 +25,7 @@ type Server struct {
 	sessionSvc    service.SessionServicer
 	syncSvc       *service.SyncService           // optional — nil when git sync is unavailable
 	analysisSvc   service.AnalysisServicer       // optional — nil when analysis is unavailable
+	errorSvc      service.ErrorServicer          // optional — nil when error analysis is unavailable
 	replayEngine  *replay.Engine                 // optional — nil when replay is unavailable
 	skillResolver skillresolver.ResolverServicer // optional — nil when skill resolver is unavailable
 	authSvc       auth.Servicer                  // optional — nil disables authentication
@@ -37,6 +38,7 @@ type Config struct {
 	SessionService  service.SessionServicer
 	SyncService     *service.SyncService           // optional
 	AnalysisService service.AnalysisServicer       // optional — nil disables analysis endpoints
+	ErrorService    service.ErrorServicer          // optional — nil disables error endpoints
 	ReplayEngine    *replay.Engine                 // optional — nil disables replay endpoint
 	SkillResolver   skillresolver.ResolverServicer // optional — nil disables skill resolver endpoint
 	AuthService     auth.Servicer                  // optional — nil disables authentication
@@ -55,6 +57,7 @@ func New(cfg Config) *Server {
 		sessionSvc:    cfg.SessionService,
 		syncSvc:       cfg.SyncService,
 		analysisSvc:   cfg.AnalysisService,
+		errorSvc:      cfg.ErrorService,
 		replayEngine:  cfg.ReplayEngine,
 		skillResolver: cfg.SkillResolver,
 		authSvc:       cfg.AuthService,

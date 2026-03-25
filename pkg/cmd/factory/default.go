@@ -17,6 +17,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/categorizer"
 	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
+	"github.com/ChristopherAparicio/aisync/internal/errorclass"
 	"github.com/ChristopherAparicio/aisync/internal/hooks"
 	"github.com/ChristopherAparicio/aisync/internal/llm"
 	claudellm "github.com/ChristopherAparicio/aisync/internal/llm/claude"
@@ -97,10 +98,68 @@ func New() *cmdutil.Factory {
 		registrySvcOnce   sync.Once
 		registrySvcErr    error
 
+		cachedCalc *pricing.Calculator
+		calcOnce   sync.Once
+
 		cachedAnalysisSvc service.AnalysisServicer
 		analysisSvcOnce   sync.Once
 		analysisSvcErr    error
+
+		cachedErrorSvc service.ErrorServicer
+		errorSvcOnce   sync.Once
+		errorSvcErr    error
 	)
+
+	// initCalc initializes the shared pricing calculator.
+	// Catalog chain: LiteLLM cache (2500+ models) → Embedded YAML (fallback) → User overrides (top).
+	initCalc := func() *pricing.Calculator {
+		calcOnce.Do(func() {
+			// Step 1: Build the base catalog (LiteLLM → Embedded fallback).
+			baseCatalog := pricing.DefaultCatalog()
+
+			liteLLMCat, liteLLMErr := pricing.NewLiteLLMCatalog(pricing.LiteLLMCatalogConfig{
+				CacheDir: globalConfigDir(),
+			})
+			if liteLLMErr == nil {
+				// LiteLLM cache available → use it as primary with embedded as fallback.
+				baseCatalog = pricing.NewFallbackCatalog(liteLLMCat, pricing.DefaultCatalog())
+			}
+			// If LiteLLM cache not available, silently fall back to embedded YAML only.
+
+			// Step 2: Create calculator with the base catalog.
+			cachedCalc = pricing.NewCalculatorWithCatalog(baseCatalog)
+
+			// Step 3: Layer user-configured pricing overrides on top.
+			cfg, cfgErr := f.Config()
+			if cfgErr != nil {
+				return
+			}
+			overrides := cfg.GetPricingOverrides()
+			if len(overrides) == 0 {
+				return
+			}
+			modelPrices := make([]pricing.ModelPrice, len(overrides))
+			for i, o := range overrides {
+				mp := pricing.ModelPrice{
+					Model:               o.Model,
+					InputPerMToken:      o.InputPerMToken,
+					OutputPerMToken:     o.OutputPerMToken,
+					CacheReadPerMToken:  o.CacheReadPerMToken,
+					CacheWritePerMToken: o.CacheWritePerMToken,
+				}
+				for _, t := range o.Tiers {
+					mp.Tiers = append(mp.Tiers, pricing.PricingTier{
+						ThresholdTokens:  t.ThresholdTokens,
+						InputMultiplier:  t.InputMultiplier,
+						OutputMultiplier: t.OutputMultiplier,
+					})
+				}
+				modelPrices[i] = mp
+			}
+			cachedCalc = cachedCalc.WithOverrides(modelPrices)
+		})
+		return cachedCalc
+	}
 
 	f.ConfigFunc = func() (*config.Config, error) {
 		configOnce.Do(func() {
@@ -280,23 +339,9 @@ func New() *cmdutil.Factory {
 				llmClient = claudellm.New()
 			}
 
-			// Pricing calculator — apply user overrides from config if available.
-			var calc *pricing.Calculator
+			// Pricing calculator — shared across services (respects user overrides).
+			calc := initCalc()
 			cfg, cfgErr := f.Config()
-			if cfgErr == nil {
-				overrides := cfg.GetPricingOverrides()
-				if len(overrides) > 0 {
-					modelPrices := make([]pricing.ModelPrice, len(overrides))
-					for i, o := range overrides {
-						modelPrices[i] = pricing.ModelPrice{
-							Model:           o.Model,
-							InputPerMToken:  o.InputPerMToken,
-							OutputPerMToken: o.OutputPerMToken,
-						}
-					}
-					calc = pricing.NewCalculator().WithOverrides(modelPrices)
-				}
-			}
 
 			// ── Webhook dispatcher (optional) ──
 			var whDispatcher *webhookspkg.Dispatcher
@@ -327,7 +372,10 @@ func New() *cmdutil.Factory {
 			wantCategoryDetect := cfgErr == nil && cfg.IsProjectAutoDetectEnabled()
 			wantWebhooks := whDispatcher != nil
 
-			if wantAnalysis || wantTagging || wantCategoryDetect || wantWebhooks {
+			// Error classification always runs (it's deterministic and fast).
+			wantErrorProcessing := true
+
+			if wantAnalysis || wantTagging || wantCategoryDetect || wantWebhooks || wantErrorProcessing {
 				errorThreshold := float64(0)
 				minToolCalls := 0
 				if wantAnalysis {
@@ -336,6 +384,15 @@ func New() *cmdutil.Factory {
 				}
 
 				postCapture = func(sess *session.Session) {
+					// Error classification: classify and persist any errors extracted during capture.
+					// This is deterministic (no LLM), fast, and always runs.
+					if wantErrorProcessing && len(sess.Errors) > 0 {
+						errSvc, errSvcErr := f.ErrorService()
+						if errSvcErr == nil {
+							_, _ = errSvc.ProcessSession(sess)
+						}
+					}
+
 					// Webhook: session.captured
 					if wantWebhooks {
 						whDispatcher.Fire(webhookspkg.EventSessionCaptured, map[string]any{
@@ -480,6 +537,7 @@ func New() *cmdutil.Factory {
 			cachedRegistrySvc = service.NewRegistryService(service.RegistryServiceConfig{
 				Scanners: scannerReg,
 				Store:    store,
+				Pricing:  initCalc(),
 			})
 		})
 		return cachedRegistrySvc, registrySvcErr
@@ -526,6 +584,22 @@ func New() *cmdutil.Factory {
 			})
 		})
 		return cachedAnalysisSvc, analysisSvcErr
+	}
+
+	f.ErrorServiceFunc = func() (service.ErrorServicer, error) {
+		errorSvcOnce.Do(func() {
+			store, stErr := f.Store()
+			if stErr != nil {
+				errorSvcErr = stErr
+				return
+			}
+
+			cachedErrorSvc = service.NewErrorService(service.ErrorServiceConfig{
+				Store:      store,
+				Classifier: errorclass.NewDeterministicClassifier(),
+			})
+		})
+		return cachedErrorSvc, errorSvcErr
 	}
 
 	f.CloseFunc = func() error {

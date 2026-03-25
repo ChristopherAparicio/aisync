@@ -21,6 +21,7 @@ type Options struct {
 	ProviderFlag string
 	ModeFlag     string
 	Message      string
+	BranchFlag   string // explicit branch override (e.g. from plugin running in a worktree)
 	Auto         bool
 	Summarize    bool
 	All          bool   // capture all sessions for the project
@@ -46,6 +47,7 @@ func NewCmdCapture(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.ProviderFlag, "provider", "", "Force a specific provider (claude-code, opencode)")
 	cmd.Flags().StringVar(&opts.ModeFlag, "mode", "", "Storage mode: full, compact, summary")
 	cmd.Flags().StringVar(&opts.Message, "message", "", "Manual summary message")
+	cmd.Flags().StringVar(&opts.BranchFlag, "branch", "", "Explicit git branch (useful when capturing from a worktree)")
 	cmd.Flags().BoolVar(&opts.Auto, "auto", false, "Auto mode (used by git hooks, silent)")
 	cmd.Flags().BoolVar(&opts.Summarize, "summarize", false, "AI-summarize the session after capture")
 	cmd.Flags().BoolVar(&opts.All, "all", false, "Capture all sessions for the project (requires --provider)")
@@ -61,9 +63,16 @@ func runCapture(opts *Options) error {
 		return fmt.Errorf("not a git repository")
 	}
 
-	branch, err := gitClient.CurrentBranch()
-	if err != nil {
-		return fmt.Errorf("could not determine current branch: %w", err)
+	// Branch: use explicit --branch flag if provided, otherwise detect from git.
+	// The --branch flag is essential for worktree-based captures where the CWD
+	// is not the project's git repo (e.g. OpenCode worktrees under ~/.local/share/opencode/worktree/).
+	branch := opts.BranchFlag
+	if branch == "" {
+		var branchErr error
+		branch, branchErr = gitClient.CurrentBranch()
+		if branchErr != nil {
+			return fmt.Errorf("could not determine current branch: %w", branchErr)
+		}
 	}
 
 	topLevel, err := gitClient.TopLevel()

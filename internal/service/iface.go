@@ -178,3 +178,27 @@ type AnalysisServicer interface {
 
 // Compile-time check: *AnalysisService implements AnalysisServicer.
 var _ AnalysisServicer = (*AnalysisService)(nil)
+
+// ── Error Bounded Context ──
+
+// ErrorServicer is the Use Case Port for the Error bounded context.
+// It provides error classification, persistence, and querying for session errors.
+//
+// Current implementation:
+//   - *ErrorService — local mode (deterministic classifier + SQLite)
+type ErrorServicer interface {
+	// ProcessSession classifies and persists all errors from a captured session.
+	ProcessSession(sess *session.Session) (*ProcessSessionResult, error)
+
+	// GetErrors retrieves all classified errors for a session.
+	GetErrors(sessionID session.ID) ([]session.SessionError, error)
+
+	// GetSummary computes aggregated error statistics for a session.
+	GetSummary(sessionID session.ID) (*session.SessionErrorSummary, error)
+
+	// ListRecent returns recent errors across all sessions, optionally filtered by category.
+	ListRecent(limit int, category session.ErrorCategory) ([]session.SessionError, error)
+}
+
+// Compile-time check: *ErrorService implements ErrorServicer.
+var _ ErrorServicer = (*ErrorService)(nil)

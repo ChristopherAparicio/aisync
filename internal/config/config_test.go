@@ -1605,3 +1605,119 @@ func TestProjectCategory_SaveAndReload(t *testing.T) {
 		t.Error("auto-detect should be enabled after reload")
 	}
 }
+
+// ── Error Classification Config Tests ──
+
+func TestErrorsConfig_Defaults(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(filepath.Join(dir, "g"), filepath.Join(dir, "r"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if got := cfg.GetErrorsClassifier(); got != "deterministic" {
+		t.Errorf("GetErrorsClassifier() = %q, want %q", got, "deterministic")
+	}
+	if cfg.IsErrorsLLMFallbackEnabled() {
+		t.Error("LLM fallback should be disabled by default")
+	}
+	if got := cfg.GetErrorsLLMSchedule(); got != "" {
+		t.Errorf("GetErrorsLLMSchedule() = %q, want empty", got)
+	}
+	if got := cfg.GetErrorsLLMProfile(); got != "" {
+		t.Errorf("GetErrorsLLMProfile() = %q, want empty", got)
+	}
+}
+
+func TestErrorsConfig_GetSet(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(filepath.Join(dir, "g"), filepath.Join(dir, "r"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	tests := []struct {
+		key      string
+		setValue string
+		wantGet  string
+	}{
+		{"errors.classifier", "composite", "composite"},
+		{"errors.classifier", "deterministic", "deterministic"},
+		{"errors.llm_fallback", "true", "true"},
+		{"errors.llm_fallback", "false", "false"},
+		{"errors.llm_schedule", "0 0 * * *", "0 0 * * *"},
+		{"errors.llm_profile", "fast", "fast"},
+	}
+
+	for _, tt := range tests {
+		if err := cfg.Set(tt.key, tt.setValue); err != nil {
+			t.Fatalf("Set(%q, %q) error = %v", tt.key, tt.setValue, err)
+		}
+		got, err := cfg.Get(tt.key)
+		if err != nil {
+			t.Fatalf("Get(%q) error = %v", tt.key, err)
+		}
+		if got != tt.wantGet {
+			t.Errorf("Get(%q) = %q, want %q", tt.key, got, tt.wantGet)
+		}
+	}
+}
+
+func TestErrorsConfig_SetValidation(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(filepath.Join(dir, "g"), filepath.Join(dir, "r"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// Invalid classifier value.
+	if err := cfg.Set("errors.classifier", "invalid"); err == nil {
+		t.Error("expected error for invalid classifier")
+	}
+
+	// Invalid cron expression.
+	if err := cfg.Set("errors.llm_schedule", "not a cron"); err == nil {
+		t.Error("expected error for invalid cron expression")
+	}
+
+	// Valid cron expression should succeed.
+	if err := cfg.Set("errors.llm_schedule", "0 0 * * *"); err != nil {
+		t.Errorf("valid cron should succeed: %v", err)
+	}
+}
+
+func TestErrorsConfig_LoadFromJSON(t *testing.T) {
+	dir := t.TempDir()
+	gDir := filepath.Join(dir, "g")
+	rDir := filepath.Join(dir, "r")
+
+	os.MkdirAll(gDir, 0o755)
+
+	configJSON := `{
+		"errors": {
+			"classifier": "composite",
+			"llm_fallback": true,
+			"llm_schedule": "0 2 * * *",
+			"llm_profile": "cloud"
+		}
+	}`
+	os.WriteFile(filepath.Join(gDir, "config.json"), []byte(configJSON), 0o644)
+
+	cfg, err := New(gDir, rDir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if got := cfg.GetErrorsClassifier(); got != "composite" {
+		t.Errorf("GetErrorsClassifier() = %q, want %q", got, "composite")
+	}
+	if !cfg.IsErrorsLLMFallbackEnabled() {
+		t.Error("LLM fallback should be enabled")
+	}
+	if got := cfg.GetErrorsLLMSchedule(); got != "0 2 * * *" {
+		t.Errorf("GetErrorsLLMSchedule() = %q, want %q", got, "0 2 * * *")
+	}
+	if got := cfg.GetErrorsLLMProfile(); got != "cloud" {
+		t.Errorf("GetErrorsLLMProfile() = %q, want %q", got, "cloud")
+	}
+}

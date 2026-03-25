@@ -1,7 +1,8 @@
 # aisync — Roadmap
 
-> Last updated: 2026-03-18
-> Status: Phase 1-3.5, 5.0-5.5, 6.2-6.3, 7.1-7.4, 8.1-8.9, 9.1-9.3 COMPLETE — Dashboard improvements DONE. Features 6.1, 7.3, tech debt remaining.
+> Last updated: 2026-03-25
+> Status: Phase 1-3.5, 5.0-5.5, 6.2-6.3, 7.1-7.4, 8.1-8.9, 9.1-9.3, 10.1-10.6c, 10.8 COMPLETE — LiteLLM pricing integration DONE. Features 6.1, 7.3, tech debt remaining.
+> Phase 10.8 completed: LiteLLM pricing database adapter — 2500+ model pricing from GitHub, FallbackCatalog chain, `aisync update-prices` CLI command.
 > Phase 9.1 completed: Authentication & Multi-Auth (JWT + API Keys) with auth BC, middleware, CLI, client SDK.
 > Phase 8.1 completed: Universal Ingest endpoint with MCP tool, full vertical slice.
 > Phase 6.3 completed: Web Dashboard with dynamic columns, error tracking, project selector on all pages.
@@ -1321,3 +1322,126 @@ more discoverable. Consumes `SkillObservation` output from 8.6.6.
 - [x] Fix `Import()` for Claude Code and OpenCode providers — both fully implemented (CanImport=true)
 - [x] Fix `aisync show <commit-sha>` — verified: Get() correctly chains commit SHA → trailer → session ID; added tests for ParseSessionTrailer, looksLikeCommitSHA, and Get()
 - [x] Add `forked_at_message` field to session relationships (needed for rewind → fork linking in 5.0.5 + 5.1.4)
+
+---
+
+## Phase 10 — Structured Error Analysis (2026-03-25)
+
+**Goal:** Capture, classify, and surface errors from AI coding sessions to answer "is this Anthropic's fault or ours?"
+
+### 10.1 Domain Model (COMPLETE)
+- [x] `SessionError` entity with classification fields (Category, Source, HTTPStatus, ProviderName, etc.)
+- [x] `ErrorCategory` enum: provider_error, rate_limit, context_overflow, auth_error, validation, tool_error, network_error, aborted, unknown
+- [x] `ErrorSource` enum: provider, tool, client
+- [x] `SessionErrorSummary` with `NewSessionErrorSummary()` aggregator
+- [x] `ErrorClassifier` port interface (Classify + Name)
+- [x] `IsExternal()` helper for quick internal/external triage
+- [x] 6 domain tests
+
+### 10.2 Deterministic Classifier (COMPLETE)
+- [x] `DeterministicClassifier` adapter in `internal/errorclass/`
+- [x] HTTP status code classification (500→provider, 429→rate_limit, 401/403→auth, 400→validation/context_overflow, 529→overloaded)
+- [x] Tool error patterns (permission denied, file not found, command not found, OOM, disk full, exit codes, network)
+- [x] Message-based fallback patterns (aborted, internal server error, rate limit, context overflow, auth keywords)
+- [x] 19 tests
+
+### 10.3 OpenCode Error Extraction (COMPLETE)
+- [x] `ocAPIError`/`ocAPIErrorData` structs added to `ocMessage`
+- [x] `ExtractErrors()` function in `internal/provider/opencode/errors.go`
+- [x] Extracts both API-level errors (from `message.data.error`) and tool-level errors (from tool call results)
+- [x] Integrated into `Export()` — populates `Session.Errors`
+- [x] `resolveProviderName()` from request URL
+- [x] 6 tests
+
+### 10.4 Storage Layer (COMPLETE)
+- [x] `ErrorStore` interface: SaveErrors, GetErrors, GetErrorSummary, ListRecentErrors
+- [x] Migration 017: `session_errors` table with 3 indexes (session_id, category, occurred_at)
+- [x] SQLite implementation in `internal/storage/sqlite/error_store.go`
+- [x] MockStore updated (centralized + inline mock stores)
+
+### 10.5 ErrorService + PostCapture Integration (COMPLETE)
+- [x] `ErrorService` in `internal/service/error.go` — classify + persist
+- [x] `ErrorServicer` interface in `iface.go`
+- [x] `ProcessSession()` — classify raw errors, persist via ErrorStore (idempotent/upsert)
+- [x] Query methods: `GetErrors()`, `GetSummary()`, `ListRecent()`
+- [x] Skips already-classified errors (re-classification guard)
+- [x] Factory wiring: `ErrorServiceFunc` in Factory, lazy singleton with DeterministicClassifier
+- [x] PostCapture hook: error processing runs automatically on every capture (fast, deterministic)
+- [x] 11 tests (total: 1693 tests passing)
+
+### 10.6 API Endpoints (DONE)
+- [x] `GET /api/v1/sessions/{id}/errors` — all classified errors for a session
+- [x] `GET /api/v1/sessions/{id}/errors/summary` — aggregated error statistics
+- [x] `GET /api/v1/errors/recent?limit=50&category=provider_error` — recent errors cross-sessions
+- [x] View DTOs + mappers (domain/view boundary separation, following auth handler pattern)
+- [x] Optional service (nil-check guard, 404 when error service not configured)
+- [x] Query param validation (category, limit with bounds)
+- [x] Wired ErrorService into `api.Config` in serve command
+- [x] 11 tests (total: 1704 tests passing)
+
+### 10.6b CLI/MCP/Config/Scheduler (COMPLETE)
+- [x] Config toggles: `errors.classifier` (deterministic/composite), `errors.llm_fallback`, `errors.llm_schedule`, `errors.llm_profile`
+- [x] Config accessor methods with defaults, Get/Set with validation (classifier enum, cron validation)
+- [x] `aisync errors <session-id>` — CLI command for session errors (table + JSON output)
+- [x] `aisync errors --recent` — recent errors across all sessions
+- [x] `--category` filter, `--limit`, `--json` flags
+- [x] `aisync_errors` MCP tool (session_id, recent, category, limit params)
+- [x] MCP wiring: ErrorServicer added to Config, handlers, mcpcmd
+- [x] `ReclassifyTask` scheduler task — finds unknown errors and reclassifies via ErrorService
+- [x] Scheduler wiring in serve.go (uses `errors.llm_schedule` config)
+- [x] `POST /api/v1/errors/reclassify` — manual trigger API endpoint
+- [x] 17 new tests, 1718 total tests passing
+
+### 10.6c Dashboard Filters: Status + Has Errors (COMPLETE)
+- [x] Domain: `Status` and `HasErrors *bool` fields added to `SearchQuery`
+- [x] Service: `Status` and `HasErrors` string fields in `SearchRequest`, wired in `Search()`
+- [x] Storage: `WHERE status = ?` and `WHERE error_count > 0` clauses in `buildSearchWhere()`
+- [x] Storage: Fixed `Search()` SELECT to include `project_category` and `status` columns (were missing)
+- [x] Web handler: reads `status` and `has_errors` query params, passes to service, echoes to template
+- [x] Template: 2 new `<select>` dropdowns (Status: Active/Idle/Archived, Errors: Has errors/No errors)
+- [x] Bugfix: pagination links now propagate ALL filters (was missing `session_type`, `project_category`, `owner`)
+- [x] 4 new storage tests (filter by status, filter by has_errors, combined, project_category+status in results)
+- [x] 1723 total tests passing
+
+### 10.7 LLM Classifier (FUTURE)
+- [ ] `LLMClassifier` adapter using LLM for ambiguous tool errors
+- [ ] `CompositeClassifier` — deterministic first, LLM fallback for "unknown"
+
+### 10.8 LiteLLM Pricing Database Integration (COMPLETE)
+
+Integrated the LiteLLM open-source pricing database (2500+ models) as a secondary pricing catalog,
+chained via `FallbackCatalog` with the existing `EmbeddedCatalog` as offline fallback.
+
+**Catalog Architecture:**
+```
+OverrideCatalog (user config overrides — top layer)
+  └─ FallbackCatalog (first match wins)
+       ├─ LiteLLMCatalog  ← 2500+ models from GitHub JSON cache
+       └─ EmbeddedCatalog ← 15 models from catalog.yaml (offline fallback)
+```
+
+- [x] `LiteLLMCatalog` adapter (`internal/pricing/litellm.go`)
+  - Parses LiteLLM JSON format (per-token → per-M-token conversion)
+  - Extracts tiered pricing from `_above_Nk_tokens` suffix fields
+  - Regex-based threshold extraction (128k, 200k, 256k, 272k patterns)
+  - Computes tier multipliers (tier rate / base rate)
+  - Cache-aware pricing: `cache_read_input_token_cost`, `cache_creation_input_token_cost`
+  - Filters to `mode: "chat"` models only (1983 of 2594 entries)
+  - `HTTPClient` interface for testability
+- [x] `FallbackCatalog` — chains multiple `Catalog` implementations, first match wins
+- [x] `UpdateCache()` — fetches from GitHub, validates JSON, writes to `~/.aisync/litellm_prices.json`
+- [x] `CacheInfo()` — returns cache path, age, model count, last update time
+- [x] `aisync update-prices` CLI command (`pkg/cmd/pricescmd/pricescmd.go`)
+  - `--info` flag: show cache status without fetching
+  - Spot-check output: verifies key models (Claude Opus 4, Sonnet 4, GPT-4o) are findable
+  - Reports total models loaded, cache age, file size
+- [x] Factory wiring: `initCalc()` in `pkg/cmd/factory/default.go` builds full chain
+  - `FallbackCatalog(LiteLLMCatalog, EmbeddedCatalog)` → `OverrideCatalog` on top
+  - Graceful degradation: if LiteLLM cache missing/corrupt, falls through to Embedded
+- [x] 37 new LiteLLM tests (`internal/pricing/litellm_test.go`)
+  - JSON parsing, tier extraction, provider filtering, cache management
+  - FallbackCatalog semantics, calculator integration
+  - Real-data test with actual LiteLLM JSON structure
+  - `assertFloatApprox` helper for tolerance-based comparisons
+- [x] 88 total pricing tests (51 existing + 37 new), all passing
+- [x] 1761 total tests across 95 packages, 0 failures

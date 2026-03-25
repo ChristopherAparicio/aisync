@@ -32,13 +32,19 @@ type Request struct {
 	SessionID    session.ID           // empty = lookup by branch
 	ProviderName session.ProviderName // empty = use source provider
 	AsContext    bool                 // generate CONTEXT.md instead of native import
+
+	// Filters is a chain of SessionFilter strategies applied before restore.
+	// Each filter transforms the session (e.g. clean errors, redact secrets).
+	// Filters are applied in order; an empty slice means no filtering.
+	Filters []session.SessionFilter
 }
 
 // Result contains the output of a restore operation.
 type Result struct {
-	Session     *session.Session
-	Method      string // "native", "converted", or "context"
-	ContextPath string // only set if Method == "context"
+	Session       *session.Session
+	Method        string                 // "native", "converted", or "context"
+	ContextPath   string                 // only set if Method == "context"
+	FilterResults []session.FilterResult // results from each applied filter (empty if no filters)
 }
 
 // Service orchestrates the restore workflow.
@@ -78,12 +84,28 @@ func (s *Service) Restore(req Request) (*Result, error) {
 		sess.Agent = req.Agent
 	}
 
-	// Step 2: If --as-context, generate CONTEXT.md
-	if req.AsContext {
-		return s.restoreAsContext(sess, req.ProjectPath)
+	// Step 2: Apply filter chain (if any)
+	var filterResults []session.FilterResult
+	if len(req.Filters) > 0 {
+		filtered, results, filterErr := session.ApplyFilters(sess, req.Filters)
+		if filterErr != nil {
+			return nil, fmt.Errorf("applying filters: %w", filterErr)
+		}
+		sess = filtered
+		filterResults = results
 	}
 
-	// Step 3: Determine target provider
+	// Step 3: If --as-context, generate CONTEXT.md
+	if req.AsContext {
+		result, contextErr := s.restoreAsContext(sess, req.ProjectPath)
+		if contextErr != nil {
+			return nil, contextErr
+		}
+		result.FilterResults = filterResults
+		return result, nil
+	}
+
+	// Step 4: Determine target provider
 	targetName := req.ProviderName
 	if targetName == "" {
 		targetName = sess.Provider
@@ -92,15 +114,25 @@ func (s *Service) Restore(req Request) (*Result, error) {
 	target, targetErr := s.registry.Get(targetName)
 	if targetErr != nil {
 		// Fall back to CONTEXT.md if target provider not available
-		return s.restoreAsContext(sess, req.ProjectPath)
+		result, contextErr := s.restoreAsContext(sess, req.ProjectPath)
+		if contextErr != nil {
+			return nil, contextErr
+		}
+		result.FilterResults = filterResults
+		return result, nil
 	}
 
-	// Step 4: Check if import is supported
+	// Step 5: Check if import is supported
 	if !target.CanImport() {
-		return s.restoreAsContext(sess, req.ProjectPath)
+		result, contextErr := s.restoreAsContext(sess, req.ProjectPath)
+		if contextErr != nil {
+			return nil, contextErr
+		}
+		result.FilterResults = filterResults
+		return result, nil
 	}
 
-	// Step 5: Import directly — each provider's Import() handles
+	// Step 6: Import directly — each provider's Import() handles
 	// conversion from the unified session format to its native format.
 	// Cross-provider conversion is handled transparently by Import().
 	method := "native"
@@ -110,12 +142,18 @@ func (s *Service) Restore(req Request) (*Result, error) {
 
 	if importErr := target.Import(sess); importErr != nil {
 		// Fall back to CONTEXT.md on import failure
-		return s.restoreAsContext(sess, req.ProjectPath)
+		result, contextErr := s.restoreAsContext(sess, req.ProjectPath)
+		if contextErr != nil {
+			return nil, contextErr
+		}
+		result.FilterResults = filterResults
+		return result, nil
 	}
 
 	return &Result{
-		Session: sess,
-		Method:  method,
+		Session:       sess,
+		Method:        method,
+		FilterResults: filterResults,
 	}, nil
 }
 

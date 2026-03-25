@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/internal/restore/filter"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
@@ -26,6 +27,12 @@ type Options struct {
 	AsContext    bool
 	PRFlag       int
 	Pick         bool
+
+	// Filter flags
+	CleanErrors   bool
+	StripEmpty    bool
+	RedactSecrets bool
+	ExcludeFlag   string // comma-separated: indices (e.g. "0,3,5"), roles (e.g. "system"), or pattern (e.g. "/regex/")
 }
 
 // NewCmdRestore creates the `aisync restore` command.
@@ -38,7 +45,20 @@ func NewCmdRestore(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restore",
 		Short: "Restore a captured AI session",
-		Long:  "Restores a previously captured session into an AI tool, or generates a CONTEXT.md file.",
+		Long: `Restores a previously captured session into an AI tool, or generates a CONTEXT.md file.
+
+Smart Restore filters can clean up the session before restoring:
+  --clean-errors     Replace tool error outputs with compact summaries
+  --strip-empty      Remove messages with no content
+  --redact-secrets   Replace detected secrets with $VARIABLE_NAME references
+  --exclude          Remove messages by index, role, or content pattern
+
+The --exclude flag accepts a comma-separated list of:
+  - Indices:  "0,3,5" (0-based message positions)
+  - Roles:    "system" (remove all system messages)
+  - Patterns: "/regex/" (remove messages matching the regex)
+
+Example: aisync restore --session ses-abc --clean-errors --redact-secrets --as-context`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRestore(opts)
 		},
@@ -51,7 +71,86 @@ func NewCmdRestore(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().IntVar(&opts.PRFlag, "pr", 0, "Restore session linked to this PR number")
 	cmd.Flags().BoolVar(&opts.Pick, "pick", false, "Choose from available sessions on the current branch")
 
+	// Smart Restore filter flags
+	cmd.Flags().BoolVar(&opts.CleanErrors, "clean-errors", false, "Replace tool error outputs with compact summaries")
+	cmd.Flags().BoolVar(&opts.StripEmpty, "strip-empty", false, "Remove empty messages (no content, no tool calls)")
+	cmd.Flags().BoolVar(&opts.RedactSecrets, "redact-secrets", false, "Replace detected secrets with $VARIABLE_NAME references")
+	cmd.Flags().StringVar(&opts.ExcludeFlag, "exclude", "", "Exclude messages by index, role, or /pattern/ (comma-separated)")
+
 	return cmd
+}
+
+// buildFilters constructs the filter chain from CLI flags.
+// Filter order: exclude → empty → errors → secrets
+// (exclude first so subsequent filters work on a smaller set).
+func buildFilters(opts *Options) ([]session.SessionFilter, error) {
+	var filters []session.SessionFilter
+
+	// 1. Message excluder (if --exclude is set)
+	if opts.ExcludeFlag != "" {
+		f, err := parseExcludeFlag(opts.ExcludeFlag)
+		if err != nil {
+			return nil, fmt.Errorf("--exclude: %w", err)
+		}
+		filters = append(filters, f)
+	}
+
+	// 2. Empty message filter
+	if opts.StripEmpty {
+		filters = append(filters, filter.NewEmptyMessage())
+	}
+
+	// 3. Error cleaner
+	if opts.CleanErrors {
+		filters = append(filters, filter.NewErrorCleaner())
+	}
+
+	// 4. Secret redactor (last, so it scans everything that remains)
+	if opts.RedactSecrets {
+		filters = append(filters, filter.NewSecretRedactor())
+	}
+
+	return filters, nil
+}
+
+// parseExcludeFlag parses the --exclude flag value into a MessageExcluder.
+// Format: comma-separated values where:
+//   - numbers are message indices (0-based)
+//   - /pattern/ is a content regex
+//   - anything else is treated as a role name
+func parseExcludeFlag(value string) (*filter.MessageExcluder, error) {
+	cfg := filter.MessageExcluderConfig{}
+
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Check if it's a regex pattern: /pattern/
+		if strings.HasPrefix(part, "/") && strings.HasSuffix(part, "/") && len(part) > 2 {
+			pattern := part[1 : len(part)-1]
+			if cfg.ContentPattern != "" {
+				return nil, fmt.Errorf("only one content pattern is supported, got multiple")
+			}
+			cfg.ContentPattern = pattern
+			continue
+		}
+
+		// Check if it's an integer (message index)
+		if idx, err := strconv.Atoi(part); err == nil {
+			if idx < 0 {
+				return nil, fmt.Errorf("invalid negative index: %d", idx)
+			}
+			cfg.Indices = append(cfg.Indices, idx)
+			continue
+		}
+
+		// Otherwise treat as role name
+		cfg.Roles = append(cfg.Roles, part)
+	}
+
+	return filter.NewMessageExcluder(cfg)
 }
 
 // pickSession lists sessions on the current branch and prompts the user to pick one.
@@ -151,6 +250,12 @@ func runRestore(opts *Options) error {
 		providerName = parsed
 	}
 
+	// Build filter chain from CLI flags
+	filters, err := buildFilters(opts)
+	if err != nil {
+		return err
+	}
+
 	// Get service
 	svc, err := opts.Factory.SessionService()
 	if err != nil {
@@ -175,9 +280,21 @@ func runRestore(opts *Options) error {
 		Agent:        opts.AgentFlag,
 		AsContext:    opts.AsContext,
 		PRNumber:     opts.PRFlag,
+		Filters:      filters,
 	})
 	if err != nil {
 		return err
+	}
+
+	// Print filter results (if any filters were applied)
+	if len(result.FilterResults) > 0 {
+		fmt.Fprintln(out, "Smart Restore filters applied:")
+		for _, fr := range result.FilterResults {
+			if fr.Applied {
+				fmt.Fprintf(out, "  [%s] %s\n", fr.FilterName, fr.Summary)
+			}
+		}
+		fmt.Fprintln(out)
 	}
 
 	fmt.Fprintf(out, "Restored session %s\n", result.Session.ID)

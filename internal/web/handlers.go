@@ -13,7 +13,6 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/config"
-	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -102,6 +101,33 @@ type projectItem struct {
 	Selected bool
 }
 
+// sidebarProject is a project entry for the sidebar navigation.
+type sidebarProject struct {
+	Name         string
+	Path         string
+	SessionCount int
+	Active       bool // true if this project is currently selected
+}
+
+// buildSidebarProjects returns project data for the sidebar, sorted by recent activity.
+func (s *Server) buildSidebarProjects(ctx context.Context, activePath string) []sidebarProject {
+	groups, err := s.sessionSvc.ListProjects(ctx)
+	if err != nil || len(groups) == 0 {
+		return nil
+	}
+
+	items := make([]sidebarProject, 0, len(groups))
+	for _, g := range groups {
+		items = append(items, sidebarProject{
+			Name:         g.DisplayName,
+			Path:         g.ProjectPath,
+			SessionCount: g.SessionCount,
+			Active:       g.ProjectPath == activePath,
+		})
+	}
+	return items
+}
+
 // ── API: Projects ──
 
 // handleAPIProjects returns JSON list of projects for the project selector.
@@ -153,8 +179,9 @@ func (s *Server) buildProjectList(selectedPath string) []projectItem {
 // ── Projects Page ──
 
 type projectsPage struct {
-	Nav      string
-	Projects []projectCard
+	Nav             string
+	SidebarProjects []sidebarProject
+	Projects        []projectCard
 }
 
 type projectCard struct {
@@ -169,7 +196,7 @@ type projectCard struct {
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	data := projectsPage{Nav: "projects"}
+	data := projectsPage{Nav: "projects", SidebarProjects: s.buildSidebarProjects(ctx, "")}
 
 	groups, err := s.sessionSvc.ListProjects(ctx)
 	if err != nil {
@@ -223,6 +250,9 @@ type dashboardPage struct {
 	// Project filtering
 	Projects        []projectItem
 	SelectedProject string
+
+	// Sidebar
+	SidebarProjects []sidebarProject
 
 	// Error KPIs (aggregated from session summaries)
 	TotalErrors        int
@@ -291,6 +321,7 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 		Nav:             "dashboard",
 		Projects:        s.buildProjectList(project),
 		SelectedProject: project,
+		SidebarProjects: s.buildSidebarProjects(r.Context(), project),
 	}
 
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
@@ -445,6 +476,9 @@ type sessionCell struct {
 type sessionsPage struct {
 	Nav string
 
+	// Sidebar
+	SidebarProjects []sidebarProject
+
 	// Filter state (echoed back for form pre-fill).
 	FilterKeyword         string
 	FilterBranch          string
@@ -455,6 +489,8 @@ type sessionsPage struct {
 	FilterProjectCategory string
 	FilterSince           string
 	FilterUntil           string
+	FilterStatus          string
+	FilterHasErrors       string
 
 	// Sort state
 	SortBy    string
@@ -497,6 +533,8 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 	owner := q.Get("owner")
 	sessionType := q.Get("session_type")
 	projectCategory := q.Get("project_category")
+	status := q.Get("status")
+	hasErrors := q.Get("has_errors")
 	since := q.Get("since")
 	until := q.Get("until")
 	sortBy := q.Get("sort_by")
@@ -540,6 +578,8 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 		OwnerID:         session.ID(owner),
 		SessionType:     sessionType,
 		ProjectCategory: projectCategory,
+		Status:          status,
+		HasErrors:       hasErrors,
 		Since:           since,
 		Until:           until,
 		Limit:           pageSize,
@@ -548,7 +588,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 	if err != nil {
 		s.logger.Printf("sessions search error: %v", err)
 		cols := s.buildColumnDefs()
-		return sessionsPage{Nav: "sessions", Projects: s.buildProjectList(project), Columns: cols, SortBy: sortBy, SortOrder: sortOrder}
+		return sessionsPage{Nav: "sessions", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project), Columns: cols, SortBy: sortBy, SortOrder: sortOrder}
 	}
 
 	totalPages := (result.TotalCount + pageSize - 1) / pageSize
@@ -561,6 +601,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 
 	return sessionsPage{
 		Nav:                   "sessions",
+		SidebarProjects:       s.buildSidebarProjects(r.Context(), project),
 		FilterKeyword:         keyword,
 		FilterBranch:          branch,
 		FilterProvider:        provider,
@@ -568,6 +609,8 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 		FilterOwner:           owner,
 		FilterSessionType:     sessionType,
 		FilterProjectCategory: projectCategory,
+		FilterStatus:          status,
+		FilterHasErrors:       hasErrors,
 		FilterSince:           since,
 		FilterUntil:           until,
 		SortBy:                sortBy,
@@ -948,9 +991,8 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		data.ErrorRate = float64(data.ErrorCount) / float64(data.ToolCallCount) * 100
 	}
 
-	// Compute cost breakdown via pricing calculator.
-	calc := pricing.NewCalculator()
-	estimate := calc.SessionCost(sess)
+	// Compute cost breakdown via the session service (respects user pricing overrides).
+	estimate, _ := s.sessionSvc.EstimateCost(r.Context(), string(sess.ID))
 	if estimate != nil {
 		data.TotalCost = estimate.TotalCost.TotalCost
 		data.CostBreakdown = estimate.PerModel
@@ -1140,10 +1182,11 @@ type branchData struct {
 }
 
 type branchExplorerPage struct {
-	Nav        string
-	Branches   []branchData
-	Projects   []projectItem
-	Objectives map[string]*objectiveView // session ID → objective (for inline display)
+	Nav             string
+	SidebarProjects []sidebarProject
+	Branches        []branchData
+	Projects        []projectItem
+	Objectives      map[string]*objectiveView // session ID → objective (for inline display)
 }
 
 // handleBranches renders the branch explorer page.
@@ -1154,7 +1197,7 @@ func (s *Server) handleBranches(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
 	project := r.URL.Query().Get("project")
-	data := branchExplorerPage{Nav: "branches", Projects: s.buildProjectList(project)}
+	data := branchExplorerPage{Nav: "branches", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project)}
 
 	// Get per-branch stats (cached).
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
@@ -1325,19 +1368,20 @@ func timeAgoString(t time.Time) string {
 // ── Token Usage ──
 
 type usagePage struct {
-	Nav           string
-	HasData       bool
-	Projects      []projectItem
-	Hours         []string
-	HeatmapRows   []heatmapRow
-	BarChartData  []barChartBar
-	PeakHour      int
-	NightTokens   int
-	DayTokens     int
-	EveningTokens int
-	NightPct      int
-	DayPct        int
-	EveningPct    int
+	Nav             string
+	SidebarProjects []sidebarProject
+	HasData         bool
+	Projects        []projectItem
+	Hours           []string
+	HeatmapRows     []heatmapRow
+	BarChartData    []barChartBar
+	PeakHour        int
+	NightTokens     int
+	DayTokens       int
+	EveningTokens   int
+	NightPct        int
+	DayPct          int
+	EveningPct      int
 
 	// Breakdown by time of day
 	NightToolCalls    int
@@ -1400,7 +1444,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	data := usagePage{Nav: "usage"}
+	data := usagePage{Nav: "usage", SidebarProjects: s.buildSidebarProjects(r.Context(), project)}
 	data.Hours = make([]string, 24)
 	for i := 0; i < 24; i++ {
 		data.Hours[i] = fmt.Sprintf("%d", i)
@@ -1581,15 +1625,16 @@ type branchCostEntry struct {
 }
 
 type costDashboardPage struct {
-	Nav           string
-	HasData       bool
-	Projects      []projectItem
-	TotalCost     float64 // API-equivalent cost
-	ActualCost    float64 // actual cost from providers
-	Savings       float64 // TotalCost - ActualCost
-	BillingType   string  // "subscription", "api", "mixed"
-	TotalSessions int
-	AvgPerSession float64
+	Nav             string
+	SidebarProjects []sidebarProject
+	HasData         bool
+	Projects        []projectItem
+	TotalCost       float64 // API-equivalent cost
+	ActualCost      float64 // actual cost from providers
+	Savings         float64 // TotalCost - ActualCost
+	BillingType     string  // "subscription", "api", "mixed"
+	TotalSessions   int
+	AvgPerSession   float64
 
 	// Forecast
 	HasForecast  bool
@@ -1617,7 +1662,7 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	project := r.URL.Query().Get("project")
-	data := costDashboardPage{Nav: "costs", Projects: s.buildProjectList(project)}
+	data := costDashboardPage{Nav: "costs", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project)}
 
 	// Stats for totals + per-branch (cached).
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}

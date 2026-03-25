@@ -6,6 +6,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
 
 // ── Role Interfaces (Interface Segregation Principle) ──
@@ -229,6 +230,49 @@ type AuthStore interface {
 	CountAuthUsers() (int, error)
 }
 
+// ErrorStore manages structured session errors.
+type ErrorStore interface {
+	// SaveErrors persists a batch of session errors (upsert by error ID).
+	SaveErrors(errors []session.SessionError) error
+
+	// GetErrors retrieves all errors for a session, ordered by occurred_at ASC.
+	GetErrors(sessionID session.ID) ([]session.SessionError, error)
+
+	// GetErrorSummary computes aggregated error statistics for a session.
+	GetErrorSummary(sessionID session.ID) (*session.SessionErrorSummary, error)
+
+	// ListRecentErrors returns recent errors across all sessions, ordered by occurred_at DESC.
+	// Limit 0 means use default (50).
+	ListRecentErrors(limit int, category session.ErrorCategory) ([]session.SessionError, error)
+}
+
+// SessionEventStore manages structured session events and aggregated buckets.
+// Events are extracted at capture time and provide both a micro view (per session)
+// and a macro view (per project via pre-computed buckets).
+type SessionEventStore interface {
+	// SaveEvents persists a batch of session events (upsert by event ID).
+	SaveEvents(events []sessionevent.Event) error
+
+	// GetSessionEvents returns all events for a session, ordered by occurred_at ASC.
+	GetSessionEvents(sessionID session.ID) ([]sessionevent.Event, error)
+
+	// QueryEvents returns events matching the given filters.
+	QueryEvents(query sessionevent.EventQuery) ([]sessionevent.Event, error)
+
+	// DeleteSessionEvents removes all events for a session (used during re-capture).
+	DeleteSessionEvents(sessionID session.ID) error
+
+	// UpsertEventBucket inserts or merges an event bucket.
+	UpsertEventBucket(bucket sessionevent.EventBucket) error
+
+	// UpsertEventBuckets inserts or merges multiple event buckets in a single transaction.
+	// Preferred for batch operations.
+	UpsertEventBuckets(buckets []sessionevent.EventBucket) error
+
+	// QueryEventBuckets returns aggregated buckets matching the given filters.
+	QueryEventBuckets(query sessionevent.BucketQuery) ([]sessionevent.EventBucket, error)
+}
+
 // ── Composed Interface ──
 
 // Store composes all role interfaces into a single persistence contract.
@@ -246,6 +290,8 @@ type Store interface {
 	AnalysisStore
 	CacheStore
 	AuthStore
+	ErrorStore
+	SessionEventStore
 
 	// Close releases any resources held by the store.
 	Close() error

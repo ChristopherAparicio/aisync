@@ -179,6 +179,13 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 			SecretsFound: r.SecretsFound,
 			Skipped:      r.Skipped,
 		})
+
+		// Post-capture hook: fire for each non-skipped session so that error
+		// classification, event extraction, auto-tagging, etc. run for batch
+		// captures the same way they run for single captures.
+		if !r.Skipped && s.postCapture != nil {
+			s.postCapture(r.Session)
+		}
 	}
 	return captureResults, nil
 }
@@ -210,10 +217,17 @@ func (s *SessionService) CaptureByID(req CaptureRequest, sessionID session.ID) (
 		result.Session.RemoteURL = s.resolveRemoteURL()
 	}
 
-	return &CaptureResult{
+	captureResult := &CaptureResult{
 		Session:      result.Session,
 		Provider:     result.Provider,
 		SecretsFound: result.SecretsFound,
 		Skipped:      result.Skipped,
-	}, nil
+	}
+
+	// Post-capture hook: fire for non-skipped sessions (same as Capture).
+	if !result.Skipped && s.postCapture != nil {
+		s.postCapture(result.Session)
+	}
+
+	return captureResult, nil
 }

@@ -1,7 +1,3 @@
-// Package pricing computes monetary costs from token usage and model identifiers.
-// It ships with built-in prices for popular models (Claude, GPT, Gemini) and
-// supports user-configured overrides. The Calculator uses prefix matching to
-// handle dated model variants (e.g., "claude-sonnet-4-20250514" matches "claude-sonnet-4").
 package pricing
 
 import (
@@ -13,88 +9,40 @@ import (
 
 const defaultCurrency = "USD"
 
-// ModelPrice defines the cost per million tokens for a model.
-type ModelPrice struct {
-	Model               string  `json:"model"`
-	InputPerMToken      float64 `json:"input_per_mtoken"`       // $ per 1M input tokens
-	OutputPerMToken     float64 `json:"output_per_mtoken"`      // $ per 1M output tokens
-	CacheReadPerMToken  float64 `json:"cache_read_per_mtoken"`  // $ per 1M cache read tokens (0 = use InputPerMToken)
-	CacheWritePerMToken float64 `json:"cache_write_per_mtoken"` // $ per 1M cache write tokens (0 = use InputPerMToken * 1.25)
-}
+// ── Calculator (Domain Service) ─────────────────────────────────────────────
 
-// Calculator computes costs from token counts and model identifiers.
+// Calculator is the domain service for computing token costs.
+// It delegates model lookups to a Catalog and encapsulates all pricing logic
+// including tiered pricing, cache-aware costing, and session-level aggregation.
+//
+// No pricing logic should leak outside this service. Consumers call
+// Calculator methods with (model, tokens) and receive Cost values.
 type Calculator struct {
-	// prices maps model prefix → price. Sorted by key length descending
-	// so longer (more specific) prefixes match first.
-	prices []modelEntry
+	catalog Catalog
 }
 
-type modelEntry struct {
-	prefix string
-	price  ModelPrice
-}
-
-// DefaultPrices contains built-in pricing for popular AI models.
-// Prices are in USD per 1M tokens, as of early 2026.
-var DefaultPrices = []ModelPrice{
-	// Claude models (Anthropic) — with prompt caching pricing
-	{Model: "claude-opus-4", InputPerMToken: 15.0, OutputPerMToken: 75.0, CacheReadPerMToken: 1.50, CacheWritePerMToken: 18.75},
-	{Model: "claude-sonnet-4", InputPerMToken: 3.0, OutputPerMToken: 15.0, CacheReadPerMToken: 0.30, CacheWritePerMToken: 3.75},
-	{Model: "claude-haiku-4", InputPerMToken: 0.80, OutputPerMToken: 4.0, CacheReadPerMToken: 0.08, CacheWritePerMToken: 1.0},
-	{Model: "claude-haiku-3.5", InputPerMToken: 0.80, OutputPerMToken: 4.0, CacheReadPerMToken: 0.08, CacheWritePerMToken: 1.0},
-
-	// GPT models (OpenAI) — with cached input pricing
-	{Model: "gpt-4o", InputPerMToken: 2.50, OutputPerMToken: 10.0, CacheReadPerMToken: 1.25},
-	{Model: "gpt-4o-mini", InputPerMToken: 0.15, OutputPerMToken: 0.60, CacheReadPerMToken: 0.075},
-	{Model: "gpt-4.1", InputPerMToken: 2.0, OutputPerMToken: 8.0, CacheReadPerMToken: 0.50},
-	{Model: "gpt-4.1-mini", InputPerMToken: 0.40, OutputPerMToken: 1.60, CacheReadPerMToken: 0.10},
-	{Model: "gpt-4.1-nano", InputPerMToken: 0.10, OutputPerMToken: 0.40, CacheReadPerMToken: 0.025},
-	{Model: "o3", InputPerMToken: 2.0, OutputPerMToken: 8.0, CacheReadPerMToken: 0.50},
-	{Model: "o3-mini", InputPerMToken: 1.10, OutputPerMToken: 4.40, CacheReadPerMToken: 0.275},
-	{Model: "o4-mini", InputPerMToken: 1.10, OutputPerMToken: 4.40, CacheReadPerMToken: 0.275},
-
-	// Gemini models (Google)
-	{Model: "gemini-2.5-pro", InputPerMToken: 1.25, OutputPerMToken: 10.0},
-	{Model: "gemini-2.5-flash", InputPerMToken: 0.15, OutputPerMToken: 0.60},
-	{Model: "gemini-2.0-flash", InputPerMToken: 0.10, OutputPerMToken: 0.40},
-}
-
-// NewCalculator creates a Calculator with the built-in default prices.
+// NewCalculator creates a Calculator backed by the built-in embedded catalog.
 func NewCalculator() *Calculator {
-	return newCalculator(DefaultPrices)
+	return &Calculator{catalog: DefaultCatalog()}
 }
 
-// WithOverrides returns a new Calculator that adds (or replaces) prices from overrides.
-// Overrides take precedence over defaults when model prefixes match.
+// NewCalculatorWithCatalog creates a Calculator backed by a custom Catalog.
+// This is the primary constructor for dependency injection.
+func NewCalculatorWithCatalog(cat Catalog) *Calculator {
+	return &Calculator{catalog: cat}
+}
+
+// WithOverrides returns a new Calculator that layers user-configured price
+// overrides on top of the current catalog. Overrides take precedence.
 func (c *Calculator) WithOverrides(overrides []ModelPrice) *Calculator {
-	// Start with the current prices, then apply overrides.
-	merged := make(map[string]ModelPrice, len(c.prices)+len(overrides))
-	for _, e := range c.prices {
-		merged[e.prefix] = e.price
-	}
-	for _, o := range overrides {
-		merged[o.Model] = o
-	}
-
-	all := make([]ModelPrice, 0, len(merged))
-	for _, p := range merged {
-		all = append(all, p)
-	}
-	return newCalculator(all)
+	cat := NewOverrideCatalog(c.catalog, overrides)
+	return &Calculator{catalog: cat}
 }
 
-func newCalculator(prices []ModelPrice) *Calculator {
-	entries := make([]modelEntry, len(prices))
-	for i, p := range prices {
-		entries[i] = modelEntry{prefix: strings.ToLower(p.Model), price: p}
-	}
-
-	// Sort by prefix length descending so longer (more specific) prefixes match first.
-	sort.Slice(entries, func(i, j int) bool {
-		return len(entries[i].prefix) > len(entries[j].prefix)
-	})
-
-	return &Calculator{prices: entries}
+// Lookup finds the price for a model identifier.
+// Delegates to the underlying Catalog.
+func (c *Calculator) Lookup(model string) (ModelPrice, bool) {
+	return c.catalog.Lookup(model)
 }
 
 // CheaperAlternative returns a cheaper model suggestion for the given model, if one exists.
@@ -138,51 +86,10 @@ func (c *Calculator) CheaperAlternative(model string) (string, float64, bool) {
 	return "", 0, false
 }
 
-// Lookup finds the price for a model identifier using prefix matching.
-// Handles provider-specific model name formats (Bedrock, Vertex, Ollama).
-func (c *Calculator) Lookup(model string) (ModelPrice, bool) {
-	lower := strings.ToLower(model)
-
-	// Direct prefix match first.
-	for _, e := range c.prices {
-		if strings.HasPrefix(lower, e.prefix) {
-			return e.price, true
-		}
-	}
-
-	// Normalize: strip cloud provider prefixes (Bedrock, Vertex).
-	// e.g. "global.anthropic.claude-opus-4-6-v1" → "claude-opus-4-6-v1"
-	// e.g. "us.anthropic.claude-opus-4-6-v1" → "claude-opus-4-6-v1"
-	// e.g. "anthropic.claude-sonnet-4-6" → "claude-sonnet-4-6"
-	normalized := lower
-	for _, prefix := range []string{
-		"global.anthropic.", "us.anthropic.", "eu.anthropic.",
-		"anthropic.", "google.", "meta.",
-	} {
-		if strings.HasPrefix(normalized, prefix) {
-			normalized = strings.TrimPrefix(normalized, prefix)
-			break
-		}
-	}
-
-	// Strip version suffixes: "-v1", "-v1:0", "-v2:0"
-	if idx := strings.LastIndex(normalized, "-v"); idx > 0 {
-		normalized = normalized[:idx]
-	}
-
-	// Retry with normalized name.
-	if normalized != lower {
-		for _, e := range c.prices {
-			if strings.HasPrefix(normalized, e.prefix) {
-				return e.price, true
-			}
-		}
-	}
-
-	return ModelPrice{}, false
-}
+// ── Cost Computation ────────────────────────────────────────────────────────
 
 // MessageCost computes the cost for a single message given its model and token counts.
+// This uses the base (tier-0) rates. For tiered pricing within a session, use SessionCost.
 func (c *Calculator) MessageCost(model string, inputTokens, outputTokens int) session.Cost {
 	return c.MessageCostWithCache(model, inputTokens, outputTokens, 0, 0)
 }
@@ -190,6 +97,9 @@ func (c *Calculator) MessageCost(model string, inputTokens, outputTokens int) se
 // MessageCostWithCache computes cost with separate cache token pricing.
 // Cache read tokens are typically 10x cheaper than regular input tokens.
 // Cache write tokens are typically 1.25x more expensive than input tokens.
+//
+// Note: this method applies the base rate only (no tiered pricing).
+// For session-level tiered cost computation, use SessionCost.
 func (c *Calculator) MessageCostWithCache(model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int) session.Cost {
 	price, found := c.Lookup(model)
 	if !found {
@@ -202,7 +112,7 @@ func (c *Calculator) MessageCostWithCache(model string, inputTokens, outputToken
 		rawInput = 0
 	}
 
-	// Price each component separately.
+	// Price each component separately using base rates.
 	rawInputCost := float64(rawInput) * price.InputPerMToken / 1_000_000
 
 	cacheReadRate := price.CacheReadPerMToken
@@ -228,11 +138,167 @@ func (c *Calculator) MessageCostWithCache(model string, inputTokens, outputToken
 	}
 }
 
+// computeTieredCost computes cost for a token count using tiered pricing.
+// It splits the tokens across tier boundaries and applies the appropriate
+// multiplier to each segment.
+//
+// Example for claude-opus-4 with 300k input tokens:
+//   - First 200k at base rate ($15/M) = $3.00
+//   - Next 100k at 2x rate ($30/M) = $3.00
+//   - Total = $6.00 (vs $4.50 at flat rate)
+func computeTieredCost(tokens int, baseRatePerMToken float64, tiers []PricingTier) float64 {
+	if len(tiers) == 0 || tokens <= 0 {
+		return float64(tokens) * baseRatePerMToken / 1_000_000
+	}
+
+	remaining := tokens
+	cost := 0.0
+	prevThreshold := 0
+
+	for _, tier := range tiers {
+		// Tokens in the segment before this tier's threshold use the current rate.
+		segmentTokens := tier.ThresholdTokens - prevThreshold
+		if segmentTokens > remaining {
+			segmentTokens = remaining
+		}
+		if segmentTokens > 0 {
+			cost += float64(segmentTokens) * baseRatePerMToken / 1_000_000
+			remaining -= segmentTokens
+		}
+		if remaining <= 0 {
+			return cost
+		}
+		// After this threshold, apply the tier's multiplier.
+		baseRatePerMToken = baseRatePerMToken * tier.InputMultiplier
+		prevThreshold = tier.ThresholdTokens
+	}
+
+	// Any remaining tokens use the last tier's rate.
+	if remaining > 0 {
+		cost += float64(remaining) * baseRatePerMToken / 1_000_000
+	}
+
+	return cost
+}
+
+// computeTieredOutputCost is like computeTieredCost but uses OutputMultiplier.
+func computeTieredOutputCost(tokens int, baseRatePerMToken float64, tiers []PricingTier) float64 {
+	if len(tiers) == 0 || tokens <= 0 {
+		return float64(tokens) * baseRatePerMToken / 1_000_000
+	}
+
+	remaining := tokens
+	cost := 0.0
+	prevThreshold := 0
+
+	for _, tier := range tiers {
+		segmentTokens := tier.ThresholdTokens - prevThreshold
+		if segmentTokens > remaining {
+			segmentTokens = remaining
+		}
+		if segmentTokens > 0 {
+			cost += float64(segmentTokens) * baseRatePerMToken / 1_000_000
+			remaining -= segmentTokens
+		}
+		if remaining <= 0 {
+			return cost
+		}
+		baseRatePerMToken = baseRatePerMToken * tier.OutputMultiplier
+		prevThreshold = tier.ThresholdTokens
+	}
+
+	if remaining > 0 {
+		cost += float64(remaining) * baseRatePerMToken / 1_000_000
+	}
+
+	return cost
+}
+
+// messageCostTiered computes cost for a single model's aggregated tokens,
+// taking tiers into account. This is used by SessionCost for per-model totals.
+func (c *Calculator) messageCostTiered(model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int) session.Cost {
+	price, found := c.Lookup(model)
+	if !found {
+		return session.Cost{Currency: defaultCurrency}
+	}
+
+	// If no tiers, fall back to flat-rate computation.
+	if !price.HasTiers() {
+		return c.MessageCostWithCache(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)
+	}
+
+	// With tiers: compute raw input, cache read, cache write costs separately,
+	// then apply tiered pricing to the total input token count.
+	rawInput := inputTokens - cacheReadTokens - cacheWriteTokens
+	if rawInput < 0 {
+		rawInput = 0
+	}
+
+	// For tiered models, the tier threshold applies to the total context window,
+	// which includes ALL input tokens (raw + cache read + cache write).
+	// We compute the cost as if all inputTokens go through the tier system,
+	// but then adjust for cache pricing.
+
+	// Step 1: Compute the effective input rate at each token position.
+	// We need to split the total input tokens across tiers.
+	// Cache read tokens get a discount relative to the tier rate.
+	// Cache write tokens get a premium relative to the tier rate.
+
+	// Approach: compute the tiered cost for all input tokens, then
+	// adjust the portion that was cache reads/writes.
+
+	// Cost if all input tokens were at the raw input rate (tiered).
+	totalInputTiered := computeTieredCost(inputTokens, price.InputPerMToken, price.Tiers)
+
+	// The effective per-token rate (blended across tiers).
+	effectiveInputRate := 0.0
+	if inputTokens > 0 {
+		effectiveInputRate = totalInputTiered / float64(inputTokens) * 1_000_000
+	}
+
+	// Now apply cache discounts relative to the effective rate.
+	cacheReadRate := price.CacheReadPerMToken
+	if cacheReadRate == 0 {
+		cacheReadRate = price.InputPerMToken
+	}
+	// Scale cache read rate by the same tier multiplier as the effective rate.
+	tierMultiplier := 1.0
+	if price.InputPerMToken > 0 {
+		tierMultiplier = effectiveInputRate / price.InputPerMToken
+	}
+
+	cacheWriteRate := price.CacheWritePerMToken
+	if cacheWriteRate == 0 {
+		cacheWriteRate = price.InputPerMToken * 1.25
+	}
+
+	rawInputCost := float64(rawInput) * effectiveInputRate / 1_000_000
+	cacheReadCost := float64(cacheReadTokens) * cacheReadRate * tierMultiplier / 1_000_000
+	cacheWriteCost := float64(cacheWriteTokens) * cacheWriteRate * tierMultiplier / 1_000_000
+
+	totalInputCost := rawInputCost + cacheReadCost + cacheWriteCost
+
+	// Output tokens also have tiered pricing.
+	outputCost := computeTieredOutputCost(outputTokens, price.OutputPerMToken, price.Tiers)
+
+	return session.Cost{
+		InputCost:  totalInputCost,
+		OutputCost: outputCost,
+		TotalCost:  totalInputCost + outputCost,
+		Currency:   defaultCurrency,
+	}
+}
+
+// ── Session Cost ────────────────────────────────────────────────────────────
+
 // SessionCost computes the full cost breakdown for a session.
 //
 // It produces two cost views:
 //   - APICost:    what it would cost at public API per-token rates
 //   - ActualCost: what was actually charged (from provider-reported cost fields)
+//
+// For models with tiered pricing, the tier threshold is evaluated against the
+// total cumulative input tokens for that model across the entire session.
 //
 // Strategy for input token distribution:
 //   - Session-level InputTokens are distributed proportionally across assistant
@@ -322,9 +388,6 @@ func (c *Calculator) SessionCost(sess *session.Session) *session.CostEstimate {
 		}
 	} else if len(sess.Messages) > 20 {
 		// No explicit cache data, but session has many messages.
-		// For interactive sessions with prompt caching (Claude, GPT), most input tokens
-		// are cache reads (~90%). Apply estimated cache ratio to avoid massive overcount.
-		// This heuristic is conservative: 90% cache read, 3% cache write, 7% raw input.
 		const estimatedCacheReadRatio = 0.90
 		const estimatedCacheWriteRatio = 0.03
 		for _, agg := range perModel {
@@ -333,7 +396,7 @@ func (c *Calculator) SessionCost(sess *session.Session) *session.CostEstimate {
 		}
 	}
 
-	// Build result.
+	// Build result — use tiered cost computation.
 	estimate := &session.CostEstimate{}
 	var totalInput, totalOutput float64
 
@@ -345,7 +408,8 @@ func (c *Calculator) SessionCost(sess *session.Session) *session.CostEstimate {
 
 	for _, model := range models {
 		agg := perModel[model]
-		cost := c.MessageCostWithCache(model, agg.inputTokens, agg.outputTokens, agg.cacheReadTokens, agg.cacheWriteTokens)
+		// Use tiered computation (falls back to flat if model has no tiers).
+		cost := c.messageCostTiered(model, agg.inputTokens, agg.outputTokens, agg.cacheReadTokens, agg.cacheWriteTokens)
 
 		estimate.PerModel = append(estimate.PerModel, session.ModelCost{
 			Model:        model,
@@ -402,3 +466,9 @@ func (c *Calculator) SessionCost(sess *session.Session) *session.CostEstimate {
 
 	return estimate
 }
+
+// ── Backward Compatibility ──────────────────────────────────────────────────
+
+// DefaultPrices returns the built-in pricing catalog as a slice.
+// Deprecated: prefer using the Catalog interface directly.
+var DefaultPrices = defaultCatalog.List()

@@ -34,16 +34,35 @@ type configData struct {
 	Server      serverConf    `json:"server"`
 	Database    databaseConf  `json:"database"`
 	Scheduler   schedulerConf `json:"scheduler"`
+	Errors      errorsConf    `json:"errors"`
 	Telemetry   telemetryConf `json:"telemetry"`
 	Version     int           `json:"version"`
 	AutoCapture bool          `json:"auto_capture"`
 }
 
+// errorsConf holds configuration for error classification and LLM reclassification.
+type errorsConf struct {
+	Classifier  string `json:"classifier"`   // "deterministic" (default) or "composite" (deterministic + LLM fallback)
+	LLMFallback bool   `json:"llm_fallback"` // enable LLM for unknown errors (requires composite classifier)
+	LLMSchedule string `json:"llm_schedule"` // cron expression for scheduled reclassification (e.g. "0 0 * * *")
+	LLMProfile  string `json:"llm_profile"`  // LLM profile name for error classification
+}
+
 // PricingOverride is an exported type for pricing overrides, used by Factory.
 type PricingOverride struct {
-	Model           string  `json:"model"`
-	InputPerMToken  float64 `json:"input_per_mtoken"`
-	OutputPerMToken float64 `json:"output_per_mtoken"`
+	Model               string                `json:"model"`
+	InputPerMToken      float64               `json:"input_per_mtoken"`
+	OutputPerMToken     float64               `json:"output_per_mtoken"`
+	CacheReadPerMToken  float64               `json:"cache_read_per_mtoken,omitempty"`  // 0 = use default
+	CacheWritePerMToken float64               `json:"cache_write_per_mtoken,omitempty"` // 0 = use default
+	Tiers               []PricingTierOverride `json:"tiers,omitempty"`                  // optional tiered pricing
+}
+
+// PricingTierOverride defines a pricing tier override.
+type PricingTierOverride struct {
+	ThresholdTokens  int     `json:"threshold_tokens"`
+	InputMultiplier  float64 `json:"input_multiplier"`
+	OutputMultiplier float64 `json:"output_multiplier"`
 }
 
 type secrets struct {
@@ -208,6 +227,9 @@ func defaultConfig() configData {
 			SortBy:    "created_at",
 			SortOrder: "desc",
 		},
+		Errors: errorsConf{
+			Classifier: "deterministic",
+		},
 	}
 }
 
@@ -347,6 +369,18 @@ func (c *Config) loadFrom(dir string) error {
 		c.data.Project.AutoDetect = true
 	}
 
+	// Errors
+	if loaded.Errors.Classifier != "" {
+		c.data.Errors.Classifier = loaded.Errors.Classifier
+	}
+	c.data.Errors.LLMFallback = loaded.Errors.LLMFallback
+	if loaded.Errors.LLMSchedule != "" {
+		c.data.Errors.LLMSchedule = loaded.Errors.LLMSchedule
+	}
+	if loaded.Errors.LLMProfile != "" {
+		c.data.Errors.LLMProfile = loaded.Errors.LLMProfile
+	}
+
 	// Scheduler — bools always take the loaded value
 	c.data.Scheduler.GC.Enabled = loaded.Scheduler.GC.Enabled
 	if loaded.Scheduler.GC.Cron != "" {
@@ -460,6 +494,16 @@ func (c *Config) Get(key string) (string, error) {
 		return c.data.Database.Path, nil
 	case "database.driver":
 		return c.GetDatabaseDriver(), nil
+
+	// Errors
+	case "errors.classifier":
+		return c.GetErrorsClassifier(), nil
+	case "errors.llm_fallback":
+		return fmt.Sprintf("%v", c.data.Errors.LLMFallback), nil
+	case "errors.llm_schedule":
+		return c.data.Errors.LLMSchedule, nil
+	case "errors.llm_profile":
+		return c.data.Errors.LLMProfile, nil
 
 	// Scheduler
 	case "scheduler.gc.enabled":
@@ -674,6 +718,22 @@ func (c *Config) Set(key string, value string) error {
 			return fmt.Errorf("invalid database.driver %q: only \"sqlite\" is currently supported", value)
 		}
 		c.data.Database.Driver = value
+
+	// Errors
+	case "errors.classifier":
+		if value != "deterministic" && value != "composite" {
+			return fmt.Errorf("invalid errors.classifier %q: must be \"deterministic\" or \"composite\"", value)
+		}
+		c.data.Errors.Classifier = value
+	case "errors.llm_fallback":
+		c.data.Errors.LLMFallback = value == "true"
+	case "errors.llm_schedule":
+		if err := validateCronExpr(value); err != nil {
+			return fmt.Errorf("invalid errors.llm_schedule %q: %w", value, err)
+		}
+		c.data.Errors.LLMSchedule = value
+	case "errors.llm_profile":
+		c.data.Errors.LLMProfile = value
 
 	// Scheduler
 	case "scheduler.gc.enabled":
@@ -1026,6 +1086,34 @@ func (c *Config) GetDashboardDefaultProvider() string {
 // GetDashboardDefaultBranch returns the pre-selected branch filter (empty = all).
 func (c *Config) GetDashboardDefaultBranch() string {
 	return c.data.Dashboard.DefaultBranch
+}
+
+// ── Error Classification Getters ──
+
+// GetErrorsClassifier returns the error classifier mode: "deterministic" or "composite".
+// Returns "deterministic" as the default.
+func (c *Config) GetErrorsClassifier() string {
+	if c.data.Errors.Classifier == "" {
+		return "deterministic"
+	}
+	return c.data.Errors.Classifier
+}
+
+// IsErrorsLLMFallbackEnabled returns whether LLM fallback is enabled for unknown errors.
+func (c *Config) IsErrorsLLMFallbackEnabled() bool {
+	return c.data.Errors.LLMFallback
+}
+
+// GetErrorsLLMSchedule returns the cron expression for scheduled LLM reclassification.
+// Returns empty string if not configured (meaning disabled).
+func (c *Config) GetErrorsLLMSchedule() string {
+	return c.data.Errors.LLMSchedule
+}
+
+// GetErrorsLLMProfile returns the LLM profile name for error classification.
+// Returns empty string if not configured (uses default profile).
+func (c *Config) GetErrorsLLMProfile() string {
+	return c.data.Errors.LLMProfile
 }
 
 // ── Scheduler Getters ──

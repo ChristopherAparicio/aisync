@@ -674,6 +674,124 @@ func (h *handlers) handleIngest(ctx context.Context, req mcp.CallToolRequest) (*
 	return toolJSON(result)
 }
 
+func (h *handlers) handleValidate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var args struct {
+		SessionID string `json:"session_id"`
+		Fix       bool   `json:"fix"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+	if args.SessionID == "" {
+		return toolError(fmt.Errorf("session_id is required")), nil
+	}
+
+	sess, err := h.sessionSvc.Get(args.SessionID)
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	result := session.Validate(sess)
+
+	// Auto-fix if requested
+	if args.Fix && result.SuggestedRewindTo > 0 {
+		parsedID, err := session.ParseID(args.SessionID)
+		if err != nil {
+			return toolError(err), nil
+		}
+
+		rewindResult, err := h.sessionSvc.Rewind(ctx, service.RewindRequest{
+			SessionID: parsedID,
+			AtMessage: result.SuggestedRewindTo,
+		})
+		if err != nil {
+			return toolError(fmt.Errorf("auto-fix rewind failed: %w", err)), nil
+		}
+
+		// Return both validation result and fix info
+		response := map[string]any{
+			"validation": result,
+			"fix_applied": map[string]any{
+				"new_session_id":   rewindResult.NewSession.ID,
+				"truncated_at":     rewindResult.TruncatedAt,
+				"messages_removed": rewindResult.MessagesRemoved,
+			},
+		}
+		return toolJSON(response)
+	}
+
+	return toolJSON(result)
+}
+
+// ── Errors ──
+
+func (h *handlers) handleErrors(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if h.errorSvc == nil {
+		return toolError(fmt.Errorf("error service not available")), nil
+	}
+
+	var args struct {
+		SessionID string `json:"session_id"`
+		Recent    bool   `json:"recent"`
+		Category  string `json:"category"`
+		Limit     int    `json:"limit"`
+	}
+	if err := req.BindArguments(&args); err != nil {
+		return toolError(err), nil
+	}
+
+	// Recent errors across all sessions.
+	if args.Recent {
+		limit := args.Limit
+		if limit <= 0 {
+			limit = 50
+		}
+		cat := session.ErrorCategory(args.Category)
+		errors, err := h.errorSvc.ListRecent(limit, cat)
+		if err != nil {
+			return toolError(err), nil
+		}
+		return toolJSON(errors)
+	}
+
+	// Session-specific errors.
+	if args.SessionID == "" {
+		return toolError(fmt.Errorf("provide session_id or set recent=true")), nil
+	}
+
+	sessionID := session.ID(args.SessionID)
+	errors, err := h.errorSvc.GetErrors(sessionID)
+	if err != nil {
+		return toolError(err), nil
+	}
+
+	// Filter by category if specified.
+	if args.Category != "" {
+		cat := session.ErrorCategory(args.Category)
+		var filtered []session.SessionError
+		for _, e := range errors {
+			if e.Category == cat {
+				filtered = append(filtered, e)
+			}
+		}
+		errors = filtered
+	}
+
+	summary, _ := h.errorSvc.GetSummary(sessionID)
+
+	result := struct {
+		SessionID string                       `json:"session_id"`
+		Errors    []session.SessionError       `json:"errors"`
+		Summary   *session.SessionErrorSummary `json:"summary,omitempty"`
+	}{
+		SessionID: args.SessionID,
+		Errors:    errors,
+		Summary:   summary,
+	}
+
+	return toolJSON(result)
+}
+
 // ── Helpers ──
 
 // toolError returns an MCP error result from any error.

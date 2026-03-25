@@ -345,10 +345,14 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			}
 		}
 
+		// Get error service (optional — best-effort, nil if unavailable).
+		errorSvc, _ := f.ErrorService()
+
 		apiSrv := api.New(api.Config{
 			SessionService:  sessionSvc,
 			SyncService:     syncSvc,
 			AnalysisService: analysisSvcAPI,
+			ErrorService:    errorSvc,
 			ReplayEngine:    replayEngine,
 			SkillResolver:   skillResolver,
 			AuthService:     authSvc,
@@ -486,6 +490,23 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		})
 		logger.Println("scheduled task: token_usage_compute (30 3 * * *)")
 
+		// Error reclassification task — reclassifies unknown errors via LLM.
+		if schedule := appCfg.GetErrorsLLMSchedule(); schedule != "" {
+			errorSvcSched, errSvcErr := f.ErrorService()
+			storeSched2, storeErr2 := f.Store()
+			if errSvcErr == nil && storeErr2 == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: schedule,
+					Task: scheduler.NewReclassifyTask(scheduler.ReclassifyConfig{
+						ErrorService: errorSvcSched,
+						Store:        storeSched2,
+						Logger:       logger,
+					}),
+				})
+				logger.Printf("scheduled task: reclassify_errors (%s)", schedule)
+			}
+		}
+
 		// Create and start scheduler if any entries are configured.
 		if len(entries) > 0 {
 			var schedErr error
@@ -510,6 +531,31 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			data, _ := json.Marshal(results)
 			w.Write(data)
 		})
+	}
+
+	// ── Manual reclassification trigger ──
+	{
+		errorSvcTrigger, errSvcErr := f.ErrorService()
+		storeTrigger, storeErr := f.Store()
+		if errSvcErr == nil && storeErr == nil {
+			mux.HandleFunc("POST /api/v1/errors/reclassify", func(w http.ResponseWriter, r *http.Request) {
+				task := scheduler.NewReclassifyTask(scheduler.ReclassifyConfig{
+					ErrorService: errorSvcTrigger,
+					Store:        storeTrigger,
+					Logger:       logger,
+				})
+				if err := task.Run(r.Context()); err != nil {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusInternalServerError)
+					data, _ := json.Marshal(map[string]string{"error": err.Error()})
+					w.Write(data)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				data, _ := json.Marshal(map[string]string{"status": "ok", "message": "reclassification complete"})
+				w.Write(data)
+			})
+		}
 	}
 
 	// Serve in background.

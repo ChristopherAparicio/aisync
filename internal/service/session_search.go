@@ -18,6 +18,8 @@ type SearchRequest struct {
 	OwnerID         session.ID
 	SessionType     string // filter by session type (feature, bug, etc.)
 	ProjectCategory string // filter by project category (backend, frontend, etc.)
+	Status          string // filter by lifecycle status: "active", "idle", "archived"
+	HasErrors       string // "true" = has errors, "false" = no errors, "" = no filter
 	Since           string // RFC3339 or "2006-01-02" format
 	Until           string // RFC3339 or "2006-01-02" format
 	Limit           int
@@ -40,8 +42,18 @@ func (s *SessionService) Search(req SearchRequest) (*session.SearchResult, error
 		OwnerID:         req.OwnerID,
 		SessionType:     req.SessionType,
 		ProjectCategory: req.ProjectCategory,
+		Status:          session.SessionStatus(req.Status),
 		Limit:           req.Limit,
 		Offset:          req.Offset,
+	}
+
+	// Parse HasErrors filter: "true" → &true, "false" → &false, "" → nil.
+	if req.HasErrors == "true" {
+		v := true
+		query.HasErrors = &v
+	} else if req.HasErrors == "false" {
+		v := false
+		query.HasErrors = &v
 	}
 
 	if req.Since != "" {

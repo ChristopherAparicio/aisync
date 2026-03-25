@@ -17,8 +17,9 @@ import (
 // Config holds the configuration for creating an MCP server.
 type Config struct {
 	SessionService service.SessionServicer
-	SyncService    *service.SyncService // optional — nil when git sync is unavailable
-	Version        string               // aisync version string
+	SyncService    *service.SyncService  // optional — nil when git sync is unavailable
+	ErrorService   service.ErrorServicer // optional — nil when error service is unavailable
+	Version        string                // aisync version string
 }
 
 // NewServer creates a new MCP server with all aisync tools registered.
@@ -37,10 +38,12 @@ func NewServer(cfg Config) *server.MCPServer {
 	h := &handlers{
 		sessionSvc: cfg.SessionService,
 		syncSvc:    cfg.SyncService,
+		errorSvc:   cfg.ErrorService,
 	}
 
 	registerSessionTools(s, h)
 	registerSyncTools(s, h)
+	registerErrorTools(s, h)
 
 	return s
 }
@@ -49,6 +52,7 @@ func NewServer(cfg Config) *server.MCPServer {
 type handlers struct {
 	sessionSvc service.SessionServicer
 	syncSvc    *service.SyncService
+	errorSvc   service.ErrorServicer
 }
 
 // registerSessionTools registers all session-related MCP tools.
@@ -233,6 +237,13 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithNumber("days", mcp.Description("Look-back window in days (default: 90)")),
 	), h.handleForecast)
 
+	// ── Validate ──
+	s.AddTool(mcp.NewTool("aisync_validate",
+		mcp.WithDescription("Validate a session's message structure for integrity issues. Detects orphan tool_use blocks (tool called but no tool_result returned), consecutive same-role messages, pending tool calls, and other structural problems that break the Anthropic Messages API. Returns issues with severity, affected message index, and suggested rewind point."),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to validate")),
+		mcp.WithBoolean("fix", mcp.Description("If true, auto-fix by rewinding to before the first error")),
+	), h.handleValidate)
+
 	// ── Ingest ──
 	s.AddTool(mcp.NewTool("aisync_ingest",
 		mcp.WithDescription("Push a session into aisync from an external client (e.g. voice assistant, custom agent, Ollama). This is the simplest path — no provider detection or file-system reads. Requires at least a provider name and one message."),
@@ -246,6 +257,17 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 		mcp.WithString("remote_url", mcp.Description("Git remote URL (e.g. 'github.com/org/repo'). Auto-detected from git if omitted.")),
 		mcp.WithString("delegated_from_session_id", mcp.Description("If set, creates a delegated_from link to this parent session")),
 	), h.handleIngest)
+}
+
+// registerErrorTools registers error-related MCP tools.
+func registerErrorTools(s *server.MCPServer, h *handlers) {
+	s.AddTool(mcp.NewTool("aisync_errors",
+		mcp.WithDescription("Get classified errors for a session or recent errors across all sessions. Errors are categorized as: provider_error, rate_limit, context_overflow, auth_error, validation, tool_error, network_error, aborted, unknown."),
+		mcp.WithString("session_id", mcp.Description("Session ID to get errors for")),
+		mcp.WithBoolean("recent", mcp.Description("If true, show recent errors across all sessions")),
+		mcp.WithString("category", mcp.Description("Filter by error category (e.g. tool_error, provider_error, rate_limit)")),
+		mcp.WithNumber("limit", mcp.Description("Max errors to return (default: 50)")),
+	), h.handleErrors)
 }
 
 // registerSyncTools registers all sync-related MCP tools.

@@ -864,7 +864,7 @@ func (s *Store) Search(query session.SearchQuery) (*session.SearchResult, error)
 	}
 
 	// Fetch paginated results
-	selectCols := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, created_at, COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, '')"
+	selectCols := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, created_at, COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '')"
 	dataQuery := selectCols + " FROM sessions" + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	dataArgs := make([]interface{}, len(args), len(args)+2)
 	copy(dataArgs, args)
@@ -879,11 +879,12 @@ func (s *Store) Search(query session.SearchQuery) (*session.SearchResult, error)
 	var summaries []session.Summary
 	for rows.Next() {
 		var ss session.Summary
-		var createdAt string
-		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &createdAt, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType); err != nil {
+		var createdAt, status string
+		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &createdAt, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType, &ss.ProjectCategory, &status); err != nil {
 			return nil, fmt.Errorf("scanning search result: %w", err)
 		}
 		ss.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
+		ss.Status = session.SessionStatus(status)
 		summaries = append(summaries, ss)
 	}
 	if err := rows.Err(); err != nil {
@@ -944,6 +945,17 @@ func buildSearchWhere(q session.SearchQuery) (string, []interface{}) {
 	if !q.Until.IsZero() {
 		conditions = append(conditions, "created_at <= ?")
 		args = append(args, q.Until.Format("2006-01-02T15:04:05Z"))
+	}
+	if q.Status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, string(q.Status))
+	}
+	if q.HasErrors != nil {
+		if *q.HasErrors {
+			conditions = append(conditions, "error_count > 0")
+		} else {
+			conditions = append(conditions, "(error_count = 0 OR error_count IS NULL)")
+		}
 	}
 	if q.Keyword != "" {
 		// Case-insensitive LIKE on summary (the indexed column).
@@ -1909,6 +1921,99 @@ func runMigrations(db *sql.DB) error {
 		if _, err := db.Exec("ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT ''"); err != nil {
 			return fmt.Errorf("migration 016 (status): %w", err)
 		}
+	}
+
+	// Migration 017: session_errors table for structured error tracking.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_errors (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		category TEXT NOT NULL DEFAULT 'unknown',
+		source TEXT NOT NULL DEFAULT 'client',
+		message TEXT NOT NULL DEFAULT '',
+		raw_error TEXT NOT NULL DEFAULT '',
+		tool_name TEXT NOT NULL DEFAULT '',
+		tool_call_id TEXT NOT NULL DEFAULT '',
+		message_id TEXT NOT NULL DEFAULT '',
+		message_index INTEGER NOT NULL DEFAULT 0,
+		http_status INTEGER NOT NULL DEFAULT 0,
+		provider_name TEXT NOT NULL DEFAULT '',
+		request_id TEXT NOT NULL DEFAULT '',
+		headers TEXT NOT NULL DEFAULT '{}',
+		occurred_at TEXT NOT NULL DEFAULT '',
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		is_retryable INTEGER NOT NULL DEFAULT 0,
+		confidence TEXT NOT NULL DEFAULT 'low',
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	)`); err != nil {
+		return fmt.Errorf("migration 017 (session_errors table): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_errors_session ON session_errors(session_id)"); err != nil {
+		return fmt.Errorf("migration 017 (session_errors index session): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_errors_occurred ON session_errors(occurred_at)"); err != nil {
+		return fmt.Errorf("migration 017 (session_errors index occurred): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_errors_category ON session_errors(category)"); err != nil {
+		return fmt.Errorf("migration 017 (session_errors index category): %w", err)
+	}
+
+	// Migration 018: session_events table for structured event tracking
+	// and event_buckets table for pre-computed hourly/daily aggregations.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_events (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		message_index INTEGER NOT NULL DEFAULT 0,
+		message_id TEXT NOT NULL DEFAULT '',
+		occurred_at TEXT NOT NULL DEFAULT '',
+		project_path TEXT NOT NULL DEFAULT '',
+		remote_url TEXT NOT NULL DEFAULT '',
+		provider TEXT NOT NULL DEFAULT '',
+		agent TEXT NOT NULL DEFAULT '',
+		payload BLOB,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	)`); err != nil {
+		return fmt.Errorf("migration 018 (session_events table): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id)"); err != nil {
+		return fmt.Errorf("migration 018 (session_events index session): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type)"); err != nil {
+		return fmt.Errorf("migration 018 (session_events index type): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_events_occurred ON session_events(occurred_at)"); err != nil {
+		return fmt.Errorf("migration 018 (session_events index occurred): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_events_project ON session_events(project_path)"); err != nil {
+		return fmt.Errorf("migration 018 (session_events index project): %w", err)
+	}
+
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS event_buckets (
+		bucket_start TEXT NOT NULL,
+		granularity TEXT NOT NULL DEFAULT '1h',
+		project_path TEXT NOT NULL DEFAULT '',
+		remote_url TEXT NOT NULL DEFAULT '',
+		provider TEXT NOT NULL DEFAULT '',
+		tool_call_count INTEGER NOT NULL DEFAULT 0,
+		tool_error_count INTEGER NOT NULL DEFAULT 0,
+		unique_tools INTEGER NOT NULL DEFAULT 0,
+		top_tools TEXT NOT NULL DEFAULT '{}',
+		skill_load_count INTEGER NOT NULL DEFAULT 0,
+		unique_skills INTEGER NOT NULL DEFAULT 0,
+		top_skills TEXT NOT NULL DEFAULT '{}',
+		session_count INTEGER NOT NULL DEFAULT 0,
+		agent_breakdown TEXT NOT NULL DEFAULT '{}',
+		command_count INTEGER NOT NULL DEFAULT 0,
+		command_error_count INTEGER NOT NULL DEFAULT 0,
+		top_commands TEXT NOT NULL DEFAULT '{}',
+		error_count INTEGER NOT NULL DEFAULT 0,
+		error_by_category TEXT NOT NULL DEFAULT '{}',
+		image_count INTEGER NOT NULL DEFAULT 0,
+		image_tokens INTEGER NOT NULL DEFAULT 0,
+		computed_at TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (bucket_start, granularity, project_path, provider)
+	)`); err != nil {
+		return fmt.Errorf("migration 018 (event_buckets table): %w", err)
 	}
 
 	return nil
