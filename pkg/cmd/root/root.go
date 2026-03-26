@@ -34,6 +34,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/searchcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/secrets"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/setupcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/show"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/skillscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/statscmd"
@@ -102,6 +103,7 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(pricescmd.NewCmdUpdatePrices(f))
 	cmd.AddCommand(backfillcmd.NewCmdBackfill(f))
 	cmd.AddCommand(usagecmd.NewCmdUsage(f))
+	cmd.AddCommand(setupcmd.NewCmdSetup(f))
 
 	return cmd
 }
