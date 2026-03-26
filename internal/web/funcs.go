@@ -101,10 +101,19 @@ func timeAgo(t time.Time) string {
 
 func truncate(v any, maxLen int) string {
 	s := fmt.Sprint(v)
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	// Try to break at a word boundary (space) within the last 20% of maxLen.
+	cutoff := maxLen - 1
+	minBreak := cutoff - cutoff/5 // don't look back further than 20%
+	for i := cutoff; i >= minBreak; i-- {
+		if runes[i] == ' ' {
+			return string(runes[:i]) + "…"
+		}
+	}
+	return string(runes[:cutoff]) + "…"
 }
 
 func formatDuration(ms int) string {

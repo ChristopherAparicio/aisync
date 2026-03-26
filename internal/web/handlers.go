@@ -785,21 +785,23 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 				}
 			case "branch":
 				if sess.Branch != "" {
-					cell.Value = truncate(sess.Branch, 20)
+					cell.Value = truncate(sess.Branch, 30)
+					cell.Class = "cell-branch"
 				} else {
 					cell.Value = "—"
 					cell.Class = "text-muted"
 				}
 			case "summary":
 				if sess.Summary != "" {
-					cell.Value = truncate(sess.Summary, 60)
+					cell.Value = truncate(sess.Summary, 90)
 					cell.IsLink = true
 					cell.LinkID = string(sess.ID)
+					cell.Class = "cell-summary"
 				} else {
 					cell.Value = truncate(string(sess.ID), 16)
 					cell.IsLink = true
 					cell.LinkID = string(sess.ID)
-					cell.Class = "text-muted font-mono"
+					cell.Class = "text-muted font-mono cell-summary"
 				}
 			case "messages":
 				cell.Value = strconv.Itoa(sess.MessageCount)

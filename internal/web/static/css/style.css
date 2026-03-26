@@ -902,6 +902,30 @@ tr:hover td { background: var(--bg-hover); }
 .text-error { color: #ef4444; font-weight: 600; }
 .font-mono { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8125rem; }
 
+/* Summary column: flexible width, graceful CSS truncation on narrow screens */
+.cell-summary {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-summary a {
+  color: inherit;
+  text-decoration: none;
+}
+.cell-summary a:hover {
+  color: var(--accent-light);
+  text-decoration: underline;
+}
+
+/* Branch column: controlled truncation */
+.cell-branch {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Badges ── */
 
 .badge {
