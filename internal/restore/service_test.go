@@ -555,3 +555,52 @@ func TestRestore_asContextTooLarge(t *testing.T) {
 		t.Error("CONTEXT.md should not have been created for oversized session")
 	}
 }
+
+func TestRestore_asContextRefusesOverwrite(t *testing.T) {
+	sess := &session.Session{
+		ID:          "ses-overwrite",
+		Provider:    session.ProviderClaudeCode,
+		Agent:       "claude",
+		Branch:      "feat/overwrite",
+		ProjectPath: "/test/project",
+		Summary:     "Overwrite test",
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "Hello"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "Hi!"},
+		},
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/overwrite"] = sess
+	reg := provider.NewRegistry()
+	svc := NewService(reg, store)
+
+	// Pre-create a CONTEXT.md to simulate an existing file.
+	contextPath := filepath.Join(projectDir, "CONTEXT.md")
+	if err := os.WriteFile(contextPath, []byte("# Existing context\n"), 0o644); err != nil {
+		t.Fatalf("failed to create existing CONTEXT.md: %v", err)
+	}
+
+	_, err := svc.Restore(Request{
+		ProjectPath: projectDir,
+		Branch:      "feat/overwrite",
+		AsContext:   true,
+	})
+	if err == nil {
+		t.Fatal("expected error when CONTEXT.md already exists")
+	}
+
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error should mention file already exists, got: %v", err)
+	}
+
+	// Original file should be untouched.
+	data, readErr := os.ReadFile(contextPath)
+	if readErr != nil {
+		t.Fatalf("failed to read CONTEXT.md: %v", readErr)
+	}
+	if string(data) != "# Existing context\n" {
+		t.Error("existing CONTEXT.md was overwritten — should have been preserved")
+	}
+}

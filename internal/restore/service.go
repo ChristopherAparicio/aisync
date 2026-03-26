@@ -187,12 +187,23 @@ func (s *Service) findSession(req Request) (*session.Session, error) {
 }
 
 // generateContextFile creates a CONTEXT.md file using the shared converter.
+// If a CONTEXT.md already exists at the target path, it refuses to overwrite
+// and returns an error suggesting the user remove or rename it first.
 func generateContextFile(sess *session.Session, projectPath string) (string, error) {
 	content, err := convpkg.ToContextMD(sess)
 	if err != nil {
 		return "", err
 	}
 	contextPath := filepath.Join(projectPath, "CONTEXT.md")
+
+	// Refuse to overwrite an existing CONTEXT.md.
+	if _, statErr := os.Stat(contextPath); statErr == nil {
+		return "", fmt.Errorf(
+			"CONTEXT.md already exists at %s\nRename or remove it before running --as-context:\n  mv %s %s.bak",
+			contextPath, contextPath, contextPath,
+		)
+	}
+
 	if err := os.WriteFile(contextPath, content, 0o644); err != nil {
 		return "", err
 	}
