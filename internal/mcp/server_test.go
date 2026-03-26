@@ -690,6 +690,7 @@ func TestNewServerRegistersAllTools(t *testing.T) {
 		"aisync_off_topic", "aisync_forecast", "aisync_validate", "aisync_ingest",
 		"aisync_push", "aisync_pull", "aisync_sync", "aisync_index",
 		"aisync_errors",
+		"aisync_session_events", "aisync_session_event_summary", "aisync_event_buckets",
 	}
 
 	for _, name := range expectedTools {

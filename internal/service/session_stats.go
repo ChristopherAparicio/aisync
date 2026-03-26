@@ -500,6 +500,7 @@ func (s *SessionService) ListProjects(_ context.Context) ([]session.ProjectGroup
 type TrendRequest struct {
 	SessionType string               // filter by session type (optional)
 	Provider    session.ProviderName // filter by provider (optional)
+	ProjectPath string               // filter by project path (optional)
 	Period      time.Duration        // comparison period (e.g. 7*24h for weekly)
 }
 
@@ -585,7 +586,8 @@ func (s *SessionService) Trends(_ context.Context, req TrendRequest) (*TrendResu
 // periodStats computes aggregated stats for sessions in [from, to).
 func (s *SessionService) periodStats(req TrendRequest, from, to time.Time) (*TrendPeriodStats, error) {
 	summaries, err := s.store.List(session.ListOptions{
-		All:         true,
+		All:         req.ProjectPath == "",
+		ProjectPath: req.ProjectPath,
 		SessionType: req.SessionType,
 		Provider:    req.Provider,
 		Since:       from,

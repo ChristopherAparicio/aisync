@@ -2442,6 +2442,41 @@ func TestNormalizeRemoteURL(t *testing.T) {
 	}
 }
 
+// ── Worktree Key Extraction Tests ──
+
+func TestExtractWorktreeKey(t *testing.T) {
+	cases := []struct {
+		path string
+		want string
+	}{
+		// OpenCode standard worktree path
+		{
+			"/Users/guardix/.local/share/opencode/worktree/782215ae1f39a7912fe8dcf75a5df3305f9474e4/eager-pixel",
+			"hash:782215ae1f39a7912fe8dcf75a5df3305f9474e4",
+		},
+		{
+			"/Users/guardix/.local/share/opencode/worktree/3aeb68bef628d5173fab70461f6092031a833e4e/feat/agent-job-name",
+			"hash:3aeb68bef628d5173fab70461f6092031a833e4e",
+		},
+		// .opencode-worktrees pattern
+		{
+			"/Users/guardix/.opencode-worktrees/backend/test/sentry-q8",
+			"wt:backend",
+		},
+		// Non-worktree paths
+		{"/Users/guardix/dev/aisync", ""},
+		{"/Users/guardix/dev/cycloplan", ""},
+		{"/tmp/test-session-transfer-wt", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := extractWorktreeKey(tc.path)
+		if got != tc.want {
+			t.Errorf("extractWorktreeKey(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
 // ── Voice Search Tests ──
 
 func TestSearch_VoiceDefaultsLimitTo5(t *testing.T) {

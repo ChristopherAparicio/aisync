@@ -20,7 +20,7 @@
     <div class="sidebar-title">Projects</div>
     <ul class="sidebar-list">
       {{range .SidebarProjects}}
-      <a href="/analytics?project={{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+      <a href="/projects{{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
         <span class="sidebar-dot"></span>
         <span class="sidebar-item-name">{{.Name}}</span>
         <span class="sidebar-item-count">{{.SessionCount}}</span>

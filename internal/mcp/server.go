@@ -12,14 +12,16 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
 
 // Config holds the configuration for creating an MCP server.
 type Config struct {
-	SessionService service.SessionServicer
-	SyncService    *service.SyncService  // optional — nil when git sync is unavailable
-	ErrorService   service.ErrorServicer // optional — nil when error service is unavailable
-	Version        string                // aisync version string
+	SessionService      service.SessionServicer
+	SyncService         *service.SyncService  // optional — nil when git sync is unavailable
+	ErrorService        service.ErrorServicer // optional — nil when error service is unavailable
+	SessionEventService *sessionevent.Service // optional — nil when event analytics is unavailable
+	Version             string                // aisync version string
 }
 
 // NewServer creates a new MCP server with all aisync tools registered.
@@ -36,23 +38,26 @@ func NewServer(cfg Config) *server.MCPServer {
 	)
 
 	h := &handlers{
-		sessionSvc: cfg.SessionService,
-		syncSvc:    cfg.SyncService,
-		errorSvc:   cfg.ErrorService,
+		sessionSvc:      cfg.SessionService,
+		syncSvc:         cfg.SyncService,
+		errorSvc:        cfg.ErrorService,
+		sessionEventSvc: cfg.SessionEventService,
 	}
 
 	registerSessionTools(s, h)
 	registerSyncTools(s, h)
 	registerErrorTools(s, h)
+	registerEventTools(s, h)
 
 	return s
 }
 
 // handlers holds service references for tool handler closures.
 type handlers struct {
-	sessionSvc service.SessionServicer
-	syncSvc    *service.SyncService
-	errorSvc   service.ErrorServicer
+	sessionSvc      service.SessionServicer
+	syncSvc         *service.SyncService
+	errorSvc        service.ErrorServicer
+	sessionEventSvc *sessionevent.Service
 }
 
 // registerSessionTools registers all session-related MCP tools.

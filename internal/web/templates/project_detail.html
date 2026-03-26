@@ -1,15 +1,15 @@
-{{define "dashboard.html"}}
+{{define "project_detail.html"}}
 {{template "layout" .}}
 {{end}}
 
-{{define "title"}}aisync — Home{{end}}
+{{define "title"}}{{.DisplayName}} — aisync{{end}}
 
 {{define "sidebar"}}
 <aside class="sidebar">
   <div class="sidebar-section">
     <div class="sidebar-title">Navigation</div>
     <ul class="sidebar-nav">
-      <li><a href="/" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
       <li><a href="/sessions" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4AC;</span> Sessions</a></li>
       <li><a href="/branches" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F33F;</span> Branches</a></li>
       <li><a href="/analytics" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4CA;</span> Analytics</a></li>
@@ -34,13 +34,30 @@
 {{end}}
 
 {{define "content"}}
+<!-- Project header -->
+<div class="project-detail-header">
+  <div class="project-detail-title">
+    <h1 class="page-title">{{.DisplayName}}</h1>
+    <div class="project-detail-meta">
+      {{if .Provider}}<span class="badge badge-provider">{{.Provider}}</span>{{end}}
+      {{if .Category}}<span class="badge badge-category">{{.Category}}</span>{{end}}
+      {{if .RemoteURL}}<span class="project-detail-remote font-mono text-muted">{{.RemoteURL}}</span>{{end}}
+    </div>
+  </div>
+  <div class="project-detail-actions">
+    <a href="/sessions?project={{.ProjectPath}}" class="action-btn">All sessions</a>
+    <a href="/analytics?project={{.ProjectPath}}" class="action-btn">Analytics</a>
+    <a href="/costs?project={{.ProjectPath}}" class="action-btn">Costs</a>
+  </div>
+</div>
+
 {{if eq .TotalSessions 0}}
   <div class="empty-state">
-    <p>No sessions captured yet.</p>
-    <p class="hint">Run <code>aisync capture</code> to get started.</p>
+    <p>No sessions found for this project.</p>
+    <p class="hint">Run <code>aisync capture</code> in this project to get started.</p>
   </div>
 {{else}}
-  <!-- Compact KPI strip -->
+  <!-- KPI strip -->
   <div class="kpi-strip">
     <div class="kpi-strip-item">
       <span class="kpi-strip-value">{{.TotalSessions}}</span>
@@ -57,7 +74,7 @@
     {{if gt .TotalErrors 0}}
     <div class="kpi-strip-item">
       <span class="kpi-strip-value kpi-strip-value--error">{{.TotalErrors}}</span>
-      <span class="kpi-strip-label">errors</span>
+      <span class="kpi-strip-label">errors ({{.SessionsWithErrors}} sessions)</span>
     </div>
     {{end}}
     {{if gt .TotalToolCalls 0}}
@@ -107,20 +124,17 @@
   </div>
   {{end}}
 
-  <!-- Main content: two-column GitHub-style -->
+  <!-- Main content: two-column -->
   <div class="home-grid">
-    <!-- Left column: Recent Sessions Feed -->
+    <!-- Left column: Recent Sessions -->
     <div class="home-feed">
-      <h2 class="section-title">
-        Recent Sessions
-        {{if .SelectedProject}}<span class="badge badge-provider">{{projectBaseName .SelectedProject}}</span>{{end}}
-      </h2>
+      <h2 class="section-title">Recent Sessions</h2>
       <div class="activity-feed">
         {{range .RecentSessions}}
         <div class="activity-card">
           <div class="activity-card-header">
             <div class="activity-card-project-badge">
-              {{if .ProjectPath}}<a href="/projects{{.ProjectPath}}" class="activity-project-link">{{projectBaseName .ProjectPath}}</a>{{end}}
+              {{if .Branch}}<span class="badge badge-branch">{{truncate .Branch 30}}</span>{{end}}
             </div>
             <span class="activity-card-when">{{if not .UpdatedAt.IsZero}}{{timeAgo .UpdatedAt}}{{else}}{{timeAgo .CreatedAt}}{{end}}</span>
           </div>
@@ -130,7 +144,6 @@
               <span class="badge badge-provider">{{.Provider}}</span>
               {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
               {{if .Status}}<span class="badge badge-status-{{.Status}}">{{.Status}}</span>{{end}}
-              {{if .Branch}}<span class="badge badge-branch">{{truncate .Branch 24}}</span>{{end}}
             </div>
             <div class="activity-card-stats">
               <span><strong>{{.MessageCount}}</strong> msgs</span>
@@ -159,18 +172,17 @@
       </div>
       {{if gt .TotalSessions 15}}
       <div class="home-feed-more">
-        <a href="/sessions" class="action-btn action-btn--wide">View all {{.TotalSessions}} sessions &rarr;</a>
+        <a href="/sessions?project={{.ProjectPath}}" class="action-btn action-btn--wide">View all {{.TotalSessions}} sessions &rarr;</a>
       </div>
       {{end}}
     </div>
 
-    <!-- Right column: Quick Info Panels -->
+    <!-- Right column: Panels -->
     <div class="home-aside">
       {{if .HasCapabilities}}
       <div class="home-panel">
         <div class="home-panel-header">
-          <span class="home-panel-title">{{.ProjectName}}</span>
-          <span class="text-muted">capabilities</span>
+          <span class="home-panel-title">Capabilities</span>
         </div>
         <div class="capability-compact">
           {{range .CapabilityStats}}
@@ -192,8 +204,8 @@
       {{if .TopBranches}}
       <div class="home-panel">
         <div class="home-panel-header">
-          <span class="home-panel-title">Top Branches</span>
-          <a href="/branches" class="home-panel-link">All &rarr;</a>
+          <span class="home-panel-title">Branches</span>
+          <a href="/branches?project={{.ProjectPath}}" class="home-panel-link">All &rarr;</a>
         </div>
         <div class="home-branch-list">
           {{range .TopBranches}}
@@ -201,6 +213,33 @@
             <span class="home-branch-name">{{if .Branch}}{{truncate .Branch 22}}{{else}}<span class="text-muted">unknown</span>{{end}}</span>
             <span class="home-branch-stat">{{.SessionCount}} sess</span>
             <span class="home-branch-stat font-mono">{{formatTokens .TotalTokens}}</span>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+
+      {{if .HasAnalytics}}
+      <div class="home-panel">
+        <div class="home-panel-header">
+          <span class="home-panel-title">Activity (30d)</span>
+          <a href="/analytics?project={{.ProjectPath}}" class="home-panel-link">Details &rarr;</a>
+        </div>
+        <div class="project-analytics-summary">
+          <div class="project-analytics-row">
+            <span class="text-muted">Tool calls</span>
+            <span class="font-mono">{{formatTokens .AnalyticsTools}}</span>
+          </div>
+          <div class="project-analytics-row">
+            <span class="text-muted">Skill loads</span>
+            <span class="font-mono">{{.AnalyticsSkills}}</span>
+          </div>
+          {{if .TopTools}}
+          <div class="project-analytics-tools">
+            <span class="text-muted project-analytics-tools-label">Top tools:</span>
+            {{range .TopTools}}
+            <span class="badge badge-type" title="{{.Count}} calls">{{.Name}}</span>
+            {{end}}
           </div>
           {{end}}
         </div>

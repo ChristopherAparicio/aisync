@@ -21,7 +21,7 @@
     <div class="sidebar-title">Your Projects</div>
     <ul class="sidebar-list">
       {{range .SidebarProjects}}
-      <a href="/sessions?project={{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+      <a href="/projects{{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
         <span class="sidebar-dot"></span>
         <span class="sidebar-item-name">{{.Name}}</span>
         <span class="sidebar-item-count">{{.SessionCount}}</span>
@@ -47,7 +47,7 @@
   <div class="project-card">
     <div class="project-card-header">
       <h2 class="project-card-name">
-        <a href="/sessions?project={{.ProjectPath}}">{{.DisplayName}}</a>
+        <a href="/projects{{.ProjectPath}}">{{.DisplayName}}</a>
       </h2>
       {{if .Provider}}
       <span class="badge badge-provider">{{.Provider}}</span>
@@ -70,8 +70,8 @@
       </div>
     </div>
     <div class="project-card-actions">
-      <a href="/sessions?project={{.ProjectPath}}" class="project-link">View sessions &rarr;</a>
-      <a href="/?project={{.ProjectPath}}" class="project-link">Dashboard &rarr;</a>
+      <a href="/projects{{.ProjectPath}}" class="project-link">View project &rarr;</a>
+      <a href="/sessions?project={{.ProjectPath}}" class="project-link">Sessions &rarr;</a>
     </div>
   </div>
   {{end}}

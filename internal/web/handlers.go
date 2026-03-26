@@ -16,6 +16,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
 
 // Cache TTLs for dashboard statistics.
@@ -808,7 +809,11 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 					cell.Class = "text-right text-error"
 				}
 			case "when":
-				cell.Value = timeAgo(sess.CreatedAt)
+				when := sess.CreatedAt
+				if !sess.UpdatedAt.IsZero() && sess.UpdatedAt.After(when) {
+					when = sess.UpdatedAt
+				}
+				cell.Value = timeAgo(when)
 				cell.Class = "text-muted"
 			}
 			row.Cells = append(row.Cells, cell)
@@ -1926,4 +1931,280 @@ func scoreClass(score int) string {
 	default:
 		return "poor"
 	}
+}
+
+// ── Project Detail ──
+
+type projectDetailPage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+
+	// Project identity
+	ProjectPath string
+	DisplayName string
+	RemoteURL   string
+	Provider    string
+	Category    string
+
+	// KPIs
+	TotalSessions      int
+	TotalTokens        int
+	TotalCost          float64
+	TotalErrors        int
+	SessionsWithErrors int
+	TotalToolCalls     int
+
+	// Branches for this project
+	TopBranches []branchStat
+
+	// Recent sessions
+	RecentSessions []session.Summary
+
+	// Weekly trends
+	HasTrends     bool
+	TrendVerdict  string
+	TrendSessions trendMetric
+	TrendTokens   trendMetric
+	TrendErrors   trendMetric
+
+	// Forecast
+	HasForecast  bool
+	Projected30d float64
+	Projected90d float64
+	TrendPerDay  float64
+	TrendDir     string
+
+	// Analytics (from event buckets)
+	HasAnalytics    bool
+	AnalyticsTools  int
+	AnalyticsSkills int
+	TopTools        []nameCount
+	DailyBuckets    []dailyActivity
+
+	// Capabilities
+	HasCapabilities bool
+	ProjectName     string
+	CapabilityStats []capabilityStat
+	MCPServerCount  int
+}
+
+func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
+	projectPath := "/" + r.PathValue("path")
+	if projectPath == "/" {
+		http.Redirect(w, r, "/projects", http.StatusFound)
+		return
+	}
+
+	data := s.buildProjectDetailData(r, projectPath)
+	s.render(w, "project_detail.html", data)
+}
+
+func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) projectDetailPage {
+	ctx := r.Context()
+	data := projectDetailPage{
+		Nav:             "projects",
+		ProjectPath:     projectPath,
+		DisplayName:     filepath.Base(projectPath),
+		SidebarProjects: s.buildSidebarProjects(ctx, projectPath),
+	}
+
+	// Find project metadata from ListProjects.
+	groups, _ := s.sessionSvc.ListProjects(ctx)
+	for _, g := range groups {
+		if g.ProjectPath == projectPath {
+			data.DisplayName = g.DisplayName
+			data.RemoteURL = g.RemoteURL
+			data.Provider = string(g.Provider)
+			data.Category = g.Category
+			break
+		}
+	}
+
+	// KPIs (filtered by project).
+	statsReq := service.StatsRequest{ProjectPath: projectPath}
+	stats, err := s.cachedStats(statsReq)
+	if err != nil {
+		s.logger.Printf("project detail stats error: %v", err)
+		return data
+	}
+
+	data.TotalSessions = stats.TotalSessions
+	data.TotalTokens = stats.TotalTokens
+	data.TotalCost = stats.TotalCost
+
+	// Top branches for this project.
+	limit := 10
+	if len(stats.PerBranch) < limit {
+		limit = len(stats.PerBranch)
+	}
+	for i := range limit {
+		bs := stats.PerBranch[i]
+		data.TopBranches = append(data.TopBranches, branchStat{
+			Branch:       bs.Branch,
+			SessionCount: bs.SessionCount,
+			TotalTokens:  bs.TotalTokens,
+			TotalCost:    bs.TotalCost,
+			ActualCost:   bs.ActualCost,
+		})
+	}
+
+	// Recent sessions for this project.
+	listReq := service.ListRequest{ProjectPath: projectPath}
+	summaries, listErr := s.sessionSvc.List(listReq)
+	if listErr == nil {
+		for _, sm := range summaries {
+			data.TotalErrors += sm.ErrorCount
+			data.TotalToolCalls += sm.ToolCallCount
+			if sm.ErrorCount > 0 {
+				data.SessionsWithErrors++
+			}
+		}
+
+		sort.Slice(summaries, func(i, j int) bool {
+			ti := summaries[i].UpdatedAt
+			if ti.IsZero() {
+				ti = summaries[i].CreatedAt
+			}
+			tj := summaries[j].UpdatedAt
+			if tj.IsZero() {
+				tj = summaries[j].CreatedAt
+			}
+			return ti.After(tj)
+		})
+
+		recentLimit := 15
+		if len(summaries) < recentLimit {
+			recentLimit = len(summaries)
+		}
+		data.RecentSessions = summaries[:recentLimit]
+	}
+
+	// Weekly trends (project-scoped).
+	trends, trendsErr := s.sessionSvc.Trends(ctx, service.TrendRequest{
+		Period:      7 * 24 * time.Hour,
+		ProjectPath: projectPath,
+	})
+	if trendsErr == nil && (trends.Current.SessionCount > 0 || trends.Previous.SessionCount > 0) {
+		data.HasTrends = true
+		data.TrendVerdict = trends.Delta.Verdict
+		data.TrendSessions = buildTrendMetric(
+			trends.Current.SessionCount, trends.Previous.SessionCount,
+			trends.Delta.SessionCountChange, 0, false,
+		)
+		data.TrendTokens = buildTrendMetric(
+			trends.Current.TotalTokens, trends.Previous.TotalTokens,
+			trends.Delta.TokensChange, trends.Delta.TokensChangePercent, false,
+		)
+		data.TrendErrors = buildTrendMetric(
+			trends.Current.TotalErrors, trends.Previous.TotalErrors,
+			trends.Delta.ErrorsChange, trends.Delta.ErrorsChangePercent, true,
+		)
+	}
+
+	// Forecast.
+	forecast, fErr := s.cachedForecast(ctx, service.ForecastRequest{
+		Period:      "weekly",
+		Days:        90,
+		ProjectPath: projectPath,
+	})
+	if fErr == nil && forecast.SessionCount > 0 {
+		data.HasForecast = true
+		data.Projected30d = forecast.Projected30d
+		data.Projected90d = forecast.Projected90d
+		data.TrendPerDay = forecast.TrendPerDay
+		data.TrendDir = forecast.TrendDir
+	}
+	if data.TrendDir == "" {
+		data.TrendDir = "stable"
+	}
+
+	// Analytics (event buckets).
+	if s.sessionEventSvc != nil {
+		now := time.Now().UTC()
+		since := now.AddDate(0, 0, -30)
+		buckets, bErr := s.sessionEventSvc.QueryBuckets(sessionevent.BucketQuery{
+			ProjectPath: projectPath,
+			Granularity: "1d",
+			Since:       since,
+			Until:       now,
+		})
+		if bErr == nil && len(buckets) > 0 {
+			data.HasAnalytics = true
+			allTools := make(map[string]int)
+			for _, b := range buckets {
+				data.AnalyticsTools += b.ToolCallCount
+				data.AnalyticsSkills += b.SkillLoadCount
+				for k, v := range b.TopTools {
+					allTools[k] += v
+				}
+				data.DailyBuckets = append(data.DailyBuckets, dailyActivity{
+					Date:      b.BucketStart.Format("Jan 2"),
+					ToolCalls: b.ToolCallCount,
+					Errors:    b.ErrorCount,
+					Sessions:  b.SessionCount,
+				})
+			}
+			data.TopTools = topN(allTools, data.AnalyticsTools, 8)
+		}
+	}
+
+	// Capabilities.
+	if s.registrySvc != nil {
+		proj, scanErr := s.registrySvc.ScanProject(projectPath)
+		if scanErr == nil {
+			data.HasCapabilities = true
+			data.ProjectName = proj.Name
+			data.MCPServerCount = len(proj.MCPServers)
+			for _, cs := range proj.CapabilityStats() {
+				data.CapabilityStats = append(data.CapabilityStats, capabilityStat{
+					Kind:  string(cs.Kind),
+					Count: cs.Count,
+				})
+			}
+		}
+	}
+
+	return data
+}
+
+// ── Global Search (Ctrl+K) ──
+
+type searchResultsData struct {
+	Query   string
+	Results []session.Summary
+	HasMore bool
+}
+
+func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
+	keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
+	if keyword == "" {
+		s.renderPartial(w, "search_results", searchResultsData{})
+		return
+	}
+
+	const searchLimit = 8
+
+	searchReq := service.SearchRequest{
+		Keyword: keyword,
+		Limit:   searchLimit + 1,
+	}
+
+	result, err := s.sessionSvc.Search(searchReq)
+	if err != nil {
+		s.logger.Printf("search error: %v", err)
+		s.renderPartial(w, "search_results", searchResultsData{Query: keyword})
+		return
+	}
+
+	data := searchResultsData{
+		Query:   keyword,
+		Results: result.Sessions,
+	}
+
+	if len(data.Results) > searchLimit {
+		data.Results = data.Results[:searchLimit]
+		data.HasMore = true
+	}
+
+	s.renderPartial(w, "search_results", data)
 }

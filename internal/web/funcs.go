@@ -61,6 +61,10 @@ func timeAgo(t time.Time) string {
 	}
 	d := time.Since(t)
 	if d < 0 {
+		// Slight clock skew: treat timestamps up to 1 hour in the future as "just now".
+		if d > -time.Hour {
+			return "just now"
+		}
 		return t.Format("2006-01-02")
 	}
 	switch {

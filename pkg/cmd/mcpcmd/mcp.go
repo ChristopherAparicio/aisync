@@ -49,12 +49,14 @@ Tools:
 			// Optional services — MCP server works without them
 			syncSvc, _ := f.SyncService()
 			errorSvc, _ := f.ErrorService()
+			sessionEventSvc, _ := f.SessionEventService()
 
 			s := aisyncmcp.NewServer(aisyncmcp.Config{
-				SessionService: sessionSvc,
-				SyncService:    syncSvc,
-				ErrorService:   errorSvc,
-				Version:        cmd.Root().Version,
+				SessionService:      sessionSvc,
+				SyncService:         syncSvc,
+				ErrorService:        errorSvc,
+				SessionEventService: sessionEventSvc,
+				Version:             cmd.Root().Version,
 			})
 
 			return server.ServeStdio(s)

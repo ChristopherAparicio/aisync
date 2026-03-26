@@ -1,8 +1,44 @@
 # aisync — Next Session TODO
 
-> Last updated: 2026-03-25
+> Last updated: 2026-03-26
 
 ## Recently Completed
+
+### Project Detail Page (2026-03-26)
+- [x] **Project Detail Page** (`GET /projects/{path...}`): Full project-scoped view
+  - Project header: display name, remote URL, provider badge, category badge
+  - KPI strip: sessions, tokens, cost, errors, tool calls, 30d forecast (project-scoped)
+  - Trend strip: 7d weekly comparison (sessions, tokens, errors) with project-level `TrendRequest.ProjectPath`
+  - Two-column layout: activity feed (15 recent sessions) + aside panels (capabilities, branches, analytics, forecast)
+  - Analytics panel: 30d tool calls, skill loads, top tools from event buckets
+  - Quick action links: All sessions, Analytics, Costs (filtered by project)
+- [x] **Sidebar links updated**: All 7 templates now link to `/projects/{path}` instead of `/?project=` or `/{page}?project=`
+- [x] **Projects list page**: Cards now link to project detail page
+- [x] **TrendRequest.ProjectPath**: Added project filtering to weekly trend analysis
+- [x] **CSS**: Project detail header, analytics summary panel, responsive breakpoints
+- [x] 1784 tests passing
+
+### UX Redesign v2 (2026-03-26)
+- [x] **Home Page Redesign**: GitHub-style two-column layout (feed + aside panels)
+  - KPI strip: sessions, tokens, cost, errors, tool calls, 30d forecast
+  - Inline trend strip: 7d weekly comparisons (sessions, tokens, errors)
+  - Left column: activity feed with enriched session cards (project link, branch badge, tags, stats, actions)
+  - Right column: Top Branches panel + Forecast panel + Capabilities panel
+- [x] **Global Search (Ctrl+K / Cmd+K)**: Modal overlay with HTMX live search
+  - Click navbar search trigger or press Ctrl+K / / to open
+  - 250ms debounce, returns top 8 results with link to full results
+  - `GET /partials/search-results?keyword=...` endpoint
+  - `templates/search_results.html` partial template
+- [x] **Restore Buttons**: Already on session cards in the activity feed
+- [x] **Sessions page keyword search**: Already existed via `SearchRequest.Keyword`
+- [x] **Data Backfills (production)**:
+  - `aisync backfill remote-url`: 237 candidates, 39 updated
+  - `aisync backfill forks`: 1161 scanned, 55 forks detected
+  - `aisync backfill events`: 1161 sessions processed (2m43s)
+  - `aisync usage compute`: 1295 buckets, 169K messages scanned
+- [x] **CLI: `aisync backfill events`** — Extract session events + recompute analytics buckets
+  - Supports `--session` (single), `--recompute-only`, `--json` flags
+- [x] 1784 total tests passing
 
 ### Backend Tasks (2026-03-25)
 - [x] **Worktree Dedup Fix**: `resolveRemoteURLForPath()` fallback — resolves git remote from session's ProjectPath
@@ -17,7 +53,6 @@
 - [x] **API: `POST /api/v1/backfill/forks`** — manual trigger endpoint
 - [x] **Scheduler tasks**: `BackfillRemoteURLTask` + `ForkDetectionTask`
 - [x] **LiteLLM auto-refresh**: background refresh on server start when cache >7 days
-- [x] 1784 total tests passing
 
 ### Pricing Catalog Refactoring + LiteLLM Integration (Phase 10.8)
 - [x] `Catalog` port interface with `Lookup(model)` and `List()` methods
@@ -28,7 +63,7 @@
 - [x] `aisync update-prices` CLI command with `--info` flag
 - [x] Tiered/dynamic pricing with multipliers (Opus 4, Gemini 2.5 Pro/Flash)
 - [x] Factory wiring: full chain with graceful degradation
-- [x] 88 pricing tests, 1761 total tests passing
+- [x] 88 pricing tests
 
 ### Error Classification (Phase 10.6)
 - [x] Domain model, deterministic classifier, OpenCode extraction
@@ -37,80 +72,29 @@
 
 ---
 
-## Priority 1: UX Redesign v2 — GitHub-style Layout
+## Priority 1: Quick Actions & Navigation
 
-### 1.1 Home Page Redesign
-Current: KPI dashboard (monitor-first)
-Target: GitHub-style "find & act" layout
+### 1.1 Analyze on Demand
+Add "Analyze" button for sessions without objectives (session detail page).
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  aisync                    [Search sessions...]         │
-├──────────────┬──────────────────────────────────────────┤
-│  YOUR        │  Recent Sessions (all projects)          │
-│  PROJECTS    │                                          │
-│              │  📌 "Fix phone extraction" — omogen      │
-│  ● omogen    │     feature · 42 msgs · [Restore] [View]│
-│    backend   │                                          │
-│  ● aisync    │  📌 "Fork detection" — aisync            │
-│  ● cycloplan │     feature · 2966 msgs · [View]         │
-│  ● opencode  │                                          │
-│  ● jarvis    │  📌 "iOS Import" — cycloplan             │
-│              │     bug · 124 msgs · [View]              │
-│              ├──────────────────────────────────────────┤
-│              │  Quick Stats (compact, right side)       │
-│              │  585 sessions · 13B tokens · 899 errors  │
-└──────────────┴──────────────────────────────────────────┘
-```
+### 1.2 Fork Tree Navigation
+Show clickable mini-tree in session list for fork relationships.
 
-### 1.2 Project Page
-When you click a project in the sidebar → project-scoped view.
-
-### 1.3 Global Search
-- Search bar always visible in navbar
-- Keyboard shortcut: Ctrl+K or /
-
-### 1.4 Search on Sessions Page
-- Add keyword search input (already supported in `SearchRequest.Keyword`)
+### 1.3 Project Page Enhancements
+- [ ] Daily activity sparkline/mini bar chart in analytics panel
+- [ ] Error rate trend chart (last 30d)
+- [ ] Session type breakdown (pie/donut)
 
 ---
 
-## Priority 2: Quick Actions
-
-### 2.1 Restore Button
-Add "Restore to OpenCode" button on session cards.
-
-### 2.2 Analyze on Demand
-Add "Analyze" button for sessions without objectives.
-
-### 2.3 Fork Tree Navigation
-Show clickable mini-tree in session list.
-
----
-
-## Priority 3: Data Operations
-
-### 3.1 Worktree Deduplication ✅ DONE
-- [x] `ListProjects()` groups by `remote_url`
-- [x] Capture-time fallback: `resolveRemoteURLForPath()`
-- [x] Backfill CLI: `aisync backfill remote-url`
-
-### 3.2 Branch Recovery ✅ DONE
-- [x] Branches extracted from worktree paths
-
-### 3.3 Run Backfill
-- [ ] Run `aisync backfill remote-url` on production database
-- [ ] Run `aisync backfill forks` on production database
-- [ ] Re-capture existing sessions to populate error data + ContentBlocks
-
-## Priority 4: Future Error Analysis
+## Priority 2: Future Error Analysis
 
 - [ ] LLM classifier for ambiguous tool errors (future, low priority)
 - [ ] `CompositeClassifier` — deterministic first, LLM fallback for "unknown"
 
 ---
 
-## Priority 5: Technical Debt
+## Priority 3: Technical Debt
 
 - [ ] Compute objectives for existing sessions (batch job)
-- [ ] Consider auto-refresh: when LiteLLM cache is stale (>7 days), optionally auto-refresh on startup in background ✅ DONE
+- [x] Auto-refresh LiteLLM cache on startup when stale (>7 days)
