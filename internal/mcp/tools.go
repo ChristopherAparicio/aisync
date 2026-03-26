@@ -20,6 +20,7 @@ func (h *handlers) handleCapture(ctx context.Context, req mcp.CallToolRequest) (
 		Mode        string `json:"mode"`
 		Provider    string `json:"provider"`
 		Message     string `json:"message"`
+		SessionID   string `json:"session_id"`
 	}
 	if err := req.BindArguments(&args); err != nil {
 		return toolError(err), nil
@@ -43,13 +44,23 @@ func (h *handlers) handleCapture(ctx context.Context, req mcp.CallToolRequest) (
 		providerName = parsed
 	}
 
-	result, err := h.sessionSvc.Capture(service.CaptureRequest{
+	captureReq := service.CaptureRequest{
 		ProjectPath:  args.ProjectPath,
 		Branch:       args.Branch,
 		Mode:         mode,
 		ProviderName: providerName,
 		Message:      args.Message,
-	})
+	}
+
+	// If a specific session ID is provided, capture that exact session
+	// instead of auto-detecting the most recent one.
+	var result *service.CaptureResult
+	var err error
+	if args.SessionID != "" {
+		result, err = h.sessionSvc.CaptureByID(captureReq, session.ID(args.SessionID))
+	} else {
+		result, err = h.sessionSvc.Capture(captureReq)
+	}
 	if err != nil {
 		return toolError(err), nil
 	}

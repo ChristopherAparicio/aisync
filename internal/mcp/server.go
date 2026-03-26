@@ -64,12 +64,13 @@ type handlers struct {
 func registerSessionTools(s *server.MCPServer, h *handlers) {
 	// ── Capture ──
 	s.AddTool(mcp.NewTool("aisync_capture",
-		mcp.WithDescription("Capture the current AI session and store it in aisync. Detects the active AI provider, exports the session, and saves it locally."),
+		mcp.WithDescription("Capture the current AI session and store it in aisync. Detects the active AI provider, exports the session, and saves it locally. If session_id is provided, captures that specific session instead of auto-detecting."),
 		mcp.WithString("project_path", mcp.Required(), mcp.Description("Absolute path to the project directory")),
 		mcp.WithString("branch", mcp.Required(), mcp.Description("Git branch name")),
 		mcp.WithString("mode", mcp.Description("Storage mode: full, compact, or summary (default: full)")),
 		mcp.WithString("provider", mcp.Description("AI provider name: claude-code, opencode, or cursor (default: auto-detect)")),
 		mcp.WithString("message", mcp.Description("Optional summary message for the session")),
+		mcp.WithString("session_id", mcp.Description("Provider-native session ID to capture (e.g. OpenCode session UUID). If omitted, auto-detects the most recent session.")),
 	), h.handleCapture)
 
 	// ── Restore ──
