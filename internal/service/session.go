@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ChristopherAparicio/aisync/git"
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/llm"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
@@ -32,6 +33,7 @@ type SessionService struct {
 	scanner   *secrets.Scanner // optional — nil means no scanning
 	converter *converter.Converter
 	pricing   *pricing.Calculator
+	cfg       *config.Config    // optional — nil uses defaults
 	git       *git.Client       // optional — nil when git is unavailable
 	platform  platform.Platform // optional — nil when platform is unavailable
 	llm       llm.Client        // optional — nil disables AI features (summarize, explain)
@@ -58,6 +60,7 @@ type SessionServiceConfig struct {
 	Scanner     *secrets.Scanner // optional
 	Converter   *converter.Converter
 	Pricing     *pricing.Calculator // optional — nil uses defaults
+	Config      *config.Config      // optional — nil uses defaults (needed for billing config)
 	Git         *git.Client         // optional
 	Platform    platform.Platform   // optional
 	LLM         llm.Client          // optional — nil disables AI features
@@ -80,6 +83,7 @@ func NewSessionService(cfg SessionServiceConfig) *SessionService {
 		scanner:     cfg.Scanner,
 		converter:   conv,
 		pricing:     calc,
+		cfg:         cfg.Config,
 		git:         cfg.Git,
 		platform:    cfg.Platform,
 		llm:         cfg.LLM,

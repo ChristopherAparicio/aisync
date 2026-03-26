@@ -78,7 +78,22 @@ type summarize struct {
 }
 
 type pricing struct {
-	Overrides []PricingOverride `json:"overrides"`
+	Overrides      []PricingOverride             `json:"overrides"`
+	BackendBilling map[string]backendBillingConf `json:"backend_billing,omitempty"` // keyed by LLM backend name ("anthropic", "amazon-bedrock")
+}
+
+// backendBillingConf defines billing type for an LLM backend.
+type backendBillingConf struct {
+	Type        string  `json:"type"`                   // "subscription", "api", "free", or "auto" (default)
+	MonthlyCost float64 `json:"monthly_cost,omitempty"` // fixed monthly cost (for subscription type)
+	PlanName    string  `json:"plan_name,omitempty"`    // e.g. "Claude Max", "Cursor Pro"
+}
+
+// BackendBillingConfig is the exported version of backendBillingConf for external use.
+type BackendBillingConfig struct {
+	Type        string  // "subscription", "api", "free", or "auto"
+	MonthlyCost float64 // fixed monthly cost (for subscription type)
+	PlanName    string  // human-readable plan name
 }
 
 // ── LLM Provider Profiles ──
@@ -307,6 +322,9 @@ func (c *Config) loadFrom(dir string) error {
 	// Pricing overrides
 	if len(loaded.Pricing.Overrides) > 0 {
 		c.data.Pricing.Overrides = loaded.Pricing.Overrides
+	}
+	if len(loaded.Pricing.BackendBilling) > 0 {
+		c.data.Pricing.BackendBilling = loaded.Pricing.BackendBilling
 	}
 
 	// Analysis — bools always take the loaded value
@@ -875,6 +893,59 @@ func (c *Config) GetSummarizeModel() string {
 // GetPricingOverrides returns the list of user-configured pricing overrides.
 func (c *Config) GetPricingOverrides() []PricingOverride {
 	return c.data.Pricing.Overrides
+}
+
+// GetBackendBilling returns the billing configuration for an LLM backend.
+// Returns nil if no configuration exists for the given backend.
+func (c *Config) GetBackendBilling(backend string) *BackendBillingConfig {
+	if c.data.Pricing.BackendBilling == nil {
+		return nil
+	}
+	conf, ok := c.data.Pricing.BackendBilling[backend]
+	if !ok {
+		return nil
+	}
+	return &BackendBillingConfig{
+		Type:        conf.Type,
+		MonthlyCost: conf.MonthlyCost,
+		PlanName:    conf.PlanName,
+	}
+}
+
+// GetAllBackendBilling returns all configured backend billing entries.
+func (c *Config) GetAllBackendBilling() map[string]BackendBillingConfig {
+	if len(c.data.Pricing.BackendBilling) == 0 {
+		return nil
+	}
+	result := make(map[string]BackendBillingConfig, len(c.data.Pricing.BackendBilling))
+	for k, v := range c.data.Pricing.BackendBilling {
+		result[k] = BackendBillingConfig{
+			Type:        v.Type,
+			MonthlyCost: v.MonthlyCost,
+			PlanName:    v.PlanName,
+		}
+	}
+	return result
+}
+
+// ResolveBillingType determines the billing type for an LLM backend.
+// Uses configured value if available, otherwise returns "auto" (caller should infer from data).
+func (c *Config) ResolveBillingType(backend string) string {
+	if bc := c.GetBackendBilling(backend); bc != nil && bc.Type != "" {
+		return bc.Type
+	}
+	return "auto"
+}
+
+// GetSubscriptionCosts returns only the subscription-type backends with their monthly costs.
+func (c *Config) GetSubscriptionCosts() map[string]float64 {
+	result := make(map[string]float64)
+	for k, v := range c.data.Pricing.BackendBilling {
+		if v.Type == "subscription" && v.MonthlyCost > 0 {
+			result[k] = v.MonthlyCost
+		}
+	}
+	return result
 }
 
 // AddPricingOverride adds or updates a model price override.

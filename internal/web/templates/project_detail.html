@@ -85,8 +85,8 @@
     {{end}}
     {{if .HasForecast}}
     <div class="kpi-strip-item kpi-strip-item--separator">
-      <span class="kpi-strip-value kpi-strip-value--muted">{{formatCost .Projected30d}}</span>
-      <span class="kpi-strip-label">30d forecast</span>
+      <span class="kpi-strip-value kpi-strip-value--muted">{{if .HasRealForecast}}{{formatCost .TotalReal30d}}{{else}}{{formatCost .Projected30d}}{{end}}</span>
+      <span class="kpi-strip-label">30d {{if .HasRealForecast}}real cost{{else}}forecast{{end}}</span>
     </div>
     {{end}}
   </div>
@@ -252,12 +252,18 @@
           <span class="home-panel-title">Forecast</span>
         </div>
         <div class="home-forecast">
+          {{if .HasRealForecast}}
+          <div class="home-forecast-row home-forecast-highlight">
+            <span class="text-muted">Real / 30d</span>
+            <span class="font-mono">{{formatCost .TotalReal30d}}</span>
+          </div>
+          {{end}}
           <div class="home-forecast-row">
-            <span class="text-muted">30 days</span>
+            <span class="text-muted">API-equiv 30d</span>
             <span class="font-mono">{{formatCost .Projected30d}}</span>
           </div>
           <div class="home-forecast-row">
-            <span class="text-muted">90 days</span>
+            <span class="text-muted">API-equiv 90d</span>
             <span class="font-mono">{{formatCost .Projected90d}}</span>
           </div>
           <div class="home-forecast-row">

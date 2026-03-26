@@ -73,6 +73,10 @@ type SessionWriter interface {
 	// GetForkRelations retrieves all fork relations for a session (as original or fork).
 	GetForkRelations(sessionID session.ID) ([]session.ForkRelation, error)
 
+	// ListAllForkRelations returns every fork relation in the database.
+	// Used by ComputeTokenBuckets and Forecast to build a dedup map.
+	ListAllForkRelations() ([]session.ForkRelation, error)
+
 	// GetTotalDeduplication returns the total shared tokens across all detected forks.
 	GetTotalDeduplication() (sharedInput, sharedOutput int, err error)
 

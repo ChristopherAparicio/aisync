@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -181,8 +183,17 @@ type ForkDetectionResult struct {
 	RelationsSaved  int
 }
 
-// DetectForksBatch runs fork detection on all sessions grouped by branch
+// rewindRe matches session summaries like "Rewind of ses_XXX at message N".
+var rewindRe = regexp.MustCompile(`(?i)rewind\s+of\s+(ses_\w+)\s+at\s+message\s+(\d+)`)
+
+// DetectForksBatch runs fork detection on all sessions grouped by project
 // and persists the results to the session_forks table.
+//
+// Two detection strategies:
+//  1. Content-hash comparison: groups sessions by project path (+ branch if set)
+//     and compares message hashes to find shared prefixes.
+//  2. Rewind detection: parses "Rewind of ses_XXX at message N" from summaries
+//     and creates fork relations with the specified fork point.
 func (s *SessionService) DetectForksBatch(ctx context.Context) (*ForkDetectionResult, error) {
 	// List all sessions.
 	summaries, err := s.store.List(session.ListOptions{All: true})
@@ -192,14 +203,77 @@ func (s *SessionService) DetectForksBatch(ctx context.Context) (*ForkDetectionRe
 
 	result := &ForkDetectionResult{SessionsScanned: len(summaries)}
 
-	// Group sessions by branch+project for fork detection.
+	// Build a lookup of session ID → summary for rewind detection.
+	summaryByID := make(map[session.ID]session.Summary, len(summaries))
+	for _, sm := range summaries {
+		summaryByID[sm.ID] = sm
+	}
+
+	// ── Phase 1: Rewind detection (parse summary text) ──
+	rewindOriginals := make(map[session.ID]bool) // sessions that are rewind targets
+	rewindForks := make(map[session.ID]bool)     // sessions that are rewinds
+
+	for _, sm := range summaries {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		matches := rewindRe.FindStringSubmatch(sm.Summary)
+		if matches == nil {
+			continue
+		}
+		originalID := session.ID(matches[1])
+		forkPoint, _ := strconv.Atoi(matches[2])
+
+		// Verify the original session exists.
+		if _, ok := summaryByID[originalID]; !ok {
+			continue
+		}
+
+		// Load the original to compute shared tokens.
+		orig, getErr := s.store.Get(originalID)
+		if getErr != nil {
+			continue
+		}
+
+		var sharedInput, sharedOutput int
+		for k := 0; k < forkPoint && k < len(orig.Messages); k++ {
+			sharedInput += orig.Messages[k].InputTokens
+			sharedOutput += orig.Messages[k].OutputTokens
+		}
+
+		rel := session.ForkRelation{
+			OriginalID:         originalID,
+			ForkID:             sm.ID,
+			ForkPoint:          forkPoint,
+			SharedMessages:     forkPoint,
+			OverlapRatio:       1.0, // rewinds are exact copies up to fork point
+			Reason:             fmt.Sprintf("Rewind at message %d", forkPoint),
+			ForkContext:        sm.Summary,
+			SharedInputTokens:  sharedInput,
+			SharedOutputTokens: sharedOutput,
+		}
+		if err := s.store.SaveForkRelation(rel); err != nil {
+			log.Printf("[fork-detect] failed to save rewind relation: %v", err)
+			continue
+		}
+		result.RelationsSaved++
+		result.ForksDetected++
+		rewindOriginals[originalID] = true
+		rewindForks[sm.ID] = true
+	}
+
+	// ── Phase 2: Content-hash fork detection ──
+	// Group sessions by project path. Sessions with a branch are also
+	// grouped by project+branch for tighter comparison within branches,
+	// but branchless sessions are grouped by project path only.
 	type groupKey struct {
 		projectPath string
 		branch      string
 	}
 	groups := make(map[groupKey][]session.ID)
 	for _, sm := range summaries {
-		if sm.Branch == "" {
+		// Skip sessions already identified as rewind forks (they're handled above).
+		if rewindForks[sm.ID] {
 			continue
 		}
 		key := groupKey{projectPath: sm.ProjectPath, branch: sm.Branch}

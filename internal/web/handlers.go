@@ -248,6 +248,11 @@ type dashboardPage struct {
 	Projected90d     float64
 	TrendPerDay      float64
 
+	// Real cost forecast (API-only spend + subscriptions)
+	HasRealForecast     bool
+	TotalReal30d        float64
+	SubscriptionMonthly float64
+
 	// Project filtering
 	Projects        []projectItem
 	SelectedProject string
@@ -401,6 +406,13 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 		data.Projected90d = forecast.Projected90d
 		data.TrendPerDay = forecast.TrendPerDay
 		data.TrendDir = forecast.TrendDir
+
+		// Real cost (subscriptions + API) if available.
+		if forecast.TotalReal30d > 0 || forecast.SubscriptionMonthly > 0 {
+			data.HasRealForecast = true
+			data.TotalReal30d = forecast.TotalReal30d
+			data.SubscriptionMonthly = forecast.SubscriptionMonthly
+		}
 	}
 
 	if data.TrendDir == "" {
@@ -1630,12 +1642,25 @@ type costDashboardPage struct {
 	TotalSessions   int
 	AvgPerSession   float64
 
-	// Forecast
+	// Forecast (API-equivalent — all sessions)
 	HasForecast  bool
 	Projected30d float64
 	Projected90d float64
 	TrendPerDay  float64
 	TrendDir     string
+
+	// Real cost forecast (API-only spend + subscriptions)
+	HasRealForecast     bool
+	APIProjected30d     float64
+	APIProjected90d     float64
+	APITrendPerDay      float64
+	APITrendDir         string
+	SubscriptionMonthly float64
+	TotalReal30d        float64 // subscription + API projected 30d
+
+	// Per-backend cost summary
+	HasBackends  bool
+	BackendCosts []backendCostView
 
 	// Time buckets
 	Period  string
@@ -1646,6 +1671,19 @@ type costDashboardPage struct {
 
 	// Per-branch cost
 	BranchCosts []branchCostEntry
+}
+
+// backendCostView is a template-friendly view of a backend cost summary.
+type backendCostView struct {
+	Backend       string
+	BillingType   string // "subscription", "api", "free"
+	PlanName      string
+	MonthlyCost   float64
+	MessageCount  int
+	TotalTokens   int
+	EstimatedCost float64
+	ActualCost    float64
+	SessionCount  int
 }
 
 // handleCosts renders the cost dashboard.
@@ -1708,6 +1746,35 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 		data.Period = forecast.Period
 		data.Models = forecast.ModelBreakdown
 
+		// Real cost forecast (API-only + subscriptions).
+		if forecast.TotalReal30d > 0 || forecast.APIProjected30d > 0 || forecast.SubscriptionMonthly > 0 {
+			data.HasRealForecast = true
+			data.APIProjected30d = forecast.APIProjected30d
+			data.APIProjected90d = forecast.APIProjected90d
+			data.APITrendPerDay = forecast.APITrendPerDay
+			data.APITrendDir = forecast.APITrendDir
+			data.SubscriptionMonthly = forecast.SubscriptionMonthly
+			data.TotalReal30d = forecast.TotalReal30d
+		}
+
+		// Per-backend cost breakdown.
+		if len(forecast.BackendCosts) > 0 {
+			data.HasBackends = true
+			for _, bc := range forecast.BackendCosts {
+				data.BackendCosts = append(data.BackendCosts, backendCostView{
+					Backend:       bc.Backend,
+					BillingType:   bc.BillingType,
+					PlanName:      bc.PlanName,
+					MonthlyCost:   bc.MonthlyCost,
+					MessageCount:  bc.MessageCount,
+					TotalTokens:   bc.TotalTokens,
+					EstimatedCost: bc.EstimatedCost,
+					ActualCost:    bc.ActualCost,
+					SessionCount:  bc.SessionCount,
+				})
+			}
+		}
+
 		// Convert buckets to template-friendly format with bar heights.
 		if len(forecast.Buckets) > 0 {
 			maxCost := 0.0
@@ -1736,6 +1803,9 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 
 	if data.TrendDir == "" {
 		data.TrendDir = "stable"
+	}
+	if data.APITrendDir == "" {
+		data.APITrendDir = "stable"
 	}
 
 	return data
@@ -1974,6 +2044,11 @@ type projectDetailPage struct {
 	TrendPerDay  float64
 	TrendDir     string
 
+	// Real cost forecast
+	HasRealForecast     bool
+	TotalReal30d        float64
+	SubscriptionMonthly float64
+
 	// Analytics (from event buckets)
 	HasAnalytics    bool
 	AnalyticsTools  int
@@ -2113,6 +2188,13 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		data.Projected90d = forecast.Projected90d
 		data.TrendPerDay = forecast.TrendPerDay
 		data.TrendDir = forecast.TrendDir
+
+		// Real cost if available.
+		if forecast.TotalReal30d > 0 || forecast.SubscriptionMonthly > 0 {
+			data.HasRealForecast = true
+			data.TotalReal30d = forecast.TotalReal30d
+			data.SubscriptionMonthly = forecast.SubscriptionMonthly
+		}
 	}
 	if data.TrendDir == "" {
 		data.TrendDir = "stable"

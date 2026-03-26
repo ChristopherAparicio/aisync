@@ -510,6 +510,7 @@ func New() *cmdutil.Factory {
 				Scanner:     scanner,
 				Converter:   conv,
 				Pricing:     calc,
+				Config:      cfg,
 				Git:         gitClient,
 				Platform:    plat,
 				LLM:         llmClient,

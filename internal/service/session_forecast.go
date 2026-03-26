@@ -66,8 +66,22 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 		}, nil
 	}
 
+	// Load fork dedup map: fork session ID → fork point.
+	forkPoints := s.buildForkPointMap()
+
+	// Track per-backend aggregates.
+	type backendAgg struct {
+		messageCount  int
+		totalTokens   int
+		estimatedCost float64
+		actualCost    float64
+		sessionCount  int
+	}
+	perBackend := make(map[string]*backendAgg)
+
 	// Load full sessions for cost calculation + model breakdown.
 	var loaded []sessionCostEntry
+	var apiOnly []sessionCostEntry // entries with actual provider cost (API billing)
 	globalModels := make(map[string]*forecastModelAgg)
 
 	for _, sm := range filtered {
@@ -76,19 +90,102 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 			continue
 		}
 		estimate := s.pricing.SessionCost(full)
-		loaded = append(loaded, sessionCostEntry{
-			createdAt: full.CreatedAt,
-			cost:      estimate.TotalCost.TotalCost,
-			tokens:    full.TokenUsage.TotalTokens,
-		})
+
+		// Determine fork dedup offset for this session.
+		forkOffset := 0
+		if forkPoints != nil {
+			if fp, isFork := forkPoints[full.ID]; isFork {
+				forkOffset = fp
+			}
+		}
+
+		// If this is a fork session, subtract shared prefix tokens/cost from the estimate.
+		adjustedCost := estimate.TotalCost.TotalCost
+		adjustedActual := estimate.Breakdown.ActualCost.TotalCost
+		adjustedTokens := full.TokenUsage.TotalTokens
+		if forkOffset > 0 {
+			var sharedTokens int
+			var sharedCost float64
+			var sharedActual float64
+			for k := 0; k < forkOffset && k < len(full.Messages); k++ {
+				msg := &full.Messages[k]
+				sharedTokens += msg.InputTokens + msg.OutputTokens
+				sharedActual += msg.ProviderCost
+			}
+			// Estimate shared cost proportionally: (sharedTokens/totalTokens) × totalCost.
+			if full.TokenUsage.TotalTokens > 0 {
+				sharedCost = adjustedCost * float64(sharedTokens) / float64(full.TokenUsage.TotalTokens)
+			}
+			adjustedCost -= sharedCost
+			adjustedActual -= sharedActual
+			adjustedTokens -= sharedTokens
+			if adjustedCost < 0 {
+				adjustedCost = 0
+			}
+			if adjustedActual < 0 {
+				adjustedActual = 0
+			}
+			if adjustedTokens < 0 {
+				adjustedTokens = 0
+			}
+		}
+
+		entry := sessionCostEntry{
+			createdAt:  full.CreatedAt,
+			cost:       adjustedCost,
+			actualCost: adjustedActual,
+			tokens:     adjustedTokens,
+		}
+		loaded = append(loaded, entry)
+
+		// Track API-only entries (sessions with actual provider cost).
+		if entry.actualCost > 0 {
+			apiOnly = append(apiOnly, sessionCostEntry{
+				createdAt: entry.createdAt,
+				cost:      entry.actualCost,
+				tokens:    entry.tokens,
+			})
+		}
+
+		// Aggregate per-backend stats from message-level ProviderID.
+		sessionBackends := make(map[string]bool) // track unique backends per session
+		for i := range full.Messages {
+			// Fork dedup: skip shared prefix messages.
+			if i < forkOffset {
+				continue
+			}
+			msg := &full.Messages[i]
+			backend := msg.ProviderID
+			if backend == "" {
+				continue
+			}
+			agg, ok := perBackend[backend]
+			if !ok {
+				agg = &backendAgg{}
+				perBackend[backend] = agg
+			}
+			agg.messageCount++
+			agg.totalTokens += msg.InputTokens + msg.OutputTokens
+			agg.actualCost += msg.ProviderCost
+			if !sessionBackends[backend] {
+				sessionBackends[backend] = true
+				agg.sessionCount++
+			}
+		}
+
+		// Also adjust model breakdown — scale down proportionally for forks.
+		costScale := 1.0
+		if forkOffset > 0 && estimate.TotalCost.TotalCost > 0 {
+			costScale = adjustedCost / estimate.TotalCost.TotalCost
+		}
 		for _, mc := range estimate.PerModel {
 			g, ok := globalModels[mc.Model]
 			if !ok {
 				g = &forecastModelAgg{}
 				globalModels[mc.Model] = g
 			}
-			g.cost += mc.Cost.TotalCost
-			g.tokens += mc.InputTokens + mc.OutputTokens
+			g.cost += mc.Cost.TotalCost * costScale
+			g.tokens += int(float64(mc.InputTokens+mc.OutputTokens) * costScale)
 			g.count++
 		}
 	}
@@ -115,23 +212,123 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 	// Linear regression on bucket costs for trend.
 	trendPerDay, trendDir := computeTrend(buckets, bucketDuration)
 
-	// Project forward.
-	projected30d := math.Max(0, avgPerBucket*30.0/bucketDuration.Hours()*24+trendPerDay*15) // avg + mid-point trend
+	// Project forward (API-equivalent — all sessions).
+	projected30d := math.Max(0, avgPerBucket*30.0/bucketDuration.Hours()*24+trendPerDay*15)
 	projected90d := math.Max(0, avgPerBucket*90.0/bucketDuration.Hours()*24+trendPerDay*45)
+
+	// API-only projections (real spend — only sessions with actual provider costs).
+	var apiProjected30d, apiProjected90d, apiTrendPerDay float64
+	var apiTrendDir string
+	if len(apiOnly) > 0 {
+		apiBuckets := buildCostBuckets(apiOnly, since, now, bucketDuration)
+		var apiTotal float64
+		for _, b := range apiBuckets {
+			apiTotal += b.Cost
+		}
+		apiAvg := 0.0
+		if len(apiBuckets) > 0 {
+			apiAvg = apiTotal / float64(len(apiBuckets))
+		}
+		apiTrendPerDay, apiTrendDir = computeTrend(apiBuckets, bucketDuration)
+		apiProjected30d = math.Max(0, apiAvg*30.0/bucketDuration.Hours()*24+apiTrendPerDay*15)
+		apiProjected90d = math.Max(0, apiAvg*90.0/bucketDuration.Hours()*24+apiTrendPerDay*45)
+	} else {
+		apiTrendDir = "stable"
+	}
+
+	// Subscription monthly total from config.
+	var subscriptionMonthly float64
+	if s.cfg != nil {
+		for _, cost := range s.cfg.GetSubscriptionCosts() {
+			subscriptionMonthly += cost
+		}
+	}
+
+	// Build per-backend cost summaries.
+	var backendCosts []session.BackendCostSummary
+	for backend, agg := range perBackend {
+		bcs := session.BackendCostSummary{
+			Backend:      backend,
+			BillingType:  "auto",
+			MessageCount: agg.messageCount,
+			TotalTokens:  agg.totalTokens,
+			ActualCost:   math.Round(agg.actualCost*10000) / 10000,
+			SessionCount: agg.sessionCount,
+		}
+		// Resolve billing type from config.
+		if s.cfg != nil {
+			bt := s.cfg.ResolveBillingType(backend)
+			bcs.BillingType = bt
+			if bc := s.cfg.GetBackendBilling(backend); bc != nil {
+				bcs.PlanName = bc.PlanName
+				bcs.MonthlyCost = bc.MonthlyCost
+			}
+		}
+		// Infer billing type if "auto": if actual cost > 0, it's API; otherwise subscription.
+		if bcs.BillingType == "auto" {
+			if bcs.ActualCost > 0 {
+				bcs.BillingType = "api"
+			} else {
+				bcs.BillingType = "subscription"
+			}
+		}
+		backendCosts = append(backendCosts, bcs)
+	}
+
+	// Sort backends: API first (real cost), then subscription, then free.
+	sort.Slice(backendCosts, func(i, j int) bool {
+		order := map[string]int{"api": 0, "subscription": 1, "free": 2}
+		oi, oj := order[backendCosts[i].BillingType], order[backendCosts[j].BillingType]
+		if oi != oj {
+			return oi < oj
+		}
+		return backendCosts[i].ActualCost > backendCosts[j].ActualCost
+	})
+
+	// Compute estimated cost per backend from model breakdown.
+	// We distribute model cost to backends based on token share.
+	if totalCost > 0 {
+		for i := range backendCosts {
+			// Rough estimate: backend's share of total tokens × total estimated cost.
+			totalTokensAll := 0
+			for _, bc := range backendCosts {
+				totalTokensAll += bc.TotalTokens
+			}
+			if totalTokensAll > 0 {
+				backendCosts[i].EstimatedCost = math.Round(totalCost*float64(backendCosts[i].TotalTokens)/float64(totalTokensAll)*10000) / 10000
+			}
+		}
+	}
 
 	// Model breakdown with recommendations.
 	modelBreakdown := buildModelBreakdown(globalModels, totalCost, s.pricing)
 
+	totalReal30d := subscriptionMonthly + math.Round(apiProjected30d*10000)/10000
+
 	return &session.ForecastResult{
-		Period:         period,
-		Buckets:        buckets,
-		TotalCost:      totalCost,
-		AvgPerBucket:   avgPerBucket,
-		SessionCount:   len(loaded),
-		Projected30d:   math.Round(projected30d*10000) / 10000, // round to 4 decimals
-		Projected90d:   math.Round(projected90d*10000) / 10000,
-		TrendPerDay:    math.Round(trendPerDay*10000) / 10000,
-		TrendDir:       trendDir,
+		Period:       period,
+		Buckets:      buckets,
+		TotalCost:    totalCost,
+		AvgPerBucket: avgPerBucket,
+		SessionCount: len(loaded),
+		Projected30d: math.Round(projected30d*10000) / 10000,
+		Projected90d: math.Round(projected90d*10000) / 10000,
+		TrendPerDay:  math.Round(trendPerDay*10000) / 10000,
+		TrendDir:     trendDir,
+
+		// API-only projections
+		APIProjected30d: math.Round(apiProjected30d*10000) / 10000,
+		APIProjected90d: math.Round(apiProjected90d*10000) / 10000,
+		APITrendPerDay:  math.Round(apiTrendPerDay*10000) / 10000,
+		APITrendDir:     apiTrendDir,
+
+		// Subscription costs
+		SubscriptionMonthly: subscriptionMonthly,
+		TotalReal30d:        totalReal30d,
+
+		// Per-backend breakdown
+		BackendCosts: backendCosts,
+
 		ModelBreakdown: modelBreakdown,
 	}, nil
 }
@@ -172,9 +369,10 @@ func buildCostBuckets(sessions []sessionCostEntry, start, end time.Time, bucketD
 
 // sessionCostEntry is a lightweight struct for bucket building.
 type sessionCostEntry struct {
-	createdAt time.Time
-	cost      float64
-	tokens    int
+	createdAt  time.Time
+	cost       float64 // API-equivalent cost
+	actualCost float64 // provider-reported cost (0 for subscription)
+	tokens     int
 }
 
 // forecastModelAgg accumulates per-model cost data for forecasting.

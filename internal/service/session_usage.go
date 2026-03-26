@@ -23,10 +23,41 @@ type ComputeTokenBucketsResult struct {
 	Duration        time.Duration
 }
 
+// buildForkPointMap loads all fork relations and builds a map of
+// fork session ID → fork point (message index where the fork diverges).
+// Messages before the fork point are shared with the original and should
+// be skipped during token accounting to avoid double-counting.
+func (s *SessionService) buildForkPointMap() map[session.ID]int {
+	rels, err := s.store.ListAllForkRelations()
+	if err != nil {
+		log.Printf("[dedup] failed to load fork relations: %v", err)
+		return nil
+	}
+	if len(rels) == 0 {
+		return nil
+	}
+
+	m := make(map[session.ID]int, len(rels))
+	for _, rel := range rels {
+		// If a session appears in multiple fork relations (fork of a fork),
+		// keep the maximum fork point (most messages to skip).
+		if existing, ok := m[rel.ForkID]; !ok || rel.ForkPoint > existing {
+			m[rel.ForkID] = rel.ForkPoint
+		}
+	}
+	log.Printf("[dedup] loaded %d fork relations, %d sessions have dedup offsets", len(rels), len(m))
+	return m
+}
+
 // ComputeTokenBuckets scans sessions and pre-computes token usage per time bucket.
 //
-// This is designed to run as a nightly scheduled task. It groups message tokens
-// by hour (or day) and project/provider, then persists the aggregates.
+// Buckets are keyed by (bucket_start, project_path, provider, llm_backend), so
+// tokens from different LLM backends (e.g. "anthropic" vs "amazon-bedrock") are
+// tracked separately. Each bucket also includes estimated and actual cost.
+//
+// Fork deduplication: for sessions that are forks (appear as fork_id in
+// session_forks), messages before the fork_point are skipped to avoid
+// double-counting the shared prefix with the original session.
 //
 // When Incremental=true, only processes sessions captured after the last compute.
 func (s *SessionService) ComputeTokenBuckets(ctx context.Context, req ComputeTokenBucketsRequest) (*ComputeTokenBucketsResult, error) {
@@ -55,17 +86,26 @@ func (s *SessionService) ComputeTokenBuckets(ctx context.Context, req ComputeTok
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
 
-	// Bucket key: bucket_start + project_path + provider.
+	// Load fork dedup map: fork session ID → first message index to count.
+	forkPoints := s.buildForkPointMap()
+
+	// Bucket key: bucket_start + project_path + provider + llm_backend.
 	type bucketKey struct {
 		start       time.Time
 		projectPath string
 		provider    string
+		llmBackend  string
 	}
 	buckets := make(map[bucketKey]*session.TokenUsageBucket)
+
+	// Track which sessions have been counted per bucket key (avoid double-counting).
+	sessionCounted := make(map[bucketKey]map[session.ID]bool)
 
 	result := &ComputeTokenBucketsResult{
 		SessionsScanned: len(summaries),
 	}
+
+	var dedupSkipped int // messages skipped due to fork dedup
 
 	for _, sm := range summaries {
 		// Load full session to access per-message timestamps and tokens.
@@ -74,9 +114,42 @@ func (s *SessionService) ComputeTokenBuckets(ctx context.Context, req ComputeTok
 			continue
 		}
 
+		// Determine the fork dedup offset for this session.
+		// Messages at index < forkOffset are shared with the original and skipped.
+		forkOffset := 0
+		if forkPoints != nil {
+			if fp, isFork := forkPoints[sess.ID]; isFork {
+				forkOffset = fp
+			}
+		}
+
+		// Compute per-model cost for this session (needed for per-message cost estimation).
+		var estimate *session.CostEstimate
+		if s.pricing != nil {
+			estimate = s.pricing.SessionCost(sess)
+		}
+
+		// Build a per-model cost-per-token map for distributing costs to individual messages.
+		modelCostRate := make(map[string]float64) // model → cost per output token
+		if estimate != nil {
+			for _, mc := range estimate.PerModel {
+				if mc.OutputTokens > 0 {
+					modelCostRate[mc.Model] = mc.Cost.TotalCost / float64(mc.OutputTokens)
+				} else if mc.InputTokens > 0 {
+					modelCostRate[mc.Model] = mc.Cost.TotalCost / float64(mc.InputTokens)
+				}
+			}
+		}
+
 		for i := range sess.Messages {
 			msg := &sess.Messages[i]
 			if msg.Timestamp.IsZero() {
+				continue
+			}
+
+			// Fork dedup: skip messages in the shared prefix.
+			if i < forkOffset {
+				dedupSkipped++
 				continue
 			}
 
@@ -89,10 +162,15 @@ func (s *SessionService) ComputeTokenBuckets(ctx context.Context, req ComputeTok
 				bucketStart = msg.Timestamp.Truncate(time.Hour)
 			}
 
+			// Use per-message ProviderID as the LLM backend key.
+			// Falls back to empty string if not available.
+			llmBackend := msg.ProviderID
+
 			key := bucketKey{
 				start:       bucketStart,
 				projectPath: sess.ProjectPath,
 				provider:    string(sess.Provider),
+				llmBackend:  llmBackend,
 			}
 
 			b, ok := buckets[key]
@@ -102,6 +180,7 @@ func (s *SessionService) ComputeTokenBuckets(ctx context.Context, req ComputeTok
 					Granularity: gran,
 					ProjectPath: sess.ProjectPath,
 					Provider:    sess.Provider,
+					LLMBackend:  llmBackend,
 				}
 				buckets[key] = b
 			}
@@ -110,6 +189,20 @@ func (s *SessionService) ComputeTokenBuckets(ctx context.Context, req ComputeTok
 			b.OutputTokens += msg.OutputTokens
 			b.MessageCount++
 			result.MessagesScanned++
+
+			// Accumulate actual cost from provider-reported data.
+			if msg.ProviderCost > 0 {
+				b.ActualCost += msg.ProviderCost
+			}
+
+			// Estimate API-equivalent cost for this message using the model's rate.
+			if rate, hasRate := modelCostRate[msg.Model]; hasRate {
+				msgTokens := msg.OutputTokens
+				if msgTokens == 0 {
+					msgTokens = msg.InputTokens
+				}
+				b.EstimatedCost += float64(msgTokens) * rate
+			}
 
 			// Count by role (human vs agent indicator).
 			switch msg.Role {
@@ -132,23 +225,20 @@ func (s *SessionService) ComputeTokenBuckets(ctx context.Context, req ComputeTok
 				b.ImageTokens += img.TokensEstimate
 				b.ImageCount++
 			}
-		}
 
-		// Count sessions per bucket (use first message timestamp).
-		if len(sess.Messages) > 0 && !sess.Messages[0].Timestamp.IsZero() {
-			firstMsg := sess.Messages[0].Timestamp
-			var bucketStart time.Time
-			switch gran {
-			case "1d":
-				bucketStart = time.Date(firstMsg.Year(), firstMsg.Month(), firstMsg.Day(), 0, 0, 0, 0, firstMsg.Location())
-			default:
-				bucketStart = firstMsg.Truncate(time.Hour)
+			// Count this session in the bucket (once per session per bucket key).
+			if sessionCounted[key] == nil {
+				sessionCounted[key] = make(map[session.ID]bool)
 			}
-			key := bucketKey{start: bucketStart, projectPath: sess.ProjectPath, provider: string(sess.Provider)}
-			if b, ok := buckets[key]; ok {
+			if !sessionCounted[key][sess.ID] {
+				sessionCounted[key][sess.ID] = true
 				b.SessionCount++
 			}
 		}
+	}
+
+	if dedupSkipped > 0 {
+		log.Printf("[token_usage] fork dedup: skipped %d shared-prefix messages", dedupSkipped)
 	}
 
 	// Persist all buckets.

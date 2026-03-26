@@ -656,6 +656,17 @@ a:hover { text-decoration: underline; }
   padding: 0.2rem 0;
 }
 
+.home-forecast-row.home-forecast-highlight {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+
+.home-forecast-row.home-forecast-highlight .font-mono {
+  color: var(--accent-light);
+  font-weight: 600;
+}
+
 /* ── Search Overlay (Ctrl+K) ── */
 
 .search-overlay {
@@ -925,6 +936,26 @@ tr:hover td { background: var(--bg-hover); }
   color: var(--red, #ef4444);
   font-size: 0.6rem;
   vertical-align: middle;
+}
+
+.badge-billing-sub {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--green);
+  font-size: 0.6rem;
+  vertical-align: middle;
+}
+
+.badge-billing-free {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  vertical-align: middle;
+}
+
+/* KPI accent card (highlighted real cost) */
+.kpi-card.kpi-accent {
+  border-left: 3px solid var(--accent);
+  background: rgba(108, 126, 225, 0.06);
 }
 
 /* ── Empty state ── */

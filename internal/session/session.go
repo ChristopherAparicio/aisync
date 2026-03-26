@@ -136,6 +136,7 @@ type TokenUsageBucket struct {
 	Granularity    string       `json:"granularity"` // "1h" or "1d"
 	ProjectPath    string       `json:"project_path,omitempty"`
 	Provider       ProviderName `json:"provider,omitempty"`
+	LLMBackend     string       `json:"llm_backend,omitempty"` // LLM backend identifier (e.g. "anthropic", "amazon-bedrock")
 	InputTokens    int          `json:"input_tokens"`
 	OutputTokens   int          `json:"output_tokens"`
 	ImageTokens    int          `json:"image_tokens"`
@@ -146,6 +147,8 @@ type TokenUsageBucket struct {
 	ImageCount     int          `json:"image_count"`
 	UserMsgCount   int          `json:"user_msg_count"`   // messages from user (human interaction indicator)
 	AssistMsgCount int          `json:"assist_msg_count"` // messages from assistant
+	EstimatedCost  float64      `json:"estimated_cost"`   // API-equivalent cost (computed from token rates)
+	ActualCost     float64      `json:"actual_cost"`      // actual cost reported by provider (0 for subscription)
 }
 
 // FileChange records a file touched during a session.
@@ -542,14 +545,40 @@ type ForecastResult struct {
 	AvgPerBucket float64      `json:"avg_per_bucket"` // average cost per bucket
 	SessionCount int          `json:"session_count"`  // total sessions analyzed
 
-	// Projection
+	// Projection (API-equivalent — includes both subscription and API sessions)
 	Projected30d float64 `json:"projected_30d"` // estimated cost for the next 30 days
 	Projected90d float64 `json:"projected_90d"` // estimated cost for the next 90 days
 	TrendPerDay  float64 `json:"trend_per_day"` // daily cost trend (positive = increasing)
 	TrendDir     string  `json:"trend_dir"`     // "increasing", "decreasing", or "stable"
 
+	// API-only projections (real spend — only sessions with actual provider costs)
+	APIProjected30d float64 `json:"api_projected_30d,omitempty"` // projected API cost for 30 days
+	APIProjected90d float64 `json:"api_projected_90d,omitempty"` // projected API cost for 90 days
+	APITrendPerDay  float64 `json:"api_trend_per_day,omitempty"` // daily API cost trend
+	APITrendDir     string  `json:"api_trend_dir,omitempty"`     // API trend direction
+
+	// Fixed subscription costs (from config)
+	SubscriptionMonthly float64 `json:"subscription_monthly,omitempty"` // total monthly subscription cost
+	TotalReal30d        float64 `json:"total_real_30d,omitempty"`       // subscription + API projected 30d
+
+	// Per-backend cost summary
+	BackendCosts []BackendCostSummary `json:"backend_costs,omitempty"` // per LLM backend breakdown
+
 	// Model recommendations
 	ModelBreakdown []ModelForecast `json:"model_breakdown"` // per-model cost breakdown + recommendation
+}
+
+// BackendCostSummary aggregates cost data for a single LLM backend (e.g. "anthropic", "amazon-bedrock").
+type BackendCostSummary struct {
+	Backend       string  `json:"backend"`                // e.g. "anthropic", "amazon-bedrock"
+	BillingType   string  `json:"billing_type"`           // "subscription", "api", "free"
+	PlanName      string  `json:"plan_name,omitempty"`    // e.g. "Claude Max"
+	MonthlyCost   float64 `json:"monthly_cost,omitempty"` // fixed subscription cost per month
+	MessageCount  int     `json:"message_count"`          // total messages via this backend
+	TotalTokens   int     `json:"total_tokens"`           // total tokens (input + output)
+	EstimatedCost float64 `json:"estimated_cost"`         // API-equivalent cost
+	ActualCost    float64 `json:"actual_cost"`            // actual cost reported by provider
+	SessionCount  int     `json:"session_count"`          // sessions using this backend
 }
 
 // CostBucket holds cost data for a time period.

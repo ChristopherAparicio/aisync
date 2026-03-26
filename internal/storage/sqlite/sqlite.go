@@ -590,6 +590,32 @@ func (s *Store) GetForkRelations(sessionID session.ID) ([]session.ForkRelation, 
 	return rels, rows.Err()
 }
 
+// ListAllForkRelations returns every fork relation in the database.
+func (s *Store) ListAllForkRelations() ([]session.ForkRelation, error) {
+	rows, err := s.db.Query(`
+		SELECT original_id, fork_id, fork_point, shared_messages, overlap_ratio,
+		       COALESCE(reason, ''), COALESCE(fork_context, ''),
+		       shared_input_tokens, shared_output_tokens
+		FROM session_forks
+		ORDER BY original_id, fork_point ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var rels []session.ForkRelation
+	for rows.Next() {
+		var r session.ForkRelation
+		if err := rows.Scan(&r.OriginalID, &r.ForkID, &r.ForkPoint, &r.SharedMessages,
+			&r.OverlapRatio, &r.Reason, &r.ForkContext,
+			&r.SharedInputTokens, &r.SharedOutputTokens); err != nil {
+			return nil, err
+		}
+		rels = append(rels, r)
+	}
+	return rels, rows.Err()
+}
+
 // GetTotalDeduplication returns the total shared tokens across all forks.
 func (s *Store) GetTotalDeduplication() (sharedInput, sharedOutput int, err error) {
 	err = s.db.QueryRow(`
@@ -695,22 +721,24 @@ func (s *Store) ListObjectives(sessionIDs []session.ID) (map[session.ID]*session
 // UpsertTokenBucket inserts or updates a token usage bucket.
 func (s *Store) UpsertTokenBucket(b session.TokenUsageBucket) error {
 	_, err := s.db.Exec(`
-		INSERT INTO token_usage_buckets (bucket_start, granularity, project_path, provider,
+		INSERT INTO token_usage_buckets (bucket_start, granularity, project_path, provider, llm_backend,
 			input_tokens, output_tokens, image_tokens, session_count, message_count,
 			tool_call_count, tool_error_count, image_count, user_msg_count, assist_msg_count,
-			computed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-		ON CONFLICT(bucket_start, granularity, project_path, provider) DO UPDATE SET
+			estimated_cost, actual_cost, computed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(bucket_start, granularity, project_path, provider, llm_backend) DO UPDATE SET
 			input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
 			image_tokens=excluded.image_tokens, session_count=excluded.session_count,
 			message_count=excluded.message_count,
 			tool_call_count=excluded.tool_call_count, tool_error_count=excluded.tool_error_count,
 			image_count=excluded.image_count, user_msg_count=excluded.user_msg_count,
 			assist_msg_count=excluded.assist_msg_count,
+			estimated_cost=excluded.estimated_cost, actual_cost=excluded.actual_cost,
 			computed_at=excluded.computed_at`,
-		b.BucketStart.Format(time.RFC3339), b.Granularity, b.ProjectPath, b.Provider,
+		b.BucketStart.Format(time.RFC3339), b.Granularity, b.ProjectPath, b.Provider, b.LLMBackend,
 		b.InputTokens, b.OutputTokens, b.ImageTokens, b.SessionCount, b.MessageCount,
 		b.ToolCallCount, b.ToolErrorCount, b.ImageCount, b.UserMsgCount, b.AssistMsgCount,
+		b.EstimatedCost, b.ActualCost,
 	)
 	return err
 }
@@ -718,9 +746,11 @@ func (s *Store) UpsertTokenBucket(b session.TokenUsageBucket) error {
 // QueryTokenBuckets retrieves token usage buckets for a time range and granularity.
 func (s *Store) QueryTokenBuckets(granularity string, since, until time.Time, projectPath string) ([]session.TokenUsageBucket, error) {
 	query := `SELECT bucket_start, granularity, project_path, provider,
-		input_tokens, output_tokens, image_tokens, session_count, message_count,
+		COALESCE(llm_backend,''), input_tokens, output_tokens, image_tokens,
+		session_count, message_count,
 		COALESCE(tool_call_count,0), COALESCE(tool_error_count,0), COALESCE(image_count,0),
-		COALESCE(user_msg_count,0), COALESCE(assist_msg_count,0)
+		COALESCE(user_msg_count,0), COALESCE(assist_msg_count,0),
+		COALESCE(estimated_cost,0), COALESCE(actual_cost,0)
 		FROM token_usage_buckets WHERE granularity = ?`
 	args := []interface{}{granularity}
 
@@ -749,8 +779,10 @@ func (s *Store) QueryTokenBuckets(granularity string, since, until time.Time, pr
 		var b session.TokenUsageBucket
 		var startStr string
 		if err := rows.Scan(&startStr, &b.Granularity, &b.ProjectPath, &b.Provider,
-			&b.InputTokens, &b.OutputTokens, &b.ImageTokens, &b.SessionCount, &b.MessageCount,
-			&b.ToolCallCount, &b.ToolErrorCount, &b.ImageCount, &b.UserMsgCount, &b.AssistMsgCount); err != nil {
+			&b.LLMBackend, &b.InputTokens, &b.OutputTokens, &b.ImageTokens,
+			&b.SessionCount, &b.MessageCount,
+			&b.ToolCallCount, &b.ToolErrorCount, &b.ImageCount, &b.UserMsgCount, &b.AssistMsgCount,
+			&b.EstimatedCost, &b.ActualCost); err != nil {
 			continue
 		}
 		b.BucketStart, _ = time.Parse(time.RFC3339, startStr)
@@ -2077,6 +2109,85 @@ func runMigrations(db *sql.DB) error {
 		PRIMARY KEY (bucket_start, granularity, project_path, provider)
 	)`); err != nil {
 		return fmt.Errorf("migration 018 (event_buckets table): %w", err)
+	}
+
+	// Migration 019: add llm_backend, estimated_cost, actual_cost to token_usage_buckets.
+	for _, col := range []string{"llm_backend"} {
+		if !columnExists(db, "token_usage_buckets", col) {
+			if _, err := db.Exec("ALTER TABLE token_usage_buckets ADD COLUMN llm_backend TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("migration 019 (llm_backend): %w", err)
+			}
+		}
+	}
+	for _, col := range []string{"estimated_cost", "actual_cost"} {
+		if !columnExists(db, "token_usage_buckets", col) {
+			if _, err := db.Exec(fmt.Sprintf("ALTER TABLE token_usage_buckets ADD COLUMN %s REAL NOT NULL DEFAULT 0", col)); err != nil {
+				return fmt.Errorf("migration 019 (%s): %w", col, err)
+			}
+		}
+	}
+	// Recreate unique index to include llm_backend in the key.
+	// The old PRIMARY KEY was (bucket_start, granularity, project_path, provider).
+	// We create a new unique index that includes llm_backend for the new bucket key.
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_token_buckets_key
+		ON token_usage_buckets(bucket_start, granularity, project_path, provider, llm_backend)`); err != nil {
+		return fmt.Errorf("migration 019 (token_buckets unique index): %w", err)
+	}
+
+	// Migration 020: recreate token_usage_buckets with llm_backend in the PRIMARY KEY.
+	// The old PK was (bucket_start, granularity, project_path, provider) which rejected
+	// inserts with different llm_backend values for the same time slot.
+	// We recreate the table with the correct PK. Data is recomputed via `aisync usage compute`.
+	{
+		var hasBadPK bool
+		// Check if the PK still lacks llm_backend by inspecting table_info.
+		pkRows, pkErr := db.Query("PRAGMA table_info(token_usage_buckets)")
+		if pkErr == nil {
+			defer func() { _ = pkRows.Close() }()
+			pkCols := make(map[string]bool)
+			for pkRows.Next() {
+				var cid int
+				var name, typeName string
+				var notNull, pkFlag int
+				var dflt sql.NullString
+				if scanErr := pkRows.Scan(&cid, &name, &typeName, &notNull, &dflt, &pkFlag); scanErr == nil && pkFlag > 0 {
+					pkCols[name] = true
+				}
+			}
+			_ = pkRows.Close()
+			// If PK has 4 columns without llm_backend, we need to recreate.
+			hasBadPK = len(pkCols) == 4 && !pkCols["llm_backend"]
+		}
+
+		if hasBadPK {
+			// Drop and recreate with correct PK. Data will be recomputed.
+			if _, err := db.Exec(`DROP TABLE IF EXISTS token_usage_buckets`); err != nil {
+				return fmt.Errorf("migration 020 (drop old table): %w", err)
+			}
+			if _, err := db.Exec(`CREATE TABLE token_usage_buckets (
+				bucket_start TEXT NOT NULL,
+				granularity TEXT NOT NULL DEFAULT '1h',
+				project_path TEXT NOT NULL DEFAULT '',
+				provider TEXT NOT NULL DEFAULT '',
+				llm_backend TEXT NOT NULL DEFAULT '',
+				input_tokens INTEGER NOT NULL DEFAULT 0,
+				output_tokens INTEGER NOT NULL DEFAULT 0,
+				image_tokens INTEGER NOT NULL DEFAULT 0,
+				session_count INTEGER NOT NULL DEFAULT 0,
+				message_count INTEGER NOT NULL DEFAULT 0,
+				tool_call_count INTEGER NOT NULL DEFAULT 0,
+				tool_error_count INTEGER NOT NULL DEFAULT 0,
+				image_count INTEGER NOT NULL DEFAULT 0,
+				user_msg_count INTEGER NOT NULL DEFAULT 0,
+				assist_msg_count INTEGER NOT NULL DEFAULT 0,
+				estimated_cost REAL NOT NULL DEFAULT 0,
+				actual_cost REAL NOT NULL DEFAULT 0,
+				computed_at TEXT NOT NULL DEFAULT '',
+				PRIMARY KEY (bucket_start, granularity, project_path, provider, llm_backend)
+			)`); err != nil {
+				return fmt.Errorf("migration 020 (create new table): %w", err)
+			}
+		}
 	}
 
 	return nil

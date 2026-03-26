@@ -4,6 +4,32 @@
 
 ## Recently Completed
 
+### Fork Deduplication in Cost Computation (2026-03-26)
+- [x] **DetectForksBatch fix**: Removed `branch==""` skip — branchless sessions now included in fork detection
+- [x] **Rewind detection**: Parse "Rewind of ses_XXX at message N" from summary, create ForkRelation with exact fork_point
+- [x] **Store**: `ListAllForkRelations()` — bulk query all fork relations for dedup map
+- [x] **ComputeTokenBuckets dedup**: Messages at index < fork_point are skipped for fork sessions
+- [x] **Forecast dedup**: Shared prefix tokens/costs subtracted from fork session totals, per-backend stats skip shared msgs
+- [x] **Production results**: 128 fork relations (was 55), 78 sessions deduplicated, 16,819 shared-prefix messages skipped
+- [x] **Tests**: 4 new unit tests (fork dedup, no-forks baseline, rewind detection, branchless sessions)
+- [x] 1820 tests passing
+
+### Backend Pricing Separation (2026-03-26)
+- [x] **Config**: `pricing.backend_billing` map with `BackendBillingConfig` (type, monthly_cost, plan_name)
+- [x] **Config getters**: `GetBackendBilling()`, `GetAllBackendBilling()`, `ResolveBillingType()`, `GetSubscriptionCosts()`
+- [x] **Domain**: Added `LLMBackend`, `EstimatedCost`, `ActualCost` to `TokenUsageBucket`
+- [x] **Domain**: `BackendCostSummary` struct + `ForecastResult` API-only projections + subscription fields
+- [x] **Storage**: Migration 019 — `llm_backend`, `estimated_cost`, `actual_cost` columns + new unique index
+- [x] **Storage**: Updated `UpsertTokenBucket` and `QueryTokenBuckets` for new fields
+- [x] **Service**: Rewrote `ComputeTokenBuckets` to key by `msg.ProviderID`, compute per-message cost
+- [x] **Service**: Rewrote `Forecast()` — API-only projections, per-backend summaries, subscription costs
+- [x] **Service**: Added `cfg *config.Config` to `SessionService` + wired in factory
+- [x] **Cost Dashboard**: Redesigned with "Real Monthly Spend" KPIs, "Cost by LLM Backend" table, API vs subscription separation
+- [x] **Home Page**: Forecast panel shows real cost (subscriptions + API) when backend data is available
+- [x] **Project Detail**: Forecast panel shows real cost when available
+- [x] **CSS**: Billing badges (subscription, api, free), accent KPI card, forecast highlight row
+- [x] 1811 tests passing
+
 ### Project Detail Page (2026-03-26)
 - [x] **Project Detail Page** (`GET /projects/{path...}`): Full project-scoped view
   - Project header: display name, remote URL, provider badge, category badge
@@ -69,6 +95,20 @@
 - [x] Domain model, deterministic classifier, OpenCode extraction
 - [x] SQLite store, API endpoints, CLI, MCP tool, scheduler task
 - [x] Dashboard filters: Status + HasErrors
+
+---
+
+## Priority 0: Operational — COMPLETED
+
+### Backend Pricing (2026-03-26)
+- [x] **Configure backend billing**: anthropic (subscription, $200/mo, "Claude Max"), amazon-bedrock (api), opencode (free), ollama (free)
+- [x] **Migration 020**: DROP + CREATE `token_usage_buckets` with correct 5-column PK
+- [x] **Production data**: anthropic 161K msgs/$0 actual (subscription), amazon-bedrock 32K msgs/$3,986 actual (API)
+
+### Fork Deduplication (2026-03-26)
+- [x] **Fork detection improved**: 128 forks (was 55), branchless + rewind sessions included
+- [x] **Dedup in ComputeTokenBuckets + Forecast**: 16,819 shared-prefix messages skipped, ~3.5B duplicated tokens eliminated
+- [x] **Re-backfill**: `aisync backfill forks` + `aisync usage compute` — 1,570 buckets, 186K messages (was 195K)
 
 ---
 

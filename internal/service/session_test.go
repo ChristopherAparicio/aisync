@@ -882,8 +882,9 @@ func (m *mockStore) SaveForkRelation(_ session.ForkRelation) error { return nil 
 func (m *mockStore) GetForkRelations(_ session.ID) ([]session.ForkRelation, error) {
 	return nil, nil
 }
-func (m *mockStore) GetTotalDeduplication() (int, int, error)       { return 0, 0, nil }
-func (m *mockStore) SaveObjective(_ session.SessionObjective) error { return nil }
+func (m *mockStore) ListAllForkRelations() ([]session.ForkRelation, error) { return nil, nil }
+func (m *mockStore) GetTotalDeduplication() (int, int, error)              { return 0, 0, nil }
+func (m *mockStore) SaveObjective(_ session.SessionObjective) error        { return nil }
 func (m *mockStore) GetObjective(_ session.ID) (*session.SessionObjective, error) {
 	return nil, nil
 }
