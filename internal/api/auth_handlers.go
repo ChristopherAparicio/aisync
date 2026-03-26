@@ -102,6 +102,10 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate the "no users" cache so the auth middleware starts enforcing
+	// credentials on subsequent requests.
+	s.authHasUsers.Store(0)
+
 	writeJSON(w, http.StatusCreated, authResponse{
 		Token: result.Token,
 		User:  toUserResponse(result.User),

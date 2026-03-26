@@ -10,6 +10,11 @@ import (
 // authMiddleware checks for authentication via Bearer token or X-API-Key header.
 // If auth is disabled (authSvc is nil), requests pass through unauthenticated.
 // Public routes (health, auth endpoints) bypass authentication.
+//
+// "Open until first registration" mode: when auth is enabled but no users have
+// registered yet, all requests pass through without credentials. This makes the
+// API immediately usable for development and debugging. Once the first user
+// registers via POST /api/v1/auth/register, auth enforcement activates.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// If auth is not configured, pass through.
@@ -22,6 +27,24 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if isPublicRoute(r.Method, r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// "Open until first registration" — bypass auth when no users exist.
+		// The cache is invalidated (reset to 0) by handleAuthRegister so the
+		// next request re-checks. This avoids a DB query on every request.
+		state := s.authHasUsers.Load()
+		if state != 2 {
+			has, err := s.authSvc.HasUsers(r.Context())
+			if err != nil {
+				// If we can't check, fall through to normal auth (safe default).
+				s.logger.Printf("WARN: failed to check user count: %v", err)
+			} else if !has {
+				s.authHasUsers.Store(1)
+				next.ServeHTTP(w, r)
+				return
+			} else {
+				s.authHasUsers.Store(2)
+			}
 		}
 
 		// Try Bearer token first.

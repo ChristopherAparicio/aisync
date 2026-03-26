@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,6 +34,12 @@ type Server struct {
 	authSvc         auth.Servicer                  // optional — nil disables authentication
 	httpServer      *http.Server
 	logger          *log.Logger
+
+	// authHasUsers caches whether any auth users exist.
+	// 0 = unknown, 1 = no users (open access), 2 = has users (enforce auth).
+	// Used by authMiddleware for "open until first registration" dev mode.
+	// Reset to 0 by handleAuthRegister so the next request re-checks.
+	authHasUsers atomic.Int32
 }
 
 // Config holds the configuration for creating a new Server.

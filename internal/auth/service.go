@@ -39,6 +39,10 @@ type Servicer interface {
 
 	// ListUsers returns all users (admin only in practice, enforced at handler level).
 	ListUsers(ctx context.Context) ([]*User, error)
+
+	// HasUsers reports whether at least one user is registered.
+	// Used by the auth middleware to implement "open until first registration" dev mode.
+	HasUsers(ctx context.Context) (bool, error)
 }
 
 // ── Store Port (Dependency Inversion) ──
@@ -275,4 +279,13 @@ func (s *Service) DeleteAPIKey(_ context.Context, keyID, _ string) error {
 // ListUsers returns all registered users.
 func (s *Service) ListUsers(_ context.Context) ([]*User, error) {
 	return s.store.ListAuthUsers()
+}
+
+// HasUsers reports whether at least one user is registered.
+func (s *Service) HasUsers(_ context.Context) (bool, error) {
+	count, err := s.store.CountAuthUsers()
+	if err != nil {
+		return false, fmt.Errorf("counting users: %w", err)
+	}
+	return count > 0, nil
 }
