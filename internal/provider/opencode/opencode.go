@@ -268,6 +268,8 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 			// Per-message: store the total (raw + cache) for display purposes.
 			domainMsg.InputTokens = rawInput + cacheRead + cacheWrite
 			domainMsg.OutputTokens = msg.Tokens.Output
+			domainMsg.CacheReadTokens = cacheRead
+			domainMsg.CacheWriteTokens = cacheWrite
 		}
 
 		result.Messages = append(result.Messages, domainMsg)
@@ -318,9 +320,9 @@ func (p *Provider) CanImport() bool {
 }
 
 // Import writes a session back to OpenCode's native format.
-// It creates the project, session, message, and part JSON files
-// in the appropriate subdirectories under storage/.
-// Import always uses the file-based writer regardless of reader backend.
+// When OpenCode's SQLite database is available, it writes directly to the DB
+// so the session appears immediately. Otherwise, it falls back to writing
+// JSON files under storage/ (legacy path).
 func (p *Provider) Import(sess *session.Session) error {
 	if sess == nil {
 		return fmt.Errorf("session is nil")
@@ -338,8 +340,43 @@ func (p *Provider) Import(sess *session.Session) error {
 		sess.ID = session.ID(sessionID)
 	}
 
+	// Try DB writer first — this is the primary path for modern OpenCode.
+	if dw, err := newDBWriter(p.dataHome); err == nil {
+		defer dw.close()
+		if err := p.importViaDB(dw, sess); err != nil {
+			return fmt.Errorf("DB import: %w", err)
+		}
+		return nil
+	}
+
+	// Fallback to file-based writer (legacy).
+	return p.importViaFiles(sess)
+}
+
+// importViaDB writes the session tree directly into OpenCode's SQLite DB.
+func (p *Provider) importViaDB(dw *dbWriter, sess *session.Session) error {
+	if err := dw.importSession(sess, sess.Agent); err != nil {
+		return err
+	}
+
+	// Recursively import child sessions.
+	for i := range sess.Children {
+		child := &sess.Children[i]
+		child.ProjectPath = sess.ProjectPath
+		if child.ParentID == "" {
+			child.ParentID = sess.ID
+		}
+		if err := dw.importSession(child, child.Agent); err != nil {
+			return fmt.Errorf("importing child session: %w", err)
+		}
+	}
+	return nil
+}
+
+// importViaFiles writes JSON files under storage/ (legacy path).
+func (p *Provider) importViaFiles(sess *session.Session) error {
 	// Step 1: Ensure or find the project.
-	projectID, err := p.ensureProject(projectPath)
+	projectID, err := p.ensureProject(sess.ProjectPath)
 	if err != nil {
 		return fmt.Errorf("ensuring project: %w", err)
 	}
@@ -357,11 +394,11 @@ func (p *Provider) Import(sess *session.Session) error {
 	// Step 4: Import child sessions.
 	for i := range sess.Children {
 		child := &sess.Children[i]
-		child.ProjectPath = projectPath
+		child.ProjectPath = sess.ProjectPath
 		if child.ParentID == "" {
 			child.ParentID = sess.ID
 		}
-		if err := p.Import(child); err != nil {
+		if err := p.importViaFiles(child); err != nil {
 			return fmt.Errorf("importing child session: %w", err)
 		}
 	}
