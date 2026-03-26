@@ -22,6 +22,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/internal/provider"
+	"github.com/ChristopherAparicio/aisync/internal/provider/claude"
+	"github.com/ChristopherAparicio/aisync/internal/provider/opencode"
+	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -326,6 +331,11 @@ func setupAgent(opts *Options, scanner *bufio.Scanner) error {
 		}
 	}
 	fmt.Fprintln(out)
+
+	// ── Import existing sessions ──
+	if err := discoverAndImport(opts, scanner, out); err != nil {
+		fmt.Fprintf(out, "  Warning: import discovery failed: %v\n", err)
+	}
 
 	// ── Optional: remote server ──
 	serverURL := opts.ServerURL
@@ -806,4 +816,169 @@ func generateSecret() (string, error) {
 func copyDir(src, dst string) error {
 	cmd := exec.Command("cp", "-r", src, dst)
 	return cmd.Run()
+}
+
+// ── Import Discovery (embedded in setup) ──
+
+// discoverAndImport scans providers for existing sessions and offers to import them.
+func discoverAndImport(opts *Options, scanner *bufio.Scanner, out io.Writer) error {
+	fmt.Fprintln(out, "  Scanning for existing sessions...")
+
+	type providerResult struct {
+		name     string
+		slug     session.ProviderName
+		prov     provider.Provider
+		projects []provider.ProjectInfo
+	}
+
+	var results []providerResult
+
+	ocProv := opencode.New("")
+	if disc, ok := provider.Provider(ocProv).(provider.ProjectDiscoverer); ok {
+		if projects, err := disc.ListAllProjects(); err == nil && len(projects) > 0 {
+			total := 0
+			for _, p := range projects {
+				total += p.SessionCount
+			}
+			results = append(results, providerResult{
+				name: "OpenCode", slug: session.ProviderOpenCode,
+				prov: ocProv, projects: projects,
+			})
+			fmt.Fprintf(out, "    OpenCode:    %d projects, %d sessions\n", len(projects), total)
+		}
+	}
+
+	ccProv := claude.New("")
+	if disc, ok := provider.Provider(ccProv).(provider.ProjectDiscoverer); ok {
+		if projects, err := disc.ListAllProjects(); err == nil && len(projects) > 0 {
+			total := 0
+			for _, p := range projects {
+				total += p.SessionCount
+			}
+			results = append(results, providerResult{
+				name: "Claude Code", slug: session.ProviderClaudeCode,
+				prov: ccProv, projects: projects,
+			})
+			fmt.Fprintf(out, "    Claude Code: %d projects, %d sessions\n", len(projects), total)
+		}
+	}
+
+	if len(results) == 0 {
+		fmt.Fprintln(out, "    No existing sessions found.")
+		fmt.Fprintln(out)
+		return nil
+	}
+	fmt.Fprintln(out)
+
+	// Ask if user wants to import
+	doImport := opts.Yes || promptYesNo(scanner, "Import existing sessions into aisync?", true)
+	if !doImport {
+		return nil
+	}
+
+	// In non-interactive mode, import everything.
+	// In interactive mode, let user pick projects.
+	type selectedProject struct {
+		slug session.ProviderName
+		prov provider.Provider
+		proj provider.ProjectInfo
+	}
+	var selected []selectedProject
+
+	for _, r := range results {
+		if opts.Yes {
+			for _, proj := range r.projects {
+				if proj.SessionCount > 0 {
+					selected = append(selected, selectedProject{slug: r.slug, prov: r.prov, proj: proj})
+				}
+			}
+			continue
+		}
+
+		fmt.Fprintf(out, "  ── %s ──\n", r.name)
+		var nonEmpty []provider.ProjectInfo
+		for _, proj := range r.projects {
+			if proj.SessionCount > 0 {
+				nonEmpty = append(nonEmpty, proj)
+			}
+		}
+
+		for i, proj := range nonEmpty {
+			shortPath := proj.Path
+			if home, err := os.UserHomeDir(); err == nil {
+				shortPath = strings.Replace(proj.Path, home, "~", 1)
+			}
+			fmt.Fprintf(out, "    %d) %-45s  %d sessions\n", i+1, shortPath, proj.SessionCount)
+		}
+		fmt.Fprintln(out)
+		fmt.Fprint(out, "  Select projects (comma-separated, or 'all'): ")
+		scanner.Scan()
+		answer := strings.TrimSpace(scanner.Text())
+
+		if answer == "" || strings.EqualFold(answer, "all") || strings.EqualFold(answer, "a") {
+			for _, proj := range nonEmpty {
+				selected = append(selected, selectedProject{slug: r.slug, prov: r.prov, proj: proj})
+			}
+		} else {
+			for _, part := range strings.Split(answer, ",") {
+				part = strings.TrimSpace(part)
+				var idx int
+				if _, err := fmt.Sscanf(part, "%d", &idx); err == nil && idx >= 1 && idx <= len(nonEmpty) {
+					selected = append(selected, selectedProject{slug: r.slug, prov: r.prov, proj: nonEmpty[idx-1]})
+				}
+			}
+		}
+		fmt.Fprintln(out)
+	}
+
+	if len(selected) == 0 {
+		return nil
+	}
+
+	// Do the import
+	svc, err := opts.Factory.SessionService()
+	if err != nil {
+		return fmt.Errorf("initializing service: %w", err)
+	}
+
+	totalImported, totalSkipped := 0, 0
+	for _, sel := range selected {
+		shortPath := sel.proj.Path
+		if home, hErr := os.UserHomeDir(); hErr == nil {
+			shortPath = strings.Replace(sel.proj.Path, home, "~", 1)
+		}
+
+		summaries, detectErr := sel.prov.Detect(sel.proj.Path, "")
+		if detectErr != nil {
+			fmt.Fprintf(out, "    %s: detect failed: %v\n", shortPath, detectErr)
+			continue
+		}
+
+		imported, skipped := 0, 0
+		for range summaries {
+			result, captureErr := svc.Capture(service.CaptureRequest{
+				ProjectPath:  sel.proj.Path,
+				Mode:         session.StorageModeCompact,
+				ProviderName: sel.slug,
+			})
+			if captureErr != nil {
+				continue
+			}
+			if result.Skipped {
+				skipped++
+			} else {
+				imported++
+			}
+		}
+
+		fmt.Fprintf(out, "    %s: %d imported, %d skipped\n", shortPath, imported, skipped)
+		totalImported += imported
+		totalSkipped += skipped
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  Imported %d sessions (%d skipped)\n", totalImported, totalSkipped)
+	fmt.Fprintln(out)
+
+	return nil
 }
