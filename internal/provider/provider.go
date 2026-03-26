@@ -23,6 +23,21 @@ type Provider interface {
 	Import(s *session.Session) error
 }
 
+// ProjectInfo holds metadata about a project discovered in a provider.
+type ProjectInfo struct {
+	ID           string // provider-native project ID
+	Path         string // worktree / project path on disk
+	SessionCount int    // number of sessions for this project
+}
+
+// ProjectDiscoverer is an optional interface that providers can implement
+// to support bulk discovery of all projects and their session counts.
+// Used by `aisync import --discover` to list everything available.
+type ProjectDiscoverer interface {
+	// ListAllProjects returns all projects known to this provider.
+	ListAllProjects() ([]ProjectInfo, error)
+}
+
 // Freshness holds the minimal data needed to determine if a session
 // has changed since the last capture. Used by the skip-if-unchanged
 // optimization to avoid re-exporting unmodified sessions.

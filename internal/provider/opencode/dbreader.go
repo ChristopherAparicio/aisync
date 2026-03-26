@@ -281,3 +281,27 @@ func (r *dbReader) sessionUpdatedAt(sessionID string) int64 {
 	}
 	return updated
 }
+
+func (r *dbReader) listAllProjects() ([]ocProjectInfo, error) {
+	rows, err := r.db.Query(
+		`SELECT p.id, p.worktree, COUNT(s.id) as session_count
+		 FROM project p
+		 LEFT JOIN session s ON s.project_id = p.id AND (s.parent_id IS NULL OR s.parent_id = '')
+		 GROUP BY p.id, p.worktree
+		 ORDER BY session_count DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying all projects: %w", err)
+	}
+	defer rows.Close()
+
+	var projects []ocProjectInfo
+	for rows.Next() {
+		var p ocProjectInfo
+		if err := rows.Scan(&p.ID, &p.Worktree, &p.SessionCount); err != nil {
+			continue
+		}
+		projects = append(projects, p)
+	}
+	return projects, rows.Err()
+}

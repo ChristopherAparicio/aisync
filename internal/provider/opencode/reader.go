@@ -34,4 +34,14 @@ type reader interface {
 	// sessionUpdatedAt returns the session's last-updated timestamp (epoch ms).
 	// Returns 0 if unknown.
 	sessionUpdatedAt(sessionID string) int64
+
+	// listAllProjects returns all projects known to this reader.
+	listAllProjects() ([]ocProjectInfo, error)
+}
+
+// ocProjectInfo holds a project's metadata including session count.
+type ocProjectInfo struct {
+	ID           string
+	Worktree     string
+	SessionCount int
 }

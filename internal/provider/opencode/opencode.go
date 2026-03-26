@@ -59,6 +59,25 @@ func (p *Provider) Name() session.ProviderName {
 	return session.ProviderOpenCode
 }
 
+// ListAllProjects returns all projects known to the OpenCode provider.
+// Implements provider.ProjectDiscoverer.
+func (p *Provider) ListAllProjects() ([]provider.ProjectInfo, error) {
+	ocProjects, err := p.reader.listAllProjects()
+	if err != nil {
+		return nil, err
+	}
+
+	projects := make([]provider.ProjectInfo, len(ocProjects))
+	for i, op := range ocProjects {
+		projects[i] = provider.ProjectInfo{
+			ID:           op.ID,
+			Path:         op.Worktree,
+			SessionCount: op.SessionCount,
+		}
+	}
+	return projects, nil
+}
+
 // SessionFreshness returns the message count and last-updated timestamp
 // for a session, enabling the skip-if-unchanged optimization.
 // Implements provider.FreshnessChecker.

@@ -246,3 +246,47 @@ func (r *fileReader) sessionUpdatedAt(sessionID string) int64 {
 	}
 	return sess.Time.Updated
 }
+
+func (r *fileReader) listAllProjects() ([]ocProjectInfo, error) {
+	projectsPath := filepath.Join(r.storagePath, projectDir)
+	entries, err := os.ReadDir(projectsPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading projects directory: %w", err)
+	}
+
+	var projects []ocProjectInfo
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == "global.json" {
+			continue
+		}
+
+		data, readErr := os.ReadFile(filepath.Join(projectsPath, entry.Name()))
+		if readErr != nil {
+			continue
+		}
+
+		var proj ocProject
+		if unmarshalErr := json.Unmarshal(data, &proj); unmarshalErr != nil {
+			continue
+		}
+
+		// Count sessions for this project.
+		sessDir := filepath.Join(r.storagePath, sessionDir, proj.ID)
+		sessCount := 0
+		if sessEntries, dirErr := os.ReadDir(sessDir); dirErr == nil {
+			for _, se := range sessEntries {
+				if strings.HasSuffix(se.Name(), ".json") {
+					sessCount++
+				}
+			}
+		}
+
+		projects = append(projects, ocProjectInfo{
+			ID:           proj.ID,
+			Worktree:     proj.Worktree,
+			SessionCount: sessCount,
+		})
+	}
+
+	return projects, nil
+}

@@ -18,8 +18,11 @@ type Options struct {
 	IO      *iostreams.IOStreams
 	Factory *cmdutil.Factory
 
-	FormatFlag string
-	IntoFlag   string
+	FormatFlag   string
+	IntoFlag     string
+	DiscoverFlag bool
+	YesFlag      bool
+	ModeFlag     string
 }
 
 // NewCmdImport creates the `aisync import` command.
@@ -30,17 +33,45 @@ func NewCmdImport(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "import <file>",
-		Short: "Import a session from a file",
-		Long:  "Imports a session from a file. Auto-detects the format or use --format to specify.",
-		Args:  cobra.ExactArgs(1),
+		Use:   "import [file]",
+		Short: "Import sessions from a file or discover from providers",
+		Long: `Imports sessions into aisync.
+
+Two modes:
+  aisync import <file>            Import a single session from a file
+  aisync import --discover        Scan all providers, select projects, bulk import
+
+The --discover flag scans installed AI providers (OpenCode, Claude Code),
+lists all projects and session counts, lets you select which to import,
+and captures everything into aisync.
+
+Examples:
+  aisync import session.json                  # import from file
+  aisync import --discover                    # interactive bulk import
+  aisync import --discover --yes              # import everything (non-interactive)
+  aisync import --discover --mode compact     # set storage mode`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.DiscoverFlag {
+				return runDiscover(&DiscoverOptions{
+					IO:      opts.IO,
+					Factory: opts.Factory,
+					Yes:     opts.YesFlag,
+					Mode:    opts.ModeFlag,
+				})
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("provide a file path, or use --discover for bulk import")
+			}
 			return runImport(opts, args[0])
 		},
 	}
 
 	cmd.Flags().StringVar(&opts.FormatFlag, "format", "", "Source format: aisync, claude, opencode (default: auto-detect)")
 	cmd.Flags().StringVar(&opts.IntoFlag, "into", "aisync", "Target: aisync (store only), claude-code, opencode")
+	cmd.Flags().BoolVar(&opts.DiscoverFlag, "discover", false, "Scan providers and interactively import sessions")
+	cmd.Flags().BoolVarP(&opts.YesFlag, "yes", "y", false, "Accept all defaults without prompting (with --discover)")
+	cmd.Flags().StringVar(&opts.ModeFlag, "mode", "compact", "Storage mode: full, compact, summary (with --discover)")
 
 	return cmd
 }

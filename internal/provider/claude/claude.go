@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/google/uuid"
 )
@@ -432,6 +433,62 @@ func (p *Provider) projectDir(projectPath string) string {
 	return filepath.Join(p.claudeHome, projectsDir, encoded)
 }
 
+// ListAllProjects enumerates all projects known to Claude Code by scanning
+// the projects directory. Each subdirectory is a project with an encoded path.
+// Implements provider.ProjectDiscoverer.
+func (p *Provider) ListAllProjects() ([]provider.ProjectInfo, error) {
+	projectsRoot := filepath.Join(p.claudeHome, projectsDir)
+	entries, err := os.ReadDir(projectsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("reading projects directory: %w", err)
+	}
+
+	var projects []provider.ProjectInfo
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		// Decode the project path from the directory name.
+		dirName := entry.Name()
+		projectPath := decodeProjectPath(dirName)
+
+		// Count sessions from the index file.
+		indexPath := filepath.Join(projectsRoot, dirName, sessionsIndex)
+		sessCount := 0
+		if index, readErr := readSessionsIndex(indexPath); readErr == nil {
+			sessCount = len(index.Entries)
+		} else {
+			// No index — count JSONL files instead.
+			if subEntries, dirErr := os.ReadDir(filepath.Join(projectsRoot, dirName)); dirErr == nil {
+				for _, se := range subEntries {
+					if strings.HasSuffix(se.Name(), jsonlExtension) {
+						sessCount++
+					}
+				}
+			}
+		}
+
+		if sessCount == 0 {
+			continue // skip empty project dirs
+		}
+
+		projects = append(projects, provider.ProjectInfo{
+			ID:           dirName,
+			Path:         projectPath,
+			SessionCount: sessCount,
+		})
+	}
+
+	return projects, nil
+}
+
+// decodeProjectPath converts a Claude Code directory name back to a path.
+// Reverses encodeProjectPath: "-" becomes "/".
+func decodeProjectPath(encoded string) string {
+	return strings.ReplaceAll(encoded, "-", "/")
+}
+
 // findSessionFile locates the JSONL file for a given session ID.
 // It searches all project directories.
 func (p *Provider) findSessionFile(sessionID session.ID) (string, error) {
@@ -640,10 +697,11 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 	fileChanges := make(map[string]session.ChangeType)
 
 	var (
-		totalInput     int
-		totalOutput    int
-		totalCache     int
-		totalImageToks int
+		totalInput      int
+		totalOutput     int
+		totalCacheRead  int
+		totalCacheWrite int
+		totalImageToks  int
 	)
 
 	for _, line := range lines {
@@ -678,7 +736,8 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 			if msg.Usage != nil {
 				totalInput += msg.Usage.InputTokens + msg.Usage.CacheCreationInputTokens + msg.Usage.CacheReadInputTokens
 				totalOutput += msg.Usage.OutputTokens
-				totalCache += msg.Usage.CacheReadInputTokens + msg.Usage.CacheCreationInputTokens
+				totalCacheRead += msg.Usage.CacheReadInputTokens
+				totalCacheWrite += msg.Usage.CacheCreationInputTokens
 			}
 
 			// summary mode: only metadata, no messages
@@ -712,6 +771,8 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 			if msg.Usage != nil {
 				domainMsg.InputTokens = msg.Usage.InputTokens + msg.Usage.CacheCreationInputTokens + msg.Usage.CacheReadInputTokens
 				domainMsg.OutputTokens = msg.Usage.OutputTokens
+				domainMsg.CacheReadTokens = msg.Usage.CacheReadInputTokens
+				domainMsg.CacheWriteTokens = msg.Usage.CacheCreationInputTokens
 			}
 			// Accumulate image tokens.
 			for _, img := range parsed.images {
@@ -752,7 +813,8 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 		OutputTokens: totalOutput,
 		TotalTokens:  totalInput + totalOutput,
 		ImageTokens:  totalImageToks,
-		CacheRead:    totalCache,
+		CacheRead:    totalCacheRead,
+		CacheWrite:   totalCacheWrite,
 	}
 
 	// Set file changes
