@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"testing"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/service"
@@ -133,6 +134,21 @@ func (m *mockSessionService) ComputeTokenBuckets(_ context.Context, _ service.Co
 }
 func (m *mockSessionService) QueryTokenUsage(_ context.Context, _ service.QueryTokenUsageRequest) ([]session.TokenUsageBucket, error) {
 	return nil, nil
+}
+func (m *mockSessionService) ToolCostSummary(_ context.Context, _ string, _, _ time.Time) (*session.ToolCostSummary, error) {
+	return nil, nil
+}
+func (m *mockSessionService) AgentCostSummary(_ context.Context, _ string, _, _ time.Time) ([]session.AgentCostEntry, error) {
+	return nil, nil
+}
+func (m *mockSessionService) CacheEfficiency(_ context.Context, _ string, _ time.Time) (*session.CacheEfficiency, error) {
+	return nil, nil
+}
+func (m *mockSessionService) ClassifySession(_ *session.Session) int {
+	return 0
+}
+func (m *mockSessionService) ClassifyProjectSessions(_, _ string) (int, int, error) {
+	return 0, 0, nil
 }
 func (m *mockSessionService) Rewind(_ context.Context, _ service.RewindRequest) (*service.RewindResult, error) {
 	return nil, nil

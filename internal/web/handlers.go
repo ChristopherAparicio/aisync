@@ -252,6 +252,14 @@ type dashboardPage struct {
 	HasRealForecast     bool
 	TotalReal30d        float64
 	SubscriptionMonthly float64
+	APIProjected30d     float64
+
+	// Cache efficiency (quick stats for dashboard)
+	HasCacheStats         bool
+	DashCacheHitRate      float64 // 0-100
+	DashCacheMissSessions int     // sessions with at least 1 miss
+	DashCacheTotalMisses  int     // total miss messages
+	DashCacheWaste        float64 // $ wasted
 
 	// Project filtering
 	Projects        []projectItem
@@ -412,11 +420,23 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 			data.HasRealForecast = true
 			data.TotalReal30d = forecast.TotalReal30d
 			data.SubscriptionMonthly = forecast.SubscriptionMonthly
+			data.APIProjected30d = forecast.APIProjected30d
 		}
 	}
 
 	if data.TrendDir == "" {
 		data.TrendDir = "stable"
+	}
+
+	// Cache efficiency (quick stats).
+	since7d := time.Now().AddDate(0, 0, -7)
+	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(r.Context(), project, since7d)
+	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
+		data.HasCacheStats = true
+		data.DashCacheHitRate = cacheEff.CacheHitRate
+		data.DashCacheMissSessions = cacheEff.SessionsWithMiss
+		data.DashCacheTotalMisses = cacheEff.TotalCacheMisses
+		data.DashCacheWaste = cacheEff.EstimatedWaste
 	}
 
 	// Weekly trends (current vs previous 7 days)
@@ -479,11 +499,12 @@ type sessionRow struct {
 
 // sessionCell holds a single cell's display value and optional CSS class/badge.
 type sessionCell struct {
-	Value   string
-	Class   string // extra CSS class for the <td>
-	IsLink  bool   // render as <a href="/sessions/...">
-	IsBadge bool   // wrap in <span class="badge badge-provider">
-	LinkID  string // session ID for the link target
+	Value    string
+	Class    string // extra CSS class for the <td>
+	IsLink   bool   // render as <a href="/sessions/..."> (when LinkHref is empty)
+	IsBadge  bool   // wrap in <span class="badge badge-provider">
+	LinkID   string // session ID for the link target (used when LinkHref is empty)
+	LinkHref string // explicit link URL (takes precedence over LinkID)
 }
 
 type sessionsPage struct {
@@ -689,6 +710,7 @@ func (s *Server) getDashboardSortOrder() string {
 // allColumnDefs maps column IDs to their display definitions.
 var allColumnDefs = map[string]columnDef{
 	"id":         {ID: "id", Label: "ID", Class: ""},
+	"project":    {ID: "project", Label: "Project", Class: ""},
 	"provider":   {ID: "provider", Label: "Provider", Class: ""},
 	"agent":      {ID: "agent", Label: "Agent", Class: ""},
 	"branch":     {ID: "branch", Label: "Branch", Class: ""},
@@ -769,10 +791,21 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 			cell := sessionCell{}
 			switch col.ID {
 			case "id":
-				cell.Value = truncate(string(sess.ID), 8)
+				cell.Value = truncate(string(sess.ID), 12)
 				cell.IsLink = true
 				cell.LinkID = string(sess.ID)
 				cell.Class = "font-mono text-muted"
+			case "project":
+				name := projectBaseName(sess.ProjectPath)
+				if name == "" || name == "." {
+					name = "—"
+					cell.Class = "text-muted"
+				} else {
+					cell.IsLink = true
+					cell.LinkHref = "/projects" + sess.ProjectPath
+					cell.Class = "cell-project"
+				}
+				cell.Value = name
 			case "provider":
 				cell.Value = providerShortName(sess.Provider)
 				cell.IsBadge = true
@@ -1673,6 +1706,44 @@ type costDashboardPage struct {
 
 	// Per-branch cost
 	BranchCosts []branchCostEntry
+
+	// Per-tool cost (populated when project is selected)
+	HasToolCosts  bool
+	ToolCosts     []toolCostView
+	TopMCPServers []mcpServerView
+	TotalMCPCalls int
+	TotalMCPCost  float64
+
+	// Per-agent cost (populated when project is selected)
+	HasAgentCosts bool
+	AgentCosts    []agentCostView
+
+	// Cache efficiency
+	HasCacheData         bool
+	CacheHitRate         float64 // 0-100
+	CacheSavings         float64 // $ saved
+	CacheWaste           float64 // $ wasted
+	CacheReadTokens      int
+	CacheWriteTokens     int
+	CacheTotalInput      int
+	CacheTotalSessions   int
+	CacheSessionsMiss    int     // sessions with at least 1 cache miss
+	CacheSessionsMissPct float64 // % of sessions with miss
+	CacheTotalMisses     int     // total cache miss messages
+	CacheAvgGap          float64 // avg gap between messages (minutes)
+	CacheAvgMissGap      float64 // avg gap for miss messages (minutes)
+	WorstCacheSessions   []cacheMissView
+}
+
+// cacheMissView is a template-friendly view of a cache miss session.
+type cacheMissView struct {
+	ID             string
+	Summary        string
+	CacheHitRate   float64
+	CacheMissCount int
+	WastedTokens   int
+	WastedCost     float64
+	LongestGapMins int
 }
 
 // backendCostView is a template-friendly view of a backend cost summary.
@@ -1686,6 +1757,41 @@ type backendCostView struct {
 	EstimatedCost float64
 	ActualCost    float64
 	SessionCount  int
+}
+
+// toolCostView is a template-friendly view of per-tool cost data.
+type toolCostView struct {
+	Name           string
+	Category       string // "builtin" or "mcp:server"
+	IsMCP          bool
+	CallCount      int
+	TotalTokens    int
+	ErrorCount     int
+	AvgDuration    int // ms
+	EstimatedCost  float64
+	AvgCostPerCall float64
+}
+
+// mcpServerView is a template-friendly view of per-MCP-server aggregated costs.
+type mcpServerView struct {
+	Server         string
+	ToolCount      int
+	CallCount      int
+	TotalTokens    int
+	ErrorCount     int
+	EstimatedCost  float64
+	AvgCostPerCall float64
+}
+
+// agentCostView is a template-friendly view of per-agent cost data.
+type agentCostView struct {
+	Agent             string
+	SessionCount      int
+	MessageCount      int
+	TotalTokens       int
+	ToolCallCount     int
+	EstimatedCost     float64
+	AvgCostPerSession float64
 }
 
 // handleCosts renders the cost dashboard.
@@ -1808,6 +1914,92 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 	if data.APITrendDir == "" {
 		data.APITrendDir = "stable"
+	}
+
+	// Per-tool and per-agent costs (always loaded — uses pre-computed buckets).
+	since90d := time.Now().AddDate(0, 0, -90)
+	toolSummary, toolErr := s.sessionSvc.ToolCostSummary(r.Context(), project, since90d, time.Time{})
+	if toolErr == nil && toolSummary != nil && len(toolSummary.Tools) > 0 {
+		data.HasToolCosts = true
+		// Top 20 tools by cost.
+		limit := 20
+		if len(toolSummary.Tools) < limit {
+			limit = len(toolSummary.Tools)
+		}
+		for _, t := range toolSummary.Tools[:limit] {
+			data.ToolCosts = append(data.ToolCosts, toolCostView{
+				Name:           t.Name,
+				Category:       t.Category,
+				IsMCP:          session.MCPServerName(t.Category) != "",
+				CallCount:      t.CallCount,
+				TotalTokens:    t.TotalTokens,
+				ErrorCount:     t.ErrorCount,
+				AvgDuration:    t.AvgDuration,
+				EstimatedCost:  t.EstimatedCost,
+				AvgCostPerCall: t.AvgCostPerCall,
+			})
+		}
+		// MCP servers.
+		for _, ms := range toolSummary.MCPServers {
+			data.TopMCPServers = append(data.TopMCPServers, mcpServerView{
+				Server:         ms.Server,
+				ToolCount:      ms.ToolCount,
+				CallCount:      ms.CallCount,
+				TotalTokens:    ms.TotalTokens,
+				ErrorCount:     ms.ErrorCount,
+				EstimatedCost:  ms.EstimatedCost,
+				AvgCostPerCall: ms.AvgCostPerCall,
+			})
+		}
+		data.TotalMCPCalls = toolSummary.TotalMCPCalls
+		data.TotalMCPCost = toolSummary.TotalMCPCost
+	}
+
+	agentCosts, agentErr := s.sessionSvc.AgentCostSummary(r.Context(), project, since90d, time.Time{})
+	if agentErr == nil && len(agentCosts) > 0 {
+		data.HasAgentCosts = true
+		for _, ac := range agentCosts {
+			data.AgentCosts = append(data.AgentCosts, agentCostView{
+				Agent:             ac.Agent,
+				SessionCount:      ac.SessionCount,
+				MessageCount:      ac.MessageCount,
+				TotalTokens:       ac.TotalTokens,
+				ToolCallCount:     ac.ToolCallCount,
+				EstimatedCost:     ac.EstimatedCost,
+				AvgCostPerSession: ac.AvgCostPerSession,
+			})
+		}
+	}
+
+	// Cache efficiency analysis.
+	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(r.Context(), project, since90d)
+	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
+		data.HasCacheData = true
+		data.CacheHitRate = cacheEff.CacheHitRate
+		data.CacheSavings = cacheEff.EstimatedSavings
+		data.CacheWaste = cacheEff.EstimatedWaste
+		data.CacheReadTokens = cacheEff.TotalCacheRead
+		data.CacheWriteTokens = cacheEff.TotalCacheWrite
+		data.CacheTotalInput = cacheEff.TotalInputTokens
+		data.CacheTotalSessions = cacheEff.TotalSessions
+		data.CacheSessionsMiss = cacheEff.SessionsWithMiss
+		if cacheEff.TotalSessions > 0 {
+			data.CacheSessionsMissPct = float64(cacheEff.SessionsWithMiss) / float64(cacheEff.TotalSessions) * 100
+		}
+		data.CacheTotalMisses = cacheEff.TotalCacheMisses
+		data.CacheAvgGap = cacheEff.AvgGapMinutes
+		data.CacheAvgMissGap = cacheEff.AvgMissGapMinutes
+		for _, ws := range cacheEff.WorstSessions {
+			data.WorstCacheSessions = append(data.WorstCacheSessions, cacheMissView{
+				ID:             string(ws.ID),
+				Summary:        truncate(ws.Summary, 50),
+				CacheHitRate:   ws.CacheHitRate,
+				CacheMissCount: ws.CacheMissCount,
+				WastedTokens:   ws.WastedTokens,
+				WastedCost:     ws.WastedCost,
+				LongestGapMins: ws.LongestGapMins,
+			})
+		}
 	}
 
 	return data
@@ -2050,6 +2242,14 @@ type projectDetailPage struct {
 	HasRealForecast     bool
 	TotalReal30d        float64
 	SubscriptionMonthly float64
+	APIProjected30d     float64
+
+	// Cache efficiency
+	HasCacheStats         bool
+	DashCacheHitRate      float64
+	DashCacheMissSessions int
+	DashCacheTotalMisses  int
+	DashCacheWaste        float64
 
 	// Analytics (from event buckets)
 	HasAnalytics    bool
@@ -2074,6 +2274,31 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 
 	data := s.buildProjectDetailData(r, projectPath)
 	s.render(w, "project_detail.html", data)
+}
+
+// handleProjectSessionsPartial returns a filtered list of sessions for a project (HTMX).
+func (s *Server) handleProjectSessionsPartial(w http.ResponseWriter, r *http.Request) {
+	projectPath := "/" + r.PathValue("path")
+	keyword := r.URL.Query().Get("keyword")
+
+	result, err := s.sessionSvc.Search(service.SearchRequest{
+		Keyword:     keyword,
+		ProjectPath: projectPath,
+		Limit:       30,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	type partialData struct {
+		Sessions    []session.Summary
+		ProjectPath string
+	}
+	s.renderPartial(w, "project_sessions_partial.html", partialData{
+		Sessions:    result.Sessions,
+		ProjectPath: projectPath,
+	})
 }
 
 func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) projectDetailPage {
@@ -2196,10 +2421,22 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			data.HasRealForecast = true
 			data.TotalReal30d = forecast.TotalReal30d
 			data.SubscriptionMonthly = forecast.SubscriptionMonthly
+			data.APIProjected30d = forecast.APIProjected30d
 		}
 	}
 	if data.TrendDir == "" {
 		data.TrendDir = "stable"
+	}
+
+	// Cache efficiency (7-day window, project-scoped).
+	since7d := time.Now().AddDate(0, 0, -7)
+	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(ctx, projectPath, since7d)
+	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
+		data.HasCacheStats = true
+		data.DashCacheHitRate = cacheEff.CacheHitRate
+		data.DashCacheMissSessions = cacheEff.SessionsWithMiss
+		data.DashCacheTotalMisses = cacheEff.TotalCacheMisses
+		data.DashCacheWaste = cacheEff.EstimatedWaste
 	}
 
 	// Analytics (event buckets).

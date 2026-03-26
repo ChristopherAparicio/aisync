@@ -1466,7 +1466,7 @@ func TestBuildColumnDefs_default(t *testing.T) {
 	srv := newTestServer(t) // srv.cfg is nil
 	cols := srv.buildColumnDefs()
 
-	want := []string{"id", "provider", "branch", "summary", "messages", "tokens", "errors", "when"}
+	want := []string{"id", "project", "provider", "branch", "summary", "messages", "tokens", "errors", "when"}
 	if len(cols) != len(want) {
 		t.Fatalf("got %d columns, want %d", len(cols), len(want))
 	}

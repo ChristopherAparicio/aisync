@@ -466,6 +466,11 @@ func New() *cmdutil.Factory {
 						}
 					}
 
+					// Per-project classifier rules (ticket extraction, branch-to-type mapping).
+					if classSvc, classSvcErr := f.SessionService(); classSvcErr == nil {
+						classSvc.ClassifySession(sess)
+					}
+
 					// Auto-analysis: only if error rate exceeds threshold.
 					if wantAnalysis && service.ShouldAutoAnalyze(sess, errorThreshold, minToolCalls) {
 						analysisSvc, analysisErr := f.AnalysisService()

@@ -239,6 +239,11 @@ func (m *MockStore) GetLastBucketComputeTime(_ string) (time.Time, error) {
 	return time.Time{}, nil
 }
 
+func (m *MockStore) UpsertToolBucket(_ session.ToolUsageBucket) error { return nil }
+func (m *MockStore) QueryToolBuckets(_ string, _, _ time.Time, _ string) ([]session.ToolUsageBucket, error) {
+	return nil, nil
+}
+
 func (m *MockStore) Delete(id session.ID) error {
 	m.Deleted = append(m.Deleted, id)
 	delete(m.Sessions, id)

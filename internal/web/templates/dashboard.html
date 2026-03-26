@@ -211,6 +211,7 @@
       <div class="home-panel">
         <div class="home-panel-header">
           <span class="home-panel-title">Forecast</span>
+          <a href="/costs" class="home-panel-link">Details &rarr;</a>
         </div>
         <div class="home-forecast">
           {{if .HasRealForecast}}
@@ -218,14 +219,18 @@
             <span class="text-muted">Real / 30d</span>
             <span class="font-mono">{{formatCost .TotalReal30d}}</span>
           </div>
+          <div class="home-forecast-row">
+            <span class="text-muted" style="padding-left:0.75rem;">Subscriptions</span>
+            <span class="font-mono text-muted">{{formatCost .SubscriptionMonthly}}/mo</span>
+          </div>
+          <div class="home-forecast-row">
+            <span class="text-muted" style="padding-left:0.75rem;">API spend</span>
+            <span class="font-mono text-muted">{{formatCost .APIProjected30d}}</span>
+          </div>
           {{end}}
           <div class="home-forecast-row">
             <span class="text-muted">API-equiv 30d</span>
             <span class="font-mono">{{formatCost .Projected30d}}</span>
-          </div>
-          <div class="home-forecast-row">
-            <span class="text-muted">API-equiv 90d</span>
-            <span class="font-mono">{{formatCost .Projected90d}}</span>
           </div>
           <div class="home-forecast-row">
             <span class="text-muted">Trend</span>
@@ -234,6 +239,31 @@
               {{formatCost .TrendPerDay}}/day
             </span>
           </div>
+        </div>
+      </div>
+      {{end}}
+
+      {{if .HasCacheStats}}
+      <div class="home-panel">
+        <div class="home-panel-header">
+          <span class="home-panel-title">Cache Efficiency</span>
+          <span class="text-muted" style="font-size:0.7rem;">7d</span>
+        </div>
+        <div class="home-forecast">
+          <div class="home-forecast-row">
+            <span class="text-muted">Hit Rate</span>
+            <span class="font-mono{{if ge .DashCacheHitRate 90.0}} kpi-accent-text{{end}}">{{printf "%.1f" .DashCacheHitRate}}%</span>
+          </div>
+          <div class="home-forecast-row">
+            <span class="text-muted">Cache Misses</span>
+            <span class="font-mono">{{.DashCacheTotalMisses}} in {{.DashCacheMissSessions}} sessions</span>
+          </div>
+          {{if gt .DashCacheWaste 0.0}}
+          <div class="home-forecast-row">
+            <span class="text-muted">Waste</span>
+            <span class="font-mono text-error">{{formatCost .DashCacheWaste}}</span>
+          </div>
+          {{end}}
         </div>
       </div>
       {{end}}

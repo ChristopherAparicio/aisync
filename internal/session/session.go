@@ -62,19 +62,21 @@ type Summary struct {
 
 // Message represents a single message in an AI conversation.
 type Message struct {
-	Timestamp     time.Time      `json:"timestamp"`
-	ID            string         `json:"id"`
-	Content       string         `json:"content"`
-	Model         string         `json:"model,omitempty"`
-	ProviderID    string         `json:"provider_id,omitempty"` // e.g. "anthropic", "amazon-bedrock", "opencode"
-	Thinking      string         `json:"thinking,omitempty"`
-	Role          MessageRole    `json:"role"`
-	ToolCalls     []ToolCall     `json:"tool_calls,omitempty"`
-	Images        []ImageMeta    `json:"images,omitempty"`         // images included in this message
-	ContentBlocks []ContentBlock `json:"content_blocks,omitempty"` // structured content blocks (text, image, etc.)
-	InputTokens   int            `json:"input_tokens,omitempty"`
-	OutputTokens  int            `json:"output_tokens,omitempty"`
-	ProviderCost  float64        `json:"provider_cost,omitempty"` // actual cost reported by provider (0 = unknown/subscription)
+	Timestamp        time.Time      `json:"timestamp"`
+	ID               string         `json:"id"`
+	Content          string         `json:"content"`
+	Model            string         `json:"model,omitempty"`
+	ProviderID       string         `json:"provider_id,omitempty"` // e.g. "anthropic", "amazon-bedrock", "opencode"
+	Thinking         string         `json:"thinking,omitempty"`
+	Role             MessageRole    `json:"role"`
+	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
+	Images           []ImageMeta    `json:"images,omitempty"`         // images included in this message
+	ContentBlocks    []ContentBlock `json:"content_blocks,omitempty"` // structured content blocks (text, image, etc.)
+	InputTokens      int            `json:"input_tokens,omitempty"`
+	OutputTokens     int            `json:"output_tokens,omitempty"`
+	CacheReadTokens  int            `json:"cache_read_tokens,omitempty"`  // tokens read from prompt cache (cheaper)
+	CacheWriteTokens int            `json:"cache_write_tokens,omitempty"` // tokens written to prompt cache (more expensive)
+	ProviderCost     float64        `json:"provider_cost,omitempty"`      // actual cost reported by provider (0 = unknown/subscription)
 }
 
 // ContentBlock represents a structured content block within a message.
@@ -131,24 +133,131 @@ type ToolCall struct {
 // TokenUsageBucket aggregates token consumption for a specific time window.
 // Buckets are pre-computed (nightly) and stored for fast dashboard queries.
 type TokenUsageBucket struct {
-	BucketStart    time.Time    `json:"bucket_start"`
-	BucketEnd      time.Time    `json:"bucket_end"`
-	Granularity    string       `json:"granularity"` // "1h" or "1d"
-	ProjectPath    string       `json:"project_path,omitempty"`
-	Provider       ProviderName `json:"provider,omitempty"`
-	LLMBackend     string       `json:"llm_backend,omitempty"` // LLM backend identifier (e.g. "anthropic", "amazon-bedrock")
-	InputTokens    int          `json:"input_tokens"`
-	OutputTokens   int          `json:"output_tokens"`
-	ImageTokens    int          `json:"image_tokens"`
-	SessionCount   int          `json:"session_count"`
-	MessageCount   int          `json:"message_count"`
-	ToolCallCount  int          `json:"tool_call_count"`
-	ToolErrorCount int          `json:"tool_error_count"`
-	ImageCount     int          `json:"image_count"`
-	UserMsgCount   int          `json:"user_msg_count"`   // messages from user (human interaction indicator)
-	AssistMsgCount int          `json:"assist_msg_count"` // messages from assistant
-	EstimatedCost  float64      `json:"estimated_cost"`   // API-equivalent cost (computed from token rates)
-	ActualCost     float64      `json:"actual_cost"`      // actual cost reported by provider (0 for subscription)
+	BucketStart      time.Time    `json:"bucket_start"`
+	BucketEnd        time.Time    `json:"bucket_end"`
+	Granularity      string       `json:"granularity"` // "1h" or "1d"
+	ProjectPath      string       `json:"project_path,omitempty"`
+	Provider         ProviderName `json:"provider,omitempty"`
+	LLMBackend       string       `json:"llm_backend,omitempty"` // LLM backend identifier (e.g. "anthropic", "amazon-bedrock")
+	InputTokens      int          `json:"input_tokens"`
+	OutputTokens     int          `json:"output_tokens"`
+	ImageTokens      int          `json:"image_tokens"`
+	CacheReadTokens  int          `json:"cache_read_tokens"`  // tokens read from prompt cache
+	CacheWriteTokens int          `json:"cache_write_tokens"` // tokens written to prompt cache
+	SessionCount     int          `json:"session_count"`
+	MessageCount     int          `json:"message_count"`
+	ToolCallCount    int          `json:"tool_call_count"`
+	ToolErrorCount   int          `json:"tool_error_count"`
+	ImageCount       int          `json:"image_count"`
+	UserMsgCount     int          `json:"user_msg_count"`   // messages from user (human interaction indicator)
+	AssistMsgCount   int          `json:"assist_msg_count"` // messages from assistant
+	EstimatedCost    float64      `json:"estimated_cost"`   // API-equivalent cost (computed from token rates)
+	ActualCost       float64      `json:"actual_cost"`      // actual cost reported by provider (0 for subscription)
+}
+
+// ToolUsageBucket aggregates per-tool usage for a time window.
+// Buckets are keyed by (bucket_start, granularity, project_path, tool_name, tool_category).
+type ToolUsageBucket struct {
+	BucketStart   time.Time `json:"bucket_start"`
+	BucketEnd     time.Time `json:"bucket_end"`
+	Granularity   string    `json:"granularity"` // "1h" or "1d"
+	ProjectPath   string    `json:"project_path,omitempty"`
+	ToolName      string    `json:"tool_name"`                // e.g. "bash", "Read", "notionApi_API-post-search"
+	ToolCategory  string    `json:"tool_category"`            // "builtin", "mcp:notion", "mcp:sentry", "mcp:langfuse", ...
+	CallCount     int       `json:"call_count"`               // number of tool invocations
+	InputTokens   int       `json:"input_tokens"`             // estimated tokens consumed by tool inputs
+	OutputTokens  int       `json:"output_tokens"`            // estimated tokens consumed by tool outputs
+	ErrorCount    int       `json:"error_count"`              // tool calls that ended in error state
+	TotalDuration int       `json:"total_duration_ms"`        // cumulative execution time in ms
+	EstimatedCost float64   `json:"estimated_cost,omitempty"` // cost attributed to this tool's token usage
+}
+
+// ToolCostSummary aggregates tool costs across sessions for a project/time range.
+type ToolCostSummary struct {
+	// Per-tool breakdown (sorted by cost descending)
+	Tools []ToolCostEntry `json:"tools"`
+
+	// Per-MCP-server aggregation (e.g. "notion" → sum of all notion tools)
+	MCPServers []MCPServerCost `json:"mcp_servers,omitempty"`
+
+	// Per-agent aggregation
+	Agents []AgentCostEntry `json:"agents,omitempty"`
+
+	// Totals
+	TotalCalls    int     `json:"total_calls"`
+	TotalTokens   int     `json:"total_tokens"`
+	TotalCost     float64 `json:"total_cost"`
+	TotalMCPCalls int     `json:"total_mcp_calls"`
+	TotalMCPCost  float64 `json:"total_mcp_cost"`
+}
+
+// ToolCostEntry is a single tool's aggregated cost data.
+type ToolCostEntry struct {
+	Name           string  `json:"name"`
+	Category       string  `json:"category"` // "builtin" or "mcp:server"
+	CallCount      int     `json:"call_count"`
+	InputTokens    int     `json:"input_tokens"`
+	OutputTokens   int     `json:"output_tokens"`
+	TotalTokens    int     `json:"total_tokens"`
+	ErrorCount     int     `json:"error_count"`
+	AvgDuration    int     `json:"avg_duration_ms"`
+	TotalDuration  int     `json:"total_duration_ms"`
+	EstimatedCost  float64 `json:"estimated_cost"`
+	AvgCostPerCall float64 `json:"avg_cost_per_call"` // estimated_cost / call_count
+}
+
+// MCPServerCost aggregates all tools from a single MCP server.
+type MCPServerCost struct {
+	Server         string  `json:"server"`     // e.g. "notion", "sentry", "langfuse"
+	ToolCount      int     `json:"tool_count"` // distinct tools from this server
+	CallCount      int     `json:"call_count"`
+	TotalTokens    int     `json:"total_tokens"`
+	ErrorCount     int     `json:"error_count"`
+	EstimatedCost  float64 `json:"estimated_cost"`
+	AvgCostPerCall float64 `json:"avg_cost_per_call"`
+}
+
+// AgentCostEntry aggregates costs for a single agent type.
+type AgentCostEntry struct {
+	Agent             string  `json:"agent"` // e.g. "coder", "explore", "general", "build"
+	SessionCount      int     `json:"session_count"`
+	MessageCount      int     `json:"message_count"`
+	TotalTokens       int     `json:"total_tokens"`
+	ToolCallCount     int     `json:"tool_call_count"`
+	EstimatedCost     float64 `json:"estimated_cost"`
+	AvgCostPerSession float64 `json:"avg_cost_per_session"`
+}
+
+// CacheEfficiency summarizes prompt cache usage and waste.
+type CacheEfficiency struct {
+	// Aggregate stats
+	TotalInputTokens int     `json:"total_input_tokens"`
+	TotalCacheRead   int     `json:"total_cache_read"`
+	TotalCacheWrite  int     `json:"total_cache_write"`
+	CacheHitRate     float64 `json:"cache_hit_rate"`    // 0-100, cache_read / input_tokens
+	EstimatedSavings float64 `json:"estimated_savings"` // $ saved by cache hits vs full price
+	EstimatedWaste   float64 `json:"estimated_waste"`   // $ wasted on cache misses after gaps
+
+	// Activity stats
+	TotalSessions     int     `json:"total_sessions"`
+	SessionsWithMiss  int     `json:"sessions_with_miss"`   // sessions that had at least 1 cache miss
+	TotalCacheMisses  int     `json:"total_cache_misses"`   // total messages after gaps > TTL
+	AvgGapMinutes     float64 `json:"avg_gap_minutes"`      // average gap between messages (all sessions)
+	AvgMissGapMinutes float64 `json:"avg_miss_gap_minutes"` // average gap for cache-miss messages only
+
+	// Sessions with worst cache efficiency
+	WorstSessions []CacheMissSession `json:"worst_sessions,omitempty"`
+}
+
+// CacheMissSession identifies a session with significant cache misses.
+type CacheMissSession struct {
+	ID             ID      `json:"id"`
+	Summary        string  `json:"summary"`
+	CacheHitRate   float64 `json:"cache_hit_rate"`   // 0-100
+	CacheMissCount int     `json:"cache_miss_count"` // number of messages after gaps > 5min
+	WastedTokens   int     `json:"wasted_tokens"`    // tokens that could have been cached
+	WastedCost     float64 `json:"wasted_cost"`      // $ cost of those wasted tokens
+	LongestGapMins int     `json:"longest_gap_mins"` // longest gap between messages in minutes
 }
 
 // FileChange records a file touched during a session.

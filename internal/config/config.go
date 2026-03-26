@@ -20,24 +20,25 @@ const configFileName = "config.json"
 
 // configData is the JSON-serializable configuration structure.
 type configData struct {
-	StorageMode string        `json:"storage_mode"`
-	Providers   []string      `json:"providers"`
-	Secrets     secrets       `json:"secrets"`
-	Summarize   summarize     `json:"summarize"`
-	Pricing     pricing       `json:"pricing"`
-	LLM         llmConf       `json:"llm"`
-	Analysis    analysisConf  `json:"analysis"`
-	Tagging     taggingConf   `json:"tagging"`
-	Project     projectConf   `json:"project"`
-	Webhooks    webhooksConf  `json:"webhooks"`
-	Dashboard   dashboardConf `json:"dashboard"`
-	Server      serverConf    `json:"server"`
-	Database    databaseConf  `json:"database"`
-	Scheduler   schedulerConf `json:"scheduler"`
-	Errors      errorsConf    `json:"errors"`
-	Telemetry   telemetryConf `json:"telemetry"`
-	Version     int           `json:"version"`
-	AutoCapture bool          `json:"auto_capture"`
+	StorageMode string                           `json:"storage_mode"`
+	Providers   []string                         `json:"providers"`
+	Secrets     secrets                          `json:"secrets"`
+	Summarize   summarize                        `json:"summarize"`
+	Pricing     pricing                          `json:"pricing"`
+	LLM         llmConf                          `json:"llm"`
+	Analysis    analysisConf                     `json:"analysis"`
+	Tagging     taggingConf                      `json:"tagging"`
+	Project     projectConf                      `json:"project"`
+	Projects    map[string]projectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
+	Webhooks    webhooksConf                     `json:"webhooks"`
+	Dashboard   dashboardConf                    `json:"dashboard"`
+	Server      serverConf                       `json:"server"`
+	Database    databaseConf                     `json:"database"`
+	Scheduler   schedulerConf                    `json:"scheduler"`
+	Errors      errorsConf                       `json:"errors"`
+	Telemetry   telemetryConf                    `json:"telemetry"`
+	Version     int                              `json:"version"`
+	AutoCapture bool                             `json:"auto_capture"`
 }
 
 // errorsConf holds configuration for error classification and LLM reclassification.
@@ -151,6 +152,29 @@ type projectConf struct {
 	AutoDetect bool     `json:"auto_detect"`          // auto-detect category from project files
 }
 
+// projectClassifierConf holds per-project classifier rules.
+// Keyed by remote URL display name (e.g. "Omogen-ai/backend") or project path.
+type projectClassifierConf struct {
+	// TicketPattern is a regex to extract ticket IDs from branch names, summaries, and commits.
+	// Example: "OMO-\\d+" matches OMO-250, OMO-1234.
+	TicketPattern string `json:"ticket_pattern,omitempty"`
+
+	// TicketSource identifies where tickets live (e.g. "notion", "jira", "linear", "github").
+	TicketSource string `json:"ticket_source,omitempty"`
+
+	// TicketURL is a template URL for linking to tickets. Use {id} as placeholder.
+	// Example: "https://www.notion.so/omogen/{id}"
+	TicketURL string `json:"ticket_url,omitempty"`
+
+	// BranchRules map branch glob patterns to session types.
+	// Example: {"feature/*": "feature", "fix/*": "bug", "hotfix/*": "bug"}
+	BranchRules map[string]string `json:"branch_rules,omitempty"`
+
+	// Tags overrides the default session type vocabulary for this project.
+	// If empty, the global tagging.tags (or DefaultSessionTypes) is used.
+	Tags []string `json:"tags,omitempty"`
+}
+
 type webhookEntry struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events,omitempty"` // empty = all events
@@ -217,7 +241,7 @@ var ValidDashboardColumns = map[string]bool{
 
 // DefaultDashboardColumns is the default column set.
 var DefaultDashboardColumns = []string{
-	"id", "provider", "branch", "summary", "messages", "tokens", "errors", "when",
+	"id", "project", "provider", "branch", "summary", "messages", "tokens", "errors", "when",
 }
 
 func defaultConfig() configData {
@@ -325,6 +349,16 @@ func (c *Config) loadFrom(dir string) error {
 	}
 	if len(loaded.Pricing.BackendBilling) > 0 {
 		c.data.Pricing.BackendBilling = loaded.Pricing.BackendBilling
+	}
+
+	// Projects — merge per-project classifiers (overlay wins per-key).
+	if len(loaded.Projects) > 0 {
+		if c.data.Projects == nil {
+			c.data.Projects = make(map[string]projectClassifierConf)
+		}
+		for k, v := range loaded.Projects {
+			c.data.Projects[k] = v
+		}
 	}
 
 	// Analysis — bools always take the loaded value
@@ -1299,6 +1333,59 @@ func (c *Config) GetProjectCategories() []string {
 // IsProjectAutoDetectEnabled returns whether auto-detection of project category is enabled.
 func (c *Config) IsProjectAutoDetectEnabled() bool {
 	return c.data.Project.AutoDetect
+}
+
+// GetProjectClassifier returns the classifier config for a project.
+// It tries matching by remote URL display name (e.g. "Omogen-ai/backend"),
+// then by full remote URL, then by project path basename.
+// Returns nil if no classifier is configured for this project.
+func (c *Config) GetProjectClassifier(remoteURL, projectPath string) *projectClassifierConf {
+	if len(c.data.Projects) == 0 {
+		return nil
+	}
+
+	// Extract display name from remote URL (e.g. "git@github.com:Omogen-ai/backend.git" → "Omogen-ai/backend")
+	displayName := remoteDisplayName(remoteURL)
+
+	// Try exact match on display name, remote URL, project path, or basename.
+	candidates := []string{displayName, remoteURL, projectPath}
+	if projectPath != "" {
+		candidates = append(candidates, filepath.Base(projectPath))
+	}
+
+	for _, key := range candidates {
+		if key == "" {
+			continue
+		}
+		if pc, ok := c.data.Projects[key]; ok {
+			return &pc
+		}
+	}
+	return nil
+}
+
+// remoteDisplayName extracts "org/repo" from a git remote URL.
+func remoteDisplayName(raw string) string {
+	// git@github.com:Org/Repo.git → Org/Repo
+	if idx := strings.Index(raw, ":"); idx >= 0 && strings.Contains(raw[:idx], "@") {
+		name := raw[idx+1:]
+		name = strings.TrimSuffix(name, ".git")
+		return name
+	}
+	// https://github.com/Org/Repo.git → Org/Repo
+	raw = strings.TrimSuffix(raw, ".git")
+	if idx := strings.LastIndex(raw, "://"); idx >= 0 {
+		path := raw[idx+3:]
+		if slashIdx := strings.Index(path, "/"); slashIdx >= 0 {
+			return path[slashIdx+1:]
+		}
+	}
+	// github.com/Org/Repo (already normalized, no scheme) → Org/Repo
+	if strings.Count(raw, "/") >= 2 {
+		firstSlash := strings.Index(raw, "/")
+		return raw[firstSlash+1:]
+	}
+	return raw
 }
 
 // IsAuthEnabled returns true if authentication is enabled on the server.

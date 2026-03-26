@@ -83,6 +83,79 @@
 </div>
 {{end}}
 
+<!-- ── Cache Efficiency ── -->
+{{if .HasCacheData}}
+<div class="section">
+  <h2 class="section-title">Prompt Cache Efficiency <span class="text-muted">(90d)</span></h2>
+  <div class="kpi-grid">
+    <div class="kpi-card{{if ge .CacheHitRate 80.0}} kpi-accent{{end}}">
+      <div class="label">Cache Hit Rate</div>
+      <div class="value">{{printf "%.1f" .CacheHitRate}}%</div>
+      <div class="sub">{{formatTokens .CacheReadTokens}} tokens from cache</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Savings from Cache</div>
+      <div class="value">{{formatCost .CacheSavings}}</div>
+      <div class="sub">vs. full price for all input</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Cache Waste</div>
+      <div class="value{{if gt .CacheWaste 10.0}} text-error{{end}}">{{formatCost .CacheWaste}}</div>
+      <div class="sub">{{.CacheTotalMisses}} cache misses in {{.CacheSessionsMiss}} sessions</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Avg Response Time</div>
+      <div class="value">{{printf "%.1f" .CacheAvgGap}} min</div>
+      <div class="sub">{{if gt .CacheAvgMissGap 0.0}}avg miss gap: {{printf "%.0f" .CacheAvgMissGap}} min{{else}}across all messages{{end}}</div>
+    </div>
+  </div>
+
+  <div class="kpi-grid" style="margin-top: 0.75rem;">
+    <div class="kpi-card">
+      <div class="label">Sessions Analyzed</div>
+      <div class="value">{{.CacheTotalSessions}}</div>
+      <div class="sub">{{.CacheSessionsMiss}} had cache misses ({{printf "%.0f" .CacheSessionsMissPct}}%)</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Cache Write</div>
+      <div class="value">{{formatTokens .CacheWriteTokens}}</div>
+      <div class="sub">of {{formatTokens .CacheTotalInput}} total input</div>
+    </div>
+  </div>
+
+  {{if .WorstCacheSessions}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Sessions with Most Cache Waste</h3>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">These sessions had long gaps (&gt;5 min) between messages, causing cache eviction and full-price re-processing.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Session</th>
+          <th class="text-right">Hit Rate</th>
+          <th class="text-right">Misses</th>
+          <th class="text-right">Wasted Tokens</th>
+          <th class="text-right">Wasted Cost</th>
+          <th class="text-right">Longest Gap</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .WorstCacheSessions}}
+        <tr>
+          <td><a href="/sessions/{{.ID}}" class="font-mono">{{.Summary}}</a></td>
+          <td class="text-right">{{printf "%.0f" .CacheHitRate}}%</td>
+          <td class="text-right">{{.CacheMissCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .WastedTokens}}</td>
+          <td class="text-right font-mono text-error">{{formatCost .WastedCost}}</td>
+          <td class="text-right text-muted">{{.LongestGapMins}} min</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
 <!-- ── Backend Breakdown ── -->
 {{if .HasBackends}}
 <div class="section">
@@ -257,6 +330,127 @@
           <td class="text-right">{{.SessionCount}}</td>
           <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
           <td class="text-right font-mono">{{formatCost .TotalCost}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Cost by MCP Server ── -->
+{{if .TopMCPServers}}
+<div class="section">
+  <h2 class="section-title">Cost by MCP Server <span class="text-muted">(90d)</span></h2>
+  <div class="kpi-grid" style="margin-bottom: 1rem;">
+    <div class="kpi-card">
+      <div class="label">Total MCP Calls</div>
+      <div class="value">{{.TotalMCPCalls}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Total MCP Cost</div>
+      <div class="value">{{formatCost .TotalMCPCost}}</div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th class="text-right">Tools</th>
+          <th class="text-right">Calls</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Errors</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Avg / Call</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .TopMCPServers}}
+        <tr>
+          <td><span class="badge badge-provider">{{.Server}}</span></td>
+          <td class="text-right">{{.ToolCount}}</td>
+          <td class="text-right">{{.CallCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right{{if gt .ErrorCount 0}} text-error{{end}}">{{.ErrorCount}}</td>
+          <td class="text-right font-mono">{{formatCost .EstimatedCost}}</td>
+          <td class="text-right font-mono text-muted">{{formatCost .AvgCostPerCall}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Cost by Tool ── -->
+{{if .HasToolCosts}}
+<div class="section">
+  <h2 class="section-title">Cost by Tool <span class="text-muted">(top 20, 90d)</span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th>Type</th>
+          <th class="text-right">Calls</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Errors</th>
+          <th class="text-right">Avg Duration</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Avg / Call</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ToolCosts}}
+        <tr>
+          <td class="font-mono cell-branch">{{.Name}}</td>
+          <td>
+            {{if .IsMCP}}<span class="badge badge-billing-api">{{.Category}}</span>
+            {{else}}<span class="badge badge-billing-free">builtin</span>
+            {{end}}
+          </td>
+          <td class="text-right">{{.CallCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right{{if gt .ErrorCount 0}} text-error{{end}}">{{.ErrorCount}}</td>
+          <td class="text-right text-muted">{{if gt .AvgDuration 0}}{{formatDuration .AvgDuration}}{{else}}—{{end}}</td>
+          <td class="text-right font-mono">{{formatCost .EstimatedCost}}</td>
+          <td class="text-right font-mono text-muted">{{formatCost .AvgCostPerCall}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Cost by Agent ── -->
+{{if .HasAgentCosts}}
+<div class="section">
+  <h2 class="section-title">Cost by Agent <span class="text-muted">(90d)</span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Messages</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Tools</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Avg / Session</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .AgentCosts}}
+        <tr>
+          <td><span class="badge badge-provider">{{.Agent}}</span></td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right">{{.MessageCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right">{{.ToolCallCount}}</td>
+          <td class="text-right font-mono">{{formatCost .EstimatedCost}}</td>
+          <td class="text-right font-mono text-muted">{{formatCost .AvgCostPerSession}}</td>
         </tr>
         {{end}}
       </tbody>

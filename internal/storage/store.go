@@ -98,6 +98,12 @@ type SessionWriter interface {
 	// GetLastBucketComputeTime returns the most recent compute timestamp.
 	GetLastBucketComputeTime(granularity string) (time.Time, error)
 
+	// UpsertToolBucket inserts or updates a per-tool usage bucket.
+	UpsertToolBucket(b session.ToolUsageBucket) error
+
+	// QueryToolBuckets retrieves per-tool usage buckets for a time range.
+	QueryToolBuckets(granularity string, since, until time.Time, projectPath string) ([]session.ToolUsageBucket, error)
+
 	// UpdateRemoteURL sets the remote_url for a single session by ID.
 	UpdateRemoteURL(id session.ID, remoteURL string) error
 

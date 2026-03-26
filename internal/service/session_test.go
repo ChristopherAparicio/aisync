@@ -898,6 +898,10 @@ func (m *mockStore) QueryTokenBuckets(_ string, _, _ time.Time, _ string) ([]ses
 func (m *mockStore) GetLastBucketComputeTime(_ string) (time.Time, error) {
 	return time.Time{}, nil
 }
+func (m *mockStore) UpsertToolBucket(_ session.ToolUsageBucket) error { return nil }
+func (m *mockStore) QueryToolBuckets(_ string, _, _ time.Time, _ string) ([]session.ToolUsageBucket, error) {
+	return nil, nil
+}
 func (m *mockStore) AddLink(_ session.ID, _ session.Link) error { return nil }
 func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, error) {
 	return nil, session.ErrSessionNotFound

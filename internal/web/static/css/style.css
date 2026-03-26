@@ -82,6 +82,11 @@ a:hover { text-decoration: underline; }
   min-height: calc(100vh - 56px);
 }
 
+/* When no sidebar child is present, use single-column layout */
+.app-shell:not(:has(.sidebar)) {
+  grid-template-columns: 1fr;
+}
+
 .app-shell--no-sidebar {
   grid-template-columns: 1fr;
 }
@@ -926,6 +931,22 @@ tr:hover td { background: var(--bg-hover); }
   white-space: nowrap;
 }
 
+/* Project column: compact with link */
+.cell-project {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-project a {
+  color: var(--accent-light);
+  text-decoration: none;
+  font-weight: 500;
+}
+.cell-project a:hover {
+  text-decoration: underline;
+}
+
 /* ── Badges ── */
 
 .badge {
@@ -981,6 +1002,8 @@ tr:hover td { background: var(--bg-hover); }
   border-left: 3px solid var(--accent);
   background: rgba(108, 126, 225, 0.06);
 }
+
+.kpi-accent-text { color: var(--accent-light); font-weight: 600; }
 
 /* ── Empty state ── */
 

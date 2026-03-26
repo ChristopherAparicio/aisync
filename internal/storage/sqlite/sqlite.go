@@ -722,13 +722,16 @@ func (s *Store) ListObjectives(sessionIDs []session.ID) (map[session.ID]*session
 func (s *Store) UpsertTokenBucket(b session.TokenUsageBucket) error {
 	_, err := s.db.Exec(`
 		INSERT INTO token_usage_buckets (bucket_start, granularity, project_path, provider, llm_backend,
-			input_tokens, output_tokens, image_tokens, session_count, message_count,
+			input_tokens, output_tokens, image_tokens, cache_read_tokens, cache_write_tokens,
+			session_count, message_count,
 			tool_call_count, tool_error_count, image_count, user_msg_count, assist_msg_count,
 			estimated_cost, actual_cost, computed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(bucket_start, granularity, project_path, provider, llm_backend) DO UPDATE SET
 			input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
-			image_tokens=excluded.image_tokens, session_count=excluded.session_count,
+			image_tokens=excluded.image_tokens,
+			cache_read_tokens=excluded.cache_read_tokens, cache_write_tokens=excluded.cache_write_tokens,
+			session_count=excluded.session_count,
 			message_count=excluded.message_count,
 			tool_call_count=excluded.tool_call_count, tool_error_count=excluded.tool_error_count,
 			image_count=excluded.image_count, user_msg_count=excluded.user_msg_count,
@@ -736,7 +739,8 @@ func (s *Store) UpsertTokenBucket(b session.TokenUsageBucket) error {
 			estimated_cost=excluded.estimated_cost, actual_cost=excluded.actual_cost,
 			computed_at=excluded.computed_at`,
 		b.BucketStart.Format(time.RFC3339), b.Granularity, b.ProjectPath, b.Provider, b.LLMBackend,
-		b.InputTokens, b.OutputTokens, b.ImageTokens, b.SessionCount, b.MessageCount,
+		b.InputTokens, b.OutputTokens, b.ImageTokens, b.CacheReadTokens, b.CacheWriteTokens,
+		b.SessionCount, b.MessageCount,
 		b.ToolCallCount, b.ToolErrorCount, b.ImageCount, b.UserMsgCount, b.AssistMsgCount,
 		b.EstimatedCost, b.ActualCost,
 	)
@@ -747,6 +751,7 @@ func (s *Store) UpsertTokenBucket(b session.TokenUsageBucket) error {
 func (s *Store) QueryTokenBuckets(granularity string, since, until time.Time, projectPath string) ([]session.TokenUsageBucket, error) {
 	query := `SELECT bucket_start, granularity, project_path, provider,
 		COALESCE(llm_backend,''), input_tokens, output_tokens, image_tokens,
+		COALESCE(cache_read_tokens,0), COALESCE(cache_write_tokens,0),
 		session_count, message_count,
 		COALESCE(tool_call_count,0), COALESCE(tool_error_count,0), COALESCE(image_count,0),
 		COALESCE(user_msg_count,0), COALESCE(assist_msg_count,0),
@@ -780,6 +785,7 @@ func (s *Store) QueryTokenBuckets(granularity string, since, until time.Time, pr
 		var startStr string
 		if err := rows.Scan(&startStr, &b.Granularity, &b.ProjectPath, &b.Provider,
 			&b.LLMBackend, &b.InputTokens, &b.OutputTokens, &b.ImageTokens,
+			&b.CacheReadTokens, &b.CacheWriteTokens,
 			&b.SessionCount, &b.MessageCount,
 			&b.ToolCallCount, &b.ToolErrorCount, &b.ImageCount, &b.UserMsgCount, &b.AssistMsgCount,
 			&b.EstimatedCost, &b.ActualCost); err != nil {
@@ -812,6 +818,74 @@ func parseDuration(gran string) time.Duration {
 	default:
 		return time.Hour
 	}
+}
+
+// UpsertToolBucket inserts or updates a per-tool usage bucket.
+func (s *Store) UpsertToolBucket(b session.ToolUsageBucket) error {
+	_, err := s.db.Exec(`
+		INSERT INTO tool_usage_buckets (bucket_start, granularity, project_path, tool_name, tool_category,
+			call_count, input_tokens, output_tokens, error_count, total_duration_ms,
+			estimated_cost, computed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(bucket_start, granularity, project_path, tool_name, tool_category) DO UPDATE SET
+			call_count=excluded.call_count, input_tokens=excluded.input_tokens,
+			output_tokens=excluded.output_tokens, error_count=excluded.error_count,
+			total_duration_ms=excluded.total_duration_ms,
+			estimated_cost=excluded.estimated_cost,
+			computed_at=excluded.computed_at`,
+		b.BucketStart.Format(time.RFC3339), b.Granularity, b.ProjectPath,
+		b.ToolName, b.ToolCategory,
+		b.CallCount, b.InputTokens, b.OutputTokens, b.ErrorCount, b.TotalDuration,
+		b.EstimatedCost,
+	)
+	return err
+}
+
+// QueryToolBuckets retrieves per-tool usage buckets for a time range.
+func (s *Store) QueryToolBuckets(granularity string, since, until time.Time, projectPath string) ([]session.ToolUsageBucket, error) {
+	query := `SELECT bucket_start, granularity, project_path, tool_name, tool_category,
+		call_count, input_tokens, output_tokens, error_count, total_duration_ms,
+		COALESCE(estimated_cost, 0)
+		FROM tool_usage_buckets WHERE granularity = ?`
+	args := []interface{}{granularity}
+
+	if !since.IsZero() {
+		query += " AND bucket_start >= ?"
+		args = append(args, since.Format(time.RFC3339))
+	}
+	if !until.IsZero() {
+		query += " AND bucket_start < ?"
+		args = append(args, until.Format(time.RFC3339))
+	}
+	if projectPath != "" {
+		query += " AND project_path = ?"
+		args = append(args, projectPath)
+	}
+	query += " ORDER BY bucket_start ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var buckets []session.ToolUsageBucket
+	for rows.Next() {
+		var b session.ToolUsageBucket
+		var ts string
+		if err := rows.Scan(&ts, &b.Granularity, &b.ProjectPath,
+			&b.ToolName, &b.ToolCategory,
+			&b.CallCount, &b.InputTokens, &b.OutputTokens,
+			&b.ErrorCount, &b.TotalDuration,
+			&b.EstimatedCost,
+		); err != nil {
+			return nil, err
+		}
+		b.BucketStart, _ = time.Parse(time.RFC3339, ts)
+		b.BucketEnd = b.BucketStart.Add(parseDuration(b.Granularity))
+		buckets = append(buckets, b)
+	}
+	return buckets, rows.Err()
 }
 
 // AddLink associates a session with a git object.
@@ -2187,6 +2261,38 @@ func runMigrations(db *sql.DB) error {
 			)`); err != nil {
 				return fmt.Errorf("migration 020 (create new table): %w", err)
 			}
+		}
+	}
+
+	// ── Migration 021: tool_usage_buckets table for per-tool cost tracking ──
+	{
+		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS tool_usage_buckets (
+			bucket_start TEXT NOT NULL,
+			granularity TEXT NOT NULL DEFAULT '1d',
+			project_path TEXT NOT NULL DEFAULT '',
+			tool_name TEXT NOT NULL DEFAULT '',
+			tool_category TEXT NOT NULL DEFAULT 'builtin',
+			call_count INTEGER NOT NULL DEFAULT 0,
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			error_count INTEGER NOT NULL DEFAULT 0,
+			total_duration_ms INTEGER NOT NULL DEFAULT 0,
+			estimated_cost REAL NOT NULL DEFAULT 0,
+			computed_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (bucket_start, granularity, project_path, tool_name, tool_category)
+		)`); err != nil {
+			return fmt.Errorf("migration 021 (tool_usage_buckets): %w", err)
+		}
+	}
+
+	// ── Migration 022: add cache token columns to token_usage_buckets ──
+	{
+		// Add columns if they don't exist (idempotent).
+		for _, col := range []string{
+			"ALTER TABLE token_usage_buckets ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE token_usage_buckets ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0",
+		} {
+			_, _ = db.Exec(col) // ignore "duplicate column" errors
 		}
 	}
 

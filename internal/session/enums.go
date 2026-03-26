@@ -277,12 +277,14 @@ const (
 	LinkBranch LinkType = "branch"
 	LinkCommit LinkType = "commit"
 	LinkPR     LinkType = "pr"
+	LinkTicket LinkType = "ticket" // external ticket reference (e.g. "OMO-250")
 )
 
 var allLinkTypes = []LinkType{
 	LinkBranch,
 	LinkCommit,
 	LinkPR,
+	LinkTicket,
 }
 
 // Valid reports whether l is a known link type.

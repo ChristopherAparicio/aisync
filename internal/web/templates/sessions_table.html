@@ -25,7 +25,8 @@
         <tr>
           {{range .Cells}}
           <td class="{{.Class}}">
-            {{if .IsLink}}<a href="/sessions/{{.LinkID}}">{{.Value}}</a>
+            {{if and .IsLink .LinkHref}}<a href="{{.LinkHref}}">{{.Value}}</a>
+            {{else if .IsLink}}<a href="/sessions/{{.LinkID}}">{{.Value}}</a>
             {{else if .IsBadge}}<span class="badge badge-provider">{{.Value}}</span>
             {{else}}{{.Value}}
             {{end}}

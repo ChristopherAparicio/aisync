@@ -1,0 +1,43 @@
+{{range .Sessions}}
+<div class="activity-card">
+  <div class="activity-card-header">
+    <div class="activity-card-project-badge">
+      {{if .Branch}}<span class="badge badge-branch">{{truncate .Branch 30}}</span>{{end}}
+    </div>
+    <span class="activity-card-when">{{if not .UpdatedAt.IsZero}}{{timeAgo .UpdatedAt}}{{else}}{{timeAgo .CreatedAt}}{{end}}</span>
+  </div>
+  <div class="activity-card-body">
+    <a href="/sessions/{{.ID}}" class="activity-card-title">{{if .Summary}}{{truncate .Summary 100}}{{else}}Session {{truncate .ID 16}}{{end}}</a>
+    <div class="activity-card-tags">
+      <span class="badge badge-provider">{{.Provider}}</span>
+      {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
+      {{if .Status}}<span class="badge badge-status-{{.Status}}">{{.Status}}</span>{{end}}
+    </div>
+    <div class="activity-card-stats">
+      <span><strong>{{.MessageCount}}</strong> msgs</span>
+      <span class="activity-stat-sep">&middot;</span>
+      <span class="font-mono">{{formatTokens .TotalTokens}} tok</span>
+      {{if gt .ToolCallCount 0}}
+      <span class="activity-stat-sep">&middot;</span>
+      <span>{{.ToolCallCount}} tools</span>
+      {{end}}
+      {{if gt .ErrorCount 0}}
+      <span class="activity-stat-sep">&middot;</span>
+      <span class="activity-card-errors">{{.ErrorCount}} errors</span>
+      {{end}}
+    </div>
+  </div>
+  <div class="activity-card-actions">
+    <a href="/sessions/{{.ID}}" class="action-btn">View</a>
+    <button class="action-btn action-btn--primary"
+            hx-get="/partials/restore-command/{{.ID}}"
+            hx-target="#restore-{{.ID}}"
+            hx-swap="innerHTML">Restore</button>
+    <span id="restore-{{.ID}}"></span>
+  </div>
+</div>
+{{else}}
+<div class="empty-state" style="padding: 2rem;">
+  <p class="text-muted">No sessions found.</p>
+</div>
+{{end}}

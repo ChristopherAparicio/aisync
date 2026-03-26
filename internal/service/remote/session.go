@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/client"
 	"github.com/ChristopherAparicio/aisync/internal/service"
@@ -395,6 +396,26 @@ func (r *SessionService) ComputeTokenBuckets(_ context.Context, _ service.Comput
 
 func (r *SessionService) QueryTokenUsage(_ context.Context, _ service.QueryTokenUsageRequest) ([]session.TokenUsageBucket, error) {
 	return nil, fmt.Errorf("QueryTokenUsage not supported in remote mode yet")
+}
+
+func (r *SessionService) ToolCostSummary(_ context.Context, _ string, _, _ time.Time) (*session.ToolCostSummary, error) {
+	return nil, fmt.Errorf("ToolCostSummary not supported in remote mode yet")
+}
+
+func (r *SessionService) AgentCostSummary(_ context.Context, _ string, _, _ time.Time) ([]session.AgentCostEntry, error) {
+	return nil, fmt.Errorf("AgentCostSummary not supported in remote mode yet")
+}
+
+func (r *SessionService) CacheEfficiency(_ context.Context, _ string, _ time.Time) (*session.CacheEfficiency, error) {
+	return nil, fmt.Errorf("CacheEfficiency not supported in remote mode yet")
+}
+
+func (r *SessionService) ClassifySession(_ *session.Session) int {
+	return 0
+}
+
+func (r *SessionService) ClassifyProjectSessions(_, _ string) (int, int, error) {
+	return 0, 0, fmt.Errorf("ClassifyProjectSessions not supported in remote mode")
 }
 
 func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {

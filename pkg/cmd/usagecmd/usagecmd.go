@@ -70,10 +70,26 @@ Examples:
 			}
 
 			fmt.Fprintf(f.IOStreams.Out, "Token usage computation complete:\n")
-			fmt.Fprintf(f.IOStreams.Out, "  Buckets written:  %d\n", result.BucketsWritten)
-			fmt.Fprintf(f.IOStreams.Out, "  Sessions scanned: %d\n", result.SessionsScanned)
-			fmt.Fprintf(f.IOStreams.Out, "  Messages scanned: %d\n", result.MessagesScanned)
-			fmt.Fprintf(f.IOStreams.Out, "  Duration:         %s\n", result.Duration.Round(1e6))
+			fmt.Fprintf(f.IOStreams.Out, "  Buckets written:       %d\n", result.BucketsWritten)
+			fmt.Fprintf(f.IOStreams.Out, "  Tool buckets written:  %d\n", result.ToolBucketsWritten)
+			fmt.Fprintf(f.IOStreams.Out, "  Sessions scanned:      %d\n", result.SessionsScanned)
+			fmt.Fprintf(f.IOStreams.Out, "  Messages scanned:      %d\n", result.MessagesScanned)
+			fmt.Fprintf(f.IOStreams.Out, "  Duration:              %s\n", result.Duration.Round(1e6))
+
+			// Run per-project classifiers (ticket extraction + branch rules).
+			projects, _ := svc.ListProjects(context.Background())
+			totalClassified := 0
+			for _, proj := range projects {
+				classified, total, classErr := svc.ClassifyProjectSessions(proj.RemoteURL, proj.ProjectPath)
+				if classErr == nil && classified > 0 {
+					fmt.Fprintf(f.IOStreams.Out, "  Classified %d/%d sessions for %s\n", classified, total, proj.DisplayName)
+					totalClassified += classified
+				}
+			}
+			if totalClassified > 0 {
+				fmt.Fprintf(f.IOStreams.Out, "  Total classified:      %d\n", totalClassified)
+			}
+
 			return nil
 		},
 	}

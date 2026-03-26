@@ -9,6 +9,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -94,6 +95,21 @@ type SessionAnalytics interface {
 
 	// QueryTokenUsage retrieves pre-computed token usage buckets.
 	QueryTokenUsage(ctx context.Context, req QueryTokenUsageRequest) ([]session.TokenUsageBucket, error)
+
+	// ToolCostSummary returns per-tool and per-MCP-server cost aggregation.
+	ToolCostSummary(ctx context.Context, projectPath string, since, until time.Time) (*session.ToolCostSummary, error)
+
+	// AgentCostSummary returns per-agent cost aggregation for a project.
+	AgentCostSummary(ctx context.Context, projectPath string, since, until time.Time) ([]session.AgentCostEntry, error)
+
+	// CacheEfficiency computes prompt cache usage stats and identifies waste.
+	CacheEfficiency(ctx context.Context, projectPath string, since time.Time) (*session.CacheEfficiency, error)
+
+	// ClassifySession applies per-project classifier rules (ticket extraction, branch rules).
+	ClassifySession(sess *session.Session) int
+
+	// ClassifyProjectSessions runs classifiers on all sessions for a project.
+	ClassifyProjectSessions(remoteURL, projectPath string) (classified, total int, err error)
 }
 
 // SessionAI provides LLM-powered analysis features.
