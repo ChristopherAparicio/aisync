@@ -31,6 +31,7 @@ type Options struct {
 	// Filter flags
 	CleanErrors   bool
 	StripEmpty    bool
+	FixOrphans    bool
 	RedactSecrets bool
 	ExcludeFlag   string // comma-separated: indices (e.g. "0,3,5"), roles (e.g. "system"), or pattern (e.g. "/regex/")
 }
@@ -45,9 +46,10 @@ func NewCmdRestore(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restore",
 		Short: "Restore a captured AI session",
-		Long: `Restores a previously captured session into an AI tool, or generates a CONTEXT.md file.
+		Long: `Restores a previously captured session into an AI tool.
 
 Smart Restore filters can clean up the session before restoring:
+  --fix-orphans      Fix orphan tool_use blocks by injecting synthetic error results
   --clean-errors     Replace tool error outputs with compact summaries
   --strip-empty      Remove messages with no content
   --redact-secrets   Replace detected secrets with $VARIABLE_NAME references
@@ -58,7 +60,7 @@ The --exclude flag accepts a comma-separated list of:
   - Roles:    "system" (remove all system messages)
   - Patterns: "/regex/" (remove messages matching the regex)
 
-Example: aisync restore --session ses-abc --clean-errors --redact-secrets --as-context`,
+Example: aisync restore --session ses-abc --clean-errors --redact-secrets`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRestore(opts)
 		},
@@ -68,12 +70,14 @@ Example: aisync restore --session ses-abc --clean-errors --redact-secrets --as-c
 	cmd.Flags().StringVar(&opts.ProviderFlag, "provider", "", "Force restore into a specific provider")
 	cmd.Flags().StringVar(&opts.AgentFlag, "agent", "", "Target agent name (e.g., for OpenCode multi-agent)")
 	cmd.Flags().BoolVar(&opts.AsContext, "as-context", false, "Generate CONTEXT.md instead of native import")
+	_ = cmd.Flags().MarkHidden("as-context") // hidden: use native import instead; kept for backward compat
 	cmd.Flags().IntVar(&opts.PRFlag, "pr", 0, "Restore session linked to this PR number")
 	cmd.Flags().BoolVar(&opts.Pick, "pick", false, "Choose from available sessions on the current branch")
 
 	// Smart Restore filter flags
 	cmd.Flags().BoolVar(&opts.CleanErrors, "clean-errors", false, "Replace tool error outputs with compact summaries")
 	cmd.Flags().BoolVar(&opts.StripEmpty, "strip-empty", false, "Remove empty messages (no content, no tool calls)")
+	cmd.Flags().BoolVar(&opts.FixOrphans, "fix-orphans", false, "Fix orphan tool_use blocks by injecting synthetic error results")
 	cmd.Flags().BoolVar(&opts.RedactSecrets, "redact-secrets", false, "Replace detected secrets with $VARIABLE_NAME references")
 	cmd.Flags().StringVar(&opts.ExcludeFlag, "exclude", "", "Exclude messages by index, role, or /pattern/ (comma-separated)")
 
@@ -95,17 +99,22 @@ func buildFilters(opts *Options) ([]session.SessionFilter, error) {
 		filters = append(filters, f)
 	}
 
-	// 2. Empty message filter
+	// 2. Orphan tool fixer (before empty/error cleaners so they can process the results)
+	if opts.FixOrphans {
+		filters = append(filters, filter.NewOrphanToolFixer())
+	}
+
+	// 3. Empty message filter
 	if opts.StripEmpty {
 		filters = append(filters, filter.NewEmptyMessage())
 	}
 
-	// 3. Error cleaner
+	// 4. Error cleaner
 	if opts.CleanErrors {
 		filters = append(filters, filter.NewErrorCleaner())
 	}
 
-	// 4. Secret redactor (last, so it scans everything that remains)
+	// 5. Secret redactor (last, so it scans everything that remains)
 	if opts.RedactSecrets {
 		filters = append(filters, filter.NewSecretRedactor())
 	}

@@ -52,6 +52,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.SessionID, "session", "", "Specific session ID to restore")
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "Target provider (claude-code, opencode, cursor)")
 	cmd.Flags().BoolVar(&opts.AsContext, "as-context", false, "Restore as context.md instead of native format")
+	_ = cmd.Flags().MarkHidden("as-context") // hidden: use native import instead; kept for backward compat
 
 	return cmd
 }
