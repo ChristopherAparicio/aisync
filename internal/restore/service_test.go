@@ -1,6 +1,7 @@
 package restore
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -496,4 +497,61 @@ type mockFailFilter struct{}
 func (f *mockFailFilter) Name() string { return "mock-fail" }
 func (f *mockFailFilter) Apply(_ *session.Session) (*session.Session, *session.FilterResult, error) {
 	return nil, nil, fmt.Errorf("intentional test failure")
+}
+
+func TestRestore_asContextTooLarge(t *testing.T) {
+	// Build a session with enough data to exceed the CONTEXT.md size limit.
+	bigContent := strings.Repeat("x", 10*1024) // 10KB per message
+	var messages []session.Message
+	for i := 0; i < 50; i++ {
+		messages = append(messages, session.Message{
+			ID:      fmt.Sprintf("m-%d", i),
+			Role:    session.RoleAssistant,
+			Content: bigContent,
+			ToolCalls: []session.ToolCall{
+				{
+					ID:     fmt.Sprintf("tc-%d", i),
+					Name:   "Bash",
+					Input:  `{"command":"ls"}`,
+					Output: bigContent,
+					State:  session.ToolStateCompleted,
+				},
+			},
+		})
+	}
+
+	sess := &session.Session{
+		ID:          "ses-huge",
+		Provider:    session.ProviderClaudeCode,
+		Agent:       "claude",
+		Branch:      "feat/huge",
+		ProjectPath: "/test/project",
+		Summary:     "Huge session",
+		Messages:    messages,
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/huge"] = sess
+	reg := provider.NewRegistry()
+	svc := NewService(reg, store)
+
+	_, err := svc.Restore(Request{
+		ProjectPath: projectDir,
+		Branch:      "feat/huge",
+		AsContext:   true,
+	})
+	if err == nil {
+		t.Fatal("expected error for oversized session")
+	}
+
+	if !errors.Is(err, session.ErrContextTooLarge) {
+		t.Errorf("expected ErrContextTooLarge, got: %v", err)
+	}
+
+	// CONTEXT.md should NOT have been written
+	contextPath := filepath.Join(projectDir, "CONTEXT.md")
+	if _, statErr := os.Stat(contextPath); statErr == nil {
+		t.Error("CONTEXT.md should not have been created for oversized session")
+	}
 }

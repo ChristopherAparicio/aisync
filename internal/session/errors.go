@@ -24,4 +24,8 @@ var (
 
 	// ErrPlatformNotDetected is returned when the code hosting platform cannot be determined.
 	ErrPlatformNotDetected = errors.New("code platform not detected")
+
+	// ErrContextTooLarge is returned when a generated CONTEXT.md would exceed
+	// the safe size limit for AI context windows.
+	ErrContextTooLarge = errors.New("CONTEXT.md too large for AI context window")
 )

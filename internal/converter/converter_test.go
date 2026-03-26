@@ -2,6 +2,8 @@ package converter
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -210,7 +212,10 @@ func TestConverter_RoundTrip_OpenCode(t *testing.T) {
 
 func TestConverter_ToContextMD(t *testing.T) {
 	sess := testSession()
-	md := ToContextMD(sess)
+	md, err := ToContextMD(sess)
+	if err != nil {
+		t.Fatalf("ToContextMD() error: %v", err)
+	}
 	content := string(md)
 
 	checks := []string{
@@ -248,7 +253,10 @@ func TestConverter_ToContextMD_WithChildren(t *testing.T) {
 		},
 	}
 
-	md := ToContextMD(sess)
+	md, err := ToContextMD(sess)
+	if err != nil {
+		t.Fatalf("ToContextMD() error: %v", err)
+	}
 	content := string(md)
 
 	if !strings.Contains(content, "Sub-agent: task") {
@@ -317,5 +325,103 @@ func TestConverter_FromClaude_PreservesToolCalls(t *testing.T) {
 	}
 	if !foundTool {
 		t.Error("expected Write tool call in parsed session")
+	}
+}
+
+func TestConverter_ToContextMD_TooLarge(t *testing.T) {
+	// Create a session with many large messages that will exceed the limit.
+	sess := testSession()
+	bigContent := strings.Repeat("x", 10*1024) // 10KB per message
+
+	// Add enough messages to exceed DefaultMaxContextBytes (400KB)
+	for i := 0; i < 50; i++ {
+		sess.Messages = append(sess.Messages, session.Message{
+			ID:      fmt.Sprintf("big-%d", i),
+			Role:    session.RoleAssistant,
+			Content: bigContent,
+			ToolCalls: []session.ToolCall{
+				{
+					ID:     fmt.Sprintf("tc-big-%d", i),
+					Name:   "Bash",
+					Input:  `{"command":"ls -la"}`,
+					Output: bigContent,
+					State:  session.ToolStateCompleted,
+				},
+			},
+		})
+	}
+
+	_, err := ToContextMD(sess)
+	if err == nil {
+		t.Fatal("expected ErrContextTooLarge for oversized session")
+	}
+
+	// Should match sentinel error via errors.Is
+	if !errors.Is(err, session.ErrContextTooLarge) {
+		t.Errorf("expected errors.Is(err, ErrContextTooLarge), got: %v", err)
+	}
+
+	// Should be a ContextTooLargeError with actionable details
+	var ctlErr *ContextTooLargeError
+	if !errors.As(err, &ctlErr) {
+		t.Fatalf("expected *ContextTooLargeError, got %T", err)
+	}
+
+	if ctlErr.EstimatedBytes <= DefaultMaxContextBytes {
+		t.Errorf("EstimatedBytes = %d, should exceed %d", ctlErr.EstimatedBytes, DefaultMaxContextBytes)
+	}
+	if ctlErr.MessageCount != len(sess.Messages) {
+		t.Errorf("MessageCount = %d, want %d", ctlErr.MessageCount, len(sess.Messages))
+	}
+
+	// Error message should contain helpful suggestions
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "--clean-errors") {
+		t.Error("error message should suggest --clean-errors")
+	}
+	if !strings.Contains(errMsg, "--strip-empty") {
+		t.Error("error message should suggest --strip-empty")
+	}
+}
+
+func TestConverter_ToContextMD_JustUnderLimit(t *testing.T) {
+	// Create a session that fits within the limit — should succeed.
+	sess := &session.Session{
+		ID:       "ses-small",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "Hello"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "Hi there!"},
+		},
+	}
+
+	md, err := ToContextMD(sess)
+	if err != nil {
+		t.Fatalf("ToContextMD() should succeed for small session, got: %v", err)
+	}
+	if len(md) == 0 {
+		t.Error("ToContextMD() should return non-empty content")
+	}
+}
+
+func TestEstimateContextSize(t *testing.T) {
+	sess := testSession()
+	estimated := estimateContextSize(sess)
+
+	// The estimate should be in the right ballpark of the actual output
+	md, err := ToContextMD(sess)
+	if err != nil {
+		t.Fatalf("ToContextMD() error: %v", err)
+	}
+	actual := len(md)
+
+	// Estimate should be within 2x of actual (it's a rough estimate, but should
+	// be conservative — slightly over rather than under).
+	if estimated < actual/2 {
+		t.Errorf("estimate too low: estimated=%d, actual=%d", estimated, actual)
+	}
+	if estimated > actual*3 {
+		t.Errorf("estimate too high: estimated=%d, actual=%d", estimated, actual)
 	}
 }

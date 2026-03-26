@@ -17,6 +17,11 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
+// DefaultMaxContextBytes is the maximum size (in bytes) for generated CONTEXT.md files.
+// 400 KB ≈ 100K tokens (at ~4 bytes/token). This leaves headroom for the system prompt
+// and assistant response within typical AI context windows (128K–200K tokens).
+const DefaultMaxContextBytes = 400 * 1024
+
 // Converter implements session.Converter for cross-provider format conversion.
 type Converter struct{}
 
@@ -61,7 +66,22 @@ func (c *Converter) FromNative(data []byte, source session.ProviderName) (*sessi
 
 // ToContextMD generates a CONTEXT.md fallback from a session.
 // This is a universal output that any AI tool can read as a prompt.
-func ToContextMD(sess *session.Session) []byte {
+//
+// It returns ErrContextTooLarge if the estimated output would exceed
+// DefaultMaxContextBytes. Callers should suggest using Smart Restore
+// filters (--clean-errors, --strip-empty, --exclude) to reduce session size.
+func ToContextMD(sess *session.Session) ([]byte, error) {
+	// Pre-flight size check: estimate the output size before building it.
+	estimatedBytes := estimateContextSize(sess)
+	if estimatedBytes > DefaultMaxContextBytes {
+		return nil, &ContextTooLargeError{
+			EstimatedBytes: estimatedBytes,
+			MaxBytes:       DefaultMaxContextBytes,
+			MessageCount:   len(sess.Messages),
+			ChildCount:     len(sess.Children),
+		}
+	}
+
 	var b strings.Builder
 
 	b.WriteString("# AI Session Context\n\n")
@@ -140,7 +160,76 @@ func ToContextMD(sess *session.Session) []byte {
 		}
 	}
 
-	return []byte(b.String())
+	return []byte(b.String()), nil
+}
+
+// ContextTooLargeError provides actionable details when CONTEXT.md would be too large.
+type ContextTooLargeError struct {
+	EstimatedBytes int
+	MaxBytes       int
+	MessageCount   int
+	ChildCount     int
+}
+
+func (e *ContextTooLargeError) Error() string {
+	estKB := e.EstimatedBytes / 1024
+	maxKB := e.MaxBytes / 1024
+	estTokens := e.EstimatedBytes / 4 // rough: ~4 bytes per token
+
+	msg := fmt.Sprintf(
+		"session too large for CONTEXT.md: estimated %dKB (~%dK tokens) exceeds %dKB limit (%d messages",
+		estKB, estTokens/1000, maxKB, e.MessageCount,
+	)
+	if e.ChildCount > 0 {
+		msg += fmt.Sprintf(", %d sub-agents", e.ChildCount)
+	}
+	msg += ")\n\nReduce session size with Smart Restore filters:\n"
+	msg += "  --clean-errors     Replace verbose error outputs with compact summaries\n"
+	msg += "  --strip-empty      Remove empty messages\n"
+	msg += "  --exclude \"system\" Remove system messages\n"
+	msg += "  --exclude \"0,1,2\"  Remove specific messages by index\n"
+	msg += "\nExample: aisync restore --session <id> --as-context --clean-errors --strip-empty"
+	return msg
+}
+
+// Unwrap returns the sentinel ErrContextTooLarge for errors.Is() matching.
+func (e *ContextTooLargeError) Unwrap() error {
+	return session.ErrContextTooLarge
+}
+
+// estimateContextSize computes a rough byte estimate for the CONTEXT.md output
+// without actually building the string. This is O(n) over messages but avoids
+// allocating the full output buffer just to check if it's too big.
+func estimateContextSize(sess *session.Session) int {
+	size := 200 // header (metadata, separators)
+
+	// File changes
+	for _, fc := range sess.FileChanges {
+		size += len(fc.FilePath) + 20 // "- `path` (type)\n"
+	}
+
+	// Messages
+	for _, msg := range sess.Messages {
+		size += 20 // "### Role\n\n"
+		size += len(msg.Content) + 2
+
+		for _, tc := range msg.ToolCalls {
+			size += len(tc.Name) + 40   // "**Tool: name** (state: ...)\n"
+			size += len(tc.Input) + 20  // json code block wrapper
+			size += len(tc.Output) + 20 // output code block wrapper
+		}
+	}
+
+	// Children
+	for _, child := range sess.Children {
+		size += len(child.Agent) + 30 // "## Sub-agent: name\n"
+		for _, msg := range child.Messages {
+			size += 20 // "### Role\n\n"
+			size += len(msg.Content) + 2
+		}
+	}
+
+	return size
 }
 
 // DetectFormat tries to identify the format of raw data.

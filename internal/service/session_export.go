@@ -58,7 +58,10 @@ func (s *SessionService) Export(req ExportRequest) (*ExportResult, error) {
 		}
 
 	case "context", "context.md":
-		output = converter.ToContextMD(sess)
+		output, err = converter.ToContextMD(sess)
+		if err != nil {
+			return nil, fmt.Errorf("generating CONTEXT.md: %w", err)
+		}
 		formatLabel = "context.md"
 
 	default:

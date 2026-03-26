@@ -188,7 +188,10 @@ func (s *Service) findSession(req Request) (*session.Session, error) {
 
 // generateContextFile creates a CONTEXT.md file using the shared converter.
 func generateContextFile(sess *session.Session, projectPath string) (string, error) {
-	content := convpkg.ToContextMD(sess)
+	content, err := convpkg.ToContextMD(sess)
+	if err != nil {
+		return "", err
+	}
 	contextPath := filepath.Join(projectPath, "CONTEXT.md")
 	if err := os.WriteFile(contextPath, content, 0o644); err != nil {
 		return "", err
