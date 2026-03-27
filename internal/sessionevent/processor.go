@@ -142,6 +142,8 @@ func (p *Processor) extractModelEvents(sess *session.Session) []Event {
 }
 
 // toolCallEvent creates a tool_call event from a tool invocation.
+// It classifies the tool using session.ClassifyTool to determine if it's
+// a builtin tool or an MCP server tool.
 func (p *Processor) toolCallEvent(sess *session.Session, msgIdx int, msg *session.Message, tc *session.ToolCall) Event {
 	return Event{
 		ID:           uuid.New().String(),
@@ -156,6 +158,7 @@ func (p *Processor) toolCallEvent(sess *session.Session, msgIdx int, msg *sessio
 		Agent:        sess.Agent,
 		ToolCall: &ToolCallDetail{
 			ToolName:     tc.Name,
+			ToolCategory: session.ClassifyTool(tc.Name),
 			ToolCallID:   tc.ID,
 			State:        tc.State,
 			DurationMs:   tc.DurationMs,

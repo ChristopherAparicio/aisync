@@ -576,3 +576,281 @@ func TestExtractSkillContentTags(t *testing.T) {
 		}
 	}
 }
+
+// ── ToolCategory classification tests ──
+
+func TestProcessor_ToolCategory_Builtin(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-toolcat-builtin",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{ID: "tc-1", Name: "Read", State: session.ToolStateCompleted},
+					{ID: "tc-2", Name: "bash", State: session.ToolStateCompleted},
+					{ID: "tc-3", Name: "file_edit", State: session.ToolStateCompleted},
+				},
+			},
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	for _, e := range events {
+		if e.Type != EventToolCall {
+			continue
+		}
+		if e.ToolCall.ToolCategory != "builtin" {
+			t.Errorf("tool %q: expected category=builtin, got %q",
+				e.ToolCall.ToolName, e.ToolCall.ToolCategory)
+		}
+	}
+}
+
+func TestProcessor_ToolCategory_MCP_ClaudeCode(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-toolcat-mcp-cc",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{ID: "tc-1", Name: "mcp__notion__search", State: session.ToolStateCompleted},
+					{ID: "tc-2", Name: "mcp__sentry__get_issue", State: session.ToolStateCompleted},
+				},
+			},
+		},
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	// Verify tool categories.
+	for _, e := range events {
+		if e.Type != EventToolCall {
+			continue
+		}
+		switch e.ToolCall.ToolName {
+		case "mcp__notion__search":
+			if e.ToolCall.ToolCategory != "mcp:notion" {
+				t.Errorf("mcp__notion__search: expected category=mcp:notion, got %q", e.ToolCall.ToolCategory)
+			}
+		case "mcp__sentry__get_issue":
+			if e.ToolCall.ToolCategory != "mcp:sentry" {
+				t.Errorf("mcp__sentry__get_issue: expected category=mcp:sentry, got %q", e.ToolCall.ToolCategory)
+			}
+		}
+	}
+
+	// Verify MCP server breakdown in summary.
+	if summary.MCPServerBreakdown["notion"] != 1 {
+		t.Errorf("expected MCPServerBreakdown[notion]=1, got %d", summary.MCPServerBreakdown["notion"])
+	}
+	if summary.MCPServerBreakdown["sentry"] != 1 {
+		t.Errorf("expected MCPServerBreakdown[sentry]=1, got %d", summary.MCPServerBreakdown["sentry"])
+	}
+}
+
+func TestProcessor_ToolCategory_MCP_OpenCode(t *testing.T) {
+	p := NewProcessor()
+	sess := &session.Session{
+		ID:       "test-toolcat-mcp-oc",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{ID: "tc-1", Name: "notionApi_API-post-search", State: session.ToolStateCompleted},
+					{ID: "tc-2", Name: "sentry_search_issues", State: session.ToolStateCompleted},
+					{ID: "tc-3", Name: "langfuse-local_fetch_traces", State: session.ToolStateCompleted},
+					{ID: "tc-4", Name: "context7_resolve-library-id", State: session.ToolStateCompleted},
+				},
+			},
+		},
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	expectedCategories := map[string]string{
+		"notionApi_API-post-search":   "mcp:notion",
+		"sentry_search_issues":        "mcp:sentry",
+		"langfuse-local_fetch_traces": "mcp:langfuse",
+		"context7_resolve-library-id": "mcp:context7",
+	}
+
+	for _, e := range events {
+		if e.Type != EventToolCall {
+			continue
+		}
+		expected, ok := expectedCategories[e.ToolCall.ToolName]
+		if ok && e.ToolCall.ToolCategory != expected {
+			t.Errorf("tool %q: expected category=%q, got %q",
+				e.ToolCall.ToolName, expected, e.ToolCall.ToolCategory)
+		}
+	}
+
+	// Verify MCP server breakdown.
+	if summary.MCPServerBreakdown["notion"] != 1 {
+		t.Errorf("expected MCPServerBreakdown[notion]=1, got %d", summary.MCPServerBreakdown["notion"])
+	}
+	if summary.MCPServerBreakdown["langfuse"] != 1 {
+		t.Errorf("expected MCPServerBreakdown[langfuse]=1, got %d", summary.MCPServerBreakdown["langfuse"])
+	}
+}
+
+// ── TopMCPServers in bucket aggregation ──
+
+func TestBucketAggregator_TopMCPServers(t *testing.T) {
+	agg := NewBucketAggregator()
+	now := time.Date(2025, 3, 25, 14, 30, 0, 0, time.UTC)
+
+	events := []Event{
+		{Type: EventToolCall, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "mcp__notion__search", ToolCategory: "mcp:notion", State: session.ToolStateCompleted}},
+		{Type: EventToolCall, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "mcp__notion__create_page", ToolCategory: "mcp:notion", State: session.ToolStateCompleted}},
+		{Type: EventToolCall, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "mcp__sentry__get_issue", ToolCategory: "mcp:sentry", State: session.ToolStateCompleted}},
+		{Type: EventToolCall, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "bash", ToolCategory: "builtin", State: session.ToolStateCompleted}},
+	}
+
+	buckets := agg.Aggregate(events, "1h")
+	if len(buckets) != 1 {
+		t.Fatalf("expected 1 bucket, got %d", len(buckets))
+	}
+
+	b := buckets[0]
+	if b.TopMCPServers["notion"] != 2 {
+		t.Errorf("expected TopMCPServers[notion]=2, got %d", b.TopMCPServers["notion"])
+	}
+	if b.TopMCPServers["sentry"] != 1 {
+		t.Errorf("expected TopMCPServers[sentry]=1, got %d", b.TopMCPServers["sentry"])
+	}
+	if _, exists := b.TopMCPServers["builtin"]; exists {
+		t.Error("builtin tools should not appear in TopMCPServers")
+	}
+	if b.ToolCallCount != 4 {
+		t.Errorf("expected ToolCallCount=4, got %d", b.ToolCallCount)
+	}
+}
+
+// ── Compaction event type tests ──
+
+func TestEventType_Compaction_Valid(t *testing.T) {
+	if !EventCompaction.Valid() {
+		t.Error("EventCompaction should be a valid event type")
+	}
+}
+
+func TestBucketAggregator_CompactionCount(t *testing.T) {
+	agg := NewBucketAggregator()
+	now := time.Date(2025, 3, 25, 14, 30, 0, 0, time.UTC)
+
+	events := []Event{
+		{Type: EventCompaction, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			Compaction: &CompactionDetail{
+				BeforeMessageIdx:  45,
+				AfterMessageIdx:   46,
+				BeforeInputTokens: 180000,
+				AfterInputTokens:  50000,
+				DropRatio:         0.278,
+				CacheInvalidated:  true,
+				Model:             "claude-opus-4-20250514",
+			}},
+		{Type: EventCompaction, OccurredAt: now.Add(10 * time.Minute), ProjectPath: "/p", Provider: "opencode",
+			Compaction: &CompactionDetail{
+				BeforeMessageIdx:  90,
+				AfterMessageIdx:   91,
+				BeforeInputTokens: 195000,
+				AfterInputTokens:  60000,
+				DropRatio:         0.308,
+				CacheInvalidated:  true,
+				Model:             "claude-opus-4-20250514",
+			}},
+		{Type: EventToolCall, OccurredAt: now, ProjectPath: "/p", Provider: "opencode",
+			ToolCall: &ToolCallDetail{ToolName: "bash", ToolCategory: "builtin", State: session.ToolStateCompleted}},
+	}
+
+	buckets := agg.Aggregate(events, "1h")
+	if len(buckets) != 1 {
+		t.Fatalf("expected 1 bucket, got %d", len(buckets))
+	}
+
+	b := buckets[0]
+	if b.CompactionCount != 2 {
+		t.Errorf("expected CompactionCount=2, got %d", b.CompactionCount)
+	}
+	if b.ToolCallCount != 1 {
+		t.Errorf("expected ToolCallCount=1, got %d", b.ToolCallCount)
+	}
+}
+
+func TestSessionEventSummary_CompactionCount(t *testing.T) {
+	events := []Event{
+		{Type: EventCompaction, OccurredAt: time.Now(), SessionID: "ses-1",
+			Compaction: &CompactionDetail{BeforeInputTokens: 180000, AfterInputTokens: 50000}},
+		{Type: EventToolCall, OccurredAt: time.Now(), SessionID: "ses-1",
+			ToolCall: &ToolCallDetail{ToolName: "bash", ToolCategory: "builtin"}},
+	}
+
+	summary := NewSessionEventSummary("ses-1", events)
+	if summary.CompactionCount != 1 {
+		t.Errorf("expected CompactionCount=1, got %d", summary.CompactionCount)
+	}
+	if summary.ToolCallCount != 1 {
+		t.Errorf("expected ToolCallCount=1, got %d", summary.ToolCallCount)
+	}
+	if summary.TotalEvents != 2 {
+		t.Errorf("expected TotalEvents=2, got %d", summary.TotalEvents)
+	}
+}
+
+// ── MergeBuckets with new fields ──
+
+func TestMergeBuckets_WithMCPServersAndCompaction(t *testing.T) {
+	existing := &EventBucket{
+		ToolCallCount:   5,
+		CompactionCount: 1,
+		TopTools:        map[string]int{"bash": 3},
+		TopMCPServers:   map[string]int{"notion": 2},
+		TopSkills:       map[string]int{},
+		AgentBreakdown:  map[string]int{},
+		TopCommands:     map[string]int{},
+		ErrorByCategory: map[session.ErrorCategory]int{},
+	}
+
+	incoming := &EventBucket{
+		ToolCallCount:   3,
+		CompactionCount: 2,
+		TopTools:        map[string]int{"bash": 1},
+		TopMCPServers:   map[string]int{"notion": 1, "sentry": 3},
+		TopSkills:       map[string]int{},
+		AgentBreakdown:  map[string]int{},
+		TopCommands:     map[string]int{},
+		ErrorByCategory: map[session.ErrorCategory]int{},
+	}
+
+	MergeBuckets(existing, incoming)
+
+	if existing.CompactionCount != 3 {
+		t.Errorf("expected CompactionCount=3, got %d", existing.CompactionCount)
+	}
+	if existing.TopMCPServers["notion"] != 3 {
+		t.Errorf("expected TopMCPServers[notion]=3, got %d", existing.TopMCPServers["notion"])
+	}
+	if existing.TopMCPServers["sentry"] != 3 {
+		t.Errorf("expected TopMCPServers[sentry]=3, got %d", existing.TopMCPServers["sentry"])
+	}
+}
