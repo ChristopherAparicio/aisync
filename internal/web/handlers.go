@@ -1746,6 +1746,13 @@ type costDashboardPage struct {
 	HasQACLeaderboard bool
 	QACLeaderboard    []qacLeaderView
 
+	// Configured vs Used (MCP server governance)
+	HasConfigVsUsed bool
+	ConfigVsUsed    []mcpStatusView
+	CVUActiveCount  int
+	CVUGhostCount   int
+	CVUOrphanCount  int
+
 	// Context saturation
 	HasSaturation    bool
 	SatAvgPeak       float64 // average peak saturation (0-100)
@@ -1901,6 +1908,18 @@ type qacLeaderView struct {
 	InputCost      float64 // $ per 1M input tokens
 	QAC            float64
 	IsCurrentModel bool // true if the user currently uses this model
+}
+
+// mcpStatusView is a template-friendly MCP server governance entry.
+type mcpStatusView struct {
+	Name        string
+	Status      string // "active", "ghost", "orphan"
+	StatusClass string // CSS class
+	Scope       string // "global", "project", "" for orphans
+	Enabled     bool
+	CallCount   int
+	ToolCount   int
+	TotalCost   float64
 }
 
 // handleCosts renders the cost dashboard.
@@ -2062,6 +2081,36 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 		}
 		data.TotalMCPCalls = toolSummary.TotalMCPCalls
 		data.TotalMCPCost = toolSummary.TotalMCPCost
+	}
+
+	// Configured vs Used analysis (when project is selected and registry is available).
+	if project != "" && s.registrySvc != nil {
+		cvuResult, cvuErr := s.registrySvc.ConfiguredVsUsed(project, since90d)
+		if cvuErr == nil && cvuResult != nil && len(cvuResult.Servers) > 0 {
+			data.HasConfigVsUsed = true
+			data.CVUActiveCount = cvuResult.ActiveCount
+			data.CVUGhostCount = cvuResult.GhostCount
+			data.CVUOrphanCount = cvuResult.OrphanCount
+			for _, srv := range cvuResult.Servers {
+				statusClass := "good"
+				switch srv.Status {
+				case registry.MCPStatusGhost:
+					statusClass = "warning"
+				case registry.MCPStatusOrphan:
+					statusClass = "poor"
+				}
+				data.ConfigVsUsed = append(data.ConfigVsUsed, mcpStatusView{
+					Name:        srv.Name,
+					Status:      string(srv.Status),
+					StatusClass: statusClass,
+					Scope:       string(srv.Scope),
+					Enabled:     srv.Enabled,
+					CallCount:   srv.CallCount,
+					ToolCount:   srv.ToolCount,
+					TotalCost:   srv.TotalCost,
+				})
+			}
+		}
 	}
 
 	agentCosts, agentErr := s.sessionSvc.AgentCostSummary(r.Context(), project, since90d, time.Time{})

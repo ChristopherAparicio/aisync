@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -236,6 +237,52 @@ func discoverProjectPaths() ([]string, error) {
 // OpenCode project files are simple JSON objects.
 func parseJSONLoose(data []byte, v any) error {
 	return json.Unmarshal(data, v)
+}
+
+// ConfiguredVsUsed compares configured MCP servers against actual tool usage
+// for a project. It identifies ghost servers (configured but never called)
+// and orphan servers (called but not in config).
+func (s *RegistryService) ConfiguredVsUsed(projectPath string, since time.Time) (*registry.ConfiguredVsUsed, error) {
+	// Scan current capabilities to get configured MCP servers.
+	project, err := s.ScanProject(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("scanning project: %w", err)
+	}
+
+	// Query tool usage buckets for MCP server calls.
+	var usage []registry.MCPUsageData
+	if s.store != nil {
+		buckets, bErr := s.store.QueryToolBuckets("1d", since, time.Time{}, projectPath)
+		if bErr == nil {
+			// Aggregate by MCP server name.
+			serverAgg := make(map[string]*registry.MCPUsageData)
+			toolsSeen := make(map[string]map[string]bool) // server → tool names
+
+			for _, b := range buckets {
+				server := session.MCPServerName(b.ToolCategory)
+				if server == "" {
+					continue // skip builtin tools
+				}
+
+				agg, ok := serverAgg[server]
+				if !ok {
+					agg = &registry.MCPUsageData{Server: server}
+					serverAgg[server] = agg
+					toolsSeen[server] = make(map[string]bool)
+				}
+				agg.CallCount += b.CallCount
+				agg.TotalCost += b.EstimatedCost
+				toolsSeen[server][b.ToolName] = true
+			}
+
+			for server, agg := range serverAgg {
+				agg.ToolCount = len(toolsSeen[server])
+				usage = append(usage, *agg)
+			}
+		}
+	}
+
+	return registry.AnalyzeConfiguredVsUsed(project.MCPServers, usage), nil
 }
 
 // persistSnapshot saves a project snapshot if capabilities changed since

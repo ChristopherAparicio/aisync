@@ -282,3 +282,112 @@ func DiffSnapshots(prev, curr *Project) (capsAdded, capsRemoved, mcpAdded, mcpRe
 
 	return
 }
+
+// ── Configured vs Used Analysis ──
+
+// MCPUsageStatus classifies an MCP server's relationship between configuration and usage.
+type MCPUsageStatus string
+
+const (
+	// MCPStatusActive means the server is configured AND actively used.
+	MCPStatusActive MCPUsageStatus = "active"
+
+	// MCPStatusGhost means the server is configured but never used — wasted config.
+	MCPStatusGhost MCPUsageStatus = "ghost"
+
+	// MCPStatusOrphan means the server is used but not in the current config —
+	// possibly removed after sessions were recorded, or from a different provider.
+	MCPStatusOrphan MCPUsageStatus = "orphan"
+)
+
+// ConfiguredVsUsed is the result of comparing configured MCP servers against
+// actual tool usage data. It identifies ghost servers (configured but unused)
+// and orphan servers (used but not configured).
+type ConfiguredVsUsed struct {
+	// All MCP server entries with their status.
+	Servers []MCPServerStatus `json:"servers"`
+
+	// Summary counts.
+	ActiveCount  int `json:"active_count"`  // configured + used
+	GhostCount   int `json:"ghost_count"`   // configured but never used
+	OrphanCount  int `json:"orphan_count"`  // used but not configured
+	TotalCalls   int `json:"total_calls"`   // total MCP tool invocations
+	GhostServers int `json:"ghost_servers"` // number of ghost MCP server configs (wasted)
+}
+
+// MCPServerStatus describes a single MCP server's configuration and usage state.
+type MCPServerStatus struct {
+	Name      string         `json:"name"`       // server name (e.g. "notion", "sentry")
+	Status    MCPUsageStatus `json:"status"`     // active, ghost, orphan
+	Scope     Scope          `json:"scope"`      // where configured (global, project) — empty for orphans
+	Enabled   bool           `json:"enabled"`    // config enabled flag — false for orphans
+	CallCount int            `json:"call_count"` // total tool invocations (0 for ghosts)
+	ToolCount int            `json:"tool_count"` // distinct tools used (0 for ghosts)
+	TotalCost float64        `json:"total_cost"` // estimated cost (0 for ghosts)
+}
+
+// MCPUsageData holds aggregated usage data for a single MCP server.
+// This is an input to AnalyzeConfiguredVsUsed — computed elsewhere from tool buckets.
+type MCPUsageData struct {
+	Server    string  `json:"server"`
+	CallCount int     `json:"call_count"`
+	ToolCount int     `json:"tool_count"`
+	TotalCost float64 `json:"total_cost"`
+}
+
+// AnalyzeConfiguredVsUsed produces a ConfiguredVsUsed report from configured
+// MCP servers and actual usage data. This is a pure function — no I/O.
+func AnalyzeConfiguredVsUsed(configured []MCPServer, usage []MCPUsageData) *ConfiguredVsUsed {
+	result := &ConfiguredVsUsed{}
+
+	// Index usage by server name.
+	usageMap := make(map[string]*MCPUsageData, len(usage))
+	for i := range usage {
+		usageMap[usage[i].Server] = &usage[i]
+	}
+
+	// Track which usage entries were matched.
+	matched := make(map[string]bool)
+
+	// Check each configured server against usage.
+	for _, cfg := range configured {
+		entry := MCPServerStatus{
+			Name:    cfg.Name,
+			Scope:   cfg.Scope,
+			Enabled: cfg.Enabled,
+		}
+
+		if ud, ok := usageMap[cfg.Name]; ok {
+			entry.Status = MCPStatusActive
+			entry.CallCount = ud.CallCount
+			entry.ToolCount = ud.ToolCount
+			entry.TotalCost = ud.TotalCost
+			result.ActiveCount++
+			result.TotalCalls += ud.CallCount
+			matched[cfg.Name] = true
+		} else {
+			entry.Status = MCPStatusGhost
+			result.GhostCount++
+		}
+
+		result.Servers = append(result.Servers, entry)
+	}
+
+	// Find orphan servers (used but not configured).
+	for _, ud := range usage {
+		if !matched[ud.Server] {
+			result.Servers = append(result.Servers, MCPServerStatus{
+				Name:      ud.Server,
+				Status:    MCPStatusOrphan,
+				CallCount: ud.CallCount,
+				ToolCount: ud.ToolCount,
+				TotalCost: ud.TotalCost,
+			})
+			result.OrphanCount++
+			result.TotalCalls += ud.CallCount
+		}
+	}
+
+	result.GhostServers = result.GhostCount
+	return result
+}

@@ -575,6 +575,57 @@
 </div>
 {{end}}
 
+<!-- ── MCP Governance: Configured vs Used ── -->
+{{if .HasConfigVsUsed}}
+<div class="section">
+  <h2 class="section-title">MCP Server Governance <span class="text-muted">(90d)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Compares configured MCP servers against actual usage. Ghost servers are configured but never called. Orphan servers appear in usage data but aren't in the current config.</p>
+  <div class="kpi-grid" style="margin-bottom: 1rem;">
+    <div class="kpi-card{{if eq .CVUGhostCount 0}} kpi-accent{{end}}">
+      <div class="label">Active</div>
+      <div class="value">{{.CVUActiveCount}}</div>
+      <div class="sub">configured &amp; used</div>
+    </div>
+    <div class="kpi-card{{if gt .CVUGhostCount 0}} kpi-accent{{end}}">
+      <div class="label">Ghost</div>
+      <div class="value{{if gt .CVUGhostCount 0}} text-error{{end}}">{{.CVUGhostCount}}</div>
+      <div class="sub">configured but never used</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Orphan</div>
+      <div class="value">{{.CVUOrphanCount}}</div>
+      <div class="sub">used but not configured</div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th>Status</th>
+          <th>Scope</th>
+          <th class="text-right">Tools</th>
+          <th class="text-right">Calls</th>
+          <th class="text-right">Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ConfigVsUsed}}
+        <tr>
+          <td><span class="badge badge-provider">{{.Name}}</span></td>
+          <td><span class="badge badge-{{.StatusClass}}">{{.Status}}</span></td>
+          <td class="text-muted">{{if .Scope}}{{.Scope}}{{else}}—{{end}}</td>
+          <td class="text-right">{{if gt .ToolCount 0}}{{.ToolCount}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="text-right">{{if gt .CallCount 0}}{{.CallCount}}{{else}}<span class="text-muted">0</span>{{end}}</td>
+          <td class="text-right font-mono">{{if gt .TotalCost 0.0}}{{formatCost .TotalCost}}{{else}}<span class="text-muted">$0.00</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
 <!-- ── MCP Server x Project Matrix ── -->
 {{if .HasMCPMatrix}}
 <div class="section">

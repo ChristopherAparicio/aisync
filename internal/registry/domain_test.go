@@ -178,3 +178,142 @@ func TestDiffSnapshots_AddedAndRemoved(t *testing.T) {
 		t.Errorf("mcpRemoved = %d, want 1 (old-server)", mcpRemoved)
 	}
 }
+
+// ── AnalyzeConfiguredVsUsed tests ──
+
+func TestAnalyzeConfiguredVsUsed_AllActive(t *testing.T) {
+	configured := []MCPServer{
+		{Name: "notion", Scope: ScopeGlobal, Enabled: true},
+		{Name: "sentry", Scope: ScopeProject, Enabled: true},
+	}
+	usage := []MCPUsageData{
+		{Server: "notion", CallCount: 50, ToolCount: 3, TotalCost: 1.25},
+		{Server: "sentry", CallCount: 30, ToolCount: 2, TotalCost: 0.80},
+	}
+
+	result := AnalyzeConfiguredVsUsed(configured, usage)
+
+	if result.ActiveCount != 2 {
+		t.Errorf("ActiveCount = %d, want 2", result.ActiveCount)
+	}
+	if result.GhostCount != 0 {
+		t.Errorf("GhostCount = %d, want 0", result.GhostCount)
+	}
+	if result.OrphanCount != 0 {
+		t.Errorf("OrphanCount = %d, want 0", result.OrphanCount)
+	}
+	if result.TotalCalls != 80 {
+		t.Errorf("TotalCalls = %d, want 80", result.TotalCalls)
+	}
+	if len(result.Servers) != 2 {
+		t.Errorf("Servers count = %d, want 2", len(result.Servers))
+	}
+}
+
+func TestAnalyzeConfiguredVsUsed_GhostServers(t *testing.T) {
+	configured := []MCPServer{
+		{Name: "notion", Scope: ScopeGlobal, Enabled: true},
+		{Name: "unused-server", Scope: ScopeProject, Enabled: true},
+		{Name: "disabled-server", Scope: ScopeGlobal, Enabled: false},
+	}
+	usage := []MCPUsageData{
+		{Server: "notion", CallCount: 50, ToolCount: 3, TotalCost: 1.25},
+	}
+
+	result := AnalyzeConfiguredVsUsed(configured, usage)
+
+	if result.ActiveCount != 1 {
+		t.Errorf("ActiveCount = %d, want 1", result.ActiveCount)
+	}
+	if result.GhostCount != 2 {
+		t.Errorf("GhostCount = %d, want 2 (unused-server + disabled-server)", result.GhostCount)
+	}
+
+	// Check individual statuses.
+	for _, s := range result.Servers {
+		switch s.Name {
+		case "notion":
+			if s.Status != MCPStatusActive {
+				t.Errorf("notion: status = %q, want active", s.Status)
+			}
+			if s.CallCount != 50 {
+				t.Errorf("notion: CallCount = %d, want 50", s.CallCount)
+			}
+		case "unused-server":
+			if s.Status != MCPStatusGhost {
+				t.Errorf("unused-server: status = %q, want ghost", s.Status)
+			}
+			if s.CallCount != 0 {
+				t.Errorf("unused-server: CallCount = %d, want 0", s.CallCount)
+			}
+		case "disabled-server":
+			if s.Status != MCPStatusGhost {
+				t.Errorf("disabled-server: status = %q, want ghost", s.Status)
+			}
+		}
+	}
+}
+
+func TestAnalyzeConfiguredVsUsed_OrphanServers(t *testing.T) {
+	configured := []MCPServer{
+		{Name: "notion", Scope: ScopeGlobal, Enabled: true},
+	}
+	usage := []MCPUsageData{
+		{Server: "notion", CallCount: 50, ToolCount: 3, TotalCost: 1.25},
+		{Server: "langfuse", CallCount: 20, ToolCount: 5, TotalCost: 0.50},
+		{Server: "context7", CallCount: 10, ToolCount: 1, TotalCost: 0.10},
+	}
+
+	result := AnalyzeConfiguredVsUsed(configured, usage)
+
+	if result.ActiveCount != 1 {
+		t.Errorf("ActiveCount = %d, want 1", result.ActiveCount)
+	}
+	if result.OrphanCount != 2 {
+		t.Errorf("OrphanCount = %d, want 2 (langfuse + context7)", result.OrphanCount)
+	}
+	if result.TotalCalls != 80 {
+		t.Errorf("TotalCalls = %d, want 80", result.TotalCalls)
+	}
+
+	// Check orphans have no scope.
+	for _, s := range result.Servers {
+		if s.Status == MCPStatusOrphan && s.Scope != "" {
+			t.Errorf("orphan %s should have empty scope, got %q", s.Name, s.Scope)
+		}
+	}
+}
+
+func TestAnalyzeConfiguredVsUsed_Mixed(t *testing.T) {
+	configured := []MCPServer{
+		{Name: "notion", Scope: ScopeGlobal, Enabled: true},
+		{Name: "ghost-api", Scope: ScopeProject, Enabled: true},
+	}
+	usage := []MCPUsageData{
+		{Server: "notion", CallCount: 100, ToolCount: 5, TotalCost: 2.50},
+		{Server: "orphan-tool", CallCount: 15, ToolCount: 2, TotalCost: 0.30},
+	}
+
+	result := AnalyzeConfiguredVsUsed(configured, usage)
+
+	if result.ActiveCount != 1 {
+		t.Errorf("ActiveCount = %d, want 1", result.ActiveCount)
+	}
+	if result.GhostCount != 1 {
+		t.Errorf("GhostCount = %d, want 1", result.GhostCount)
+	}
+	if result.OrphanCount != 1 {
+		t.Errorf("OrphanCount = %d, want 1", result.OrphanCount)
+	}
+}
+
+func TestAnalyzeConfiguredVsUsed_Empty(t *testing.T) {
+	result := AnalyzeConfiguredVsUsed(nil, nil)
+
+	if result.ActiveCount != 0 || result.GhostCount != 0 || result.OrphanCount != 0 {
+		t.Errorf("expected all zeros for empty input")
+	}
+	if len(result.Servers) != 0 {
+		t.Errorf("expected no servers, got %d", len(result.Servers))
+	}
+}
