@@ -854,3 +854,293 @@ func TestMergeBuckets_WithMCPServersAndCompaction(t *testing.T) {
 		t.Errorf("expected TopMCPServers[sentry]=3, got %d", existing.TopMCPServers["sentry"])
 	}
 }
+
+// ── Compaction Detection Heuristic Tests ──
+
+func TestProcessor_Compaction_ClearDrop(t *testing.T) {
+	// Simulate a real compaction: input tokens grow steadily then drop sharply.
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:          "test-compaction-clear",
+		Provider:    session.ProviderOpenCode,
+		Agent:       "opencode",
+		ProjectPath: "/home/user/project",
+		Messages: []session.Message{
+			{ID: "m1", Timestamp: now, Role: session.RoleUser, Content: "start"},
+			{ID: "m2", Timestamp: now.Add(1 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 50000, OutputTokens: 2000, CacheReadTokens: 40000},
+			{ID: "m3", Timestamp: now.Add(2 * time.Minute), Role: session.RoleUser, Content: "continue"},
+			{ID: "m4", Timestamp: now.Add(3 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 100000, OutputTokens: 3000, CacheReadTokens: 85000},
+			{ID: "m5", Timestamp: now.Add(4 * time.Minute), Role: session.RoleUser, Content: "more"},
+			{ID: "m6", Timestamp: now.Add(5 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 180000, OutputTokens: 4000, CacheReadTokens: 160000},
+			// === COMPACTION HERE === input drops from 180K to 50K, cache invalidated
+			{ID: "m7", Timestamp: now.Add(6 * time.Minute), Role: session.RoleUser, Content: "after compaction"},
+			{ID: "m8", Timestamp: now.Add(7 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 50000, OutputTokens: 2000, CacheReadTokens: 0, CacheWriteTokens: 50000},
+		},
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	// Find compaction events.
+	var compactions []Event
+	for _, e := range events {
+		if e.Type == EventCompaction {
+			compactions = append(compactions, e)
+		}
+	}
+
+	if len(compactions) != 1 {
+		t.Fatalf("expected 1 compaction event, got %d", len(compactions))
+	}
+
+	c := compactions[0]
+	if c.Compaction.BeforeInputTokens != 180000 {
+		t.Errorf("BeforeInputTokens = %d, want 180000", c.Compaction.BeforeInputTokens)
+	}
+	if c.Compaction.AfterInputTokens != 50000 {
+		t.Errorf("AfterInputTokens = %d, want 50000", c.Compaction.AfterInputTokens)
+	}
+	if !c.Compaction.CacheInvalidated {
+		t.Error("expected CacheInvalidated=true")
+	}
+	if c.Compaction.Model != "claude-opus-4" {
+		t.Errorf("Model = %q, want claude-opus-4", c.Compaction.Model)
+	}
+	if c.Compaction.BeforeMessageIdx != 5 { // m6 is index 5
+		t.Errorf("BeforeMessageIdx = %d, want 5", c.Compaction.BeforeMessageIdx)
+	}
+	if c.Compaction.AfterMessageIdx != 7 { // m8 is index 7
+		t.Errorf("AfterMessageIdx = %d, want 7", c.Compaction.AfterMessageIdx)
+	}
+
+	// Drop ratio should be 50000/180000 ≈ 0.278
+	if c.Compaction.DropRatio < 0.27 || c.Compaction.DropRatio > 0.29 {
+		t.Errorf("DropRatio = %f, want ~0.278", c.Compaction.DropRatio)
+	}
+
+	// Summary should count it.
+	if summary.CompactionCount != 1 {
+		t.Errorf("summary.CompactionCount = %d, want 1", summary.CompactionCount)
+	}
+}
+
+func TestProcessor_Compaction_NormalGrowth(t *testing.T) {
+	// Normal conversation: tokens grow monotonically → no compaction.
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:       "test-no-compaction",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{ID: "m1", Timestamp: now, Role: session.RoleAssistant,
+				InputTokens: 20000, OutputTokens: 1000, CacheReadTokens: 15000},
+			{ID: "m2", Timestamp: now.Add(time.Minute), Role: session.RoleAssistant,
+				InputTokens: 40000, OutputTokens: 1500, CacheReadTokens: 30000},
+			{ID: "m3", Timestamp: now.Add(2 * time.Minute), Role: session.RoleAssistant,
+				InputTokens: 60000, OutputTokens: 2000, CacheReadTokens: 50000},
+			{ID: "m4", Timestamp: now.Add(3 * time.Minute), Role: session.RoleAssistant,
+				InputTokens: 80000, OutputTokens: 2500, CacheReadTokens: 65000},
+		},
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	for _, e := range events {
+		if e.Type == EventCompaction {
+			t.Error("expected no compaction events for normal growing context")
+		}
+	}
+	if summary.CompactionCount != 0 {
+		t.Errorf("summary.CompactionCount = %d, want 0", summary.CompactionCount)
+	}
+}
+
+func TestProcessor_Compaction_SmallDropIgnored(t *testing.T) {
+	// 30% drop — below the 50% threshold → no compaction.
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:       "test-small-drop",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{ID: "m1", Timestamp: now, Role: session.RoleAssistant,
+				InputTokens: 100000, OutputTokens: 2000, CacheReadTokens: 80000},
+			{ID: "m2", Timestamp: now.Add(time.Minute), Role: session.RoleAssistant,
+				InputTokens: 70000, OutputTokens: 2000, CacheReadTokens: 50000}, // 30% drop
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	for _, e := range events {
+		if e.Type == EventCompaction {
+			t.Error("expected no compaction for 30% drop (below 50% threshold)")
+		}
+	}
+}
+
+func TestProcessor_Compaction_SmallContextIgnored(t *testing.T) {
+	// Drop from 5K to 2K — below minBeforeTokens threshold (10K).
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:       "test-small-context",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{ID: "m1", Timestamp: now, Role: session.RoleAssistant,
+				InputTokens: 5000, OutputTokens: 500},
+			{ID: "m2", Timestamp: now.Add(time.Minute), Role: session.RoleAssistant,
+				InputTokens: 2000, OutputTokens: 300}, // 60% drop but context too small
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	for _, e := range events {
+		if e.Type == EventCompaction {
+			t.Error("expected no compaction for small context (before < 10K)")
+		}
+	}
+}
+
+func TestProcessor_Compaction_DoubleCompaction(t *testing.T) {
+	// Long session with two compaction events.
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:       "test-double-compaction",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			// Phase 1: grow to 180K
+			{ID: "m1", Timestamp: now, Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 50000, CacheReadTokens: 40000},
+			{ID: "m2", Timestamp: now.Add(time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 120000, CacheReadTokens: 100000},
+			{ID: "m3", Timestamp: now.Add(2 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 180000, CacheReadTokens: 160000},
+			// Compaction #1: 180K → 45K
+			{ID: "m4", Timestamp: now.Add(3 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 45000, CacheReadTokens: 0, CacheWriteTokens: 45000},
+			// Phase 2: grow again to 190K
+			{ID: "m5", Timestamp: now.Add(4 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 100000, CacheReadTokens: 40000},
+			{ID: "m6", Timestamp: now.Add(5 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 190000, CacheReadTokens: 170000},
+			// Compaction #2: 190K → 55K
+			{ID: "m7", Timestamp: now.Add(6 * time.Minute), Role: session.RoleAssistant,
+				Model: "claude-opus-4", InputTokens: 55000, CacheReadTokens: 0, CacheWriteTokens: 55000},
+		},
+	}
+
+	events, summary := p.ExtractAll(sess)
+
+	var compactions []Event
+	for _, e := range events {
+		if e.Type == EventCompaction {
+			compactions = append(compactions, e)
+		}
+	}
+
+	if len(compactions) != 2 {
+		t.Fatalf("expected 2 compaction events, got %d", len(compactions))
+	}
+
+	// First compaction: 180K → 45K
+	if compactions[0].Compaction.BeforeInputTokens != 180000 {
+		t.Errorf("compaction[0].Before = %d, want 180000", compactions[0].Compaction.BeforeInputTokens)
+	}
+	if compactions[0].Compaction.AfterInputTokens != 45000 {
+		t.Errorf("compaction[0].After = %d, want 45000", compactions[0].Compaction.AfterInputTokens)
+	}
+
+	// Second compaction: 190K → 55K
+	if compactions[1].Compaction.BeforeInputTokens != 190000 {
+		t.Errorf("compaction[1].Before = %d, want 190000", compactions[1].Compaction.BeforeInputTokens)
+	}
+	if compactions[1].Compaction.AfterInputTokens != 55000 {
+		t.Errorf("compaction[1].After = %d, want 55000", compactions[1].Compaction.AfterInputTokens)
+	}
+
+	// Both should have cache invalidated.
+	for i, c := range compactions {
+		if !c.Compaction.CacheInvalidated {
+			t.Errorf("compaction[%d]: expected CacheInvalidated=true", i)
+		}
+	}
+
+	if summary.CompactionCount != 2 {
+		t.Errorf("summary.CompactionCount = %d, want 2", summary.CompactionCount)
+	}
+}
+
+func TestProcessor_Compaction_UserMessagesIgnored(t *testing.T) {
+	// User messages have InputTokens but should not be considered for compaction.
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:       "test-user-ignored",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{ID: "m1", Timestamp: now, Role: session.RoleAssistant,
+				InputTokens: 100000, CacheReadTokens: 80000},
+			// User message with low InputTokens — should NOT trigger compaction.
+			{ID: "m2", Timestamp: now.Add(time.Minute), Role: session.RoleUser,
+				InputTokens: 500},
+			{ID: "m3", Timestamp: now.Add(2 * time.Minute), Role: session.RoleAssistant,
+				InputTokens: 120000, CacheReadTokens: 100000}, // normal growth
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	for _, e := range events {
+		if e.Type == EventCompaction {
+			t.Error("expected no compaction — user messages should be filtered out")
+		}
+	}
+}
+
+func TestProcessor_Compaction_CacheNotInvalidated(t *testing.T) {
+	// Drop with cache still active — compaction detected but cache not invalidated.
+	// This could happen with model switching or unusual provider behavior.
+	p := NewProcessor()
+	now := time.Now()
+	sess := &session.Session{
+		ID:       "test-cache-not-invalidated",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{ID: "m1", Timestamp: now, Role: session.RoleAssistant,
+				InputTokens: 150000, CacheReadTokens: 120000},
+			{ID: "m2", Timestamp: now.Add(time.Minute), Role: session.RoleAssistant,
+				InputTokens: 60000, CacheReadTokens: 30000}, // 60% drop but cache_read=50% of input
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	var compactions []Event
+	for _, e := range events {
+		if e.Type == EventCompaction {
+			compactions = append(compactions, e)
+		}
+	}
+
+	if len(compactions) != 1 {
+		t.Fatalf("expected 1 compaction (drop is >50%%), got %d", len(compactions))
+	}
+
+	// Should detect compaction but CacheInvalidated should be false.
+	if compactions[0].Compaction.CacheInvalidated {
+		t.Error("expected CacheInvalidated=false (cache_read is 50% of input)")
+	}
+}

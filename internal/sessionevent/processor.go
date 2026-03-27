@@ -81,6 +81,10 @@ func (p *Processor) ExtractAll(sess *session.Session) ([]Event, SessionEventSumm
 		events = append(events, p.imageEvents(sess, msgIdx, msg)...)
 	}
 
+	// 4. Compaction detection — requires a global view of the message sequence
+	// to detect token-drop patterns across consecutive assistant messages.
+	events = append(events, p.compactionEvents(sess)...)
+
 	// Note: error events were already extracted above (step 2), before message scan.
 
 	// Compute summary from extracted events.
@@ -322,6 +326,105 @@ func (p *Processor) errorEvents(sess *session.Session) []Event {
 				Message:    err.Message,
 				ToolName:   err.ToolName,
 				HTTPStatus: err.HTTPStatus,
+			},
+		})
+	}
+
+	return events
+}
+
+// compactionEvents detects context window compaction by analyzing token-drop
+// patterns across consecutive assistant messages.
+//
+// Compaction heuristic:
+//
+//  1. Primary signal: InputTokens drops by >50% between two consecutive
+//     assistant messages (msg[i-1] → msg[i]). During normal conversation,
+//     input tokens monotonically increase as context grows. A sharp drop
+//     means the provider summarized/compacted the conversation.
+//
+//  2. Confirmation signal: CacheReadTokens drops to near zero (<5% of input).
+//     After compaction, the entire context is new content — nothing is cached.
+//     This distinguishes compaction from normal variation (e.g. switching models).
+//
+// Only assistant messages with InputTokens > 0 are considered as candidates.
+// We require a minimum InputTokens threshold (10K) on the "before" message
+// to avoid false positives from early short conversations.
+func (p *Processor) compactionEvents(sess *session.Session) []Event {
+	const (
+		dropThreshold      = 0.50  // >50% drop in input tokens triggers detection
+		cacheInvalidThresh = 0.05  // cache_read < 5% of input confirms invalidation
+		minBeforeTokens    = 10000 // ignore drops from very short contexts
+	)
+
+	// Collect assistant messages with token data for pair-wise comparison.
+	type assistantMsg struct {
+		idx int // index in sess.Messages
+		msg *session.Message
+	}
+
+	var candidates []assistantMsg
+	for i := range sess.Messages {
+		msg := &sess.Messages[i]
+		if msg.Role == session.RoleAssistant && msg.InputTokens > 0 {
+			candidates = append(candidates, assistantMsg{idx: i, msg: msg})
+		}
+	}
+
+	if len(candidates) < 2 {
+		return nil
+	}
+
+	var events []Event
+
+	for i := 1; i < len(candidates); i++ {
+		before := candidates[i-1]
+		after := candidates[i]
+
+		// Skip if the "before" context is too small for reliable detection.
+		if before.msg.InputTokens < minBeforeTokens {
+			continue
+		}
+
+		dropRatio := float64(after.msg.InputTokens) / float64(before.msg.InputTokens)
+
+		// Primary signal: significant drop in input tokens.
+		if dropRatio >= (1 - dropThreshold) {
+			continue // not a significant drop
+		}
+
+		// Confirmation: check cache invalidation.
+		cacheInvalidated := false
+		if after.msg.InputTokens > 0 {
+			cacheReadRatio := float64(after.msg.CacheReadTokens) / float64(after.msg.InputTokens)
+			cacheInvalidated = cacheReadRatio < cacheInvalidThresh
+		}
+
+		// Determine the model active at compaction time.
+		model := after.msg.Model
+		if model == "" {
+			model = before.msg.Model
+		}
+
+		events = append(events, Event{
+			ID:           uuid.New().String(),
+			SessionID:    sess.ID,
+			Type:         EventCompaction,
+			MessageIndex: after.idx,
+			MessageID:    after.msg.ID,
+			OccurredAt:   after.msg.Timestamp,
+			ProjectPath:  sess.ProjectPath,
+			RemoteURL:    sess.RemoteURL,
+			Provider:     sess.Provider,
+			Agent:        sess.Agent,
+			Compaction: &CompactionDetail{
+				BeforeMessageIdx:  before.idx,
+				AfterMessageIdx:   after.idx,
+				BeforeInputTokens: before.msg.InputTokens,
+				AfterInputTokens:  after.msg.InputTokens,
+				DropRatio:         dropRatio,
+				CacheInvalidated:  cacheInvalidated,
+				Model:             model,
 			},
 		})
 	}
