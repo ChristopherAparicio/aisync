@@ -450,6 +450,19 @@ type SkillROIEntry struct {
 	Verdict string `json:"verdict"` // "valuable", "neutral", "ghost", "harmful"
 }
 
+// Recommendation is an auto-generated actionable insight.
+type Recommendation struct {
+	Type     string `json:"type"`              // "agent_error", "agent_cost", "skill_ghost", "cache_miss", "context_saturation", "budget"
+	Priority string `json:"priority"`          // "high", "medium", "low"
+	Icon     string `json:"icon"`              // emoji for display
+	Title    string `json:"title"`             // short headline
+	Message  string `json:"message"`           // detailed explanation
+	Impact   string `json:"impact"`            // estimated impact (e.g. "$120/mo savings")
+	Project  string `json:"project,omitempty"` // which project (empty = global)
+	Agent    string `json:"agent,omitempty"`   // which agent (if applicable)
+	Skill    string `json:"skill,omitempty"`   // which skill (if applicable)
+}
+
 // Link connects a session to a git object (branch, commit, PR).
 type Link struct {
 	LinkType LinkType `json:"link_type"`

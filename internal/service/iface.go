@@ -135,6 +135,9 @@ type SessionAnalytics interface {
 
 	// SkillROIAnalysis computes per-skill effectiveness metrics.
 	SkillROIAnalysis(ctx context.Context, projectPath string, since time.Time) (*session.SkillROI, error)
+
+	// GenerateRecommendations produces actionable insights from project data.
+	GenerateRecommendations(ctx context.Context, projectPath string) ([]session.Recommendation, error)
 }
 
 // SessionAI provides LLM-powered analysis features.

@@ -228,6 +228,25 @@
       </div>
       {{end}}
 
+      {{if .HasRecommendations}}
+      <div class="section" style="margin-top:2rem;">
+        <h2 class="section-title">Recommendations</h2>
+        <div class="rec-list">
+          {{range .Recommendations}}
+          <div class="rec-card {{.PrioClass}}">
+            <span class="rec-icon">{{.Icon}}</span>
+            <div class="rec-content">
+              <div class="rec-title">{{.Title}}</div>
+              <div class="rec-message text-muted">{{.Message}}</div>
+              {{if .Impact}}<div class="rec-impact font-mono">{{.Impact}}</div>{{end}}
+            </div>
+            <span class="badge badge-{{.Priority}}">{{.Priority}}</span>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+
       {{if .HasAgentROI}}
       <div class="section" style="margin-top:2rem;">
         <h2 class="section-title">Agent ROI <span class="text-muted">(90d)</span></h2>

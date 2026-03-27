@@ -451,6 +451,10 @@ func (r *SessionService) SkillROIAnalysis(_ context.Context, _ string, _ time.Ti
 	return nil, fmt.Errorf("SkillROIAnalysis not supported in remote mode")
 }
 
+func (r *SessionService) GenerateRecommendations(_ context.Context, _ string) ([]session.Recommendation, error) {
+	return nil, fmt.Errorf("GenerateRecommendations not supported in remote mode")
+}
+
 func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {
 	return nil, fmt.Errorf("ComputeObjective not supported in remote mode")
 }

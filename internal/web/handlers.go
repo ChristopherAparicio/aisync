@@ -2720,6 +2720,20 @@ type projectDetailPage struct {
 	// Skill ROI
 	HasSkillROI bool
 	SkillROI    []skillROIView
+
+	// Recommendations
+	HasRecommendations bool
+	Recommendations    []insightView
+}
+
+// insightView is a template-friendly auto-generated recommendation.
+type insightView struct {
+	Icon      string
+	Title     string
+	Message   string
+	Impact    string
+	Priority  string
+	PrioClass string
 }
 
 // agentROIView is a template-friendly agent ROI entry.
@@ -3106,6 +3120,29 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 				Verdict:       sk.Verdict,
 				VerdictClass:  verdictClass,
 				IsGhost:       sk.IsGhost,
+			})
+		}
+	}
+
+	// Recommendations.
+	recommendations, recErr := s.sessionSvc.GenerateRecommendations(ctx, projectPath)
+	if recErr == nil && len(recommendations) > 0 {
+		data.HasRecommendations = true
+		for _, rec := range recommendations {
+			prioClass := "rec-low"
+			switch rec.Priority {
+			case "high":
+				prioClass = "rec-high"
+			case "medium":
+				prioClass = "rec-medium"
+			}
+			data.Recommendations = append(data.Recommendations, insightView{
+				Icon:      rec.Icon,
+				Title:     rec.Title,
+				Message:   rec.Message,
+				Impact:    rec.Impact,
+				Priority:  rec.Priority,
+				PrioClass: prioClass,
 			})
 		}
 	}

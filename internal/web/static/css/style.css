@@ -1017,6 +1017,44 @@ tr:hover td { background: var(--bg-hover); }
   opacity: 0.7;
   margin-left: 2px;
 }
+.agent-chip--inline {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--accent-light);
+  cursor: pointer;
+}
+.agent-chip--inline:hover { border-color: var(--accent); }
+
+/* ── Recommendations ── */
+
+.rec-list { display: flex; flex-direction: column; gap: 8px; }
+
+.rec-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  border-left: 3px solid var(--border);
+}
+.rec-card.rec-high { border-left-color: #ef4444; }
+.rec-card.rec-medium { border-left-color: #f59e0b; }
+.rec-card.rec-low { border-left-color: #22c55e; }
+
+.rec-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: 2px; }
+.rec-content { flex: 1; min-width: 0; }
+.rec-title { font-weight: 600; font-size: 0.875rem; margin-bottom: 2px; }
+.rec-message { font-size: 0.8rem; line-height: 1.4; }
+.rec-impact { font-size: 0.75rem; color: var(--accent-light); margin-top: 4px; }
+
+.badge-high { background: rgba(239,68,68,0.15); color: #ef4444; }
+.badge-medium { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.badge-low { background: rgba(34,197,94,0.15); color: #22c55e; }
 
 /* Summary column: flexible width, graceful CSS truncation on narrow screens */
 .cell-summary {

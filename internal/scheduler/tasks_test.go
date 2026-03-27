@@ -175,6 +175,9 @@ func (m *mockSessionService) AgentROIAnalysis(_ context.Context, _ string, _ tim
 func (m *mockSessionService) SkillROIAnalysis(_ context.Context, _ string, _ time.Time) (*session.SkillROI, error) {
 	return nil, nil
 }
+func (m *mockSessionService) GenerateRecommendations(_ context.Context, _ string) ([]session.Recommendation, error) {
+	return nil, nil
+}
 func (m *mockSessionService) Rewind(_ context.Context, _ service.RewindRequest) (*service.RewindResult, error) {
 	return nil, nil
 }
