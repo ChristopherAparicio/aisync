@@ -378,16 +378,18 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 	appCfg, _ := f.Config()
 	store, _ := f.Store()
 	webSessionEventSvc, _ := f.SessionEventService()
+	benchRec, _ := f.BenchmarkRecommender()
 
 	webSrv, err := web.New(web.Config{
-		SessionService:      sessionSvc,
-		AnalysisService:     analysisSvc,
-		RegistryService:     registrySvc,
-		SessionEventService: webSessionEventSvc,
-		Store:               store,
-		AppConfig:           appCfg,
-		Addr:                addr, // not used for listen
-		Logger:              logger,
+		SessionService:       sessionSvc,
+		AnalysisService:      analysisSvc,
+		RegistryService:      registrySvc,
+		SessionEventService:  webSessionEventSvc,
+		BenchmarkRecommender: benchRec,
+		Store:                store,
+		AppConfig:            appCfg,
+		Addr:                 addr, // not used for listen
+		Logger:               logger,
 	})
 	if err != nil {
 		return fmt.Errorf("web dashboard: %w", err)

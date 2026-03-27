@@ -1737,6 +1737,10 @@ type costDashboardPage struct {
 	// Cross-project MCP matrix
 	HasMCPMatrix bool
 	MCPMatrix    *mcpMatrixView
+
+	// Model alternatives (benchmark-based recommendations)
+	HasAlternatives   bool
+	ModelAlternatives []modelAlternativeView
 }
 
 // cacheMissView is a template-friendly view of a cache miss session.
@@ -1823,6 +1827,25 @@ type mcpCellView struct {
 	ErrorCount    int
 	EstimatedCost float64
 	HasData       bool // true if this cell has non-zero data
+}
+
+// modelAlternativeView is a template-friendly model swap recommendation.
+type modelAlternativeView struct {
+	CurrentModel string
+	CurrentScore float64 // 0-100 benchmark %
+	CurrentCost  float64 // $ per 1M input tokens
+
+	AltModel string
+	AltScore float64
+	AltCost  float64
+
+	ScoreDelta   float64 // positive = quality gain
+	CostSavings  float64 // % saved
+	QualityDrop  float64 // absolute quality loss (0 if gain)
+	MonthlySaved float64 // $ estimated monthly savings
+
+	Verdict      string // "no-brainer", "tradeoff", "risky"
+	VerdictClass string // CSS class: "good", "warning", "poor"
 }
 
 // handleCosts renders the cost dashboard.
@@ -2074,6 +2097,44 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				WastedCost:     ws.WastedCost,
 				LongestGapMins: ws.LongestGapMins,
 			})
+		}
+	}
+
+	// Model alternatives (benchmark-based recommendations).
+	if s.benchmarkRec != nil && data.HasForecast && len(data.Models) > 0 {
+		for _, m := range data.Models {
+			alts := s.benchmarkRec.Recommend(m.Model, 0)
+			// Take top 3 alternatives per model.
+			limit := 3
+			if len(alts) < limit {
+				limit = len(alts)
+			}
+			for _, alt := range alts[:limit] {
+				verdictClass := "warning"
+				switch alt.Verdict {
+				case "no-brainer":
+					verdictClass = "good"
+				case "risky":
+					verdictClass = "poor"
+				}
+				data.ModelAlternatives = append(data.ModelAlternatives, modelAlternativeView{
+					CurrentModel: alt.CurrentModel,
+					CurrentScore: alt.CurrentScore,
+					CurrentCost:  alt.CurrentCost,
+					AltModel:     alt.AltModel,
+					AltScore:     alt.AltScore,
+					AltCost:      alt.AltCost,
+					ScoreDelta:   alt.ScoreDelta,
+					CostSavings:  alt.CostSavings,
+					QualityDrop:  alt.QualityDrop,
+					MonthlySaved: alt.MonthlySaved,
+					Verdict:      alt.Verdict,
+					VerdictClass: verdictClass,
+				})
+			}
+		}
+		if len(data.ModelAlternatives) > 0 {
+			data.HasAlternatives = true
 		}
 	}
 

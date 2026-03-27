@@ -1,0 +1,93 @@
+# Aider Polyglot Benchmark — Coding AI Model Leaderboard
+#
+# 225 coding exercises across 6 languages:
+# Python, JavaScript, TypeScript, C#, Java, C++
+#
+# Score = percentage of exercises completed correctly (whole-file edit format).
+# Higher is better.
+#
+# Source: https://aider.chat/docs/leaderboards/
+# Captured: 2026-03-27
+#
+# Aliases enable fuzzy model matching — aisync stores versioned model names
+# (e.g. "claude-opus-4-20250514") while benchmarks use short names.
+
+source: aider_polyglot
+date: "2026-03-27"
+
+entries:
+  # ─── Top tier (>80%) ──────────────────────────────────────────────
+  - model: gpt-5
+    score: 88.0
+    aliases: ["gpt-5-0125", "gpt-5-latest"]
+
+  - model: o3-pro
+    score: 85.3
+    aliases: ["o3-pro-2025"]
+
+  - model: gemini-2.5-pro
+    score: 83.1
+    aliases: ["gemini-2.5-pro-latest", "gemini-2.5-pro-preview"]
+
+  - model: o3
+    score: 81.3
+    aliases: ["o3-2025", "o3-2025-01-01", "o3-mini-high"]
+
+  # ─── High tier (70-80%) ──────────────────────────────────────────
+  - model: gpt-4.1
+    score: 78.5
+    aliases: ["gpt-4.1-2025"]
+
+  - model: deepseek-r1
+    score: 73.6
+    aliases: ["deepseek-r1-reasoner", "deepseek/deepseek-r1"]
+
+  - model: gemini-2.5-flash
+    score: 73.3
+    aliases: ["gemini-2.5-flash-latest", "gemini-2.5-flash-preview"]
+
+  - model: claude-opus-4
+    score: 72.0
+    aliases: ["claude-opus-4-20250514", "claude-opus-4-1", "anthropic.claude-opus-4-6-v1"]
+
+  - model: deepseek-v3
+    score: 70.2
+    aliases: ["deepseek-v3.2", "deepseek-v3-chat", "deepseek/deepseek-chat"]
+
+  # ─── Mid tier (60-70%) ──────────────────────────────────────────
+  - model: gpt-4o
+    score: 68.2
+    aliases: ["gpt-4o-2025", "gpt-4o-2024-11-20", "gpt-4o-latest"]
+
+  - model: claude-sonnet-3.7
+    score: 64.9
+    aliases: ["claude-3-7-sonnet", "claude-3.7-sonnet", "claude-sonnet-3-7-20250219"]
+
+  - model: claude-sonnet-4
+    score: 60.9
+    aliases: ["claude-sonnet-4-20250514", "anthropic.claude-sonnet-4-20250514-v1:0"]
+
+  - model: kimi-k2
+    score: 59.1
+    aliases: ["kimi-k2-0711", "moonshot/kimi-k2"]
+
+  # ─── Budget tier (<60%) ──────────────────────────────────────────
+  - model: gpt-4o-mini
+    score: 56.2
+    aliases: ["gpt-4o-mini-2024-07-18"]
+
+  - model: gpt-4.1-mini
+    score: 55.8
+    aliases: ["gpt-4.1-mini-2025"]
+
+  - model: claude-haiku-3.5
+    score: 47.3
+    aliases: ["claude-3-5-haiku", "claude-3-5-haiku-20241022"]
+
+  - model: gemini-2.0-flash
+    score: 43.8
+    aliases: ["gemini-2.0-flash-001"]
+
+  - model: gpt-4.1-nano
+    score: 38.9
+    aliases: ["gpt-4.1-nano-2025"]

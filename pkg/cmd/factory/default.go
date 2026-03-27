@@ -15,6 +15,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
+	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/categorizer"
 	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
@@ -648,6 +649,22 @@ func New() *cmdutil.Factory {
 			cachedSessionEventSvc = sessionevent.NewService(store, slog.Default())
 		})
 		return cachedSessionEventSvc, sessionEventSvcErr
+	}
+
+	f.BenchmarkRecommenderFunc = func() (*benchmark.Recommender, error) {
+		benchCat, err := benchmark.NewEmbeddedCatalog()
+		if err != nil {
+			return nil, err
+		}
+		// Reuse the same pricing catalog as the calculator.
+		priceCat := pricing.DefaultCatalog()
+		liteLLMCat, liteLLMErr := pricing.NewLiteLLMCatalog(pricing.LiteLLMCatalogConfig{
+			CacheDir: globalConfigDir(),
+		})
+		if liteLLMErr == nil {
+			priceCat = pricing.NewFallbackCatalog(liteLLMCat, priceCat)
+		}
+		return benchmark.NewRecommender(benchCat, priceCat), nil
 	}
 
 	f.CloseFunc = func() error {

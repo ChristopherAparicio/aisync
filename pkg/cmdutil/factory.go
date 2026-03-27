@@ -3,6 +3,7 @@ package cmdutil
 
 import (
 	"github.com/ChristopherAparicio/aisync/git"
+	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/hooks"
@@ -23,20 +24,21 @@ type Factory struct {
 	IOStreams *iostreams.IOStreams
 
 	// Lazy initializers — set by the composition root (default.go).
-	ConfigFunc              func() (*config.Config, error)
-	StoreFunc               func() (storage.Store, error)
-	GitFunc                 func() (*git.Client, error)
-	RegistryFunc            func() *provider.Registry
-	ScannerFunc             func() *secrets.Scanner
-	PlatformFunc            func() (platform.Platform, error)
-	ConverterFunc           func() *converter.Converter
-	HooksManagerFunc        func() (*hooks.Manager, error)
-	SessionServiceFunc      func() (service.SessionServicer, error)
-	SyncServiceFunc         func() (*service.SyncService, error)
-	RegistryServiceFunc     func() (*service.RegistryService, error)
-	AnalysisServiceFunc     func() (service.AnalysisServicer, error)
-	ErrorServiceFunc        func() (service.ErrorServicer, error)
-	SessionEventServiceFunc func() (*sessionevent.Service, error)
+	ConfigFunc               func() (*config.Config, error)
+	StoreFunc                func() (storage.Store, error)
+	GitFunc                  func() (*git.Client, error)
+	RegistryFunc             func() *provider.Registry
+	ScannerFunc              func() *secrets.Scanner
+	PlatformFunc             func() (platform.Platform, error)
+	ConverterFunc            func() *converter.Converter
+	HooksManagerFunc         func() (*hooks.Manager, error)
+	SessionServiceFunc       func() (service.SessionServicer, error)
+	SyncServiceFunc          func() (*service.SyncService, error)
+	RegistryServiceFunc      func() (*service.RegistryService, error)
+	AnalysisServiceFunc      func() (service.AnalysisServicer, error)
+	ErrorServiceFunc         func() (service.ErrorServicer, error)
+	SessionEventServiceFunc  func() (*sessionevent.Service, error)
+	BenchmarkRecommenderFunc func() (*benchmark.Recommender, error)
 
 	// CloseFunc releases resources (e.g., database connections).
 	// Set by the composition root, called by main on exit.
@@ -157,6 +159,14 @@ func (f *Factory) SessionEventService() (*sessionevent.Service, error) {
 		return nil, session.ErrConfigNotFound
 	}
 	return f.SessionEventServiceFunc()
+}
+
+// BenchmarkRecommender returns the benchmark recommender for model swap suggestions.
+func (f *Factory) BenchmarkRecommender() (*benchmark.Recommender, error) {
+	if f.BenchmarkRecommenderFunc == nil {
+		return nil, session.ErrConfigNotFound
+	}
+	return f.BenchmarkRecommenderFunc()
 }
 
 // Close releases all resources held by lazy-initialized dependencies.
