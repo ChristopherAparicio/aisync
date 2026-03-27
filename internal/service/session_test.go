@@ -908,7 +908,14 @@ func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, 
 	return nil, session.ErrSessionNotFound
 }
 func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
-func (m *mockStore) Close() error                             { return nil }
+func (m *mockStore) ReplaceSessionFiles(_ session.ID, _ []session.SessionFileRecord) error {
+	return nil
+}
+func (m *mockStore) GetSessionFileChanges(_ session.ID) ([]session.SessionFileRecord, error) {
+	return nil, nil
+}
+func (m *mockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
+func (m *mockStore) Close() error                         { return nil }
 
 func (m *mockStore) GetPreferences(_ session.ID) (*session.UserPreferences, error) { return nil, nil }
 func (m *mockStore) SavePreferences(_ *session.UserPreferences) error              { return nil }

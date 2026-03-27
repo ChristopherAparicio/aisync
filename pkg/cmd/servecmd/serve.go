@@ -30,6 +30,8 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/replay"
 	"github.com/ChristopherAparicio/aisync/internal/scheduler"
+	"github.com/ChristopherAparicio/aisync/internal/security"
+	securityRules "github.com/ChristopherAparicio/aisync/internal/security/rules"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver/llmanalyzer"
 	"github.com/ChristopherAparicio/aisync/internal/web"
@@ -380,6 +382,16 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 	webSessionEventSvc, _ := f.SessionEventService()
 	benchRec, _ := f.BenchmarkRecommender()
 
+	// Create security detector with all rules.
+	secDetector := security.NewDetector(store,
+		&securityRules.PromptInjection{},
+		&securityRules.DataExfiltration{},
+		&securityRules.SecretExposure{},
+		&securityRules.DangerousCommands{},
+		&securityRules.NetworkActivity{},
+		&securityRules.CodeInjection{},
+	)
+
 	webSrv, err := web.New(web.Config{
 		SessionService:       sessionSvc,
 		AnalysisService:      analysisSvc,
@@ -387,6 +399,7 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		SessionEventService:  webSessionEventSvc,
 		BenchmarkRecommender: benchRec,
 		Store:                store,
+		SecurityDetector:     secDetector,
 		AppConfig:            appCfg,
 		Addr:                 addr, // not used for listen
 		Logger:               logger,

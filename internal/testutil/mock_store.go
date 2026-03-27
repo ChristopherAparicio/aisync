@@ -326,6 +326,14 @@ func (m *MockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntr
 
 // ── Lifecycle ──
 
+func (m *MockStore) ReplaceSessionFiles(_ session.ID, _ []session.SessionFileRecord) error {
+	return nil
+}
+func (m *MockStore) GetSessionFileChanges(_ session.ID) ([]session.SessionFileRecord, error) {
+	return nil, nil
+}
+func (m *MockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
+
 func (m *MockStore) DeleteOlderThan(before time.Time) (int, error) {
 	count := 0
 	for _, s := range m.Sessions {

@@ -28,6 +28,7 @@ These commands fix historical data that may be incomplete:
 	cmd.AddCommand(newCmdBackfillRemoteURL(f))
 	cmd.AddCommand(newCmdBackfillForks(f))
 	cmd.AddCommand(newCmdBackfillEvents(f))
+	cmd.AddCommand(newCmdBackfillFiles(f))
 
 	return cmd
 }

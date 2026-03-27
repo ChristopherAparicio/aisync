@@ -2736,9 +2736,23 @@ type projectDetailPage struct {
 	HasSkillROI bool
 	SkillROI    []skillROIView
 
+	// Security
+	HasSecurity        bool
+	SecurityAlertCount int
+	SecurityCritical   int
+	SecurityHigh       int
+	SecurityAvgRisk    float64
+	SecurityTopCats    []securityCatView
+
 	// Recommendations
 	HasRecommendations bool
 	Recommendations    []insightView
+}
+
+// securityCatView is a template-friendly security category count.
+type securityCatView struct {
+	Category string
+	Count    int
 }
 
 // insightView is a template-friendly auto-generated recommendation.
@@ -3136,6 +3150,24 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 				VerdictClass:  verdictClass,
 				IsGhost:       sk.IsGhost,
 			})
+		}
+	}
+
+	// Security scan.
+	if s.securityDetector != nil {
+		secSummary, secErr := s.securityDetector.ScanProject(projectPath)
+		if secErr == nil && secSummary != nil && secSummary.TotalAlerts > 0 {
+			data.HasSecurity = true
+			data.SecurityAlertCount = secSummary.TotalAlerts
+			data.SecurityCritical = secSummary.CriticalAlerts
+			data.SecurityHigh = secSummary.HighAlerts
+			data.SecurityAvgRisk = secSummary.AvgRiskScore
+			for _, cat := range secSummary.TopCategories {
+				data.SecurityTopCats = append(data.SecurityTopCats, securityCatView{
+					Category: string(cat.Category),
+					Count:    cat.Count,
+				})
+			}
 		}
 	}
 

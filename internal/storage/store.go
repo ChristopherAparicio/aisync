@@ -115,6 +115,16 @@ type SessionWriter interface {
 	// DeleteOlderThan removes sessions created before the given time.
 	// Returns the number of deleted sessions.
 	DeleteOlderThan(before time.Time) (int, error)
+
+	// ReplaceSessionFiles atomically replaces all file changes for a session.
+	// Used by the file-blame extractor after parsing tool calls.
+	ReplaceSessionFiles(sessionID session.ID, records []session.SessionFileRecord) error
+
+	// GetSessionFileChanges returns all file change records for a session.
+	GetSessionFileChanges(sessionID session.ID) ([]session.SessionFileRecord, error)
+
+	// CountSessionsWithFiles returns how many sessions have file-blame data.
+	CountSessionsWithFiles() (int, error)
 }
 
 // LinkStore manages associations between sessions and git objects (branches, commits, PRs)

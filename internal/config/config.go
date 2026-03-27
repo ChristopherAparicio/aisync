@@ -37,6 +37,7 @@ type configData struct {
 	Database    databaseConf                     `json:"database"`
 	Scheduler   schedulerConf                    `json:"scheduler"`
 	Errors      errorsConf                       `json:"errors"`
+	Features    featuresConf                     `json:"features"`
 	Telemetry   telemetryConf                    `json:"telemetry"`
 	Version     int                              `json:"version"`
 	AutoCapture bool                             `json:"auto_capture"`
@@ -48,6 +49,15 @@ type errorsConf struct {
 	LLMFallback bool   `json:"llm_fallback"` // enable LLM for unknown errors (requires composite classifier)
 	LLMSchedule string `json:"llm_schedule"` // cron expression for scheduled reclassification (e.g. "0 0 * * *")
 	LLMProfile  string `json:"llm_profile"`  // LLM profile name for error classification
+}
+
+// featuresConf holds opt-in feature flags for expensive/experimental features.
+type featuresConf struct {
+	// FileBlame enables file-level blame extraction from tool calls.
+	// When enabled, each captured session's tool calls are parsed to extract
+	// file paths and operations (created, modified, read, deleted).
+	// This is opt-in because it can be expensive on large session histories.
+	FileBlame bool `json:"file_blame,omitempty"`
 }
 
 // PricingOverride is an exported type for pricing overrides, used by Factory.
@@ -565,6 +575,9 @@ func (c *Config) loadFrom(dir string) error {
 
 	// Telemetry — bools always take the loaded value
 	c.data.Telemetry.Enabled = loaded.Telemetry.Enabled
+
+	// Features — bools always take the loaded value
+	c.data.Features.FileBlame = loaded.Features.FileBlame
 
 	return nil
 }
@@ -1372,6 +1385,12 @@ func (c *Config) GetSearchMaxContentLength() int {
 		return c.data.Search.MaxContentLength
 	}
 	return 50000
+}
+
+// IsFileBlameEnabled returns whether file-level blame extraction is enabled.
+// This is opt-in: set features.file_blame: true in config.json.
+func (c *Config) IsFileBlameEnabled() bool {
+	return c.data.Features.FileBlame
 }
 
 // GetSchedulerGCCron returns the cron expression for the GC task.

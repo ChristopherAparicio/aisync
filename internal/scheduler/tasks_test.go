@@ -178,6 +178,13 @@ func (m *mockSessionService) SkillROIAnalysis(_ context.Context, _ string, _ tim
 func (m *mockSessionService) GenerateRecommendations(_ context.Context, _ string) ([]session.Recommendation, error) {
 	return nil, nil
 }
+func (m *mockSessionService) ExtractAndSaveFiles(_ *session.Session) (int, error) { return 0, nil }
+func (m *mockSessionService) BackfillFileBlame(_ context.Context) (int, int, error) {
+	return 0, 0, nil
+}
+func (m *mockSessionService) GetSessionFiles(_ context.Context, _ session.ID) ([]session.SessionFileRecord, error) {
+	return nil, nil
+}
 func (m *mockSessionService) Rewind(_ context.Context, _ service.RewindRequest) (*service.RewindResult, error) {
 	return nil, nil
 }

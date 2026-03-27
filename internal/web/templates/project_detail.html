@@ -317,6 +317,38 @@
 
     <!-- Right column: Panels -->
     <div class="home-aside">
+      {{if .HasSecurity}}
+      <div class="home-panel">
+        <div class="home-panel-header">
+          <span class="home-panel-title">Security</span>
+        </div>
+        <div class="home-forecast">
+          <div class="home-forecast-row">
+            <span class="text-muted">Alerts</span>
+            <span class="font-mono{{if gt .SecurityCritical 0}} text-error{{else if gt .SecurityHigh 0}} text-warning{{end}}">{{.SecurityAlertCount}}</span>
+          </div>
+          {{if gt .SecurityCritical 0}}
+          <div class="home-forecast-row">
+            <span class="text-muted">Critical</span>
+            <span class="font-mono text-error">{{.SecurityCritical}}</span>
+          </div>
+          {{end}}
+          {{if gt .SecurityHigh 0}}
+          <div class="home-forecast-row">
+            <span class="text-muted">High</span>
+            <span class="font-mono text-warning">{{.SecurityHigh}}</span>
+          </div>
+          {{end}}
+          {{range .SecurityTopCats}}
+          <div class="home-forecast-row">
+            <span class="text-muted">{{.Category}}</span>
+            <span class="font-mono">{{.Count}}</span>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+
       {{if .HasBudget}}
       <div class="home-panel">
         <div class="home-panel-header">

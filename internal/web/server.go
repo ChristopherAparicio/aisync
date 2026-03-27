@@ -19,6 +19,7 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/config"
+	"github.com/ChristopherAparicio/aisync/internal/security"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
@@ -32,17 +33,18 @@ var staticFS embed.FS
 
 // Server is the aisync web dashboard server.
 type Server struct {
-	sessionSvc      service.SessionServicer
-	analysisSvc     service.AnalysisServicer // optional — nil disables analysis features
-	registrySvc     *service.RegistryService // optional — nil disables project/capability features
-	sessionEventSvc *sessionevent.Service    // optional — nil disables event analytics features
-	benchmarkRec    *benchmark.Recommender   // optional — nil disables model alternatives
-	store           storage.Store            // optional — nil disables user preferences
-	cfg             *config.Config           // optional — nil uses defaults
-	httpServer      *http.Server
-	pages           map[string]*template.Template // page templates (layout + page)
-	partials        *template.Template            // standalone partials (no layout)
-	logger          *log.Logger
+	sessionSvc       service.SessionServicer
+	analysisSvc      service.AnalysisServicer // optional — nil disables analysis features
+	registrySvc      *service.RegistryService // optional — nil disables project/capability features
+	sessionEventSvc  *sessionevent.Service    // optional — nil disables event analytics features
+	benchmarkRec     *benchmark.Recommender   // optional — nil disables model alternatives
+	store            storage.Store            // optional — nil disables user preferences
+	securityDetector *security.Detector       // optional — nil disables security scanning
+	cfg              *config.Config           // optional — nil uses defaults
+	httpServer       *http.Server
+	pages            map[string]*template.Template // page templates (layout + page)
+	partials         *template.Template            // standalone partials (no layout)
+	logger           *log.Logger
 }
 
 // Config holds the configuration for creating a new web Server.
@@ -53,6 +55,7 @@ type Config struct {
 	SessionEventService  *sessionevent.Service    // optional — nil disables event analytics features
 	BenchmarkRecommender *benchmark.Recommender   // optional — nil disables model alternatives
 	Store                storage.Store            // optional — nil disables user preferences
+	SecurityDetector     *security.Detector       // optional — nil disables security scanning
 	AppConfig            *config.Config           // optional — nil uses defaults
 	Addr                 string                   // e.g. ":8372" or "127.0.0.1:8372"
 	Logger               *log.Logger              // optional — defaults to stderr
@@ -111,16 +114,17 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		sessionSvc:      cfg.SessionService,
-		analysisSvc:     cfg.AnalysisService,
-		registrySvc:     cfg.RegistryService,
-		sessionEventSvc: cfg.SessionEventService,
-		benchmarkRec:    cfg.BenchmarkRecommender,
-		store:           cfg.Store,
-		cfg:             cfg.AppConfig,
-		pages:           pages,
-		partials:        partials,
-		logger:          logger,
+		sessionSvc:       cfg.SessionService,
+		analysisSvc:      cfg.AnalysisService,
+		registrySvc:      cfg.RegistryService,
+		sessionEventSvc:  cfg.SessionEventService,
+		benchmarkRec:     cfg.BenchmarkRecommender,
+		store:            cfg.Store,
+		securityDetector: cfg.SecurityDetector,
+		cfg:              cfg.AppConfig,
+		pages:            pages,
+		partials:         partials,
+		logger:           logger,
 	}
 
 	mux := http.NewServeMux()

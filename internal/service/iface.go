@@ -138,6 +138,18 @@ type SessionAnalytics interface {
 
 	// GenerateRecommendations produces actionable insights from project data.
 	GenerateRecommendations(ctx context.Context, projectPath string) ([]session.Recommendation, error)
+
+	// ExtractAndSaveFiles parses tool calls in a session to extract file operations,
+	// then persists them in the file_changes table for blame queries.
+	// Returns the number of files extracted.
+	ExtractAndSaveFiles(sess *session.Session) (int, error)
+
+	// BackfillFileBlame runs file extraction on all sessions that don't have file data yet.
+	// Returns (processed, filesExtracted, error).
+	BackfillFileBlame(ctx context.Context) (processed, filesExtracted int, err error)
+
+	// GetSessionFiles returns file changes extracted from a session's tool calls.
+	GetSessionFiles(ctx context.Context, sessID session.ID) ([]session.SessionFileRecord, error)
 }
 
 // SessionAI provides LLM-powered analysis features.

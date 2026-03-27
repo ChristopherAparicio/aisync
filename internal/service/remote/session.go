@@ -455,6 +455,18 @@ func (r *SessionService) GenerateRecommendations(_ context.Context, _ string) ([
 	return nil, fmt.Errorf("GenerateRecommendations not supported in remote mode")
 }
 
+func (r *SessionService) ExtractAndSaveFiles(_ *session.Session) (int, error) {
+	return 0, fmt.Errorf("ExtractAndSaveFiles not supported in remote mode")
+}
+
+func (r *SessionService) BackfillFileBlame(_ context.Context) (int, int, error) {
+	return 0, 0, fmt.Errorf("BackfillFileBlame not supported in remote mode")
+}
+
+func (r *SessionService) GetSessionFiles(_ context.Context, _ session.ID) ([]session.SessionFileRecord, error) {
+	return nil, fmt.Errorf("GetSessionFiles not supported in remote mode")
+}
+
 func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {
 	return nil, fmt.Errorf("ComputeObjective not supported in remote mode")
 }

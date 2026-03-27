@@ -253,7 +253,7 @@ func (s *Store) Save(session *session.Session) error {
 		return fmt.Errorf("deleting old file changes: %w", err)
 	}
 	for _, fc := range session.FileChanges {
-		if _, err := tx.Exec("INSERT INTO file_changes (session_id, file_path, change_type) VALUES (?, ?, ?)",
+		if _, err := tx.Exec("INSERT INTO file_changes (session_id, file_path, change_type, tool_name) VALUES (?, ?, ?, '')",
 			session.ID, fc.FilePath, fc.ChangeType); err != nil {
 			return fmt.Errorf("inserting file change: %w", err)
 		}
@@ -1206,6 +1206,70 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 	}
 
 	return entries, nil
+}
+
+// ReplaceSessionFiles atomically replaces all file_changes for a session.
+// Used by the file-blame extractor after parsing tool calls.
+func (s *Store) ReplaceSessionFiles(sessionID session.ID, records []session.SessionFileRecord) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec("DELETE FROM file_changes WHERE session_id = ?", sessionID); err != nil {
+		return fmt.Errorf("deleting old file changes: %w", err)
+	}
+
+	stmt, err := tx.Prepare("INSERT INTO file_changes (session_id, file_path, change_type, tool_name) VALUES (?, ?, ?, ?)")
+	if err != nil {
+		return fmt.Errorf("preparing file insert: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, r := range records {
+		if _, err := stmt.Exec(r.SessionID, r.FilePath, r.ChangeType, r.ToolName); err != nil {
+			return fmt.Errorf("inserting file record %q: %w", r.FilePath, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetSessionFileChanges returns all file changes for a given session.
+func (s *Store) GetSessionFileChanges(sessionID session.ID) ([]session.SessionFileRecord, error) {
+	rows, err := s.db.Query(
+		`SELECT session_id, file_path, change_type, COALESCE(tool_name, '')
+		 FROM file_changes WHERE session_id = ? ORDER BY file_path`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying session files: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var records []session.SessionFileRecord
+	for rows.Next() {
+		var r session.SessionFileRecord
+		if err := rows.Scan(&r.SessionID, &r.FilePath, &r.ChangeType, &r.ToolName); err != nil {
+			return nil, fmt.Errorf("scanning file record: %w", err)
+		}
+		records = append(records, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if records == nil {
+		records = []session.SessionFileRecord{}
+	}
+	return records, nil
+}
+
+// CountSessionsWithFiles returns how many sessions have at least one file_changes row.
+func (s *Store) CountSessionsWithFiles() (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(DISTINCT session_id) FROM file_changes").Scan(&count)
+	return count, err
 }
 
 // ── User methods ──
@@ -2317,6 +2381,19 @@ func runMigrations(db *sql.DB) error {
 	}
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_project_snapshots_path_time ON project_snapshots(project_path, scanned_at DESC)"); err != nil {
 		return fmt.Errorf("migration 023 (project_snapshots index): %w", err)
+	}
+
+	// ── Migration 024: add tool_name column to file_changes for richer blame data ──
+	{
+		if !columnExists(db, "file_changes", "tool_name") {
+			if _, err := db.Exec("ALTER TABLE file_changes ADD COLUMN tool_name TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("migration 024 (file_changes tool_name): %w", err)
+			}
+		}
+		// Add composite index for efficient blame queries.
+		if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(session_id)"); err != nil {
+			return fmt.Errorf("migration 024 (file_changes session index): %w", err)
+		}
 	}
 
 	return nil

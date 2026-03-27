@@ -382,6 +382,7 @@ func New() *cmdutil.Factory {
 			wantAnalysis := cfgErr == nil && cfg.IsAnalysisAutoEnabled()
 			wantTagging := cfgErr == nil && cfg.IsTaggingAutoEnabled()
 			wantCategoryDetect := cfgErr == nil && cfg.IsProjectAutoDetectEnabled()
+			wantFileBlame := cfgErr == nil && cfg.IsFileBlameEnabled()
 			wantWebhooks := whDispatcher != nil
 
 			// Error classification always runs (it's deterministic and fast).
@@ -478,6 +479,13 @@ func New() *cmdutil.Factory {
 						// Index into search engine (FTS5, etc.) — uses concrete type.
 						if indexer, ok := classSvc.(*service.SessionService); ok {
 							indexer.IndexSession(sess)
+						}
+
+						// File blame extraction: parse tool calls to find file operations.
+						if wantFileBlame {
+							if _, err := classSvc.ExtractAndSaveFiles(sess); err != nil {
+								slog.Warn("file blame extraction failed", "session", sess.ID, "error", err)
+							}
 						}
 					}
 
