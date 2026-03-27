@@ -2683,13 +2683,6 @@ type projectDetailPage struct {
 	DashCacheTotalMisses  int
 	DashCacheWaste        float64
 
-	// Context saturation
-	HasSaturation    bool
-	SatAvgPeak       float64
-	SatAbove80       int
-	SatCompacted     int
-	SatTotalSessions int
-
 	// Analytics (from event buckets)
 	HasAnalytics    bool
 	AnalyticsTools  int
@@ -2703,12 +2696,28 @@ type projectDetailPage struct {
 	CapabilityStats []capabilityStat
 	MCPServerCount  int
 
+	// Agent distribution (for clickable filter chips)
+	Agents []agentChip
+
 	// Budget
 	HasBudget       bool
 	BudgetMonthly   budgetView
 	BudgetDaily     budgetView
 	BudgetProjected float64
 	BudgetDaysLeft  int
+
+	// Context saturation
+	HasSaturation    bool
+	SatAvgPeak       float64
+	SatAbove80       int
+	SatCompacted     int
+	SatTotalSessions int
+}
+
+// agentChip is a template-friendly agent count for filter chips.
+type agentChip struct {
+	Name  string
+	Count int
 }
 
 // budgetView is a template-friendly view of a budget limit.
@@ -2733,25 +2742,49 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 // handleProjectSessionsPartial returns a filtered list of sessions for a project (HTMX).
 func (s *Server) handleProjectSessionsPartial(w http.ResponseWriter, r *http.Request) {
 	projectPath := "/" + r.PathValue("path")
-	keyword := r.URL.Query().Get("keyword")
+	q := r.URL.Query()
+	keyword := q.Get("keyword")
+	agent := q.Get("agent")
+	sessionType := q.Get("session_type")
 
-	result, err := s.sessionSvc.Search(service.SearchRequest{
+	// Build search request with provider filter mapped from agent.
+	req := service.SearchRequest{
 		Keyword:     keyword,
 		ProjectPath: projectPath,
 		Limit:       30,
-	})
+	}
+
+	// Agent filter: search by agent name in the sessions.
+	// The SearchRequest doesn't have Agent directly, so we filter post-query.
+	result, err := s.sessionSvc.Search(req)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
+	// Post-filter by agent and session type if specified.
+	var filtered []session.Summary
+	for _, sess := range result.Sessions {
+		if agent != "" && sess.Agent != agent {
+			continue
+		}
+		if sessionType != "" && sess.SessionType != sessionType {
+			continue
+		}
+		filtered = append(filtered, sess)
+	}
+
 	type partialData struct {
 		Sessions    []session.Summary
 		ProjectPath string
+		Agent       string
+		SessionType string
 	}
 	s.renderPartial(w, "project_sessions_partial.html", partialData{
-		Sessions:    result.Sessions,
+		Sessions:    filtered,
 		ProjectPath: projectPath,
+		Agent:       agent,
+		SessionType: sessionType,
 	})
 }
 
@@ -2833,6 +2866,20 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			recentLimit = len(summaries)
 		}
 		data.RecentSessions = summaries[:recentLimit]
+
+		// Build agent distribution from all sessions (not just recent).
+		agentCounts := make(map[string]int)
+		for _, sm := range summaries {
+			if sm.Agent != "" {
+				agentCounts[sm.Agent]++
+			}
+		}
+		for name, count := range agentCounts {
+			data.Agents = append(data.Agents, agentChip{Name: name, Count: count})
+		}
+		sort.Slice(data.Agents, func(i, j int) bool {
+			return data.Agents[i].Count > data.Agents[j].Count
+		})
 	}
 
 	// Weekly trends (project-scoped).

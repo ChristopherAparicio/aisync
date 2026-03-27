@@ -153,16 +153,34 @@
   <div class="home-grid">
     <!-- Left column: Recent Sessions -->
     <div class="home-feed">
-      <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem;">
+      <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem; flex-wrap:wrap;">
         <h2 class="section-title" style="margin:0;">Recent Sessions</h2>
-        <input type="text" name="keyword"
+        <input type="text" name="keyword" id="proj-search-keyword"
                class="filter-input" placeholder="Search sessions..."
                style="flex:1; max-width:300px;"
                hx-get="/partials/project-sessions{{.ProjectPath}}"
                hx-trigger="input changed delay:300ms"
                hx-target="#project-sessions-feed"
+               hx-include="#proj-search-keyword, #proj-agent-filter"
                hx-swap="innerHTML">
+        <input type="hidden" name="agent" id="proj-agent-filter" value="">
       </div>
+      {{if .Agents}}
+      <div class="agent-chips" style="margin-bottom:0.75rem;">
+        <button class="agent-chip agent-chip--active" onclick="filterByAgent(this, '')">All</button>
+        {{range .Agents}}
+        <button class="agent-chip" onclick="filterByAgent(this, '{{.Name}}')">{{.Name}} <span class="agent-chip-count">{{.Count}}</span></button>
+        {{end}}
+      </div>
+      <script>
+      function filterByAgent(btn, agent) {
+        document.getElementById('proj-agent-filter').value = agent;
+        document.querySelectorAll('.agent-chip').forEach(c => c.classList.remove('agent-chip--active'));
+        btn.classList.add('agent-chip--active');
+        htmx.trigger(document.getElementById('proj-search-keyword'), 'input');
+      }
+      </script>
+      {{end}}
       <div id="project-sessions-feed" class="activity-feed">
         {{range .RecentSessions}}
         <div class="activity-card">
