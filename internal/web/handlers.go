@@ -1742,6 +1742,10 @@ type costDashboardPage struct {
 	HasAlternatives   bool
 	ModelAlternatives []modelAlternativeView
 
+	// QAC leaderboard (all models ranked by quality-adjusted cost)
+	HasQACLeaderboard bool
+	QACLeaderboard    []qacLeaderView
+
 	// Context saturation
 	HasSaturation    bool
 	SatAvgPeak       float64 // average peak saturation (0-100)
@@ -1854,8 +1858,11 @@ type modelAlternativeView struct {
 	QualityDrop  float64 // absolute quality loss (0 if gain)
 	MonthlySaved float64 // $ estimated monthly savings
 
-	Verdict      string // "no-brainer", "tradeoff", "risky"
-	VerdictClass string // CSS class: "good", "warning", "poor"
+	Verdict      string  // "no-brainer", "tradeoff", "risky"
+	VerdictClass string  // CSS class: "good", "warning", "poor"
+	CurrentQAC   float64 // quality-adjusted cost for current model
+	AltQAC       float64 // quality-adjusted cost for alternative
+	QACSavings   float64 // % saved on QAC basis
 }
 
 // modelSaturationView is a template-friendly per-model context saturation summary.
@@ -1884,6 +1891,16 @@ type sessionSaturationView struct {
 	MessageCount    int
 	WasCompacted    bool
 	SatClass        string // CSS class
+}
+
+// qacLeaderView is a template-friendly QAC leaderboard entry.
+type qacLeaderView struct {
+	Rank           int
+	Model          string
+	BenchmarkScore float64
+	InputCost      float64 // $ per 1M input tokens
+	QAC            float64
+	IsCurrentModel bool // true if the user currently uses this model
 }
 
 // handleCosts renders the cost dashboard.
@@ -2221,11 +2238,36 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 					MonthlySaved: alt.MonthlySaved,
 					Verdict:      alt.Verdict,
 					VerdictClass: verdictClass,
+					CurrentQAC:   alt.CurrentQAC,
+					AltQAC:       alt.AltQAC,
+					QACSavings:   alt.QACSavings,
 				})
 			}
 		}
 		if len(data.ModelAlternatives) > 0 {
 			data.HasAlternatives = true
+		}
+
+		// QAC leaderboard — all models ranked by quality-adjusted cost.
+		leaderboard := s.benchmarkRec.QACLeaderboard()
+		if len(leaderboard) > 0 {
+			// Build set of current models for highlighting.
+			currentModels := make(map[string]bool)
+			for _, m := range data.Models {
+				currentModels[m.Model] = true
+			}
+
+			data.HasQACLeaderboard = true
+			for _, entry := range leaderboard {
+				data.QACLeaderboard = append(data.QACLeaderboard, qacLeaderView{
+					Rank:           entry.Rank,
+					Model:          entry.Model,
+					BenchmarkScore: entry.BenchmarkScore,
+					InputCost:      entry.InputCost,
+					QAC:            entry.QAC,
+					IsCurrentModel: currentModels[entry.Model],
+				})
+			}
 		}
 	}
 

@@ -265,3 +265,64 @@ func TestNormalizeModel(t *testing.T) {
 		}
 	}
 }
+
+// ── QAC computation tests ──
+
+func TestComputeQAC(t *testing.T) {
+	tests := []struct {
+		name  string
+		cost  float64
+		score float64
+		want  float64
+	}{
+		{"opus: $15/M at 72%", 15.0, 72.0, 20.833},           // 15 / 0.72 = 20.833
+		{"deepseek-r1: $0.55/M at 73.6%", 0.55, 73.6, 0.747}, // 0.55 / 0.736 = 0.747
+		{"gpt-5: $10/M at 88%", 10.0, 88.0, 11.364},          // 10 / 0.88 = 11.364
+		{"zero score", 15.0, 0.0, 0.0},                       // undefined
+		{"zero cost", 0.0, 72.0, 0.0},                        // free model
+	}
+
+	for _, tt := range tests {
+		got := ComputeQAC(tt.cost, tt.score)
+		// Allow 0.01 tolerance for floating point.
+		diff := got - tt.want
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > 0.01 {
+			t.Errorf("%s: QAC = %.3f, want %.3f", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestModelAlternative_QACFields(t *testing.T) {
+	// Verify that classifyAlternative still works correctly with QAC fields present.
+	alt := ModelAlternative{
+		CurrentModel: "claude-opus-4",
+		CurrentScore: 72.0,
+		CurrentCost:  15.0,
+		AltModel:     "deepseek-r1",
+		AltScore:     73.6,
+		AltCost:      0.55,
+		ScoreDelta:   1.6,
+		CostSavings:  96.3,
+		QualityDrop:  0,
+		CurrentQAC:   ComputeQAC(15.0, 72.0),
+		AltQAC:       ComputeQAC(0.55, 73.6),
+	}
+
+	// This should be a no-brainer: better score AND cheaper.
+	verdict := classifyAlternative(alt)
+	if verdict != "no-brainer" {
+		t.Errorf("expected no-brainer, got %s", verdict)
+	}
+
+	// QAC savings should be massive.
+	if alt.CurrentQAC <= 0 || alt.AltQAC <= 0 {
+		t.Fatal("QAC values should be positive")
+	}
+	qacSavings := (alt.CurrentQAC - alt.AltQAC) / alt.CurrentQAC * 100
+	if qacSavings < 95 {
+		t.Errorf("expected QAC savings >95%%, got %.1f%%", qacSavings)
+	}
+}

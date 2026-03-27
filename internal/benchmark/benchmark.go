@@ -71,6 +71,32 @@ type ModelAlternative struct {
 	QualityDrop  float64 `json:"quality_drop"`  // abs(ScoreDelta) when negative, 0 when positive
 	MonthlySaved float64 `json:"monthly_saved"` // estimated $ saved per month (from real usage data)
 
+	// Quality-Adjusted Cost (QAC).
+	// QAC normalizes cost by quality: QAC = cost / (score/100).
+	// A model scoring 50% effectively costs twice as much per successful task.
+	CurrentQAC float64 `json:"current_qac"` // QAC for the current model
+	AltQAC     float64 `json:"alt_qac"`     // QAC for the alternative
+	QACSavings float64 `json:"qac_savings"` // (CurrentQAC - AltQAC) / CurrentQAC * 100
+
 	// Classification.
 	Verdict string `json:"verdict"` // "no-brainer", "tradeoff", "risky", "upgrade"
+}
+
+// QACLeaderEntry ranks a model by quality-adjusted cost.
+// Used for the "best value" leaderboard across all known models.
+type QACLeaderEntry struct {
+	Model          string  `json:"model"`
+	BenchmarkScore float64 `json:"benchmark_score"` // 0-100
+	InputCost      float64 `json:"input_cost"`      // $ per 1M input tokens
+	QAC            float64 `json:"qac"`             // quality-adjusted cost
+	Rank           int     `json:"rank"`            // 1-based rank (lower QAC = better)
+}
+
+// ComputeQAC returns the quality-adjusted cost for a given price and score.
+// Returns 0 if score is zero (undefined).
+func ComputeQAC(costPerMToken, benchmarkScore float64) float64 {
+	if benchmarkScore <= 0 {
+		return 0
+	}
+	return costPerMToken / (benchmarkScore / 100)
 }

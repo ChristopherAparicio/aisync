@@ -91,6 +91,13 @@ func (r *Recommender) Recommend(model string, monthlyInputTokens int) []ModelAlt
 			alt.MonthlySaved = currentMonthly - altMonthly
 		}
 
+		// Quality-Adjusted Cost.
+		alt.CurrentQAC = ComputeQAC(currentCost, currentScore)
+		alt.AltQAC = ComputeQAC(altPrice.InputPerMToken, entry.Score)
+		if alt.CurrentQAC > 0 {
+			alt.QACSavings = (alt.CurrentQAC - alt.AltQAC) / alt.CurrentQAC * 100
+		}
+
 		alt.Verdict = classifyAlternative(alt)
 
 		// Only include alternatives that save money.
@@ -130,4 +137,42 @@ func classifyAlternative(alt ModelAlternative) string {
 	default:
 		return "risky" // significant quality drop
 	}
+}
+
+// QACLeaderboard returns all models with both benchmark scores and pricing,
+// ranked by quality-adjusted cost (lowest QAC = best value).
+func (r *Recommender) QACLeaderboard() []QACLeaderEntry {
+	allEntries := r.benchmarks.List()
+	var entries []QACLeaderEntry
+
+	for _, be := range allEntries {
+		price, ok := r.prices.Lookup(be.Model)
+		if !ok || price.InputPerMToken <= 0 {
+			continue
+		}
+
+		qac := ComputeQAC(price.InputPerMToken, be.Score)
+		if qac <= 0 {
+			continue
+		}
+
+		entries = append(entries, QACLeaderEntry{
+			Model:          be.Model,
+			BenchmarkScore: be.Score,
+			InputCost:      price.InputPerMToken,
+			QAC:            qac,
+		})
+	}
+
+	// Sort by QAC ascending (best value first).
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].QAC < entries[j].QAC
+	})
+
+	// Assign ranks.
+	for i := range entries {
+		entries[i].Rank = i + 1
+	}
+
+	return entries
 }

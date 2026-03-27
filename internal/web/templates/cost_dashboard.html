@@ -415,7 +415,7 @@
 {{if .HasAlternatives}}
 <div class="section">
   <h2 class="section-title">Model Alternatives <span class="text-muted">(Aider Polyglot Benchmark)</span></h2>
-  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Cheaper models that could replace your current models, scored against the Aider polyglot coding benchmark (225 exercises, 6 languages). Quality drop &le;15% = acceptable tradeoff.</p>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Cheaper models that could replace your current models, scored against the Aider polyglot coding benchmark (225 exercises, 6 languages). QAC = cost adjusted for quality (lower is better).</p>
   <div class="table-wrap">
     <table>
       <thead>
@@ -426,6 +426,7 @@
           <th class="text-right">Quality</th>
           <th class="text-right">Cost</th>
           <th class="text-right">Savings</th>
+          <th class="text-right">QAC</th>
           <th>Verdict</th>
         </tr>
       </thead>
@@ -454,9 +455,44 @@
             ${{printf "%.1f" .AltCost}}
           </td>
           <td class="text-right font-mono" style="font-weight: 600;">{{printf "%.0f" .CostSavings}}%</td>
+          <td class="text-right font-mono text-muted">
+            ${{printf "%.1f" .CurrentQAC}} &rarr; ${{printf "%.1f" .AltQAC}}
+          </td>
           <td>
             <span class="badge badge-{{.VerdictClass}}">{{.Verdict}}</span>
           </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── QAC Leaderboard ── -->
+{{if .HasQACLeaderboard}}
+<div class="section">
+  <h2 class="section-title">Quality-Adjusted Cost Leaderboard</h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">All models ranked by true cost: price normalized by coding quality. QAC = $/1M tokens &divide; (benchmark% / 100). Lower QAC = better value. Your current models are highlighted.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="text-right">#</th>
+          <th>Model</th>
+          <th class="text-right">Benchmark</th>
+          <th class="text-right">Cost / 1M</th>
+          <th class="text-right">QAC / 1M</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .QACLeaderboard}}
+        <tr{{if .IsCurrentModel}} style="background: var(--highlight, rgba(99,102,241,0.08)); font-weight: 600;"{{end}}>
+          <td class="text-right text-muted">{{.Rank}}</td>
+          <td class="font-mono">{{.Model}}{{if .IsCurrentModel}} <span class="badge badge-good">you</span>{{end}}</td>
+          <td class="text-right">{{printf "%.1f" .BenchmarkScore}}%</td>
+          <td class="text-right font-mono">${{printf "%.2f" .InputCost}}</td>
+          <td class="text-right font-mono" style="font-weight: 600;">${{printf "%.2f" .QAC}}</td>
         </tr>
         {{end}}
       </tbody>
