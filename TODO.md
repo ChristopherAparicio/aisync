@@ -140,15 +140,44 @@ Displayed as a colored badge on each session card: 🟢 90+, 🟡 70-89, 🔴 <7
 
 ## Priority 1: Search & Discovery
 
-### 1.1 Semantic Search (pgvector / embeddings)
-- [ ] Generate embeddings at index time (via configured LLM)
-- [ ] Store in pgvector (PostgreSQL adapter) or sqlite-vec
-- [ ] "Find sessions that talk about authentication" → semantic similarity
-- [ ] Combine with FTS5 for hybrid search (keyword + semantic)
-- [ ] **Challenge**: sessions are very large (100K+ tokens) — need chunking strategy
-  - Index by message or by chunk (not whole session)
-  - Embed summary + first N messages + tool call names separately
-  - Retrieve at chunk level, group by session in results
+### 1.0 Session File Blame ("git blame by session") ⭐ HIGH VALUE
+For each file in a project, show which sessions modified it and when.
+
+**Concept:**
+Like `git blame` but per AI session instead of per commit. Answer:
+"Which sessions touched this file? What did they do? When?"
+
+```
+src/auth/login.go
+  ses_2d5a53 (build)    2026-03-25  [COMMIT] Fix OAuth token refresh
+  ses_2d4fab (explore)   2026-03-24  Audit auth implementation
+  ses_2d3c12 (build)    2026-03-22  [COMMIT] feat: add JWT auth
+```
+
+**Data extraction:**
+- Walk each session's tool calls for Edit/Write/bash operations
+- Parse `Input` JSON to extract `filePath` from Edit/Write tool calls
+- Parse bash commands for `git add`, `git commit`, file creation patterns
+- Store in `session_files` table: (session_id, file_path, operation, timestamp)
+- Operation types: `created`, `modified`, `read`, `deleted`
+
+**Views:**
+- **Project file explorer**: tree view of project files with session count badge
+- **File detail**: list of sessions that touched this file (most recent first)
+- **Session detail**: list of files modified in this session
+- **Reverse lookup**: "Show me all sessions that modified `auth/`" (directory-level)
+
+**Indexing:**
+- Extract at capture time (post-capture hook) — parse tool calls for file paths
+- Backfill command: `aisync backfill files` for existing sessions
+- Lightweight: only store file path + operation type, not content
+
+### 1.1 Search Strategy (Deferred)
+Search is a separate effort. For now FTS5 handles keyword search.
+Future: semantic search needs chunking (sessions are 100K+ tokens).
+- Index by summary + git changes summary (not full message content)
+- Summarize git add/commit activity per session for indexing
+- Semantic search on summarized work products, not raw conversation
 
 ### 1.2 Elasticsearch / Typesense Adapter
 - [ ] `search/elastic/` adapter implementing `search.Engine`
