@@ -1,140 +1,215 @@
 # aisync — Next Session TODO
 
-> Last updated: 2026-03-26
+> Last updated: 2026-03-27
 
-## Recently Completed
+## Recently Completed (2026-03-27)
 
-### Fork Deduplication in Cost Computation (2026-03-26)
-- [x] **DetectForksBatch fix**: Removed `branch==""` skip — branchless sessions now included in fork detection
-- [x] **Rewind detection**: Parse "Rewind of ses_XXX at message N" from summary, create ForkRelation with exact fork_point
-- [x] **Store**: `ListAllForkRelations()` — bulk query all fork relations for dedup map
-- [x] **ComputeTokenBuckets dedup**: Messages at index < fork_point are skipped for fork sessions
-- [x] **Forecast dedup**: Shared prefix tokens/costs subtracted from fork session totals, per-backend stats skip shared msgs
-- [x] **Production results**: 128 fork relations (was 55), 78 sessions deduplicated, 16,819 shared-prefix messages skipped
-- [x] **Tests**: 4 new unit tests (fork dedup, no-forks baseline, rewind detection, branchless sessions)
-- [x] 1820 tests passing
+### Per-Tool Cost Analytics
+- [x] `tool_usage_buckets` table — per-tool token/cost tracking with MCP classification
+- [x] Tool classification: `builtin` vs `mcp:notion`, `mcp:sentry`, `mcp:langfuse`, `mcp:context7`
+- [x] Cost dashboard: Cost by MCP Server, Cost by Tool (top 20), Cost by Agent
+- [x] 2,609 tool buckets from 1,278 sessions
 
-### Backend Pricing Separation (2026-03-26)
-- [x] **Config**: `pricing.backend_billing` map with `BackendBillingConfig` (type, monthly_cost, plan_name)
-- [x] **Config getters**: `GetBackendBilling()`, `GetAllBackendBilling()`, `ResolveBillingType()`, `GetSubscriptionCosts()`
-- [x] **Domain**: Added `LLMBackend`, `EstimatedCost`, `ActualCost` to `TokenUsageBucket`
-- [x] **Domain**: `BackendCostSummary` struct + `ForecastResult` API-only projections + subscription fields
-- [x] **Storage**: Migration 019 — `llm_backend`, `estimated_cost`, `actual_cost` columns + new unique index
-- [x] **Storage**: Updated `UpsertTokenBucket` and `QueryTokenBuckets` for new fields
-- [x] **Service**: Rewrote `ComputeTokenBuckets` to key by `msg.ProviderID`, compute per-message cost
-- [x] **Service**: Rewrote `Forecast()` — API-only projections, per-backend summaries, subscription costs
-- [x] **Service**: Added `cfg *config.Config` to `SessionService` + wired in factory
-- [x] **Cost Dashboard**: Redesigned with "Real Monthly Spend" KPIs, "Cost by LLM Backend" table, API vs subscription separation
-- [x] **Home Page**: Forecast panel shows real cost (subscriptions + API) when backend data is available
-- [x] **Project Detail**: Forecast panel shows real cost when available
-- [x] **CSS**: Billing badges (subscription, api, free), accent KPI card, forecast highlight row
-- [x] 1811 tests passing
+### Prompt Cache Efficiency
+- [x] Per-message `CacheReadTokens` / `CacheWriteTokens` on Message struct
+- [x] Cache efficiency service: hit rate, savings, waste, gap detection (>5min = cache miss)
+- [x] Dashboard: Cache Efficiency panel (hit rate 94.5%, $288K savings, $1.1K waste)
+- [x] Home + Project Detail: Cache mini-panel (7d window)
 
-### Project Detail Page (2026-03-26)
-- [x] **Project Detail Page** (`GET /projects/{path...}`): Full project-scoped view
-  - Project header: display name, remote URL, provider badge, category badge
-  - KPI strip: sessions, tokens, cost, errors, tool calls, 30d forecast (project-scoped)
-  - Trend strip: 7d weekly comparison (sessions, tokens, errors) with project-level `TrendRequest.ProjectPath`
-  - Two-column layout: activity feed (15 recent sessions) + aside panels (capabilities, branches, analytics, forecast)
-  - Analytics panel: 30d tool calls, skill loads, top tools from event buckets
-  - Quick action links: All sessions, Analytics, Costs (filtered by project)
-- [x] **Sidebar links updated**: All 7 templates now link to `/projects/{path}` instead of `/?project=` or `/{page}?project=`
-- [x] **Projects list page**: Cards now link to project detail page
-- [x] **TrendRequest.ProjectPath**: Added project filtering to weekly trend analysis
-- [x] **CSS**: Project detail header, analytics summary panel, responsive breakpoints
-- [x] 1784 tests passing
+### Per-Project Classifiers
+- [x] `projects` config map with `ticket_pattern`, `ticket_url`, `branch_rules`, `agent_rules`, `commit_rules`
+- [x] Ticket extraction: regex from branch/summary → `LinkTicket` links
+- [x] Smart classification cascade: commit message > summary keyword > branch rules > agent rules
+- [x] Conventional Commits: `fix:` → bug, `feat:` → feature, `refactor:` → refactor
+- [x] Status detection: `[WIP]` → active, `[DONE]` → completed, `[PR]` → review
+- [x] Backfill: 866 sessions classified (32 → 898 typed)
 
-### UX Redesign v2 (2026-03-26)
-- [x] **Home Page Redesign**: GitHub-style two-column layout (feed + aside panels)
-  - KPI strip: sessions, tokens, cost, errors, tool calls, 30d forecast
-  - Inline trend strip: 7d weekly comparisons (sessions, tokens, errors)
-  - Left column: activity feed with enriched session cards (project link, branch badge, tags, stats, actions)
-  - Right column: Top Branches panel + Forecast panel + Capabilities panel
-- [x] **Global Search (Ctrl+K / Cmd+K)**: Modal overlay with HTMX live search
-  - Click navbar search trigger or press Ctrl+K / / to open
-  - 250ms debounce, returns top 8 results with link to full results
-  - `GET /partials/search-results?keyword=...` endpoint
-  - `templates/search_results.html` partial template
-- [x] **Restore Buttons**: Already on session cards in the activity feed
-- [x] **Sessions page keyword search**: Already existed via `SearchRequest.Keyword`
-- [x] **Data Backfills (production)**:
-  - `aisync backfill remote-url`: 237 candidates, 39 updated
-  - `aisync backfill forks`: 1161 scanned, 55 forks detected
-  - `aisync backfill events`: 1161 sessions processed (2m43s)
-  - `aisync usage compute`: 1295 buckets, 169K messages scanned
-- [x] **CLI: `aisync backfill events`** — Extract session events + recompute analytics buckets
-  - Supports `--session` (single), `--recompute-only`, `--json` flags
-- [x] 1784 total tests passing
+### Per-Project Budget System
+- [x] Budget config: `monthly_limit`, `daily_limit`, `alert_at_percent`
+- [x] Budget service: actual spend vs limit, progress bars, projected end-of-month
+- [x] Costs page: Project Budgets table with colored progress bars
+- [x] Project detail: Budget aside panel with monthly/daily bars
+- [x] Webhook: `budget.alert` event, scheduler `BudgetCheckTask`
 
-### Backend Tasks (2026-03-25)
-- [x] **Worktree Dedup Fix**: `resolveRemoteURLForPath()` fallback — resolves git remote from session's ProjectPath
-- [x] **Backfill remote_url**: `ListSessionsWithEmptyRemoteURL()` + `UpdateRemoteURL()` store methods
-- [x] **BackfillRemoteURLs service**: groups by project_path to avoid redundant git calls
-- [x] **DetectForksBatch service**: batch fork detection across all sessions, persists to session_forks
-- [x] **Get() overlay**: mutable columns (remote_url, session_type, project_category, status) now overlay JSON payload
-- [x] **CLI: `aisync backfill remote-url`** — resolves git remotes for sessions missing them
-- [x] **CLI: `aisync backfill forks`** — detects fork relationships across all sessions
-- [x] **CLI: `aisync usage compute`** — on-demand token usage bucket computation
-- [x] **API: `POST /api/v1/backfill/remote-url`** — manual trigger endpoint
-- [x] **API: `POST /api/v1/backfill/forks`** — manual trigger endpoint
-- [x] **Scheduler tasks**: `BackfillRemoteURLTask` + `ForkDetectionTask`
-- [x] **LiteLLM auto-refresh**: background refresh on server start when cache >7 days
+### Pluggable Search Engine (FTS5)
+- [x] `search.Engine` port interface with Capabilities
+- [x] Chain fallback: FTS5 → LIKE
+- [x] FTS5 adapter: full-text in summary + message content + tools + branch, BM25 ranking, highlights
+- [x] Config: `search.engine: "fts5"` — single switch
+- [x] Post-capture indexing + bulk `IndexAllSessions()`
+- [x] 1,325 sessions indexed, search now finds content inside messages
 
-### Pricing Catalog Refactoring + LiteLLM Integration (Phase 10.8)
-- [x] `Catalog` port interface with `Lookup(model)` and `List()` methods
-- [x] `EmbeddedCatalog` adapter: YAML source of truth (go:embed, 15 models, tiers)
-- [x] `OverrideCatalog` decorator: user config overrides on base catalog
-- [x] `LiteLLMCatalog` adapter: 2500+ models from GitHub JSON cache
-- [x] `FallbackCatalog`: chains LiteLLM → Embedded (first match wins)
-- [x] `aisync update-prices` CLI command with `--info` flag
-- [x] Tiered/dynamic pricing with multipliers (Opus 4, Gemini 2.5 Pro/Flash)
-- [x] Factory wiring: full chain with graceful degradation
-- [x] 88 pricing tests
+### Dashboard Enhancements
+- [x] Project column in sessions table (links to project page)
+- [x] Session ID truncation 8→12 chars
+- [x] Fix session detail layout (CSS `:has()` for no-sidebar pages)
+- [x] Forecast breakdown: subscription vs API spend
+- [x] HTMX search bar on project detail Recent Sessions
+- [x] Word-boundary truncation for summaries
 
-### Error Classification (Phase 10.6)
-- [x] Domain model, deterministic classifier, OpenCode extraction
-- [x] SQLite store, API endpoints, CLI, MCP tool, scheduler task
-- [x] Dashboard filters: Status + HasErrors
+### Stats
+- [x] 1,936 tests passing across 103 packages
+- [x] ~4,600 lines added in this session
 
 ---
 
-## Priority 0: Operational — COMPLETED
+## Priority 0: Agent Efficiency & Observability
 
-### Backend Pricing (2026-03-26)
-- [x] **Configure backend billing**: anthropic (subscription, $200/mo, "Claude Max"), amazon-bedrock (api), opencode (free), ollama (free)
-- [x] **Migration 020**: DROP + CREATE `token_usage_buckets` with correct 5-column PK
-- [x] **Production data**: anthropic 161K msgs/$0 actual (subscription), amazon-bedrock 32K msgs/$3,986 actual (API)
+### 0.1 Context Saturation Monitor ⭐ HIGH IMPACT
+Detect when sessions reach the "degradation zone" of the model's context window.
 
-### Fork Deduplication (2026-03-26)
-- [x] **Fork detection improved**: 128 forks (was 55), branchless + rewind sessions included
-- [x] **Dedup in ComputeTokenBuckets + Forecast**: 16,819 shared-prefix messages skipped, ~3.5B duplicated tokens eliminated
-- [x] **Re-backfill**: `aisync backfill forks` + `aisync usage compute` — 1,570 buckets, 186K messages (was 195K)
+**What it does:**
+- Track cumulative input tokens per message in each session
+- Define quality zones per model:
+  - 🟢 **Optimal** (0-40% of context): full quality, fast responses
+  - 🟡 **Degraded** (40-80%): quality starts dropping, more hallucinations
+  - 🔴 **Critical** (80-100%): significant quality loss, compaction risk
+- Per-project KPIs:
+  - Average messages before reaching 80% context
+  - % of sessions that enter degraded/critical zone
+  - Tokens "wasted" in the critical zone (expensive + low quality)
+  - Compaction events detected
+- Session detail: context saturation curve (tokens per message, cumulative)
+- Recommendation: "Your Omogen sessions reach 80% in 4 messages avg — split tasks"
+
+**Model context limits:**
+| Model | Context Window | Optimal Zone | Degraded Zone | Critical Zone |
+|-------|---------------|-------------|--------------|--------------|
+| Opus 4.6 | 1M tokens | 0-200K | 200-600K | 600K-1M |
+| Sonnet 4.6 | 1M tokens | 0-200K | 200-600K | 600K-1M |
+| Opus 4.0/4.1 | 200K tokens | 0-80K | 80-160K | 160-200K |
+| Haiku 4.5 | 200K tokens | 0-80K | 80-160K | 160-200K |
+
+### 0.2 Agent & Skill ROI Dashboard ⭐ HIGH IMPACT
+Measure the return on investment of each agent and skill per project.
+
+**Agent ROI:**
+| Metric | Description |
+|--------|-------------|
+| Cost/session | Average estimated cost per session for this agent |
+| Error rate | % of tool calls that error for this agent |
+| Context efficiency | % of context used productively (not wasted in degraded zone) |
+| Completion rate | % of sessions that reach [DONE] or [COMMIT] status |
+| Avg messages | Average messages before task completion |
+| ROI score | Composite score (low cost + low errors + high completion = high ROI) |
+
+**Skill ROI:**
+| Metric | Description |
+|--------|-------------|
+| Usage frequency | How often the skill is loaded |
+| Context cost | Tokens consumed by the skill's system prompt/context |
+| Error correlation | Does loading this skill increase or decrease errors? |
+| Ghost skills | Skills configured but never used → wasted context |
+| Bloated skills | Skills that add >5K tokens to every session for minimal benefit |
+
+### 0.3 Recommendations Engine
+Auto-generated, actionable suggestions per project based on data analysis.
+
+**Recommendation types:**
+- **Context optimization**: "Sessions reach 80% in N messages — split tasks or use shorter prompts"
+- **Ghost skill removal**: "Skill X loaded in 45 sessions but never triggered — remove to save 2K tokens/session"
+- **Agent switching**: "Agent 'review' has 8% error rate vs 3% average — consider using 'build' instead"
+- **Model downgrade**: "Agent 'explore' uses Opus ($15/M) but tasks are simple — Haiku ($1/M) would suffice"
+- **Cache optimization**: "N sessions this week had cache misses — respond within 5 min or start fresh"
+- **Budget alert**: "Omogen at 75% of monthly budget with 10 days remaining"
+
+### 0.4 Session Health Score
+A composite score per session (0-100) combining multiple signals:
+- Error rate (fewer errors = higher score)
+- Context saturation (less = higher)
+- Cache hit rate (more = higher)
+- Completion status (DONE/COMMIT = higher)
+- Token efficiency (fewer tokens for same outcome = higher)
+
+Displayed as a colored badge on each session card: 🟢 90+, 🟡 70-89, 🔴 <70.
 
 ---
 
-## Priority 1: Quick Actions & Navigation
+## Priority 1: Search & Discovery
 
-### 1.1 Analyze on Demand
-Add "Analyze" button for sessions without objectives (session detail page).
+### 1.1 Semantic Search (pgvector / embeddings)
+- [ ] Generate embeddings at index time (via configured LLM)
+- [ ] Store in pgvector (PostgreSQL adapter) or sqlite-vec
+- [ ] "Find sessions that talk about authentication" → semantic similarity
+- [ ] Combine with FTS5 for hybrid search (keyword + semantic)
 
-### 1.2 Fork Tree Navigation
-Show clickable mini-tree in session list for fork relationships.
+### 1.2 Elasticsearch / Typesense Adapter
+- [ ] `search/elastic/` adapter implementing `search.Engine`
+- [ ] Faceted search: group results by project, branch, agent, session type
+- [ ] Fuzzy matching for typo tolerance
+- [ ] Config: `search.engine: "elasticsearch"` + URL
 
-### 1.3 Project Page Enhancements
-- [ ] Daily activity sparkline/mini bar chart in analytics panel
-- [ ] Error rate trend chart (last 30d)
-- [ ] Session type breakdown (pie/donut)
+### 1.3 Advanced Search UI
+- [ ] Show search engine capabilities in UI (badge: "FTS5" / "Semantic")
+- [ ] Highlighted snippets in search results (already supported by FTS5)
+- [ ] Facet sidebar: filter by project, branch, type, date range
+- [ ] Search within a session (find specific tool calls, messages)
 
 ---
 
-## Priority 2: Future Error Analysis
+## Priority 2: Dashboard & Visualization
 
-- [ ] LLM classifier for ambiguous tool errors (future, low priority)
+### 2.1 Activity Sparklines
+- [ ] Mini bar charts for daily activity on KPI cards
+- [ ] Session count sparkline on project cards
+- [ ] Token usage sparkline on home dashboard
+
+### 2.2 Cost Breakdown Charts
+- [ ] Treemap or sunburst: project → backend → model → cost
+- [ ] Timeline chart: daily cost trend with budget line overlay
+- [ ] MCP server cost pie chart
+
+### 2.3 Session Timeline View
+- [ ] Fork tree visualization (clickable mini-tree in session list)
+- [ ] Session dependency graph (parent → child → fork relationships)
+- [ ] Timeline of a session: messages, tool calls, errors as a Gantt-like chart
+
+### 2.4 Costs Page Organization
+- [ ] Collapsible sections or tabs (the page is 177KB now)
+- [ ] "Overview" tab: budgets + cache + backend breakdown
+- [ ] "Tools" tab: per-tool, MCP, agent costs
+- [ ] "Optimization" tab: recommendations, saturation, model alternatives
+
+---
+
+## Priority 3: Platform & Integration
+
+### 3.1 Slack Integration
+- [ ] Rich Slack webhook payloads (blocks, buttons, color-coded alerts)
+- [ ] Budget alerts with inline bar chart
+- [ ] Daily/weekly digest: session count, cost, top errors, recommendations
+
+### 3.2 Team & Ownership
+- [ ] Multi-user: track who spawned which session (git user identity)
+- [ ] Per-user cost tracking and budget allocation
+- [ ] Team dashboard: compare agent usage across developers
+- [ ] Billing entity per project (for client invoicing)
+
+### 3.3 Export & Reporting
+- [ ] Weekly PDF/HTML report per project (auto-generated)
+- [ ] CSV export for cost data (for accounting)
+- [ ] API for external dashboards (Grafana, Datadog)
+
+### 3.4 Settings Web UI
+- [ ] `/settings` page: visual editor for per-project config
+- [ ] CRUD for project classifiers, budgets, search engine selection
+- [ ] Live preview of classification rules against existing sessions
+
+---
+
+## Priority 4: Technical Debt
+
+### 4.1 Existing
+- [ ] Compute objectives for existing sessions (batch job)
+- [ ] LLM classifier for ambiguous tool errors
 - [ ] `CompositeClassifier` — deterministic first, LLM fallback for "unknown"
 
----
+### 4.2 Performance
+- [ ] Incremental FTS5 indexing (only new/modified sessions)
+- [ ] Lazy loading for costs page sections (HTMX partial load)
+- [ ] Cache expensive computations (CacheEfficiency, BudgetStatus)
 
-## Priority 3: Technical Debt
-
-- [ ] Compute objectives for existing sessions (batch job)
-- [x] Auto-refresh LiteLLM cache on startup when stale (>7 days)
+### 4.3 Testing
+- [ ] Integration tests for FTS5 search end-to-end
+- [ ] Budget alert webhook delivery tests
+- [ ] Classifier cascade integration tests with mock sessions
