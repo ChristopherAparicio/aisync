@@ -463,6 +463,100 @@ type Recommendation struct {
 	Skill    string `json:"skill,omitempty"`   // which skill (if applicable)
 }
 
+// HealthScore is a composite quality score for a single session (0-100).
+type HealthScore struct {
+	Total           int    `json:"total"`            // composite score 0-100
+	Grade           string `json:"grade"`            // "A", "B", "C", "D", "F"
+	ErrorScore      int    `json:"error_score"`      // 0-30: fewer errors = higher
+	SaturationScore int    `json:"saturation_score"` // 0-25: lower context usage = higher
+	CacheScore      int    `json:"cache_score"`      // 0-20: higher cache hit = higher
+	CompletionScore int    `json:"completion_score"` // 0-15: completed session = higher
+	EfficiencyScore int    `json:"efficiency_score"` // 0-10: fewer tokens per message = higher
+}
+
+// ComputeHealthScore calculates the health score for a session summary.
+// Lightweight: uses only Summary fields, no full session load needed.
+func ComputeHealthScore(sm Summary) HealthScore {
+	var hs HealthScore
+
+	// 1. Error score (0-30): 0 errors = 30, >10% error rate = 0.
+	if sm.ToolCallCount > 0 {
+		errorRate := float64(sm.ErrorCount) / float64(sm.ToolCallCount) * 100
+		score := 30.0 - errorRate*3
+		if score < 0 {
+			score = 0
+		}
+		hs.ErrorScore = int(score)
+	} else if sm.ErrorCount == 0 {
+		hs.ErrorScore = 30
+	}
+
+	// 2. Saturation score (0-25): proxy from total tokens (no context window in Summary).
+	tokenK := sm.TotalTokens / 1000
+	switch {
+	case tokenK < 50:
+		hs.SaturationScore = 25
+	case tokenK < 100:
+		hs.SaturationScore = 20
+	case tokenK < 200:
+		hs.SaturationScore = 15
+	case tokenK < 500:
+		hs.SaturationScore = 8
+	default:
+		hs.SaturationScore = 0
+	}
+
+	// 3. Cache score (0-20): default 15 (refined with full session data).
+	hs.CacheScore = 15
+
+	// 4. Completion score (0-15).
+	switch sm.Status {
+	case "completed":
+		hs.CompletionScore = 15
+	case "review":
+		hs.CompletionScore = 12
+	case "active":
+		hs.CompletionScore = 8
+	default:
+		hs.CompletionScore = 5
+	}
+
+	// 5. Efficiency score (0-10): tokens per message.
+	if sm.MessageCount > 0 {
+		tokPerMsg := sm.TotalTokens / sm.MessageCount
+		switch {
+		case tokPerMsg < 5000:
+			hs.EfficiencyScore = 10
+		case tokPerMsg < 15000:
+			hs.EfficiencyScore = 7
+		case tokPerMsg < 30000:
+			hs.EfficiencyScore = 4
+		default:
+			hs.EfficiencyScore = 1
+		}
+	}
+
+	hs.Total = hs.ErrorScore + hs.SaturationScore + hs.CacheScore + hs.CompletionScore + hs.EfficiencyScore
+	if hs.Total > 100 {
+		hs.Total = 100
+	}
+
+	switch {
+	case hs.Total >= 85:
+		hs.Grade = "A"
+	case hs.Total >= 70:
+		hs.Grade = "B"
+	case hs.Total >= 55:
+		hs.Grade = "C"
+	case hs.Total >= 40:
+		hs.Grade = "D"
+	default:
+		hs.Grade = "F"
+	}
+
+	return hs
+}
+
 // Link connects a session to a git object (branch, commit, PR).
 type Link struct {
 	LinkType LinkType `json:"link_type"`

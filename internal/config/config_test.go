@@ -167,7 +167,7 @@ func TestGet_AllKeys(t *testing.T) {
 		{"analysis.min_tool_calls", "10"},
 		{"analysis.model", "claude-3"},
 		{"dashboard.page_size", "25"},
-		{"dashboard.columns", "id,project,provider,branch,summary,messages,tokens,errors,when"},
+		{"dashboard.columns", "id,project,provider,branch,summary,health,messages,tokens,errors,when"},
 		{"dashboard.sort_by", "created_at"},
 		{"dashboard.sort_order", "desc"},
 		{"dashboard.default_provider", ""},
@@ -817,8 +817,8 @@ func TestDashboard_Defaults(t *testing.T) {
 		t.Errorf("GetDashboardPageSize() = %d, want 25", got)
 	}
 	cols := cfg.GetDashboardColumns()
-	if len(cols) != 9 {
-		t.Errorf("GetDashboardColumns() count = %d, want 9", len(cols))
+	if len(cols) != 10 {
+		t.Errorf("GetDashboardColumns() count = %d, want 10", len(cols))
 	}
 	if cols[0] != "id" {
 		t.Errorf("first column = %q, want %q", cols[0], "id")

@@ -196,6 +196,7 @@
               <span class="badge badge-provider">{{.Provider}}</span>
               {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
               {{if .Status}}<span class="badge badge-status-{{.Status}}">{{.Status}}</span>{{end}}
+              <span class="badge {{healthClass .}}">{{healthGrade .}}</span>
             </div>
             <div class="activity-card-stats">
               <span><strong>{{.MessageCount}}</strong> msgs</span>

@@ -787,6 +787,7 @@ var allColumnDefs = map[string]columnDef{
 	"agent":      {ID: "agent", Label: "Agent", Class: ""},
 	"branch":     {ID: "branch", Label: "Branch", Class: ""},
 	"summary":    {ID: "summary", Label: "Summary", Class: ""},
+	"health":     {ID: "health", Label: "Health", Class: ""},
 	"messages":   {ID: "messages", Label: "Msgs", Class: "text-right"},
 	"tokens":     {ID: "tokens", Label: "Tokens", Class: "text-right"},
 	"cost":       {ID: "cost", Label: "Cost", Class: "text-right"},
@@ -907,6 +908,20 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 					cell.IsLink = true
 					cell.LinkID = string(sess.ID)
 					cell.Class = "text-muted font-mono cell-summary"
+				}
+			case "health":
+				hs := session.ComputeHealthScore(sess)
+				cell.Value = fmt.Sprintf("%s %d", hs.Grade, hs.Total)
+				cell.IsBadge = true
+				switch {
+				case hs.Total >= 85:
+					cell.Class = "health-a"
+				case hs.Total >= 70:
+					cell.Class = "health-b"
+				case hs.Total >= 55:
+					cell.Class = "health-c"
+				default:
+					cell.Class = "health-d"
 				}
 			case "messages":
 				cell.Value = strconv.Itoa(sess.MessageCount)

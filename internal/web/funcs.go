@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"html/template"
 	"time"
+
+	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
 // templateFuncs returns the FuncMap used by all web templates.
@@ -29,6 +31,8 @@ func templateFuncs() template.FuncMap {
 			}
 			return a / b
 		},
+		"healthGrade": healthGrade,
+		"healthClass": healthClass,
 	}
 }
 
@@ -148,4 +152,25 @@ func formatPercentage(v float64) string {
 		return fmt.Sprintf("%.1f%%", v)
 	}
 	return fmt.Sprintf("%.0f%%", v)
+}
+
+// healthGrade computes and returns the health grade letter for a session summary.
+func healthGrade(sm session.Summary) string {
+	hs := session.ComputeHealthScore(sm)
+	return fmt.Sprintf("%s %d", hs.Grade, hs.Total)
+}
+
+// healthClass returns a CSS class for the health score badge.
+func healthClass(sm session.Summary) string {
+	hs := session.ComputeHealthScore(sm)
+	switch {
+	case hs.Total >= 85:
+		return "health-a"
+	case hs.Total >= 70:
+		return "health-b"
+	case hs.Total >= 55:
+		return "health-c"
+	default:
+		return "health-d"
+	}
 }

@@ -1017,6 +1017,23 @@ tr:hover td { background: var(--bg-hover); }
   opacity: 0.7;
   margin-left: 2px;
 }
+
+/* ── Health score badges ── */
+
+.health-a { background: #22c55e20; color: #22c55e; border: 1px solid #22c55e40; }
+.health-b { background: #6c7ee120; color: #8b9cf7; border: 1px solid #6c7ee140; }
+.health-c { background: #f59e0b20; color: #f59e0b; border: 1px solid #f59e0b40; }
+.health-d { background: #ef444420; color: #ef4444; border: 1px solid #ef444440; }
+
+.agent-chip--inline {
+  background: transparent;
+  border: none;
+  color: var(--accent-light);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
 .agent-chip--inline {
   font-size: 0.75rem;
   padding: 2px 8px;

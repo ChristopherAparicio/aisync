@@ -333,14 +333,14 @@ type dashboardConf struct {
 
 // ValidDashboardColumns is the set of column identifiers the sessions table supports.
 var ValidDashboardColumns = map[string]bool{
-	"id": true, "provider": true, "agent": true, "branch": true,
-	"summary": true, "messages": true, "tokens": true, "cost": true,
+	"id": true, "project": true, "provider": true, "agent": true, "branch": true,
+	"summary": true, "health": true, "messages": true, "tokens": true, "cost": true,
 	"tools": true, "errors": true, "error_rate": true, "when": true,
 }
 
 // DefaultDashboardColumns is the default column set.
 var DefaultDashboardColumns = []string{
-	"id", "project", "provider", "branch", "summary", "messages", "tokens", "errors", "when",
+	"id", "project", "provider", "branch", "summary", "health", "messages", "tokens", "errors", "when",
 }
 
 func defaultConfig() configData {
