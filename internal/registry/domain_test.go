@@ -104,3 +104,77 @@ func TestProject_CapabilityStats_Empty(t *testing.T) {
 		t.Errorf("expected 0 stats for empty project, got %d", len(stats))
 	}
 }
+
+// ── DiffSnapshots tests ──
+
+func TestDiffSnapshots_Initial(t *testing.T) {
+	curr := &Project{
+		Capabilities: []Capability{
+			{Name: "cmd-a", Kind: KindCommand},
+			{Name: "tool-b", Kind: KindTool},
+		},
+		MCPServers: []MCPServer{
+			{Name: "notion"},
+			{Name: "sentry"},
+		},
+	}
+
+	capsAdded, capsRemoved, mcpAdded, mcpRemoved := DiffSnapshots(nil, curr)
+
+	if capsAdded != 2 {
+		t.Errorf("capsAdded = %d, want 2", capsAdded)
+	}
+	if capsRemoved != 0 {
+		t.Errorf("capsRemoved = %d, want 0", capsRemoved)
+	}
+	if mcpAdded != 2 {
+		t.Errorf("mcpAdded = %d, want 2", mcpAdded)
+	}
+	if mcpRemoved != 0 {
+		t.Errorf("mcpRemoved = %d, want 0", mcpRemoved)
+	}
+}
+
+func TestDiffSnapshots_Unchanged(t *testing.T) {
+	prev := &Project{
+		Capabilities: []Capability{{Name: "a"}, {Name: "b"}},
+		MCPServers:   []MCPServer{{Name: "notion"}},
+	}
+	curr := &Project{
+		Capabilities: []Capability{{Name: "a"}, {Name: "b"}},
+		MCPServers:   []MCPServer{{Name: "notion"}},
+	}
+
+	capsAdded, capsRemoved, mcpAdded, mcpRemoved := DiffSnapshots(prev, curr)
+
+	if capsAdded != 0 || capsRemoved != 0 || mcpAdded != 0 || mcpRemoved != 0 {
+		t.Errorf("expected all zeros for unchanged, got +%d/-%d caps, +%d/-%d mcp",
+			capsAdded, capsRemoved, mcpAdded, mcpRemoved)
+	}
+}
+
+func TestDiffSnapshots_AddedAndRemoved(t *testing.T) {
+	prev := &Project{
+		Capabilities: []Capability{{Name: "a"}, {Name: "b"}, {Name: "c"}},
+		MCPServers:   []MCPServer{{Name: "notion"}, {Name: "old-server"}},
+	}
+	curr := &Project{
+		Capabilities: []Capability{{Name: "b"}, {Name: "d"}},              // a,c removed; d added
+		MCPServers:   []MCPServer{{Name: "notion"}, {Name: "new-server"}}, // old removed, new added
+	}
+
+	capsAdded, capsRemoved, mcpAdded, mcpRemoved := DiffSnapshots(prev, curr)
+
+	if capsAdded != 1 {
+		t.Errorf("capsAdded = %d, want 1 (d)", capsAdded)
+	}
+	if capsRemoved != 2 {
+		t.Errorf("capsRemoved = %d, want 2 (a,c)", capsRemoved)
+	}
+	if mcpAdded != 1 {
+		t.Errorf("mcpAdded = %d, want 1 (new-server)", mcpAdded)
+	}
+	if mcpRemoved != 1 {
+		t.Errorf("mcpRemoved = %d, want 1 (old-server)", mcpRemoved)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
@@ -86,6 +87,11 @@ func (s *RegistryService) ScanProject(projectPath string) (*registry.Project, er
 		}
 		return a.Name < b.Name
 	})
+
+	// Persist snapshot if store is available and capabilities changed.
+	if s.store != nil {
+		s.persistSnapshot(project)
+	}
 
 	return project, nil
 }
@@ -230,4 +236,46 @@ func discoverProjectPaths() ([]string, error) {
 // OpenCode project files are simple JSON objects.
 func parseJSONLoose(data []byte, v any) error {
 	return json.Unmarshal(data, v)
+}
+
+// persistSnapshot saves a project snapshot if capabilities changed since
+// the last snapshot. This is called automatically after ScanProject().
+func (s *RegistryService) persistSnapshot(project *registry.Project) {
+	prev, err := s.store.GetLatestSnapshot(project.RootPath)
+	if err != nil {
+		return // silently skip on error
+	}
+
+	// Compute diff.
+	var prevProject *registry.Project
+	if prev != nil {
+		prevProject = &prev.Project
+	}
+	capsAdded, capsRemoved, mcpAdded, mcpRemoved := registry.DiffSnapshots(prevProject, project)
+
+	// Determine change type.
+	changeType := "unchanged"
+	if prev == nil {
+		changeType = "initial"
+	} else if capsAdded > 0 || capsRemoved > 0 || mcpAdded > 0 || mcpRemoved > 0 {
+		changeType = "changed"
+	}
+
+	// Only persist if it's the initial snapshot or something changed.
+	if changeType == "unchanged" {
+		return
+	}
+
+	snapshot := &registry.ProjectSnapshot{
+		ProjectPath:         project.RootPath,
+		Project:             *project,
+		ScannedAt:           time.Now().UTC().Format(time.RFC3339),
+		ChangeType:          changeType,
+		CapabilitiesAdded:   capsAdded,
+		CapabilitiesRemoved: capsRemoved,
+		MCPServersAdded:     mcpAdded,
+		MCPServersRemoved:   mcpRemoved,
+	}
+
+	_ = s.store.SaveProjectSnapshot(snapshot) // best-effort
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/llm"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
+	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
@@ -1039,6 +1040,12 @@ func (m *mockStore) UpsertEventBuckets(_ []sessionevent.EventBucket) error  { re
 func (m *mockStore) ReplaceEventBuckets(_ []sessionevent.EventBucket) error { return nil }
 func (m *mockStore) DeleteEventBuckets(_ sessionevent.BucketQuery) error    { return nil }
 func (m *mockStore) QueryEventBuckets(_ sessionevent.BucketQuery) ([]sessionevent.EventBucket, error) {
+	return nil, nil
+}
+
+func (m *mockStore) SaveProjectSnapshot(_ *registry.ProjectSnapshot) error         { return nil }
+func (m *mockStore) GetLatestSnapshot(_ string) (*registry.ProjectSnapshot, error) { return nil, nil }
+func (m *mockStore) ListSnapshots(_ string, _ int) ([]registry.ProjectSnapshot, error) {
 	return nil, nil
 }
 

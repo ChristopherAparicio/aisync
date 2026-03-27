@@ -5,6 +5,7 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
+	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
@@ -317,9 +318,23 @@ type Store interface {
 	AuthStore
 	ErrorStore
 	SessionEventStore
+	RegistryStore
 
 	// Close releases any resources held by the store.
 	Close() error
+}
+
+// RegistryStore persists project capability snapshots.
+type RegistryStore interface {
+	// SaveProjectSnapshot persists a capability snapshot for a project.
+	SaveProjectSnapshot(snapshot *registry.ProjectSnapshot) error
+
+	// GetLatestSnapshot returns the most recent snapshot for a project.
+	// Returns nil, nil if no snapshots exist.
+	GetLatestSnapshot(projectPath string) (*registry.ProjectSnapshot, error)
+
+	// ListSnapshots returns all snapshots for a project, newest first.
+	ListSnapshots(projectPath string, limit int) ([]registry.ProjectSnapshot, error)
 }
 
 // ErrAnalysisNotFound is returned when an analysis lookup yields no results.

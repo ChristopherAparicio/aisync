@@ -8,6 +8,7 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
+	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
@@ -348,6 +349,20 @@ func (m *MockStore) GetFreshness(id session.ID) (int, int64, error) {
 func (m *MockStore) ListProjects() ([]session.ProjectGroup, error) { return nil, nil }
 
 func (m *MockStore) Close() error { return nil }
+
+// ── RegistryStore ──
+
+func (m *MockStore) SaveProjectSnapshot(_ *registry.ProjectSnapshot) error {
+	return nil
+}
+
+func (m *MockStore) GetLatestSnapshot(_ string) (*registry.ProjectSnapshot, error) {
+	return nil, nil
+}
+
+func (m *MockStore) ListSnapshots(_ string, _ int) ([]registry.ProjectSnapshot, error) {
+	return nil, nil
+}
 
 // ── Analysis ──
 

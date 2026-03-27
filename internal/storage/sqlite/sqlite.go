@@ -2296,6 +2296,24 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	// ── Migration 023: project_snapshots table for registry persistence ──
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS project_snapshots (
+		id TEXT PRIMARY KEY,
+		project_path TEXT NOT NULL,
+		scanned_at TEXT NOT NULL,
+		change_type TEXT NOT NULL DEFAULT 'initial',
+		capabilities_added INTEGER NOT NULL DEFAULT 0,
+		capabilities_removed INTEGER NOT NULL DEFAULT 0,
+		mcp_servers_added INTEGER NOT NULL DEFAULT 0,
+		mcp_servers_removed INTEGER NOT NULL DEFAULT 0,
+		payload BLOB NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("migration 023 (project_snapshots): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_project_snapshots_path_time ON project_snapshots(project_path, scanned_at DESC)"); err != nil {
+		return fmt.Errorf("migration 023 (project_snapshots index): %w", err)
+	}
+
 	return nil
 }
 

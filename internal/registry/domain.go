@@ -214,3 +214,71 @@ type CapabilityStat struct {
 	Kind  CapabilityKind `json:"kind"`
 	Count int            `json:"count"`
 }
+
+// ProjectSnapshot is a point-in-time capture of a project's capabilities.
+// Snapshots enable tracking capability evolution over time — detecting when
+// MCP servers are added/removed, skills change, or configurations drift.
+type ProjectSnapshot struct {
+	// Identity
+	ID          string `json:"id"`           // unique snapshot ID
+	ProjectPath string `json:"project_path"` // absolute path
+
+	// Captured data
+	Project Project `json:"project"` // full project state at scan time
+
+	// Metadata
+	ScannedAt  string `json:"scanned_at"`  // RFC3339 timestamp
+	ChangeType string `json:"change_type"` // "initial", "changed", "unchanged"
+
+	// Delta summary (vs previous snapshot)
+	CapabilitiesAdded   int `json:"capabilities_added,omitempty"`
+	CapabilitiesRemoved int `json:"capabilities_removed,omitempty"`
+	MCPServersAdded     int `json:"mcp_servers_added,omitempty"`
+	MCPServersRemoved   int `json:"mcp_servers_removed,omitempty"`
+}
+
+// DiffSnapshots compares two snapshots and returns the delta counts.
+// prev can be nil (for the initial snapshot).
+func DiffSnapshots(prev, curr *Project) (capsAdded, capsRemoved, mcpAdded, mcpRemoved int) {
+	if prev == nil {
+		return len(curr.Capabilities), 0, len(curr.MCPServers), 0
+	}
+
+	// Capabilities diff.
+	prevCaps := make(map[string]bool)
+	for _, c := range prev.Capabilities {
+		prevCaps[c.Name] = true
+	}
+	currCaps := make(map[string]bool)
+	for _, c := range curr.Capabilities {
+		currCaps[c.Name] = true
+		if !prevCaps[c.Name] {
+			capsAdded++
+		}
+	}
+	for name := range prevCaps {
+		if !currCaps[name] {
+			capsRemoved++
+		}
+	}
+
+	// MCP servers diff.
+	prevMCP := make(map[string]bool)
+	for _, s := range prev.MCPServers {
+		prevMCP[s.Name] = true
+	}
+	currMCP := make(map[string]bool)
+	for _, s := range curr.MCPServers {
+		currMCP[s.Name] = true
+		if !prevMCP[s.Name] {
+			mcpAdded++
+		}
+	}
+	for name := range prevMCP {
+		if !currMCP[name] {
+			mcpRemoved++
+		}
+	}
+
+	return
+}
