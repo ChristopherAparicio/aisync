@@ -627,6 +627,170 @@ func (s *SessionService) MCPCostMatrix(ctx context.Context, since, until time.Ti
 	}, nil
 }
 
+// ContextSaturation computes how close sessions get to their model's context
+// window limit. It walks all sessions, finds the peak InputTokens for each,
+// and compares it to the model's MaxInputTokens from the pricing catalog.
+//
+// High saturation (>80%) indicates the session is likely to trigger compaction,
+// degrading response quality as the model works with summarized context.
+func (s *SessionService) ContextSaturation(ctx context.Context, projectPath string, since time.Time) (*session.ContextSaturation, error) {
+	listOpts := session.ListOptions{All: true}
+	if !since.IsZero() {
+		listOpts.Since = since
+	}
+	summaries, err := s.store.List(listOpts)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions: %w", err)
+	}
+
+	result := &session.ContextSaturation{}
+	modelStats := make(map[string]*session.ModelSaturation)
+	var sessionInfos []session.SessionSaturation
+
+	for _, sm := range summaries {
+		if projectPath != "" && sm.ProjectPath != projectPath {
+			continue
+		}
+
+		sess, getErr := s.store.Get(sm.ID)
+		if getErr != nil || len(sess.Messages) == 0 {
+			continue
+		}
+
+		// Find peak InputTokens and the dominant model.
+		var peakInput int
+		modelCounts := make(map[string]int)
+		hasCompaction := false
+
+		for i := 1; i < len(sess.Messages); i++ {
+			msg := &sess.Messages[i]
+			if msg.InputTokens > peakInput {
+				peakInput = msg.InputTokens
+			}
+			if msg.Model != "" && msg.Role == session.RoleAssistant {
+				modelCounts[msg.Model]++
+			}
+		}
+
+		// Detect compaction: significant token drop (reuse the same heuristic).
+		var prevAssistantInput int
+		for _, msg := range sess.Messages {
+			if msg.Role == session.RoleAssistant && msg.InputTokens > 0 {
+				if prevAssistantInput > 10000 {
+					dropRatio := float64(msg.InputTokens) / float64(prevAssistantInput)
+					if dropRatio < 0.50 {
+						hasCompaction = true
+					}
+				}
+				prevAssistantInput = msg.InputTokens
+			}
+		}
+
+		if peakInput == 0 {
+			continue
+		}
+
+		// Find dominant model.
+		var dominantModel string
+		var maxCount int
+		for model, count := range modelCounts {
+			if count > maxCount {
+				dominantModel = model
+				maxCount = count
+			}
+		}
+
+		// Look up context window from pricing catalog.
+		var maxInputTokens int
+		if s.pricing != nil && dominantModel != "" {
+			if mp, ok := s.pricing.Lookup(dominantModel); ok {
+				maxInputTokens = mp.MaxInputTokens
+			}
+		}
+
+		if maxInputTokens == 0 {
+			continue // can't compute saturation without context window size
+		}
+
+		saturationPct := float64(peakInput) / float64(maxInputTokens) * 100
+		if saturationPct > 100 {
+			saturationPct = 100 // cap at 100% (tokens can exceed window briefly before compaction)
+		}
+
+		result.TotalSessions++
+		result.AvgPeakSaturation += saturationPct
+
+		if saturationPct > 80 {
+			result.SessionsAbove80++
+		}
+		if saturationPct > 90 {
+			result.SessionsAbove90++
+		}
+		if hasCompaction {
+			result.SessionsCompacted++
+		}
+
+		// Per-model stats.
+		ms, ok := modelStats[dominantModel]
+		if !ok {
+			ms = &session.ModelSaturation{
+				Model:          dominantModel,
+				MaxInputTokens: maxInputTokens,
+			}
+			modelStats[dominantModel] = ms
+		}
+		ms.SessionCount++
+		ms.AvgPeakPct += saturationPct
+		if saturationPct > ms.MaxPeakPct {
+			ms.MaxPeakPct = saturationPct
+		}
+		if hasCompaction {
+			ms.CompactedCount++
+		}
+		if saturationPct > 80 {
+			ms.Above80Count++
+		}
+
+		sessionInfos = append(sessionInfos, session.SessionSaturation{
+			ID:              sess.ID,
+			Summary:         sess.Summary,
+			Model:           dominantModel,
+			MaxInputTokens:  maxInputTokens,
+			PeakInputTokens: peakInput,
+			PeakSaturation:  saturationPct,
+			MessageCount:    len(sess.Messages),
+			WasCompacted:    hasCompaction,
+		})
+	}
+
+	if result.TotalSessions > 0 {
+		result.AvgPeakSaturation /= float64(result.TotalSessions)
+	}
+
+	// Finalize per-model averages.
+	for _, ms := range modelStats {
+		if ms.SessionCount > 0 {
+			ms.AvgPeakPct /= float64(ms.SessionCount)
+		}
+		result.Models = append(result.Models, *ms)
+	}
+	sort.Slice(result.Models, func(i, j int) bool {
+		return result.Models[i].AvgPeakPct > result.Models[j].AvgPeakPct
+	})
+
+	// Top 10 worst sessions by saturation.
+	sort.Slice(sessionInfos, func(i, j int) bool {
+		return sessionInfos[i].PeakSaturation > sessionInfos[j].PeakSaturation
+	})
+	limit := 10
+	if len(sessionInfos) < limit {
+		limit = len(sessionInfos)
+	}
+	result.WorstSessions = sessionInfos[:limit]
+
+	return result, nil
+}
+
 // CacheEfficiency computes prompt cache usage statistics and identifies waste.
 //
 // The prompt cache TTL is ~5 minutes. If a user doesn't respond within that window,

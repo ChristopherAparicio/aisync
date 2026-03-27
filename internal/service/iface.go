@@ -108,6 +108,9 @@ type SessionAnalytics interface {
 	// MCPCostMatrix builds a cross-project matrix of MCP server usage and costs.
 	MCPCostMatrix(ctx context.Context, since, until time.Time) (*session.MCPProjectMatrix, error)
 
+	// ContextSaturation computes how close sessions get to their model's context window limit.
+	ContextSaturation(ctx context.Context, projectPath string, since time.Time) (*session.ContextSaturation, error)
+
 	// ClassifySession applies per-project classifier rules (ticket extraction, branch rules).
 	ClassifySession(sess *session.Session) int
 

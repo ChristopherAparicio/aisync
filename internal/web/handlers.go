@@ -1741,6 +1741,16 @@ type costDashboardPage struct {
 	// Model alternatives (benchmark-based recommendations)
 	HasAlternatives   bool
 	ModelAlternatives []modelAlternativeView
+
+	// Context saturation
+	HasSaturation    bool
+	SatAvgPeak       float64 // average peak saturation (0-100)
+	SatAbove80       int     // sessions >80% saturation
+	SatAbove90       int     // sessions >90% saturation
+	SatCompacted     int     // sessions that hit compaction
+	SatTotalSessions int
+	SatModels        []modelSaturationView
+	SatWorstSessions []sessionSaturationView
 }
 
 // cacheMissView is a template-friendly view of a cache miss session.
@@ -1846,6 +1856,31 @@ type modelAlternativeView struct {
 
 	Verdict      string // "no-brainer", "tradeoff", "risky"
 	VerdictClass string // CSS class: "good", "warning", "poor"
+}
+
+// modelSaturationView is a template-friendly per-model context saturation summary.
+type modelSaturationView struct {
+	Model          string
+	MaxInputTokens int
+	SessionCount   int
+	AvgPeakPct     float64
+	MaxPeakPct     float64
+	CompactedCount int
+	Above80Count   int
+	SatClass       string // CSS class: "good", "warning", "poor"
+}
+
+// sessionSaturationView is a template-friendly per-session saturation entry.
+type sessionSaturationView struct {
+	ID              string
+	Summary         string
+	Model           string
+	PeakInputTokens int
+	MaxInputTokens  int
+	PeakSaturation  float64
+	MessageCount    int
+	WasCompacted    bool
+	SatClass        string // CSS class
 }
 
 // handleCosts renders the cost dashboard.
@@ -2068,6 +2103,56 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				mv.Projects = append(mv.Projects, rv)
 			}
 			data.MCPMatrix = mv
+		}
+	}
+
+	// Context saturation analysis.
+	saturation, satErr := s.sessionSvc.ContextSaturation(r.Context(), project, since90d)
+	if satErr == nil && saturation != nil && saturation.TotalSessions > 0 {
+		data.HasSaturation = true
+		data.SatAvgPeak = saturation.AvgPeakSaturation
+		data.SatAbove80 = saturation.SessionsAbove80
+		data.SatAbove90 = saturation.SessionsAbove90
+		data.SatCompacted = saturation.SessionsCompacted
+		data.SatTotalSessions = saturation.TotalSessions
+
+		for _, ms := range saturation.Models {
+			satClass := "good"
+			if ms.AvgPeakPct > 80 {
+				satClass = "poor"
+			} else if ms.AvgPeakPct > 60 {
+				satClass = "warning"
+			}
+			data.SatModels = append(data.SatModels, modelSaturationView{
+				Model:          ms.Model,
+				MaxInputTokens: ms.MaxInputTokens,
+				SessionCount:   ms.SessionCount,
+				AvgPeakPct:     ms.AvgPeakPct,
+				MaxPeakPct:     ms.MaxPeakPct,
+				CompactedCount: ms.CompactedCount,
+				Above80Count:   ms.Above80Count,
+				SatClass:       satClass,
+			})
+		}
+
+		for _, ws := range saturation.WorstSessions {
+			satClass := "good"
+			if ws.PeakSaturation > 90 {
+				satClass = "poor"
+			} else if ws.PeakSaturation > 80 {
+				satClass = "warning"
+			}
+			data.SatWorstSessions = append(data.SatWorstSessions, sessionSaturationView{
+				ID:              string(ws.ID),
+				Summary:         truncate(ws.Summary, 50),
+				Model:           ws.Model,
+				PeakInputTokens: ws.PeakInputTokens,
+				MaxInputTokens:  ws.MaxInputTokens,
+				PeakSaturation:  ws.PeakSaturation,
+				MessageCount:    ws.MessageCount,
+				WasCompacted:    ws.WasCompacted,
+				SatClass:        satClass,
+			})
 		}
 	}
 

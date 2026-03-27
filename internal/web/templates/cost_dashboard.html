@@ -156,6 +156,100 @@
 </div>
 {{end}}
 
+<!-- ── Context Saturation ── -->
+{{if .HasSaturation}}
+<div class="section">
+  <h2 class="section-title">Context Window Saturation <span class="text-muted">(90d)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">How close sessions get to their model's context limit. High saturation (&gt;80%) causes compaction, degrading response quality as the model works with summarized context.</p>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Avg Peak Saturation</div>
+      <div class="value">{{printf "%.0f" .SatAvgPeak}}%</div>
+      <div class="sub">across {{.SatTotalSessions}} sessions</div>
+    </div>
+    <div class="kpi-card{{if gt .SatAbove80 0}} kpi-accent{{end}}">
+      <div class="label">Sessions &gt;80%</div>
+      <div class="value{{if gt .SatAbove80 0}} text-error{{end}}">{{.SatAbove80}}</div>
+      <div class="sub">approaching context limit</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Sessions &gt;90%</div>
+      <div class="value{{if gt .SatAbove90 0}} text-error{{end}}">{{.SatAbove90}}</div>
+      <div class="sub">compaction imminent</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Compacted</div>
+      <div class="value">{{.SatCompacted}}</div>
+      <div class="sub">sessions with detected compaction</div>
+    </div>
+  </div>
+
+  {{if .SatModels}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Saturation by Model</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="text-right">Context Window</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Avg Peak</th>
+          <th class="text-right">Max Peak</th>
+          <th class="text-right">&gt;80%</th>
+          <th class="text-right">Compacted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .SatModels}}
+        <tr>
+          <td class="font-mono">{{.Model}}</td>
+          <td class="text-right font-mono">{{formatTokens .MaxInputTokens}}</td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right"><span class="badge badge-{{.SatClass}}">{{printf "%.0f" .AvgPeakPct}}%</span></td>
+          <td class="text-right font-mono">{{printf "%.0f" .MaxPeakPct}}%</td>
+          <td class="text-right{{if gt .Above80Count 0}} text-error{{end}}">{{.Above80Count}}</td>
+          <td class="text-right">{{.CompactedCount}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .SatWorstSessions}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Most Saturated Sessions</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Session</th>
+          <th>Model</th>
+          <th class="text-right">Peak</th>
+          <th class="text-right">Window</th>
+          <th class="text-right">Saturation</th>
+          <th class="text-right">Msgs</th>
+          <th>Compacted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .SatWorstSessions}}
+        <tr>
+          <td><a href="/sessions/{{.ID}}" class="font-mono">{{.Summary}}</a></td>
+          <td class="font-mono text-muted">{{.Model}}</td>
+          <td class="text-right font-mono">{{formatTokens .PeakInputTokens}}</td>
+          <td class="text-right font-mono text-muted">{{formatTokens .MaxInputTokens}}</td>
+          <td class="text-right"><span class="badge badge-{{.SatClass}}">{{printf "%.0f" .PeakSaturation}}%</span></td>
+          <td class="text-right">{{.MessageCount}}</td>
+          <td>{{if .WasCompacted}}<span class="text-error">yes</span>{{else}}<span class="text-muted">no</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
 <!-- ── Backend Breakdown ── -->
 {{if .HasBackends}}
 <div class="section">

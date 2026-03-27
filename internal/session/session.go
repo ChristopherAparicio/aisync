@@ -294,6 +294,46 @@ type CacheMissSession struct {
 	LongestGapMins int     `json:"longest_gap_mins"` // longest gap between messages in minutes
 }
 
+// ContextSaturation reports how close sessions get to their model's context window limit.
+// High saturation correlates with compaction, degraded quality, and wasted tokens.
+type ContextSaturation struct {
+	// Global stats
+	TotalSessions     int     `json:"total_sessions"`      // sessions analyzed
+	SessionsAbove80   int     `json:"sessions_above_80"`   // sessions that reached >80% of context window
+	SessionsAbove90   int     `json:"sessions_above_90"`   // sessions that reached >90% (compaction imminent)
+	SessionsCompacted int     `json:"sessions_compacted"`  // sessions with detected compaction events
+	AvgPeakSaturation float64 `json:"avg_peak_saturation"` // average peak saturation across all sessions (0-100)
+
+	// Per-model breakdown
+	Models []ModelSaturation `json:"models,omitempty"`
+
+	// Sessions with highest saturation (top 10 worst offenders)
+	WorstSessions []SessionSaturation `json:"worst_sessions,omitempty"`
+}
+
+// ModelSaturation aggregates saturation stats for a single model.
+type ModelSaturation struct {
+	Model          string  `json:"model"`
+	MaxInputTokens int     `json:"max_input_tokens"` // context window size
+	SessionCount   int     `json:"session_count"`    // sessions using this model
+	AvgPeakPct     float64 `json:"avg_peak_pct"`     // average peak saturation (0-100)
+	MaxPeakPct     float64 `json:"max_peak_pct"`     // highest peak saturation seen
+	CompactedCount int     `json:"compacted_count"`  // sessions that hit compaction
+	Above80Count   int     `json:"above_80_count"`   // sessions >80% saturation
+}
+
+// SessionSaturation captures the peak context usage for a single session.
+type SessionSaturation struct {
+	ID              ID      `json:"id"`
+	Summary         string  `json:"summary"`
+	Model           string  `json:"model"`
+	MaxInputTokens  int     `json:"max_input_tokens"`  // model's context window
+	PeakInputTokens int     `json:"peak_input_tokens"` // highest InputTokens seen
+	PeakSaturation  float64 `json:"peak_saturation"`   // PeakInputTokens / MaxInputTokens * 100
+	MessageCount    int     `json:"message_count"`
+	WasCompacted    bool    `json:"was_compacted"` // true if compaction was detected
+}
+
 // FileChange records a file touched during a session.
 type FileChange struct {
 	FilePath   string     `json:"file_path"`

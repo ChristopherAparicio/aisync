@@ -414,6 +414,10 @@ func (r *SessionService) MCPCostMatrix(_ context.Context, _, _ time.Time) (*sess
 	return nil, fmt.Errorf("MCPCostMatrix not supported in remote mode yet")
 }
 
+func (r *SessionService) ContextSaturation(_ context.Context, _ string, _ time.Time) (*session.ContextSaturation, error) {
+	return nil, fmt.Errorf("ContextSaturation not supported in remote mode yet")
+}
+
 func (r *SessionService) ClassifySession(_ *session.Session) int {
 	return 0
 }
