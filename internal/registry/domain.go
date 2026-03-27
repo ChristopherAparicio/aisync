@@ -391,3 +391,118 @@ func AnalyzeConfiguredVsUsed(configured []MCPServer, usage []MCPUsageData) *Conf
 	result.GhostServers = result.GhostCount
 	return result
 }
+
+// ── Cross-Project Capabilities ──
+
+// CrossProjectSummary aggregates capabilities across all known projects.
+type CrossProjectSummary struct {
+	ProjectCount      int                 `json:"project_count"`
+	TotalCapabilities int                 `json:"total_capabilities"`
+	TotalMCPServers   int                 `json:"total_mcp_servers"`  // distinct MCP servers across all projects
+	SharedMCPServers  []SharedMCPServer   `json:"shared_mcp_servers"` // MCP servers used by multiple projects
+	CapabilityMatrix  []CapabilityKindRow `json:"capability_matrix"`  // per-kind counts across projects
+	ProjectOverviews  []ProjectOverview   `json:"project_overviews"`  // summary per project
+}
+
+// SharedMCPServer shows an MCP server used across multiple projects.
+type SharedMCPServer struct {
+	Name         string   `json:"name"`
+	ProjectCount int      `json:"project_count"` // number of projects using this server
+	Projects     []string `json:"projects"`      // display names of projects
+	Scope        Scope    `json:"scope"`         // most common scope
+}
+
+// CapabilityKindRow aggregates a single capability kind across projects.
+type CapabilityKindRow struct {
+	Kind         CapabilityKind `json:"kind"`
+	TotalCount   int            `json:"total_count"`   // total capabilities of this kind
+	ProjectCount int            `json:"project_count"` // projects that have at least one
+}
+
+// ProjectOverview is a lightweight per-project summary for the cross-project view.
+type ProjectOverview struct {
+	Name            string `json:"name"`
+	Path            string `json:"path"`
+	CapabilityCount int    `json:"capability_count"`
+	MCPServerCount  int    `json:"mcp_server_count"`
+	SkillCount      int    `json:"skill_count"`
+	AgentCount      int    `json:"agent_count"`
+	CommandCount    int    `json:"command_count"`
+}
+
+// BuildCrossProjectSummary creates an aggregate view from multiple projects.
+// This is a pure function — no I/O.
+func BuildCrossProjectSummary(projects []Project) *CrossProjectSummary {
+	result := &CrossProjectSummary{
+		ProjectCount: len(projects),
+	}
+
+	mcpByName := make(map[string]*SharedMCPServer)
+	kindCounts := make(map[CapabilityKind]struct{ total, projects int })
+	kindProjectSeen := make(map[CapabilityKind]map[string]bool)
+
+	for _, proj := range projects {
+		overview := ProjectOverview{
+			Name:            proj.Name,
+			Path:            proj.RootPath,
+			CapabilityCount: len(proj.Capabilities),
+			MCPServerCount:  len(proj.MCPServers),
+		}
+
+		// Count capabilities by kind.
+		for _, cap := range proj.Capabilities {
+			result.TotalCapabilities++
+			kc := kindCounts[cap.Kind]
+			kc.total++
+			kindCounts[cap.Kind] = kc
+
+			if kindProjectSeen[cap.Kind] == nil {
+				kindProjectSeen[cap.Kind] = make(map[string]bool)
+			}
+			kindProjectSeen[cap.Kind][proj.Name] = true
+
+			switch cap.Kind {
+			case KindSkill:
+				overview.SkillCount++
+			case KindAgent:
+				overview.AgentCount++
+			case KindCommand:
+				overview.CommandCount++
+			}
+		}
+
+		// Track MCP servers across projects.
+		for _, mcp := range proj.MCPServers {
+			shared, ok := mcpByName[mcp.Name]
+			if !ok {
+				shared = &SharedMCPServer{Name: mcp.Name, Scope: mcp.Scope}
+				mcpByName[mcp.Name] = shared
+			}
+			shared.ProjectCount++
+			shared.Projects = append(shared.Projects, proj.Name)
+		}
+
+		result.ProjectOverviews = append(result.ProjectOverviews, overview)
+	}
+
+	// Build capability kind rows.
+	for _, kind := range allKinds {
+		kc, ok := kindCounts[kind]
+		if !ok {
+			continue
+		}
+		result.CapabilityMatrix = append(result.CapabilityMatrix, CapabilityKindRow{
+			Kind:         kind,
+			TotalCount:   kc.total,
+			ProjectCount: len(kindProjectSeen[kind]),
+		})
+	}
+
+	// Build shared MCP servers list.
+	result.TotalMCPServers = len(mcpByName)
+	for _, shared := range mcpByName {
+		result.SharedMCPServers = append(result.SharedMCPServers, *shared)
+	}
+
+	return result
+}

@@ -183,6 +183,15 @@ type projectsPage struct {
 	Nav             string
 	SidebarProjects []sidebarProject
 	Projects        []projectCard
+
+	// Cross-project capabilities summary
+	HasCapSummary       bool
+	CapProjectCount     int
+	CapTotalCaps        int
+	CapTotalMCP         int
+	CapKindMatrix       []capKindMatrixRow
+	CapSharedMCP        []sharedMCPView
+	CapProjectOverviews []capProjectOverview
 }
 
 type projectCard struct {
@@ -193,6 +202,30 @@ type projectCard struct {
 	Category     string
 	SessionCount int
 	TotalTokens  int
+}
+
+type capKindMatrixRow struct {
+	Kind         string
+	KindLabel    string
+	TotalCount   int
+	ProjectCount int
+}
+
+type sharedMCPView struct {
+	Name         string
+	ProjectCount int
+	Projects     []string
+	IsShared     bool // true if used by >1 project
+}
+
+type capProjectOverview struct {
+	Name            string
+	Path            string
+	CapabilityCount int
+	MCPServerCount  int
+	SkillCount      int
+	AgentCount      int
+	CommandCount    int
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +249,45 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			SessionCount: g.SessionCount,
 			TotalTokens:  g.TotalTokens,
 		})
+	}
+
+	// Cross-project capabilities summary.
+	if s.registrySvc != nil {
+		summary, capErr := s.registrySvc.CrossProjectCapabilities()
+		if capErr == nil && summary != nil && summary.ProjectCount > 0 {
+			data.HasCapSummary = true
+			data.CapProjectCount = summary.ProjectCount
+			data.CapTotalCaps = summary.TotalCapabilities
+			data.CapTotalMCP = summary.TotalMCPServers
+
+			for _, row := range summary.CapabilityMatrix {
+				data.CapKindMatrix = append(data.CapKindMatrix, capKindMatrixRow{
+					Kind:         string(row.Kind),
+					KindLabel:    capabilityKindLabel(string(row.Kind)),
+					TotalCount:   row.TotalCount,
+					ProjectCount: row.ProjectCount,
+				})
+			}
+			for _, shared := range summary.SharedMCPServers {
+				data.CapSharedMCP = append(data.CapSharedMCP, sharedMCPView{
+					Name:         shared.Name,
+					ProjectCount: shared.ProjectCount,
+					Projects:     shared.Projects,
+					IsShared:     shared.ProjectCount > 1,
+				})
+			}
+			for _, po := range summary.ProjectOverviews {
+				data.CapProjectOverviews = append(data.CapProjectOverviews, capProjectOverview{
+					Name:            po.Name,
+					Path:            po.Path,
+					CapabilityCount: po.CapabilityCount,
+					MCPServerCount:  po.MCPServerCount,
+					SkillCount:      po.SkillCount,
+					AgentCount:      po.AgentCount,
+					CommandCount:    po.CommandCount,
+				})
+			}
+		}
 	}
 
 	s.render(w, "projects.html", data)

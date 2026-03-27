@@ -77,4 +77,104 @@
   {{end}}
 </div>
 {{end}}
+
+<!-- ── Cross-Project Capabilities ── -->
+{{if .HasCapSummary}}
+<div class="section" style="margin-top: 2rem;">
+  <h2 class="section-title">Capabilities Across Projects</h2>
+  <div class="kpi-grid" style="margin-bottom: 1rem;">
+    <div class="kpi-card">
+      <div class="label">Projects</div>
+      <div class="value">{{.CapProjectCount}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Total Capabilities</div>
+      <div class="value">{{.CapTotalCaps}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">MCP Servers</div>
+      <div class="value">{{.CapTotalMCP}}</div>
+      <div class="sub">distinct across all projects</div>
+    </div>
+  </div>
+
+  {{if .CapKindMatrix}}
+  <h3 class="section-subtitle">Capabilities by Type</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th class="text-right">Total</th>
+          <th class="text-right">Projects</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .CapKindMatrix}}
+        <tr>
+          <td>{{.KindLabel}}</td>
+          <td class="text-right">{{.TotalCount}}</td>
+          <td class="text-right text-muted">{{.ProjectCount}} / {{$.CapProjectCount}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .CapSharedMCP}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">MCP Servers</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th class="text-right">Projects</th>
+          <th>Used By</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .CapSharedMCP}}
+        <tr>
+          <td><span class="badge badge-provider">{{.Name}}</span></td>
+          <td class="text-right">{{.ProjectCount}}</td>
+          <td class="text-muted">{{range $i, $p := .Projects}}{{if $i}}, {{end}}{{$p}}{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .CapProjectOverviews}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Per-Project Breakdown</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th class="text-right">Capabilities</th>
+          <th class="text-right">MCP Servers</th>
+          <th class="text-right">Agents</th>
+          <th class="text-right">Commands</th>
+          <th class="text-right">Skills</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .CapProjectOverviews}}
+        <tr>
+          <td><a href="/projects{{.Path}}" class="font-mono">{{.Name}}</a></td>
+          <td class="text-right">{{.CapabilityCount}}</td>
+          <td class="text-right">{{.MCPServerCount}}</td>
+          <td class="text-right">{{.AgentCount}}</td>
+          <td class="text-right">{{.CommandCount}}</td>
+          <td class="text-right">{{.SkillCount}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
 {{end}}

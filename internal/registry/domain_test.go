@@ -317,3 +317,123 @@ func TestAnalyzeConfiguredVsUsed_Empty(t *testing.T) {
 		t.Errorf("expected no servers, got %d", len(result.Servers))
 	}
 }
+
+// ── BuildCrossProjectSummary tests ──
+
+func TestBuildCrossProjectSummary_Basic(t *testing.T) {
+	projects := []Project{
+		{
+			Name:     "project-a",
+			RootPath: "/home/user/project-a",
+			Capabilities: []Capability{
+				{Name: "cmd-1", Kind: KindCommand},
+				{Name: "skill-1", Kind: KindSkill},
+				{Name: "agent-1", Kind: KindAgent},
+			},
+			MCPServers: []MCPServer{
+				{Name: "notion", Scope: ScopeGlobal},
+				{Name: "sentry", Scope: ScopeProject},
+			},
+		},
+		{
+			Name:     "project-b",
+			RootPath: "/home/user/project-b",
+			Capabilities: []Capability{
+				{Name: "cmd-2", Kind: KindCommand},
+				{Name: "skill-2", Kind: KindSkill},
+			},
+			MCPServers: []MCPServer{
+				{Name: "notion", Scope: ScopeGlobal}, // shared with project-a
+				{Name: "langfuse", Scope: ScopeProject},
+			},
+		},
+	}
+
+	result := BuildCrossProjectSummary(projects)
+
+	if result.ProjectCount != 2 {
+		t.Errorf("ProjectCount = %d, want 2", result.ProjectCount)
+	}
+	if result.TotalCapabilities != 5 {
+		t.Errorf("TotalCapabilities = %d, want 5", result.TotalCapabilities)
+	}
+	if result.TotalMCPServers != 3 {
+		t.Errorf("TotalMCPServers = %d, want 3 (notion, sentry, langfuse)", result.TotalMCPServers)
+	}
+
+	// Check shared MCP servers.
+	var notionShared *SharedMCPServer
+	for i, s := range result.SharedMCPServers {
+		if s.Name == "notion" {
+			notionShared = &result.SharedMCPServers[i]
+			break
+		}
+	}
+	if notionShared == nil {
+		t.Fatal("notion not found in SharedMCPServers")
+	}
+	if notionShared.ProjectCount != 2 {
+		t.Errorf("notion.ProjectCount = %d, want 2", notionShared.ProjectCount)
+	}
+
+	// Check capability matrix.
+	for _, row := range result.CapabilityMatrix {
+		switch row.Kind {
+		case KindCommand:
+			if row.TotalCount != 2 || row.ProjectCount != 2 {
+				t.Errorf("command: total=%d projects=%d, want 2/2", row.TotalCount, row.ProjectCount)
+			}
+		case KindSkill:
+			if row.TotalCount != 2 || row.ProjectCount != 2 {
+				t.Errorf("skill: total=%d projects=%d, want 2/2", row.TotalCount, row.ProjectCount)
+			}
+		case KindAgent:
+			if row.TotalCount != 1 || row.ProjectCount != 1 {
+				t.Errorf("agent: total=%d projects=%d, want 1/1", row.TotalCount, row.ProjectCount)
+			}
+		}
+	}
+
+	// Check project overviews.
+	if len(result.ProjectOverviews) != 2 {
+		t.Fatalf("ProjectOverviews = %d, want 2", len(result.ProjectOverviews))
+	}
+	for _, po := range result.ProjectOverviews {
+		if po.Name == "project-a" {
+			if po.CapabilityCount != 3 || po.MCPServerCount != 2 {
+				t.Errorf("project-a: caps=%d mcp=%d, want 3/2", po.CapabilityCount, po.MCPServerCount)
+			}
+		}
+	}
+}
+
+func TestBuildCrossProjectSummary_Empty(t *testing.T) {
+	result := BuildCrossProjectSummary(nil)
+	if result.ProjectCount != 0 || result.TotalCapabilities != 0 {
+		t.Errorf("expected zeros for empty input")
+	}
+}
+
+func TestBuildCrossProjectSummary_SingleProject(t *testing.T) {
+	projects := []Project{
+		{
+			Name:     "solo",
+			RootPath: "/solo",
+			Capabilities: []Capability{
+				{Name: "tool-1", Kind: KindTool},
+			},
+			MCPServers: []MCPServer{
+				{Name: "sentry"},
+			},
+		},
+	}
+
+	result := BuildCrossProjectSummary(projects)
+
+	if result.TotalMCPServers != 1 {
+		t.Errorf("TotalMCPServers = %d, want 1", result.TotalMCPServers)
+	}
+	if result.SharedMCPServers[0].ProjectCount != 1 {
+		t.Errorf("sentry.ProjectCount = %d, want 1", result.SharedMCPServers[0].ProjectCount)
+	}
+}

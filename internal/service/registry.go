@@ -326,3 +326,13 @@ func (s *RegistryService) persistSnapshot(project *registry.Project) {
 
 	_ = s.store.SaveProjectSnapshot(snapshot) // best-effort
 }
+
+// CrossProjectCapabilities aggregates capabilities across all known projects.
+// It scans all discovered projects and builds a cross-project summary.
+func (s *RegistryService) CrossProjectCapabilities() (*registry.CrossProjectSummary, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return nil, fmt.Errorf("listing projects: %w", err)
+	}
+	return registry.BuildCrossProjectSummary(projects), nil
+}
