@@ -126,6 +126,9 @@ type SessionAnalytics interface {
 
 	// IndexAllSessions indexes all sessions into the search engine.
 	IndexAllSessions(ctx context.Context) (indexed, total int, err error)
+
+	// SessionSaturationCurve returns per-message context saturation data for a session.
+	SessionSaturationCurve(ctx context.Context, sessID session.ID) (*session.SaturationCurve, error)
 }
 
 // SessionAI provides LLM-powered analysis features.

@@ -1,0 +1,33 @@
+<div class="saturation-panel">
+  <h3 class="section-subtitle">Context Saturation</h3>
+  <div class="saturation-meta">
+    <span class="font-mono text-muted">{{.Model}}</span>
+    <span class="text-muted">&middot; Window: {{formatTokens .MaxTokens}}</span>
+    <span class="text-muted">&middot; Init: {{.InitOverheadK}} tokens</span>
+    <span class="text-muted">&middot; Peak: {{printf "%.0f" .PeakPercent}}%</span>
+    {{if .WasCompacted}}<span class="badge badge-poor">compacted</span>{{end}}
+    {{if gt .MsgAtDegraded 0}}<span class="text-muted">&middot; Degraded at msg #{{.MsgAtDegraded}}</span>{{end}}
+    {{if gt .MsgAtCritical 0}}<span class="text-muted">&middot; Critical at msg #{{.MsgAtCritical}}</span>{{end}}
+  </div>
+
+  <div class="saturation-chart">
+    {{range .Points}}
+    <div class="sat-row">
+      <span class="sat-index font-mono">#{{.Index}}</span>
+      <span class="sat-role">{{.Role}}</span>
+      <div class="sat-bar-container">
+        <div class="sat-bar {{.ZoneClass}}" style="width:{{.BarWidth}}%"></div>
+        {{if gt .BarWidth 8}}<span class="sat-bar-label">{{printf "%.0f" .Percent}}%</span>{{end}}
+      </div>
+      <span class="sat-tokens font-mono">{{formatTokens .Tokens}}</span>
+      <span class="sat-label text-muted">{{.Label}}</span>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="saturation-legend" style="margin-top:0.75rem;">
+    <span class="sat-legend-item"><span class="sat-dot sat-optimal"></span> Optimal (0-40%)</span>
+    <span class="sat-legend-item"><span class="sat-dot sat-degraded"></span> Degraded (40-80%)</span>
+    <span class="sat-legend-item"><span class="sat-dot sat-critical"></span> Critical (80%+)</span>
+  </div>
+</div>

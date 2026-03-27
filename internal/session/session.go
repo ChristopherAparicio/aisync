@@ -364,6 +364,32 @@ type SessionSaturation struct {
 	WasCompacted    bool    `json:"was_compacted"` // true if compaction was detected
 }
 
+// SaturationCurve provides per-message context usage data for a single session.
+// Used to visualize how context fills up message by message.
+type SaturationCurve struct {
+	SessionID      ID                `json:"session_id"`
+	Model          string            `json:"model"`
+	MaxInputTokens int               `json:"max_input_tokens"` // context window size
+	InitOverhead   int               `json:"init_overhead"`    // tokens in first message (system prompt, skills, etc.)
+	PeakTokens     int               `json:"peak_tokens"`      // highest cumulative input tokens
+	PeakPercent    float64           `json:"peak_percent"`     // peak as % of context window
+	WasCompacted   bool              `json:"was_compacted"`
+	MsgAtDegraded  int               `json:"msg_at_degraded"` // message # when hitting degraded zone (0 = never)
+	MsgAtCritical  int               `json:"msg_at_critical"` // message # when hitting critical zone (0 = never)
+	Points         []SaturationPoint `json:"points"`
+}
+
+// SaturationPoint is a single message's contribution to context saturation.
+type SaturationPoint struct {
+	MessageIndex int     `json:"msg_index"`
+	Role         string  `json:"role"`         // "user", "assistant", "system"
+	InputTokens  int     `json:"input_tokens"` // this message's input tokens (cumulative from API)
+	Percent      float64 `json:"percent"`      // input_tokens / max_input_tokens * 100
+	Zone         string  `json:"zone"`         // "optimal", "degraded", "critical"
+	Delta        int     `json:"delta"`        // change from previous message
+	Label        string  `json:"label"`        // short description (e.g. "User msg", "Bash output +8K")
+}
+
 // FileChange records a file touched during a session.
 type FileChange struct {
 	FilePath   string     `json:"file_path"`

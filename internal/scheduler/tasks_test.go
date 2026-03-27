@@ -166,6 +166,9 @@ func (m *mockSessionService) SearchCapabilities() search.Capabilities {
 func (m *mockSessionService) IndexAllSessions(_ context.Context) (int, int, error) {
 	return 0, 0, nil
 }
+func (m *mockSessionService) SessionSaturationCurve(_ context.Context, _ session.ID) (*session.SaturationCurve, error) {
+	return nil, nil
+}
 func (m *mockSessionService) Rewind(_ context.Context, _ service.RewindRequest) (*service.RewindResult, error) {
 	return nil, nil
 }

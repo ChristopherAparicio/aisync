@@ -104,6 +104,7 @@ func New(cfg Config) (*Server, error) {
 		"templates/event_partials.html",
 		"templates/search_results.html",
 		"templates/project_sessions_partial.html",
+		"templates/saturation_partial.html",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("parse partials: %w", err)
@@ -164,6 +165,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /partials/analyze/{id}", s.handleRunAnalysis)
 	mux.HandleFunc("GET /partials/agent-detail", s.handleAgentDetailPartial)
 	mux.HandleFunc("GET /partials/session-events/{id}", s.handleSessionEventsPartial)
+	mux.HandleFunc("GET /partials/saturation/{id}", s.handleSaturationPartial)
 	mux.HandleFunc("GET /partials/search-results", s.handleSearchResults)
 
 	// API endpoints (JSON)

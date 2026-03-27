@@ -32,6 +32,16 @@
   {{end}}
 </div>
 
+<!-- ── Context Saturation (lazy loaded via HTMX) ── -->
+<div id="saturation-container">
+  <button class="action-btn"
+          hx-get="/partials/saturation/{{.Session.ID}}"
+          hx-target="#saturation-container"
+          hx-swap="innerHTML">
+    Show Context Saturation
+  </button>
+</div>
+
 <!-- ── Restore Panel ── -->
 <div class="restore-panel" id="restore-panel">
   <div class="restore-header">

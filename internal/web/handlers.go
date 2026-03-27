@@ -2683,6 +2683,13 @@ type projectDetailPage struct {
 	DashCacheTotalMisses  int
 	DashCacheWaste        float64
 
+	// Context saturation
+	HasSaturation    bool
+	SatAvgPeak       float64
+	SatAbove80       int
+	SatCompacted     int
+	SatTotalSessions int
+
 	// Analytics (from event buckets)
 	HasAnalytics    bool
 	AnalyticsTools  int
@@ -2957,7 +2964,97 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		}
 	}
 
+	// Context saturation.
+	since90d := time.Now().AddDate(0, 0, -90)
+	satResult, satErr := s.sessionSvc.ContextSaturation(ctx, projectPath, since90d)
+	if satErr == nil && satResult != nil && satResult.TotalSessions > 0 {
+		data.HasSaturation = true
+		data.SatAvgPeak = satResult.AvgPeakSaturation
+		data.SatAbove80 = satResult.SessionsAbove80
+		data.SatCompacted = satResult.SessionsCompacted
+		data.SatTotalSessions = satResult.TotalSessions
+	}
+
 	return data
+}
+
+// ── Context Saturation Partial ──
+
+type saturationCurveView struct {
+	Model         string
+	MaxTokens     int
+	InitOverhead  int
+	InitOverheadK string // formatted "15K"
+	PeakTokens    int
+	PeakPercent   float64
+	WasCompacted  bool
+	MsgAtDegraded int
+	MsgAtCritical int
+	Points        []saturationPointView
+}
+
+type saturationPointView struct {
+	Index     int
+	Role      string
+	Tokens    int
+	Percent   float64
+	Zone      string // "optimal", "degraded", "critical"
+	Delta     int
+	Label     string
+	BarWidth  int    // 0-100 for CSS width
+	ZoneClass string // CSS class
+}
+
+func (s *Server) handleSaturationPartial(w http.ResponseWriter, r *http.Request) {
+	sessID := session.ID(r.PathValue("id"))
+	curve, err := s.sessionSvc.SessionSaturationCurve(r.Context(), sessID)
+	if err != nil {
+		w.Write([]byte(`<div class="text-muted" style="padding:1rem;">Context saturation data unavailable.</div>`))
+		return
+	}
+
+	view := saturationCurveView{
+		Model:         curve.Model,
+		MaxTokens:     curve.MaxInputTokens,
+		InitOverhead:  curve.InitOverhead,
+		PeakTokens:    curve.PeakTokens,
+		PeakPercent:   curve.PeakPercent,
+		WasCompacted:  curve.WasCompacted,
+		MsgAtDegraded: curve.MsgAtDegraded,
+		MsgAtCritical: curve.MsgAtCritical,
+	}
+	if curve.InitOverhead >= 1000 {
+		view.InitOverheadK = fmt.Sprintf("%dK", curve.InitOverhead/1000)
+	} else {
+		view.InitOverheadK = fmt.Sprintf("%d", curve.InitOverhead)
+	}
+
+	for _, pt := range curve.Points {
+		barWidth := int(pt.Percent)
+		if barWidth > 100 {
+			barWidth = 100
+		}
+		zoneClass := "sat-optimal"
+		if pt.Zone == "degraded" {
+			zoneClass = "sat-degraded"
+		} else if pt.Zone == "critical" {
+			zoneClass = "sat-critical"
+		}
+
+		view.Points = append(view.Points, saturationPointView{
+			Index:     pt.MessageIndex + 1,
+			Role:      pt.Role,
+			Tokens:    pt.InputTokens,
+			Percent:   pt.Percent,
+			Zone:      pt.Zone,
+			Delta:     pt.Delta,
+			Label:     pt.Label,
+			BarWidth:  barWidth,
+			ZoneClass: zoneClass,
+		})
+	}
+
+	s.renderPartial(w, "saturation_partial.html", view)
 }
 
 // ── Global Search (Ctrl+K) ──

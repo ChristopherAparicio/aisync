@@ -439,6 +439,10 @@ func (r *SessionService) IndexAllSessions(_ context.Context) (int, int, error) {
 	return 0, 0, fmt.Errorf("IndexAllSessions not supported in remote mode")
 }
 
+func (r *SessionService) SessionSaturationCurve(_ context.Context, _ session.ID) (*session.SaturationCurve, error) {
+	return nil, fmt.Errorf("SessionSaturationCurve not supported in remote mode")
+}
+
 func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {
 	return nil, fmt.Errorf("ComputeObjective not supported in remote mode")
 }

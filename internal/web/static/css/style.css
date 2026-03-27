@@ -905,7 +905,85 @@ tr:hover td { background: var(--bg-hover); }
 .text-right { text-align: right; }
 .text-muted { color: var(--text-muted); }
 .text-error { color: #ef4444; font-weight: 600; }
-.font-mono { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8125rem; }
+.font-mono { font-family: "SF Mono", "Fira Code", monospace;   font-size: 0.8125rem;
+}
+
+/* ── Saturation chart ── */
+
+.saturation-panel { margin-top: 1.5rem; }
+.saturation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.saturation-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sat-row {
+  display: grid;
+  grid-template-columns: 32px 70px 1fr 60px auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 0.75rem;
+}
+
+.sat-index { color: var(--text-muted); text-align: right; }
+.sat-role { color: var(--text-muted); }
+.sat-tokens { text-align: right; font-size: 0.7rem; }
+.sat-label { font-size: 0.7rem; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.sat-bar-container {
+  height: 16px;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+
+.sat-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.sat-bar-label {
+  position: absolute;
+  right: 4px;
+  top: 0;
+  font-size: 0.625rem;
+  line-height: 16px;
+  color: rgba(255,255,255,0.8);
+  font-weight: 600;
+}
+
+.sat-optimal { background: #22c55e; }
+.sat-degraded { background: #f59e0b; }
+.sat-critical { background: #ef4444; }
+
+.saturation-legend {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.75rem;
+}
+.sat-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+.sat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
 
 /* Summary column: flexible width, graceful CSS truncation on narrow screens */
 .cell-summary {

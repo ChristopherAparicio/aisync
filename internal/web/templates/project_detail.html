@@ -88,8 +88,33 @@
       <span class="kpi-strip-value kpi-strip-value--muted">{{if .HasRealForecast}}{{formatCost .TotalReal30d}}{{else}}{{formatCost .Projected30d}}{{end}}</span>
       <span class="kpi-strip-label">30d {{if .HasRealForecast}}real cost{{else}}forecast{{end}}</span>
     </div>
-    {{end}}
-  </div>
+      {{end}}
+
+      {{if .HasSaturation}}
+      <div class="home-panel">
+        <div class="home-panel-header">
+          <span class="home-panel-title">Context Saturation</span>
+          <a href="/costs?project={{.ProjectPath}}" class="home-panel-link">Details &rarr;</a>
+        </div>
+        <div class="home-forecast">
+          <div class="home-forecast-row">
+            <span class="text-muted">Avg Peak</span>
+            <span class="font-mono{{if ge .SatAvgPeak 60.0}} text-warning{{end}}{{if ge .SatAvgPeak 80.0}} text-error{{end}}">{{printf "%.0f" .SatAvgPeak}}%</span>
+          </div>
+          <div class="home-forecast-row">
+            <span class="text-muted">Sessions &gt;80%</span>
+            <span class="font-mono{{if gt .SatAbove80 0}} text-error{{end}}">{{.SatAbove80}} / {{.SatTotalSessions}}</span>
+          </div>
+          {{if gt .SatCompacted 0}}
+          <div class="home-forecast-row">
+            <span class="text-muted">Compacted</span>
+            <span class="font-mono text-error">{{.SatCompacted}}</span>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+    </div>
 
   {{if .HasTrends}}
   <div class="trend-strip">
