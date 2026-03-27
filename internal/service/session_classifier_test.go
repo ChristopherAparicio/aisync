@@ -3,6 +3,8 @@ package service
 import (
 	"regexp"
 	"testing"
+
+	"github.com/ChristopherAparicio/aisync/internal/config"
 )
 
 func TestExtractTickets(t *testing.T) {
@@ -63,6 +65,69 @@ func TestMatchBranchRule(t *testing.T) {
 			got := matchBranchRule(rules, tt.branch)
 			if got != tt.want {
 				t.Errorf("matchBranchRule(%q) = %q, want %q", tt.branch, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchConventionalCommit(t *testing.T) {
+	rules := config.DefaultCommitRules
+
+	tests := []struct {
+		summary string
+		want    string
+	}{
+		{"fix: auth bug", "bug"},
+		{"feat: add login", "feature"},
+		{"feat(auth): add OAuth", "feature"},
+		{"refactor: cleanup code", "refactor"},
+		{"chore: update deps", "devops"},
+		{"docs: add README", "docs"},
+		{"test: add unit tests", "review"},
+		{"[COMMIT] fix: auth bug", "bug"},
+		{"[COMMIT] 🔀 Fix auth tokens", "bug"},
+		{"[PR] feat: new feature", "feature"},
+		{"[WIP] refactor: agent reorg", "refactor"},
+		{"Fix authentication flow", "bug"},
+		{"Fixed the login issue", "bug"},
+		{"Add new payment module", "feature"},
+		{"Refactor agent architecture", "refactor"},
+		{"Migrate database schema", "refactor"},
+		{"random session title", ""},
+		{"Explore codebase", ""},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.summary, func(t *testing.T) {
+			got := matchConventionalCommit(rules, tt.summary)
+			if got != tt.want {
+				t.Errorf("matchConventionalCommit(%q) = %q, want %q", tt.summary, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchSummaryPrefix(t *testing.T) {
+	rules := config.DefaultStatusRules
+
+	tests := []struct {
+		summary string
+		want    string
+	}{
+		{"[WIP] working on feature", "active"},
+		{"[DONE] finished task", "completed"},
+		{"[PR] create pull request", "review"},
+		{"[COMMIT] pushed code", "completed"},
+		{"Normal session", ""},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.summary, func(t *testing.T) {
+			got := matchSummaryPrefix(rules, tt.summary)
+			if got != tt.want {
+				t.Errorf("matchSummaryPrefix(%q) = %q, want %q", tt.summary, got, tt.want)
 			}
 		})
 	}

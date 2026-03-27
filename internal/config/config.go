@@ -29,7 +29,7 @@ type configData struct {
 	Analysis    analysisConf                     `json:"analysis"`
 	Tagging     taggingConf                      `json:"tagging"`
 	Project     projectConf                      `json:"project"`
-	Projects    map[string]projectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
+	Projects    map[string]ProjectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
 	Search      searchConf                       `json:"search"`
 	Webhooks    webhooksConf                     `json:"webhooks"`
 	Dashboard   dashboardConf                    `json:"dashboard"`
@@ -153,9 +153,9 @@ type projectConf struct {
 	AutoDetect bool     `json:"auto_detect"`          // auto-detect category from project files
 }
 
-// projectClassifierConf holds per-project classifier rules.
+// ProjectClassifierConf holds per-project classifier rules.
 // Keyed by remote URL display name (e.g. "Omogen-ai/backend") or project path.
-type projectClassifierConf struct {
+type ProjectClassifierConf struct {
 	// TicketPattern is a regex to extract ticket IDs from branch names, summaries, and commits.
 	// Example: "OMO-\\d+" matches OMO-250, OMO-1234.
 	TicketPattern string `json:"ticket_pattern,omitempty"`
@@ -175,8 +175,56 @@ type projectClassifierConf struct {
 	// If empty, the global tagging.tags (or DefaultSessionTypes) is used.
 	Tags []string `json:"tags,omitempty"`
 
+	// AgentRules map agent names to session types.
+	// Example: {"review": "review", "bug-reporter": "bug", "explore": "exploration"}
+	AgentRules map[string]string `json:"agent_rules,omitempty"`
+
+	// CommitRules map Conventional Commit prefixes to session types.
+	// Example: {"fix": "bug", "feat": "feature", "refactor": "refactor"}
+	// If empty, DefaultCommitRules is used (standard Conventional Commits).
+	CommitRules map[string]string `json:"commit_rules,omitempty"`
+
+	// StatusRules map session summary prefixes to session status.
+	// Example: {"[WIP]": "active", "[DONE]": "completed", "[PR]": "review", "[COMMIT]": "completed"}
+	// If empty, DefaultStatusRules is used.
+	StatusRules map[string]string `json:"status_rules,omitempty"`
+
 	// Budget defines spending limits for this project.
 	Budget *projectBudgetConf `json:"budget,omitempty"`
+}
+
+// DefaultCommitRules maps Conventional Commit prefixes to session types.
+// Applied when no project-specific commit_rules are configured.
+var DefaultCommitRules = map[string]string{
+	"fix":      "bug",
+	"feat":     "feature",
+	"refactor": "refactor",
+	"chore":    "devops",
+	"docs":     "docs",
+	"test":     "review",
+	"ci":       "devops",
+	"perf":     "refactor",
+	"style":    "refactor",
+	"build":    "devops",
+	"revert":   "bug",
+}
+
+// DefaultAgentRules maps common agent names to session types.
+var DefaultAgentRules = map[string]string{
+	"explore":         "exploration",
+	"general":         "exploration",
+	"review":          "review",
+	"bug-reporter":    "bug",
+	"bug-triage":      "bug",
+	"product-analyst": "exploration",
+}
+
+// DefaultStatusRules maps session summary prefixes to session status.
+var DefaultStatusRules = map[string]string{
+	"[WIP]":    "active",
+	"[DONE]":   "completed",
+	"[PR]":     "review",
+	"[COMMIT]": "completed",
 }
 
 // projectBudgetConf defines spending limits and alerts for a project.
@@ -405,7 +453,7 @@ func (c *Config) loadFrom(dir string) error {
 	// Projects — merge per-project classifiers (overlay wins per-key).
 	if len(loaded.Projects) > 0 {
 		if c.data.Projects == nil {
-			c.data.Projects = make(map[string]projectClassifierConf)
+			c.data.Projects = make(map[string]ProjectClassifierConf)
 		}
 		for k, v := range loaded.Projects {
 			c.data.Projects[k] = v
@@ -1437,7 +1485,7 @@ func (c *Config) IsProjectAutoDetectEnabled() bool {
 // It tries matching by remote URL display name (e.g. "Omogen-ai/backend"),
 // then by full remote URL, then by project path basename.
 // Returns nil if no classifier is configured for this project.
-func (c *Config) GetProjectClassifier(remoteURL, projectPath string) *projectClassifierConf {
+func (c *Config) GetProjectClassifier(remoteURL, projectPath string) *ProjectClassifierConf {
 	if len(c.data.Projects) == 0 {
 		return nil
 	}
