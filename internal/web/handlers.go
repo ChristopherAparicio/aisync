@@ -1860,14 +1860,17 @@ type modelAlternativeView struct {
 
 // modelSaturationView is a template-friendly per-model context saturation summary.
 type modelSaturationView struct {
-	Model          string
-	MaxInputTokens int
-	SessionCount   int
-	AvgPeakPct     float64
-	MaxPeakPct     float64
-	CompactedCount int
-	Above80Count   int
-	SatClass       string // CSS class: "good", "warning", "poor"
+	Model             string
+	MaxInputTokens    int
+	SessionCount      int
+	AvgPeakPct        float64
+	MaxPeakPct        float64
+	CompactedCount    int
+	Above80Count      int
+	SatClass          string // CSS class: "good", "warning", "poor"
+	EfficiencyVerdict string // "oversized", "well-sized", "tight", "saturated"
+	AvgPeakTokens     int
+	WastedCapacityPct float64
 }
 
 // sessionSaturationView is a template-friendly per-session saturation entry.
@@ -2124,14 +2127,17 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				satClass = "warning"
 			}
 			data.SatModels = append(data.SatModels, modelSaturationView{
-				Model:          ms.Model,
-				MaxInputTokens: ms.MaxInputTokens,
-				SessionCount:   ms.SessionCount,
-				AvgPeakPct:     ms.AvgPeakPct,
-				MaxPeakPct:     ms.MaxPeakPct,
-				CompactedCount: ms.CompactedCount,
-				Above80Count:   ms.Above80Count,
-				SatClass:       satClass,
+				Model:             ms.Model,
+				MaxInputTokens:    ms.MaxInputTokens,
+				SessionCount:      ms.SessionCount,
+				AvgPeakPct:        ms.AvgPeakPct,
+				MaxPeakPct:        ms.MaxPeakPct,
+				CompactedCount:    ms.CompactedCount,
+				Above80Count:      ms.Above80Count,
+				SatClass:          satClass,
+				EfficiencyVerdict: ms.EfficiencyVerdict,
+				AvgPeakTokens:     ms.AvgPeakTokens,
+				WastedCapacityPct: ms.WastedCapacityPct,
 			})
 		}
 

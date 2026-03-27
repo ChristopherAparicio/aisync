@@ -645,6 +645,7 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 
 	result := &session.ContextSaturation{}
 	modelStats := make(map[string]*session.ModelSaturation)
+	modelPeakTokenSum := make(map[string]int64) // sum of peak tokens per model (for averaging)
 	var sessionInfos []session.SessionSaturation
 
 	for _, sm := range summaries {
@@ -741,6 +742,7 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		}
 		ms.SessionCount++
 		ms.AvgPeakPct += saturationPct
+		modelPeakTokenSum[dominantModel] += int64(peakInput)
 		if saturationPct > ms.MaxPeakPct {
 			ms.MaxPeakPct = saturationPct
 		}
@@ -767,11 +769,14 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		result.AvgPeakSaturation /= float64(result.TotalSessions)
 	}
 
-	// Finalize per-model averages.
-	for _, ms := range modelStats {
+	// Finalize per-model averages and efficiency verdicts.
+	for model, ms := range modelStats {
 		if ms.SessionCount > 0 {
 			ms.AvgPeakPct /= float64(ms.SessionCount)
+			ms.AvgPeakTokens = int(modelPeakTokenSum[model] / int64(ms.SessionCount))
 		}
+		ms.WastedCapacityPct = 100 - ms.AvgPeakPct
+		ms.EfficiencyVerdict = classifyModelEfficiency(ms.AvgPeakPct, ms.CompactedCount)
 		result.Models = append(result.Models, *ms)
 	}
 	sort.Slice(result.Models, func(i, j int) bool {
@@ -789,6 +794,29 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 	result.WorstSessions = sessionInfos[:limit]
 
 	return result, nil
+}
+
+// classifyModelEfficiency determines if a model's context window is appropriately
+// sized for the workload.
+//
+// Verdicts:
+//   - "oversized": avg peak <30% — paying for unused context capacity
+//   - "well-sized": avg peak 30-70% — good balance of headroom and utilization
+//   - "tight": avg peak 70-90% — approaching limits, occasional compaction expected
+//   - "saturated": avg peak >90% or frequent compaction — model is undersized
+func classifyModelEfficiency(avgPeakPct float64, compactedCount int) string {
+	switch {
+	case compactedCount > 0 && avgPeakPct > 70:
+		return "saturated"
+	case avgPeakPct > 90:
+		return "saturated"
+	case avgPeakPct > 70:
+		return "tight"
+	case avgPeakPct > 30:
+		return "well-sized"
+	default:
+		return "oversized"
+	}
 }
 
 // CacheEfficiency computes prompt cache usage statistics and identifies waste.

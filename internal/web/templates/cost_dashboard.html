@@ -185,7 +185,7 @@
   </div>
 
   {{if .SatModels}}
-  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Saturation by Model</h3>
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Saturation &amp; Efficiency by Model</h3>
   <div class="table-wrap">
     <table>
       <thead>
@@ -195,7 +195,8 @@
           <th class="text-right">Sessions</th>
           <th class="text-right">Avg Peak</th>
           <th class="text-right">Max Peak</th>
-          <th class="text-right">&gt;80%</th>
+          <th class="text-right">Unused</th>
+          <th>Efficiency</th>
           <th class="text-right">Compacted</th>
         </tr>
       </thead>
@@ -207,8 +208,15 @@
           <td class="text-right">{{.SessionCount}}</td>
           <td class="text-right"><span class="badge badge-{{.SatClass}}">{{printf "%.0f" .AvgPeakPct}}%</span></td>
           <td class="text-right font-mono">{{printf "%.0f" .MaxPeakPct}}%</td>
-          <td class="text-right{{if gt .Above80Count 0}} text-error{{end}}">{{.Above80Count}}</td>
-          <td class="text-right">{{.CompactedCount}}</td>
+          <td class="text-right font-mono text-muted">{{printf "%.0f" .WastedCapacityPct}}%</td>
+          <td>
+            {{if eq .EfficiencyVerdict "oversized"}}<span class="badge badge-warning">oversized</span>
+            {{else if eq .EfficiencyVerdict "well-sized"}}<span class="badge badge-good">well-sized</span>
+            {{else if eq .EfficiencyVerdict "tight"}}<span class="badge badge-warning">tight</span>
+            {{else if eq .EfficiencyVerdict "saturated"}}<span class="badge badge-poor">saturated</span>
+            {{end}}
+          </td>
+          <td class="text-right{{if gt .CompactedCount 0}} text-error{{end}}">{{.CompactedCount}}</td>
         </tr>
         {{end}}
       </tbody>

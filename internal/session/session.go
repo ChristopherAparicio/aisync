@@ -320,6 +320,11 @@ type ModelSaturation struct {
 	MaxPeakPct     float64 `json:"max_peak_pct"`     // highest peak saturation seen
 	CompactedCount int     `json:"compacted_count"`  // sessions that hit compaction
 	Above80Count   int     `json:"above_80_count"`   // sessions >80% saturation
+
+	// Context efficiency analysis (3.1)
+	EfficiencyVerdict string  `json:"efficiency_verdict"`  // "oversized", "well-sized", "tight", "saturated"
+	AvgPeakTokens     int     `json:"avg_peak_tokens"`     // average peak tokens across sessions
+	WastedCapacityPct float64 `json:"wasted_capacity_pct"` // 100 - AvgPeakPct (unused context window %)
 }
 
 // SessionSaturation captures the peak context usage for a single session.
