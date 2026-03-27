@@ -1005,6 +1005,42 @@ tr:hover td { background: var(--bg-hover); }
 
 .kpi-accent-text { color: var(--accent-light); font-weight: 600; }
 
+/* ── Budget bars ── */
+
+.budget-bar {
+  height: 6px;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.budget-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.budget-bar-fill.budget-bar--warning {
+  background: #f59e0b;
+}
+.budget-bar-fill.budget-bar--exceeded {
+  background: #ef4444;
+}
+.budget-pct {
+  font-size: 0.75rem;
+  margin-left: 0.25rem;
+}
+.text-warning { color: #f59e0b; }
+
+.budget-inline {
+  padding: 0 0.75rem;
+}
+.budget-inline-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8125rem;
+}
+
 /* ── Empty state ── */
 
 .empty-state {

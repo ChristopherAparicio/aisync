@@ -116,6 +116,9 @@ type SessionAnalytics interface {
 
 	// ClassifyProjectSessions runs classifiers on all sessions for a project.
 	ClassifyProjectSessions(remoteURL, projectPath string) (classified, total int, err error)
+
+	// BudgetStatus computes spending vs budget for all projects with budgets.
+	BudgetStatus(ctx context.Context) ([]session.BudgetStatus, error)
 }
 
 // SessionAI provides LLM-powered analysis features.

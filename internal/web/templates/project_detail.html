@@ -188,6 +188,47 @@
 
     <!-- Right column: Panels -->
     <div class="home-aside">
+      {{if .HasBudget}}
+      <div class="home-panel">
+        <div class="home-panel-header">
+          <span class="home-panel-title">Budget</span>
+          <a href="/costs?project={{.ProjectPath}}" class="home-panel-link">Details &rarr;</a>
+        </div>
+        <div class="home-forecast">
+          {{if gt .BudgetMonthly.Limit 0.0}}
+          <div class="budget-inline">
+            <div class="budget-inline-header">
+              <span class="text-muted">Monthly</span>
+              <span class="font-mono{{if eq .BudgetMonthly.Alert "exceeded"}} text-error{{else if eq .BudgetMonthly.Alert "warning"}} text-warning{{end}}">{{formatCost .BudgetMonthly.Spent}} / {{formatCost .BudgetMonthly.Limit}}</span>
+            </div>
+            <div class="budget-bar">
+              <div class="budget-bar-fill{{if eq .BudgetMonthly.Alert "exceeded"}} budget-bar--exceeded{{else if eq .BudgetMonthly.Alert "warning"}} budget-bar--warning{{end}}" style="width:{{printf "%.0f" .BudgetMonthly.Percent}}%"></div>
+            </div>
+          </div>
+          {{end}}
+          {{if gt .BudgetDaily.Limit 0.0}}
+          <div class="budget-inline" style="margin-top:0.5rem;">
+            <div class="budget-inline-header">
+              <span class="text-muted">Today</span>
+              <span class="font-mono{{if eq .BudgetDaily.Alert "exceeded"}} text-error{{else if eq .BudgetDaily.Alert "warning"}} text-warning{{end}}">{{formatCost .BudgetDaily.Spent}} / {{formatCost .BudgetDaily.Limit}}</span>
+            </div>
+            <div class="budget-bar">
+              <div class="budget-bar-fill{{if eq .BudgetDaily.Alert "exceeded"}} budget-bar--exceeded{{else if eq .BudgetDaily.Alert "warning"}} budget-bar--warning{{end}}" style="width:{{printf "%.0f" .BudgetDaily.Percent}}%"></div>
+            </div>
+          </div>
+          {{end}}
+          <div class="home-forecast-row" style="margin-top:0.5rem;">
+            <span class="text-muted">Projected</span>
+            <span class="font-mono text-muted">{{formatCost .BudgetProjected}}</span>
+          </div>
+          <div class="home-forecast-row">
+            <span class="text-muted">Days left</span>
+            <span class="font-mono text-muted">{{.BudgetDaysLeft}}</span>
+          </div>
+        </div>
+      </div>
+      {{end}}
+
       {{if .HasCapabilities}}
       <div class="home-panel">
         <div class="home-panel-header">

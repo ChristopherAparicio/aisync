@@ -173,6 +173,27 @@ type projectClassifierConf struct {
 	// Tags overrides the default session type vocabulary for this project.
 	// If empty, the global tagging.tags (or DefaultSessionTypes) is used.
 	Tags []string `json:"tags,omitempty"`
+
+	// Budget defines spending limits for this project.
+	Budget *projectBudgetConf `json:"budget,omitempty"`
+}
+
+// projectBudgetConf defines spending limits and alerts for a project.
+type projectBudgetConf struct {
+	// MonthlyLimit is the maximum estimated cost per calendar month (in USD).
+	MonthlyLimit float64 `json:"monthly_limit,omitempty"`
+
+	// DailyLimit is the maximum estimated cost per day (in USD).
+	DailyLimit float64 `json:"daily_limit,omitempty"`
+
+	// AlertAtPercent triggers an alert when spend reaches this % of the limit (0-100).
+	// Default: 80.
+	AlertAtPercent float64 `json:"alert_at_percent,omitempty"`
+
+	// AlertWebhook is the name or URL of a webhook to fire on budget alerts.
+	// If it starts with "http", it's used as a direct URL. Otherwise it's matched
+	// against configured webhook names.
+	AlertWebhook string `json:"alert_webhook,omitempty"`
 }
 
 type webhookEntry struct {

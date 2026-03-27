@@ -1834,6 +1834,26 @@ type costDashboardPage struct {
 	SatTotalSessions int
 	SatModels        []modelSaturationView
 	SatWorstSessions []sessionSaturationView
+
+	// Budget overview (all projects with budgets)
+	HasBudgets bool
+	Budgets    []budgetOverviewView
+}
+
+// budgetOverviewView is a template-friendly view of a project budget.
+type budgetOverviewView struct {
+	ProjectName    string
+	ProjectPath    string
+	MonthlyLimit   float64
+	MonthlySpent   float64
+	MonthlyPercent float64
+	MonthlyAlert   string
+	DailyLimit     float64
+	DailySpent     float64
+	DailyPercent   float64
+	DailyAlert     string
+	ProjectedMonth float64
+	DaysRemaining  int
 }
 
 // cacheMissView is a template-friendly view of a cache miss session.
@@ -2392,6 +2412,28 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 		}
 	}
 
+	// Budget overview.
+	budgets, budgetErr := s.sessionSvc.BudgetStatus(r.Context())
+	if budgetErr == nil && len(budgets) > 0 {
+		data.HasBudgets = true
+		for _, bs := range budgets {
+			data.Budgets = append(data.Budgets, budgetOverviewView{
+				ProjectName:    bs.ProjectName,
+				ProjectPath:    bs.ProjectPath,
+				MonthlyLimit:   bs.MonthlyLimit,
+				MonthlySpent:   bs.MonthlySpent,
+				MonthlyPercent: bs.MonthlyPercent,
+				MonthlyAlert:   bs.MonthlyAlert,
+				DailyLimit:     bs.DailyLimit,
+				DailySpent:     bs.DailySpent,
+				DailyPercent:   bs.DailyPercent,
+				DailyAlert:     bs.DailyAlert,
+				ProjectedMonth: bs.ProjectedMonth,
+				DaysRemaining:  bs.DaysRemaining,
+			})
+		}
+	}
+
 	return data
 }
 
@@ -2653,6 +2695,21 @@ type projectDetailPage struct {
 	ProjectName     string
 	CapabilityStats []capabilityStat
 	MCPServerCount  int
+
+	// Budget
+	HasBudget       bool
+	BudgetMonthly   budgetView
+	BudgetDaily     budgetView
+	BudgetProjected float64
+	BudgetDaysLeft  int
+}
+
+// budgetView is a template-friendly view of a budget limit.
+type budgetView struct {
+	Limit   float64
+	Spent   float64
+	Percent float64
+	Alert   string // "", "warning", "exceeded"
 }
 
 func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
@@ -2871,6 +2928,31 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 					Kind:  string(cs.Kind),
 					Count: cs.Count,
 				})
+			}
+		}
+	}
+
+	// Budget status.
+	budgets, budgetErr := s.sessionSvc.BudgetStatus(ctx)
+	if budgetErr == nil {
+		for _, bs := range budgets {
+			if bs.ProjectPath == projectPath || bs.RemoteURL == data.RemoteURL {
+				data.HasBudget = true
+				data.BudgetMonthly = budgetView{
+					Limit:   bs.MonthlyLimit,
+					Spent:   bs.MonthlySpent,
+					Percent: bs.MonthlyPercent,
+					Alert:   bs.MonthlyAlert,
+				}
+				data.BudgetDaily = budgetView{
+					Limit:   bs.DailyLimit,
+					Spent:   bs.DailySpent,
+					Percent: bs.DailyPercent,
+					Alert:   bs.DailyAlert,
+				}
+				data.BudgetProjected = bs.ProjectedMonth
+				data.BudgetDaysLeft = bs.DaysRemaining
+				break
 			}
 		}
 	}

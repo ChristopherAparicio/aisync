@@ -426,6 +426,10 @@ func (r *SessionService) ClassifyProjectSessions(_, _ string) (int, int, error) 
 	return 0, 0, fmt.Errorf("ClassifyProjectSessions not supported in remote mode")
 }
 
+func (r *SessionService) BudgetStatus(_ context.Context) ([]session.BudgetStatus, error) {
+	return nil, fmt.Errorf("BudgetStatus not supported in remote mode")
+}
+
 func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {
 	return nil, fmt.Errorf("ComputeObjective not supported in remote mode")
 }

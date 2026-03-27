@@ -24,6 +24,7 @@ const (
 	EventSessionAnalyzed EventType = "session.analyzed"
 	EventSessionTagged   EventType = "session.tagged"
 	EventSkillMissed     EventType = "skill.missed"
+	EventBudgetAlert     EventType = "budget.alert"
 )
 
 // Event is the payload sent to webhook endpoints.

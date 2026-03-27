@@ -83,6 +83,48 @@
 </div>
 {{end}}
 
+<!-- ── Project Budgets ── -->
+{{if .HasBudgets}}
+<div class="section">
+  <h2 class="section-title">Project Budgets</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th class="text-right">Monthly Budget</th>
+          <th class="text-right">Spent</th>
+          <th>Progress</th>
+          <th class="text-right">Projected</th>
+          <th class="text-right">Daily Budget</th>
+          <th class="text-right">Today</th>
+          <th class="text-right">Days Left</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Budgets}}
+        <tr>
+          <td><a href="/projects{{.ProjectPath}}">{{.ProjectName}}</a></td>
+          <td class="text-right font-mono">{{formatCost .MonthlyLimit}}</td>
+          <td class="text-right font-mono{{if eq .MonthlyAlert "exceeded"}} text-error{{else if eq .MonthlyAlert "warning"}} text-warning{{end}}">{{formatCost .MonthlySpent}}</td>
+          <td>
+            <div class="budget-bar">
+              <div class="budget-bar-fill{{if eq .MonthlyAlert "exceeded"}} budget-bar--exceeded{{else if eq .MonthlyAlert "warning"}} budget-bar--warning{{end}}" style="width:{{printf "%.0f" .MonthlyPercent}}%"></div>
+            </div>
+            <span class="budget-pct font-mono{{if eq .MonthlyAlert "exceeded"}} text-error{{else if eq .MonthlyAlert "warning"}} text-warning{{end}}">{{printf "%.0f" .MonthlyPercent}}%</span>
+          </td>
+          <td class="text-right font-mono text-muted">{{formatCost .ProjectedMonth}}</td>
+          <td class="text-right font-mono">{{if gt .DailyLimit 0.0}}{{formatCost .DailyLimit}}{{else}}—{{end}}</td>
+          <td class="text-right font-mono{{if eq .DailyAlert "exceeded"}} text-error{{else if eq .DailyAlert "warning"}} text-warning{{end}}">{{if gt .DailyLimit 0.0}}{{formatCost .DailySpent}}{{else}}—{{end}}</td>
+          <td class="text-right text-muted">{{.DaysRemaining}}d</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
 <!-- ── Cache Efficiency ── -->
 {{if .HasCacheData}}
 <div class="section">

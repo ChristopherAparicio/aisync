@@ -294,6 +294,31 @@ type CacheMissSession struct {
 	LongestGapMins int     `json:"longest_gap_mins"` // longest gap between messages in minutes
 }
 
+// BudgetStatus represents the current spending status against a budget limit.
+type BudgetStatus struct {
+	ProjectName string `json:"project_name"`
+	ProjectPath string `json:"project_path,omitempty"`
+	RemoteURL   string `json:"remote_url,omitempty"`
+
+	// Monthly budget
+	MonthlyLimit   float64 `json:"monthly_limit"`           // configured limit ($)
+	MonthlySpent   float64 `json:"monthly_spent"`           // estimated cost this month ($)
+	MonthlyPercent float64 `json:"monthly_percent"`         // 0-100
+	MonthlyAlert   string  `json:"monthly_alert,omitempty"` // "", "warning", "exceeded"
+
+	// Daily budget
+	DailyLimit   float64 `json:"daily_limit,omitempty"`
+	DailySpent   float64 `json:"daily_spent"`
+	DailyPercent float64 `json:"daily_percent"`
+	DailyAlert   string  `json:"daily_alert,omitempty"` // "", "warning", "exceeded"
+
+	// Metadata
+	AlertThreshold float64 `json:"alert_threshold"` // % at which to warn (e.g. 80)
+	SessionCount   int     `json:"session_count"`   // sessions this month
+	DaysRemaining  int     `json:"days_remaining"`  // days left in the month
+	ProjectedMonth float64 `json:"projected_month"` // projected spend by end of month at current rate
+}
+
 // ContextSaturation reports how close sessions get to their model's context window limit.
 // High saturation correlates with compaction, degraded quality, and wasted tokens.
 type ContextSaturation struct {

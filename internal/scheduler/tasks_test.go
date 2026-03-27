@@ -156,6 +156,9 @@ func (m *mockSessionService) ClassifySession(_ *session.Session) int {
 func (m *mockSessionService) ClassifyProjectSessions(_, _ string) (int, int, error) {
 	return 0, 0, nil
 }
+func (m *mockSessionService) BudgetStatus(_ context.Context) ([]session.BudgetStatus, error) {
+	return nil, nil
+}
 func (m *mockSessionService) Rewind(_ context.Context, _ service.RewindRequest) (*service.RewindResult, error) {
 	return nil, nil
 }
