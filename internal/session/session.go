@@ -396,6 +396,60 @@ type FileChange struct {
 	ChangeType ChangeType `json:"change_type"`
 }
 
+// AgentROI measures the effectiveness of an AI agent across sessions.
+type AgentROI struct {
+	// Per-agent entries sorted by ROI score descending.
+	Agents []AgentROIEntry `json:"agents"`
+}
+
+// AgentROIEntry holds ROI metrics for a single agent.
+type AgentROIEntry struct {
+	Agent         string  `json:"agent"`
+	SessionCount  int     `json:"session_count"`
+	MessageCount  int     `json:"message_count"`
+	TotalTokens   int     `json:"total_tokens"`
+	ToolCallCount int     `json:"tool_call_count"`
+	ErrorCount    int     `json:"error_count"`
+	EstimatedCost float64 `json:"estimated_cost"`
+
+	// Derived metrics
+	AvgCostPerSession float64 `json:"avg_cost_per_session"`
+	AvgMessages       float64 `json:"avg_messages"`        // messages per session
+	ErrorRate         float64 `json:"error_rate"`          // 0-100, errors / tool_calls
+	CompletionRate    float64 `json:"completion_rate"`     // 0-100, completed / total sessions
+	CompletedCount    int     `json:"completed_count"`     // sessions with [DONE] or [COMMIT]
+	AvgPeakSaturation float64 `json:"avg_peak_saturation"` // 0-100, context usage
+	TokensPerMessage  int     `json:"tokens_per_message"`  // avg tokens per message
+
+	// Composite score (0-100, higher = better ROI)
+	ROIScore int    `json:"roi_score"`
+	ROIGrade string `json:"roi_grade"` // "A", "B", "C", "D", "F"
+}
+
+// SkillROI measures the effectiveness of skills loaded in sessions.
+type SkillROI struct {
+	Skills []SkillROIEntry `json:"skills"`
+}
+
+// SkillROIEntry holds ROI metrics for a single skill.
+type SkillROIEntry struct {
+	Name           string  `json:"name"`
+	LoadCount      int     `json:"load_count"`       // times this skill was loaded
+	SessionCount   int     `json:"session_count"`    // distinct sessions where loaded
+	TotalSessions  int     `json:"total_sessions"`   // total sessions in scope (for usage %)
+	UsagePercent   float64 `json:"usage_percent"`    // load_count / total_sessions * 100
+	ContextTokens  int     `json:"context_tokens"`   // estimated tokens added to context per load
+	TotalTokenCost int     `json:"total_token_cost"` // total tokens consumed by this skill across all loads
+
+	// Effectiveness signals
+	IsGhost          bool    `json:"is_ghost"`           // loaded but appears to have no impact
+	ErrorRateWith    float64 `json:"error_rate_with"`    // error rate when skill is loaded
+	ErrorRateWithout float64 `json:"error_rate_without"` // error rate when skill is NOT loaded
+	ErrorDelta       float64 `json:"error_delta"`        // positive = skill increases errors
+
+	Verdict string `json:"verdict"` // "valuable", "neutral", "ghost", "harmful"
+}
+
 // Link connects a session to a git object (branch, commit, PR).
 type Link struct {
 	LinkType LinkType `json:"link_type"`

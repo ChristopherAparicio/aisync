@@ -129,6 +129,12 @@ type SessionAnalytics interface {
 
 	// SessionSaturationCurve returns per-message context saturation data for a session.
 	SessionSaturationCurve(ctx context.Context, sessID session.ID) (*session.SaturationCurve, error)
+
+	// AgentROIAnalysis computes per-agent effectiveness metrics.
+	AgentROIAnalysis(ctx context.Context, projectPath string, since time.Time) (*session.AgentROI, error)
+
+	// SkillROIAnalysis computes per-skill effectiveness metrics.
+	SkillROIAnalysis(ctx context.Context, projectPath string, since time.Time) (*session.SkillROI, error)
 }
 
 // SessionAI provides LLM-powered analysis features.

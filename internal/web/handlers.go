@@ -2712,6 +2712,40 @@ type projectDetailPage struct {
 	SatAbove80       int
 	SatCompacted     int
 	SatTotalSessions int
+
+	// Agent ROI
+	HasAgentROI bool
+	AgentROI    []agentROIView
+
+	// Skill ROI
+	HasSkillROI bool
+	SkillROI    []skillROIView
+}
+
+// agentROIView is a template-friendly agent ROI entry.
+type agentROIView struct {
+	Agent          string
+	SessionCount   int
+	AvgCost        float64
+	AvgMessages    float64
+	ErrorRate      float64
+	CompletionRate float64
+	AvgSaturation  float64
+	ROIScore       int
+	ROIGrade       string
+	GradeClass     string // CSS class for grade badge
+}
+
+// skillROIView is a template-friendly skill ROI entry.
+type skillROIView struct {
+	Name          string
+	LoadCount     int
+	UsagePercent  float64
+	ContextTokens int
+	ErrorDelta    float64
+	Verdict       string
+	VerdictClass  string // CSS class
+	IsGhost       bool
 }
 
 // agentChip is a template-friendly agent count for filter chips.
@@ -3020,6 +3054,60 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		data.SatAbove80 = satResult.SessionsAbove80
 		data.SatCompacted = satResult.SessionsCompacted
 		data.SatTotalSessions = satResult.TotalSessions
+	}
+
+	// Agent ROI.
+	agentROI, roiErr := s.sessionSvc.AgentROIAnalysis(ctx, projectPath, since90d)
+	if roiErr == nil && agentROI != nil && len(agentROI.Agents) > 0 {
+		data.HasAgentROI = true
+		for _, a := range agentROI.Agents {
+			gradeClass := "badge-good"
+			switch a.ROIGrade {
+			case "C":
+				gradeClass = "badge-warning"
+			case "D", "F":
+				gradeClass = "badge-poor"
+			}
+			data.AgentROI = append(data.AgentROI, agentROIView{
+				Agent:          a.Agent,
+				SessionCount:   a.SessionCount,
+				AvgCost:        a.AvgCostPerSession,
+				AvgMessages:    a.AvgMessages,
+				ErrorRate:      a.ErrorRate,
+				CompletionRate: a.CompletionRate,
+				AvgSaturation:  a.AvgPeakSaturation,
+				ROIScore:       a.ROIScore,
+				ROIGrade:       a.ROIGrade,
+				GradeClass:     gradeClass,
+			})
+		}
+	}
+
+	// Skill ROI.
+	skillROI, skillErr := s.sessionSvc.SkillROIAnalysis(ctx, projectPath, since90d)
+	if skillErr == nil && skillROI != nil && len(skillROI.Skills) > 0 {
+		data.HasSkillROI = true
+		for _, sk := range skillROI.Skills {
+			verdictClass := "badge-good"
+			switch sk.Verdict {
+			case "ghost":
+				verdictClass = "badge-warning"
+			case "harmful":
+				verdictClass = "badge-poor"
+			case "neutral":
+				verdictClass = "badge-provider"
+			}
+			data.SkillROI = append(data.SkillROI, skillROIView{
+				Name:          sk.Name,
+				LoadCount:     sk.LoadCount,
+				UsagePercent:  sk.UsagePercent,
+				ContextTokens: sk.ContextTokens,
+				ErrorDelta:    sk.ErrorDelta,
+				Verdict:       sk.Verdict,
+				VerdictClass:  verdictClass,
+				IsGhost:       sk.IsGhost,
+			})
+		}
 	}
 
 	return data

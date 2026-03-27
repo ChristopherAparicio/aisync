@@ -169,6 +169,12 @@ func (m *mockSessionService) IndexAllSessions(_ context.Context) (int, int, erro
 func (m *mockSessionService) SessionSaturationCurve(_ context.Context, _ session.ID) (*session.SaturationCurve, error) {
 	return nil, nil
 }
+func (m *mockSessionService) AgentROIAnalysis(_ context.Context, _ string, _ time.Time) (*session.AgentROI, error) {
+	return nil, nil
+}
+func (m *mockSessionService) SkillROIAnalysis(_ context.Context, _ string, _ time.Time) (*session.SkillROI, error) {
+	return nil, nil
+}
 func (m *mockSessionService) Rewind(_ context.Context, _ service.RewindRequest) (*service.RewindResult, error) {
 	return nil, nil
 }

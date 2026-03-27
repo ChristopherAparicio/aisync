@@ -227,6 +227,72 @@
         <a href="/sessions?project={{.ProjectPath}}" class="action-btn action-btn--wide">View all {{.TotalSessions}} sessions &rarr;</a>
       </div>
       {{end}}
+
+      {{if .HasAgentROI}}
+      <div class="section" style="margin-top:2rem;">
+        <h2 class="section-title">Agent ROI <span class="text-muted">(90d)</span></h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th class="text-right">Sessions</th>
+                <th class="text-right">Avg Cost</th>
+                <th class="text-right">Avg Msgs</th>
+                <th class="text-right">Error Rate</th>
+                <th class="text-right">Completion</th>
+                <th>Grade</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .AgentROI}}
+              <tr>
+                <td><button class="agent-chip agent-chip--inline" onclick="filterByAgent(this, '{{.Agent}}')">{{.Agent}}</button></td>
+                <td class="text-right">{{.SessionCount}}</td>
+                <td class="text-right font-mono">{{formatCost .AvgCost}}</td>
+                <td class="text-right">{{printf "%.1f" .AvgMessages}}</td>
+                <td class="text-right{{if gt .ErrorRate 5.0}} text-error{{end}}">{{printf "%.1f" .ErrorRate}}%</td>
+                <td class="text-right">{{printf "%.0f" .CompletionRate}}%</td>
+                <td><span class="badge {{.GradeClass}}">{{.ROIGrade}} ({{.ROIScore}})</span></td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {{end}}
+
+      {{if .HasSkillROI}}
+      <div class="section" style="margin-top:1.5rem;">
+        <h2 class="section-title">Skill ROI <span class="text-muted">(90d)</span></h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill</th>
+                <th class="text-right">Loads</th>
+                <th class="text-right">Usage %</th>
+                <th class="text-right">Context Cost</th>
+                <th class="text-right">Error Δ</th>
+                <th>Verdict</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .SkillROI}}
+              <tr>
+                <td class="font-mono">{{.Name}}{{if .IsGhost}} <span class="text-muted">👻</span>{{end}}</td>
+                <td class="text-right">{{.LoadCount}}</td>
+                <td class="text-right">{{printf "%.0f" .UsagePercent}}%</td>
+                <td class="text-right font-mono text-muted">~{{formatTokens .ContextTokens}}/load</td>
+                <td class="text-right{{if gt .ErrorDelta 2.0}} text-error{{else if lt .ErrorDelta -2.0}} kpi-accent-text{{end}}">{{printf "%+.1f" .ErrorDelta}}%</td>
+                <td><span class="badge {{.VerdictClass}}">{{.Verdict}}</span></td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {{end}}
     </div>
 
     <!-- Right column: Panels -->

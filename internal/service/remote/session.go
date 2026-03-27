@@ -443,6 +443,14 @@ func (r *SessionService) SessionSaturationCurve(_ context.Context, _ session.ID)
 	return nil, fmt.Errorf("SessionSaturationCurve not supported in remote mode")
 }
 
+func (r *SessionService) AgentROIAnalysis(_ context.Context, _ string, _ time.Time) (*session.AgentROI, error) {
+	return nil, fmt.Errorf("AgentROIAnalysis not supported in remote mode")
+}
+
+func (r *SessionService) SkillROIAnalysis(_ context.Context, _ string, _ time.Time) (*session.SkillROI, error) {
+	return nil, fmt.Errorf("SkillROIAnalysis not supported in remote mode")
+}
+
 func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {
 	return nil, fmt.Errorf("ComputeObjective not supported in remote mode")
 }
