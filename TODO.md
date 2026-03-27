@@ -72,6 +72,19 @@ Detect when sessions reach the "degradation zone" of the model's context window.
 - Session detail: context saturation curve (tokens per message, cumulative)
 - Recommendation: "Your Omogen sessions reach 80% in 4 messages avg — split tasks"
 
+**What causes saturation — breakdown:**
+- System prompt / agent instructions (fixed per session start)
+- Skill system prompts loaded at init (can be very large: 2-5K tokens each)
+- AGENTS.md / CONTEXT.md injected context
+- Cumulative conversation (each message adds to context)
+- Tool call results (bash output can be huge)
+- Per session: show "init overhead" (tokens before first user message) vs "conversation growth"
+
+**Session detail view:**
+- Context saturation curve: X=message #, Y=cumulative tokens, colored zones
+- Annotated: "Skill loaded here (+3K)", "Bash output (+8K)", "Compaction triggered"
+- Init overhead badge: "This session starts at 15K tokens before your first message"
+
 **Model context limits:**
 | Model | Context Window | Optimal Zone | Degraded Zone | Critical Zone |
 |-------|---------------|-------------|--------------|--------------|
@@ -132,6 +145,10 @@ Displayed as a colored badge on each session card: 🟢 90+, 🟡 70-89, 🔴 <7
 - [ ] Store in pgvector (PostgreSQL adapter) or sqlite-vec
 - [ ] "Find sessions that talk about authentication" → semantic similarity
 - [ ] Combine with FTS5 for hybrid search (keyword + semantic)
+- [ ] **Challenge**: sessions are very large (100K+ tokens) — need chunking strategy
+  - Index by message or by chunk (not whole session)
+  - Embed summary + first N messages + tool call names separately
+  - Retrieve at chunk level, group by session in results
 
 ### 1.2 Elasticsearch / Typesense Adapter
 - [ ] `search/elastic/` adapter implementing `search.Engine`
@@ -149,22 +166,47 @@ Displayed as a colored badge on each session card: 🟢 90+, 🟡 70-89, 🔴 <7
 
 ## Priority 2: Dashboard & Visualization
 
-### 2.1 Activity Sparklines
+### 2.1 Branch Session Tree ⭐ HIGH VALUE
+Interactive tree visualization when clicking on a branch in the project page.
+
+**Concept:**
+- Click on a branch → opens a tree view showing all sessions on that branch
+- Tree root = first session created on this branch
+- Children = subsequent sessions, forks, subagents (parallel work)
+- Each node shows: summary, agent badge, status, token count, errors
+- Click a node → navigate to session detail
+- Parallel sessions visible side-by-side (same branch, overlapping time)
+- Fork relationships shown as branch-off from parent
+- Inspired by OpenAPI tree / git graph visualization
+
+**Data model:**
+- Group sessions by branch + project
+- Order by `created_at`
+- Connect forks via `session_forks` table
+- Connect subagents via `parent_id`
+- Detect concurrent sessions (overlapping time ranges on same branch)
+
+**UI:**
+- Collapsible tree (HTMX or lightweight JS)
+- Each level: session card with agent badge, status, token count
+- Visual connector lines between parent/child/fork
+- Color-coded by status: 🟢 completed, 🟡 active, 🔴 errors
+
+### 2.2 Activity Sparklines
 - [ ] Mini bar charts for daily activity on KPI cards
 - [ ] Session count sparkline on project cards
 - [ ] Token usage sparkline on home dashboard
 
-### 2.2 Cost Breakdown Charts
+### 2.3 Cost Breakdown Charts
 - [ ] Treemap or sunburst: project → backend → model → cost
 - [ ] Timeline chart: daily cost trend with budget line overlay
 - [ ] MCP server cost pie chart
 
-### 2.3 Session Timeline View
-- [ ] Fork tree visualization (clickable mini-tree in session list)
+### 2.4 Session Timeline View
 - [ ] Session dependency graph (parent → child → fork relationships)
 - [ ] Timeline of a session: messages, tool calls, errors as a Gantt-like chart
 
-### 2.4 Costs Page Organization
+### 2.5 Costs Page Organization
 - [ ] Collapsible sections or tabs (the page is 177KB now)
 - [ ] "Overview" tab: budgets + cache + backend breakdown
 - [ ] "Tools" tab: per-tool, MCP, agent costs
