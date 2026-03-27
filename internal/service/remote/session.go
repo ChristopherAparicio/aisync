@@ -410,6 +410,10 @@ func (r *SessionService) CacheEfficiency(_ context.Context, _ string, _ time.Tim
 	return nil, fmt.Errorf("CacheEfficiency not supported in remote mode yet")
 }
 
+func (r *SessionService) MCPCostMatrix(_ context.Context, _, _ time.Time) (*session.MCPProjectMatrix, error) {
+	return nil, fmt.Errorf("MCPCostMatrix not supported in remote mode yet")
+}
+
 func (r *SessionService) ClassifySession(_ *session.Session) int {
 	return 0
 }

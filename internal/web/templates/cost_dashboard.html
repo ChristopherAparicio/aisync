@@ -383,6 +383,63 @@
 </div>
 {{end}}
 
+<!-- ── MCP Server x Project Matrix ── -->
+{{if .HasMCPMatrix}}
+<div class="section">
+  <h2 class="section-title">MCP Servers Across Projects <span class="text-muted">(90d)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Cross-project view: which MCP servers are used by which projects, with estimated costs.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          {{range .MCPMatrix.Servers}}
+          <th class="text-right"><span class="badge badge-provider">{{.}}</span></th>
+          {{end}}
+          <th class="text-right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .MCPMatrix.Projects}}
+        <tr>
+          <td><a href="/projects{{.ProjectPath}}" class="font-mono cell-branch">{{.DisplayName}}</a></td>
+          {{$cells := .Cells}}
+          {{range $.MCPMatrix.Servers}}
+          <td class="text-right font-mono">
+            {{with index $cells .}}
+              {{if .HasData}}
+                <span title="{{.CallCount}} calls, {{formatTokens .TotalTokens}} tokens">{{formatCost .EstimatedCost}}</span>
+              {{else}}
+                <span class="text-muted">—</span>
+              {{end}}
+            {{else}}
+              <span class="text-muted">—</span>
+            {{end}}
+          </td>
+          {{end}}
+          <td class="text-right font-mono" style="font-weight: 600;">{{formatCost .TotalCost}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+      <tfoot>
+        <tr style="font-weight: 600; border-top: 2px solid var(--border);">
+          <td>All Projects</td>
+          {{$totals := .MCPMatrix.Totals}}
+          {{range .MCPMatrix.Servers}}
+          <td class="text-right font-mono">
+            {{with index $totals .}}
+              {{if .HasData}}{{formatCost .EstimatedCost}}{{else}}—{{end}}
+            {{else}}—{{end}}
+          </td>
+          {{end}}
+          <td class="text-right font-mono">{{formatCost .MCPMatrix.TotalCost}}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+{{end}}
+
 <!-- ── Cost by Tool ── -->
 {{if .HasToolCosts}}
 <div class="section">

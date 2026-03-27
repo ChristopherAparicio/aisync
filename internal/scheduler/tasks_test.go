@@ -144,6 +144,9 @@ func (m *mockSessionService) AgentCostSummary(_ context.Context, _ string, _, _ 
 func (m *mockSessionService) CacheEfficiency(_ context.Context, _ string, _ time.Time) (*session.CacheEfficiency, error) {
 	return nil, nil
 }
+func (m *mockSessionService) MCPCostMatrix(_ context.Context, _, _ time.Time) (*session.MCPProjectMatrix, error) {
+	return nil, nil
+}
 func (m *mockSessionService) ClassifySession(_ *session.Session) int {
 	return 0
 }

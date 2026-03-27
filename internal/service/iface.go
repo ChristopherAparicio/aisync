@@ -105,6 +105,9 @@ type SessionAnalytics interface {
 	// CacheEfficiency computes prompt cache usage stats and identifies waste.
 	CacheEfficiency(ctx context.Context, projectPath string, since time.Time) (*session.CacheEfficiency, error)
 
+	// MCPCostMatrix builds a cross-project matrix of MCP server usage and costs.
+	MCPCostMatrix(ctx context.Context, since, until time.Time) (*session.MCPProjectMatrix, error)
+
 	// ClassifySession applies per-project classifier rules (ticket extraction, branch rules).
 	ClassifySession(sess *session.Session) int
 

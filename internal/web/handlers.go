@@ -1733,6 +1733,10 @@ type costDashboardPage struct {
 	CacheAvgGap          float64 // avg gap between messages (minutes)
 	CacheAvgMissGap      float64 // avg gap for miss messages (minutes)
 	WorstCacheSessions   []cacheMissView
+
+	// Cross-project MCP matrix
+	HasMCPMatrix bool
+	MCPMatrix    *mcpMatrixView
 }
 
 // cacheMissView is a template-friendly view of a cache miss session.
@@ -1792,6 +1796,33 @@ type agentCostView struct {
 	ToolCallCount     int
 	EstimatedCost     float64
 	AvgCostPerSession float64
+}
+
+// mcpMatrixView is a template-friendly cross-project MCP server matrix.
+type mcpMatrixView struct {
+	Servers    []string               // column headers (MCP server names)
+	Projects   []mcpMatrixRowView     // rows (one per project)
+	Totals     map[string]mcpCellView // server name → total cell
+	TotalCost  float64
+	TotalCalls int
+}
+
+// mcpMatrixRowView is one project's row in the MCP matrix.
+type mcpMatrixRowView struct {
+	ProjectPath string
+	DisplayName string
+	Cells       map[string]mcpCellView // server name → cell
+	TotalCost   float64
+	TotalCalls  int
+}
+
+// mcpCellView is a single (project × MCP server) intersection.
+type mcpCellView struct {
+	CallCount     int
+	TotalTokens   int
+	ErrorCount    int
+	EstimatedCost float64
+	HasData       bool // true if this cell has non-zero data
 }
 
 // handleCosts renders the cost dashboard.
@@ -1973,6 +2004,50 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 
 	// Cache efficiency analysis.
 	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(r.Context(), project, since90d)
+
+	// Cross-project MCP matrix (only when no project filter — global view).
+	if project == "" {
+		matrix, mErr := s.sessionSvc.MCPCostMatrix(r.Context(), since90d, time.Time{})
+		if mErr == nil && matrix != nil && len(matrix.Projects) > 0 {
+			data.HasMCPMatrix = true
+			mv := &mcpMatrixView{
+				Servers:    matrix.Servers,
+				TotalCost:  matrix.TotalCost,
+				TotalCalls: matrix.TotalCalls,
+				Totals:     make(map[string]mcpCellView),
+			}
+			for srv, st := range matrix.ServerTotals {
+				mv.Totals[srv] = mcpCellView{
+					CallCount:     st.CallCount,
+					TotalTokens:   st.TotalTokens,
+					ErrorCount:    st.ErrorCount,
+					EstimatedCost: st.EstimatedCost,
+					HasData:       st.CallCount > 0,
+				}
+			}
+			for _, row := range matrix.Projects {
+				rv := mcpMatrixRowView{
+					ProjectPath: row.ProjectPath,
+					DisplayName: row.DisplayName,
+					Cells:       make(map[string]mcpCellView),
+					TotalCost:   row.TotalCost,
+					TotalCalls:  row.TotalCalls,
+				}
+				for srv, cell := range row.Cells {
+					rv.Cells[srv] = mcpCellView{
+						CallCount:     cell.CallCount,
+						TotalTokens:   cell.TotalTokens,
+						ErrorCount:    cell.ErrorCount,
+						EstimatedCost: cell.EstimatedCost,
+						HasData:       cell.CallCount > 0,
+					}
+				}
+				mv.Projects = append(mv.Projects, rv)
+			}
+			data.MCPMatrix = mv
+		}
+	}
+
 	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
 		data.HasCacheData = true
 		data.CacheHitRate = cacheEff.CacheHitRate

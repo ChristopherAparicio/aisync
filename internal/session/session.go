@@ -228,6 +228,40 @@ type AgentCostEntry struct {
 	AvgCostPerSession float64 `json:"avg_cost_per_session"`
 }
 
+// MCPProjectMatrix is a cross-project view of MCP server usage.
+// It shows which MCP servers are used by which projects with cost data.
+type MCPProjectMatrix struct {
+	// All distinct MCP server names found (columns).
+	Servers []string `json:"servers"`
+
+	// Per-project rows, each with per-server cost data.
+	Projects []MCPProjectRow `json:"projects"`
+
+	// Per-server totals across all projects.
+	ServerTotals map[string]MCPProjectCell `json:"server_totals"`
+
+	// Grand total.
+	TotalCost  float64 `json:"total_cost"`
+	TotalCalls int     `json:"total_calls"`
+}
+
+// MCPProjectRow represents one project's MCP usage across all servers.
+type MCPProjectRow struct {
+	ProjectPath string                    `json:"project_path"`
+	DisplayName string                    `json:"display_name"` // basename of project path
+	Cells       map[string]MCPProjectCell `json:"cells"`        // server name → cell
+	TotalCost   float64                   `json:"total_cost"`   // sum across all servers
+	TotalCalls  int                       `json:"total_calls"`
+}
+
+// MCPProjectCell is a single (project × MCP server) intersection.
+type MCPProjectCell struct {
+	CallCount     int     `json:"call_count"`
+	TotalTokens   int     `json:"total_tokens"`
+	ErrorCount    int     `json:"error_count"`
+	EstimatedCost float64 `json:"estimated_cost"`
+}
+
 // CacheEfficiency summarizes prompt cache usage and waste.
 type CacheEfficiency struct {
 	// Aggregate stats

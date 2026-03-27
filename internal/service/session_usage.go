@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -522,6 +523,108 @@ func (s *SessionService) AgentCostSummary(ctx context.Context, projectPath strin
 		return entries[i].EstimatedCost > entries[j].EstimatedCost
 	})
 	return entries, nil
+}
+
+// MCPCostMatrix builds a cross-project matrix of MCP server usage.
+// It queries all tool usage buckets and aggregates by (project, MCP server).
+// Only MCP tools (category starts with "mcp:") are included.
+func (s *SessionService) MCPCostMatrix(ctx context.Context, since, until time.Time) (*session.MCPProjectMatrix, error) {
+	buckets, err := s.store.QueryToolBuckets("1d", since, until, "" /* all projects */)
+	if err != nil {
+		return nil, fmt.Errorf("querying tool buckets: %w", err)
+	}
+
+	// Aggregate by (project_path, mcp_server).
+	type cellKey struct {
+		project string
+		server  string
+	}
+	cells := make(map[cellKey]*session.MCPProjectCell)
+	serversSeen := make(map[string]bool)
+	projectsSeen := make(map[string]bool)
+
+	for _, b := range buckets {
+		server := session.MCPServerName(b.ToolCategory)
+		if server == "" {
+			continue // skip builtin tools
+		}
+
+		key := cellKey{project: b.ProjectPath, server: server}
+		cell, ok := cells[key]
+		if !ok {
+			cell = &session.MCPProjectCell{}
+			cells[key] = cell
+		}
+		cell.CallCount += b.CallCount
+		cell.TotalTokens += b.InputTokens + b.OutputTokens
+		cell.ErrorCount += b.ErrorCount
+		cell.EstimatedCost += b.EstimatedCost
+
+		serversSeen[server] = true
+		projectsSeen[b.ProjectPath] = true
+	}
+
+	if len(cells) == 0 {
+		return nil, nil
+	}
+
+	// Build sorted server list (columns).
+	servers := make([]string, 0, len(serversSeen))
+	for s := range serversSeen {
+		servers = append(servers, s)
+	}
+	sort.Strings(servers)
+
+	// Build per-project rows.
+	serverTotals := make(map[string]session.MCPProjectCell)
+	var projects []session.MCPProjectRow
+	totalCost := 0.0
+	totalCalls := 0
+
+	projectList := make([]string, 0, len(projectsSeen))
+	for p := range projectsSeen {
+		projectList = append(projectList, p)
+	}
+	sort.Strings(projectList)
+
+	for _, proj := range projectList {
+		row := session.MCPProjectRow{
+			ProjectPath: proj,
+			DisplayName: filepath.Base(proj),
+			Cells:       make(map[string]session.MCPProjectCell),
+		}
+		for _, srv := range servers {
+			key := cellKey{project: proj, server: srv}
+			if cell, ok := cells[key]; ok {
+				row.Cells[srv] = *cell
+				row.TotalCost += cell.EstimatedCost
+				row.TotalCalls += cell.CallCount
+				// Accumulate server totals.
+				st := serverTotals[srv]
+				st.CallCount += cell.CallCount
+				st.TotalTokens += cell.TotalTokens
+				st.ErrorCount += cell.ErrorCount
+				st.EstimatedCost += cell.EstimatedCost
+				serverTotals[srv] = st
+			}
+		}
+		totalCost += row.TotalCost
+		totalCalls += row.TotalCalls
+		projects = append(projects, row)
+	}
+
+	// Sort projects by total cost descending.
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].TotalCost > projects[j].TotalCost
+	})
+
+	return &session.MCPProjectMatrix{
+		Servers:      servers,
+		Projects:     projects,
+		ServerTotals: serverTotals,
+		TotalCost:    totalCost,
+		TotalCalls:   totalCalls,
+	}, nil
 }
 
 // CacheEfficiency computes prompt cache usage statistics and identifies waste.
