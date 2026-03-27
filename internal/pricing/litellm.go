@@ -319,6 +319,8 @@ func parseLiteLLMJSON(data []byte, providerFilter []string, maxModels int) ([]Mo
 			Model:           modelKey,
 			InputPerMToken:  *m.InputCostPerToken * 1_000_000,
 			OutputPerMToken: *m.OutputCostPerToken * 1_000_000,
+			MaxInputTokens:  m.MaxInputTokens,
+			MaxOutputTokens: m.MaxOutputTokens,
 		}
 
 		// Cache pricing.

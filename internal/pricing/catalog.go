@@ -33,11 +33,13 @@ type PricingTier struct {
 // ModelPrice defines the cost per million tokens for a model.
 type ModelPrice struct {
 	Model               string        `json:"model" yaml:"model"`
-	InputPerMToken      float64       `json:"input_per_mtoken" yaml:"input_per_mtoken"`             // $ per 1M input tokens (base rate)
-	OutputPerMToken     float64       `json:"output_per_mtoken" yaml:"output_per_mtoken"`           // $ per 1M output tokens (base rate)
-	CacheReadPerMToken  float64       `json:"cache_read_per_mtoken" yaml:"cache_read_per_mtoken"`   // $ per 1M cache read tokens (0 = use InputPerMToken)
-	CacheWritePerMToken float64       `json:"cache_write_per_mtoken" yaml:"cache_write_per_mtoken"` // $ per 1M cache write tokens (0 = use InputPerMToken * 1.25)
-	Tiers               []PricingTier `json:"tiers,omitempty" yaml:"tiers,omitempty"`               // optional tiered pricing (sorted by threshold ascending)
+	InputPerMToken      float64       `json:"input_per_mtoken" yaml:"input_per_mtoken"`                       // $ per 1M input tokens (base rate)
+	OutputPerMToken     float64       `json:"output_per_mtoken" yaml:"output_per_mtoken"`                     // $ per 1M output tokens (base rate)
+	CacheReadPerMToken  float64       `json:"cache_read_per_mtoken" yaml:"cache_read_per_mtoken"`             // $ per 1M cache read tokens (0 = use InputPerMToken)
+	CacheWritePerMToken float64       `json:"cache_write_per_mtoken" yaml:"cache_write_per_mtoken"`           // $ per 1M cache write tokens (0 = use InputPerMToken * 1.25)
+	MaxInputTokens      int           `json:"max_input_tokens,omitempty" yaml:"max_input_tokens,omitempty"`   // context window size (0 = unknown)
+	MaxOutputTokens     int           `json:"max_output_tokens,omitempty" yaml:"max_output_tokens,omitempty"` // max output size (0 = unknown)
+	Tiers               []PricingTier `json:"tiers,omitempty" yaml:"tiers,omitempty"`                         // optional tiered pricing (sorted by threshold ascending)
 }
 
 // HasTiers returns true if the model has tiered pricing.

@@ -177,6 +177,93 @@ func TestParseLiteLLMJSON_perMTokenConversion(t *testing.T) {
 	assertFloat(t, "opus cache write", opus.CacheWritePerMToken, 18.75)
 }
 
+func TestParseLiteLLMJSON_contextWindowSizes(t *testing.T) {
+	prices, err := parseLiteLLMJSON([]byte(minimalLiteLLMJSON), nil, 0)
+	if err != nil {
+		t.Fatalf("parseLiteLLMJSON error: %v", err)
+	}
+
+	tests := []struct {
+		model         string
+		wantMaxInput  int
+		wantMaxOutput int
+	}{
+		{"claude-opus-4-1", 200000, 32000},
+		{"claude-sonnet-4-20250514", 200000, 64000},
+		{"gpt-4o", 128000, 16384},
+		{"gemini-2.5-pro", 1048576, 65535},
+		{"anthropic.claude-opus-4-6-v1", 1000000, 128000},
+	}
+
+	priceMap := make(map[string]ModelPrice)
+	for _, p := range prices {
+		priceMap[p.Model] = p
+	}
+
+	for _, tt := range tests {
+		p, ok := priceMap[tt.model]
+		if !ok {
+			t.Errorf("model %q not found", tt.model)
+			continue
+		}
+		if p.MaxInputTokens != tt.wantMaxInput {
+			t.Errorf("%s: MaxInputTokens = %d, want %d", tt.model, p.MaxInputTokens, tt.wantMaxInput)
+		}
+		if p.MaxOutputTokens != tt.wantMaxOutput {
+			t.Errorf("%s: MaxOutputTokens = %d, want %d", tt.model, p.MaxOutputTokens, tt.wantMaxOutput)
+		}
+	}
+}
+
+func TestParseLiteLLMJSON_contextWindowZeroWhenMissing(t *testing.T) {
+	prices, err := parseLiteLLMJSON([]byte(minimalLiteLLMJSON), nil, 0)
+	if err != nil {
+		t.Fatalf("parseLiteLLMJSON error: %v", err)
+	}
+
+	// gpt-4o-mini and o3-mini don't have max_input_tokens in the fixture.
+	for _, p := range prices {
+		if p.Model == "gpt-4o-mini" || p.Model == "o3-mini" {
+			if p.MaxInputTokens != 0 {
+				t.Errorf("%s: expected MaxInputTokens=0 (not in JSON), got %d", p.Model, p.MaxInputTokens)
+			}
+		}
+	}
+}
+
+func TestEmbeddedCatalog_contextWindowSizes(t *testing.T) {
+	cat, err := NewEmbeddedCatalog()
+	if err != nil {
+		t.Fatalf("NewEmbeddedCatalog error: %v", err)
+	}
+
+	tests := []struct {
+		model         string
+		wantMaxInput  int
+		wantMaxOutput int
+	}{
+		{"claude-opus-4-20250514", 200000, 32000},
+		{"claude-sonnet-4-20250514", 200000, 64000},
+		{"gpt-4o-2025-01-01", 128000, 16384},
+		{"gemini-2.5-pro-latest", 1048576, 65536},
+		{"o3-2025-01-01", 200000, 100000},
+	}
+
+	for _, tt := range tests {
+		p, ok := cat.Lookup(tt.model)
+		if !ok {
+			t.Errorf("model %q not found in embedded catalog", tt.model)
+			continue
+		}
+		if p.MaxInputTokens != tt.wantMaxInput {
+			t.Errorf("%s: MaxInputTokens = %d, want %d", tt.model, p.MaxInputTokens, tt.wantMaxInput)
+		}
+		if p.MaxOutputTokens != tt.wantMaxOutput {
+			t.Errorf("%s: MaxOutputTokens = %d, want %d", tt.model, p.MaxOutputTokens, tt.wantMaxOutput)
+		}
+	}
+}
+
 func TestParseLiteLLMJSON_gpt4oPricing(t *testing.T) {
 	prices, err := parseLiteLLMJSON([]byte(minimalLiteLLMJSON), nil, 0)
 	if err != nil {

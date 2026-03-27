@@ -9,7 +9,11 @@
 # tokens up to the first threshold use the base rate, then subsequent
 # tiers apply their multiplier.
 #
-# Last updated: 2026-03-24
+# Context windows: max_input_tokens and max_output_tokens define the model's
+# context window and maximum output size. Used for context saturation
+# forecasting and model fitness analysis.
+#
+# Last updated: 2026-03-27
 
 models:
   # ─── Claude (Anthropic) ───────────────────────────────────────────
@@ -18,6 +22,8 @@ models:
     output_per_mtoken: 75.0
     cache_read_per_mtoken: 1.50
     cache_write_per_mtoken: 18.75
+    max_input_tokens: 200000
+    max_output_tokens: 32000
     tiers:
       - threshold_tokens: 200000
         input_multiplier: 2.0
@@ -28,64 +34,88 @@ models:
     output_per_mtoken: 15.0
     cache_read_per_mtoken: 0.30
     cache_write_per_mtoken: 3.75
+    max_input_tokens: 200000
+    max_output_tokens: 64000
 
   - model: claude-haiku-4
     input_per_mtoken: 0.80
     output_per_mtoken: 4.0
     cache_read_per_mtoken: 0.08
     cache_write_per_mtoken: 1.0
+    max_input_tokens: 200000
+    max_output_tokens: 64000
 
   - model: claude-haiku-3.5
     input_per_mtoken: 0.80
     output_per_mtoken: 4.0
     cache_read_per_mtoken: 0.08
     cache_write_per_mtoken: 1.0
+    max_input_tokens: 200000
+    max_output_tokens: 8192
 
   # ─── GPT (OpenAI) ────────────────────────────────────────────────
   - model: gpt-4o
     input_per_mtoken: 2.50
     output_per_mtoken: 10.0
     cache_read_per_mtoken: 1.25
+    max_input_tokens: 128000
+    max_output_tokens: 16384
 
   - model: gpt-4o-mini
     input_per_mtoken: 0.15
     output_per_mtoken: 0.60
     cache_read_per_mtoken: 0.075
+    max_input_tokens: 128000
+    max_output_tokens: 16384
 
   - model: gpt-4.1
     input_per_mtoken: 2.0
     output_per_mtoken: 8.0
     cache_read_per_mtoken: 0.50
+    max_input_tokens: 1047576
+    max_output_tokens: 32768
 
   - model: gpt-4.1-mini
     input_per_mtoken: 0.40
     output_per_mtoken: 1.60
     cache_read_per_mtoken: 0.10
+    max_input_tokens: 1047576
+    max_output_tokens: 32768
 
   - model: gpt-4.1-nano
     input_per_mtoken: 0.10
     output_per_mtoken: 0.40
     cache_read_per_mtoken: 0.025
+    max_input_tokens: 1047576
+    max_output_tokens: 32768
 
   - model: o3
     input_per_mtoken: 2.0
     output_per_mtoken: 8.0
     cache_read_per_mtoken: 0.50
+    max_input_tokens: 200000
+    max_output_tokens: 100000
 
   - model: o3-mini
     input_per_mtoken: 1.10
     output_per_mtoken: 4.40
     cache_read_per_mtoken: 0.275
+    max_input_tokens: 200000
+    max_output_tokens: 100000
 
   - model: o4-mini
     input_per_mtoken: 1.10
     output_per_mtoken: 4.40
     cache_read_per_mtoken: 0.275
+    max_input_tokens: 200000
+    max_output_tokens: 100000
 
   # ─── Gemini (Google) ──────────────────────────────────────────────
   - model: gemini-2.5-pro
     input_per_mtoken: 1.25
     output_per_mtoken: 10.0
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
     tiers:
       - threshold_tokens: 200000
         input_multiplier: 2.0
@@ -94,6 +124,8 @@ models:
   - model: gemini-2.5-flash
     input_per_mtoken: 0.15
     output_per_mtoken: 0.60
+    max_input_tokens: 1048576
+    max_output_tokens: 65536
     tiers:
       - threshold_tokens: 200000
         input_multiplier: 2.0
@@ -102,3 +134,5 @@ models:
   - model: gemini-2.0-flash
     input_per_mtoken: 0.10
     output_per_mtoken: 0.40
+    max_input_tokens: 1048576
+    max_output_tokens: 8192
