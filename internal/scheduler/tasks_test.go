@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/search"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
@@ -158,6 +159,12 @@ func (m *mockSessionService) ClassifyProjectSessions(_, _ string) (int, int, err
 }
 func (m *mockSessionService) BudgetStatus(_ context.Context) ([]session.BudgetStatus, error) {
 	return nil, nil
+}
+func (m *mockSessionService) SearchCapabilities() search.Capabilities {
+	return search.Capabilities{}
+}
+func (m *mockSessionService) IndexAllSessions(_ context.Context) (int, int, error) {
+	return 0, 0, nil
 }
 func (m *mockSessionService) Rewind(_ context.Context, _ service.RewindRequest) (*service.RewindResult, error) {
 	return nil, nil

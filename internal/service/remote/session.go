@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/client"
+	"github.com/ChristopherAparicio/aisync/internal/search"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
@@ -428,6 +429,14 @@ func (r *SessionService) ClassifyProjectSessions(_, _ string) (int, int, error) 
 
 func (r *SessionService) BudgetStatus(_ context.Context) ([]session.BudgetStatus, error) {
 	return nil, fmt.Errorf("BudgetStatus not supported in remote mode")
+}
+
+func (r *SessionService) SearchCapabilities() search.Capabilities {
+	return search.Capabilities{}
+}
+
+func (r *SessionService) IndexAllSessions(_ context.Context) (int, int, error) {
+	return 0, 0, fmt.Errorf("IndexAllSessions not supported in remote mode")
 }
 
 func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {

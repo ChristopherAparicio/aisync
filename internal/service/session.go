@@ -15,6 +15,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/platform"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
+	"github.com/ChristopherAparicio/aisync/internal/search"
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
@@ -28,15 +29,16 @@ import (
 type PostCaptureFunc func(sess *session.Session)
 
 type SessionService struct {
-	store     storage.Store
-	registry  *provider.Registry
-	scanner   *secrets.Scanner // optional — nil means no scanning
-	converter *converter.Converter
-	pricing   *pricing.Calculator
-	cfg       *config.Config    // optional — nil uses defaults
-	git       *git.Client       // optional — nil when git is unavailable
-	platform  platform.Platform // optional — nil when platform is unavailable
-	llm       llm.Client        // optional — nil disables AI features (summarize, explain)
+	store        storage.Store
+	registry     *provider.Registry
+	scanner      *secrets.Scanner // optional — nil means no scanning
+	converter    *converter.Converter
+	pricing      *pricing.Calculator
+	cfg          *config.Config    // optional — nil uses defaults
+	git          *git.Client       // optional — nil when git is unavailable
+	platform     platform.Platform // optional — nil when platform is unavailable
+	llm          llm.Client        // optional — nil disables AI features (summarize, explain)
+	searchEngine search.Engine     // optional — nil falls back to LIKE search
 
 	// postCapture is an optional callback invoked after successful capture.
 	// Used by the analysis subsystem to trigger auto-analysis.
@@ -55,16 +57,17 @@ func (s *SessionService) RunPostCapture(sess *session.Session) {
 
 // SessionServiceConfig holds all dependencies for creating a SessionService.
 type SessionServiceConfig struct {
-	Store       storage.Store
-	Registry    *provider.Registry
-	Scanner     *secrets.Scanner // optional
-	Converter   *converter.Converter
-	Pricing     *pricing.Calculator // optional — nil uses defaults
-	Config      *config.Config      // optional — nil uses defaults (needed for billing config)
-	Git         *git.Client         // optional
-	Platform    platform.Platform   // optional
-	LLM         llm.Client          // optional — nil disables AI features
-	PostCapture PostCaptureFunc     // optional — callback after successful capture
+	Store        storage.Store
+	Registry     *provider.Registry
+	Scanner      *secrets.Scanner // optional
+	Converter    *converter.Converter
+	Pricing      *pricing.Calculator // optional — nil uses defaults
+	Config       *config.Config      // optional — nil uses defaults (needed for billing config)
+	Git          *git.Client         // optional
+	Platform     platform.Platform   // optional
+	LLM          llm.Client          // optional — nil disables AI features
+	PostCapture  PostCaptureFunc     // optional — callback after successful capture
+	SearchEngine search.Engine       // optional — nil falls back to LIKE search
 }
 
 // NewSessionService creates a SessionService with all dependencies.
@@ -78,16 +81,17 @@ func NewSessionService(cfg SessionServiceConfig) *SessionService {
 		calc = pricing.NewCalculator()
 	}
 	return &SessionService{
-		store:       cfg.Store,
-		registry:    cfg.Registry,
-		scanner:     cfg.Scanner,
-		converter:   conv,
-		pricing:     calc,
-		cfg:         cfg.Config,
-		git:         cfg.Git,
-		platform:    cfg.Platform,
-		llm:         cfg.LLM,
-		postCapture: cfg.PostCapture,
+		store:        cfg.Store,
+		registry:     cfg.Registry,
+		scanner:      cfg.Scanner,
+		converter:    conv,
+		pricing:      calc,
+		cfg:          cfg.Config,
+		git:          cfg.Git,
+		platform:     cfg.Platform,
+		llm:          cfg.LLM,
+		searchEngine: cfg.SearchEngine,
+		postCapture:  cfg.PostCapture,
 	}
 }
 

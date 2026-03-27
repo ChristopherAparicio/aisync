@@ -4,7 +4,9 @@ package factory
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -32,6 +34,9 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/provider/claude"
 	cursorprov "github.com/ChristopherAparicio/aisync/internal/provider/cursor"
 	"github.com/ChristopherAparicio/aisync/internal/provider/opencode"
+	"github.com/ChristopherAparicio/aisync/internal/search"
+	"github.com/ChristopherAparicio/aisync/internal/search/fts5"
+	"github.com/ChristopherAparicio/aisync/internal/search/like"
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/service/remote"
@@ -470,6 +475,10 @@ func New() *cmdutil.Factory {
 					// Per-project classifier rules (ticket extraction, branch-to-type mapping).
 					if classSvc, classSvcErr := f.SessionService(); classSvcErr == nil {
 						classSvc.ClassifySession(sess)
+						// Index into search engine (FTS5, etc.) — uses concrete type.
+						if indexer, ok := classSvc.(*service.SessionService); ok {
+							indexer.IndexSession(sess)
+						}
 					}
 
 					// Auto-analysis: only if error rate exceeds threshold.
@@ -511,16 +520,17 @@ func New() *cmdutil.Factory {
 			}
 
 			cachedSessionSvc = service.NewSessionService(service.SessionServiceConfig{
-				Store:       store,
-				Registry:    registry,
-				Scanner:     scanner,
-				Converter:   conv,
-				Pricing:     calc,
-				Config:      cfg,
-				Git:         gitClient,
-				Platform:    plat,
-				LLM:         llmClient,
-				PostCapture: postCapture,
+				Store:        store,
+				Registry:     registry,
+				Scanner:      scanner,
+				Converter:    conv,
+				Pricing:      calc,
+				Config:       cfg,
+				Git:          gitClient,
+				Platform:     plat,
+				LLM:          llmClient,
+				SearchEngine: buildSearchEngine(cfg, store),
+				PostCapture:  postCapture,
 			})
 		})
 		if cachedRemoteSvc != nil {
@@ -710,4 +720,41 @@ func repoConfigDir() string {
 	}
 
 	return filepath.Join(topLevel, globalDirName)
+}
+
+// buildSearchEngine creates the appropriate search engine based on config.
+// Returns nil if no engine is configured (falls back to basic LIKE in the service).
+func buildSearchEngine(cfg *config.Config, store storage.Store) search.Engine {
+	if cfg == nil {
+		return nil
+	}
+
+	engineName := cfg.GetSearchEngine()
+
+	// Always have LIKE as the ultimate fallback.
+	likeEngine := like.New(store)
+
+	switch engineName {
+	case "fts5":
+		// FTS5 needs access to the underlying *sql.DB.
+		type dbGetter interface {
+			DB() *sql.DB
+		}
+		if dg, ok := store.(dbGetter); ok {
+			eng, err := fts5.New(dg.DB())
+			if err != nil {
+				log.Printf("[search] failed to init FTS5: %v, falling back to LIKE", err)
+				return likeEngine
+			}
+			log.Printf("[search] FTS5 engine initialized")
+			return search.NewChain(log.Default(), eng, likeEngine)
+		}
+		log.Printf("[search] store does not expose DB() for FTS5, falling back to LIKE")
+		return likeEngine
+	case "like", "":
+		return likeEngine
+	default:
+		log.Printf("[search] unknown engine %q, falling back to LIKE", engineName)
+		return likeEngine
+	}
 }

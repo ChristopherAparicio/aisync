@@ -30,6 +30,7 @@ type configData struct {
 	Tagging     taggingConf                      `json:"tagging"`
 	Project     projectConf                      `json:"project"`
 	Projects    map[string]projectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
+	Search      searchConf                       `json:"search"`
 	Webhooks    webhooksConf                     `json:"webhooks"`
 	Dashboard   dashboardConf                    `json:"dashboard"`
 	Server      serverConf                       `json:"server"`
@@ -230,6 +231,35 @@ type schedulerConf struct {
 	StatsReport schedulerTaskConf `json:"stats_report"`
 }
 
+// searchConf configures the search engine.
+type searchConf struct {
+	// Engine selects the primary search engine: "like" (default), "fts5", "elasticsearch", "postgres".
+	Engine string `json:"engine,omitempty"`
+
+	// Fallback engine to use when the primary fails. Default: "like".
+	Fallback string `json:"fallback,omitempty"`
+
+	// IndexContent controls whether message content is indexed (for full-text search).
+	// Default: true when using fts5 or external engines.
+	IndexContent *bool `json:"index_content,omitempty"`
+
+	// MaxContentLength caps the indexed content per session (in characters).
+	// Default: 50000.
+	MaxContentLength int `json:"max_content_length,omitempty"`
+
+	// Elasticsearch-specific config.
+	Elasticsearch struct {
+		URL   string `json:"url,omitempty"`
+		Index string `json:"index,omitempty"`
+	} `json:"elasticsearch,omitempty"`
+
+	// Postgres-specific config.
+	Postgres struct {
+		DSN           string `json:"dsn,omitempty"`
+		SemanticModel string `json:"semantic_model,omitempty"` // embedding model for pgvector
+	} `json:"postgres,omitempty"`
+}
+
 // schedulerTaskConf holds configuration for a single scheduled task.
 type schedulerTaskConf struct {
 	Enabled       bool   `json:"enabled"`
@@ -380,6 +410,20 @@ func (c *Config) loadFrom(dir string) error {
 		for k, v := range loaded.Projects {
 			c.data.Projects[k] = v
 		}
+	}
+
+	// Search — merge search engine config.
+	if loaded.Search.Engine != "" {
+		c.data.Search.Engine = loaded.Search.Engine
+	}
+	if loaded.Search.Fallback != "" {
+		c.data.Search.Fallback = loaded.Search.Fallback
+	}
+	if loaded.Search.IndexContent != nil {
+		c.data.Search.IndexContent = loaded.Search.IndexContent
+	}
+	if loaded.Search.MaxContentLength > 0 {
+		c.data.Search.MaxContentLength = loaded.Search.MaxContentLength
 	}
 
 	// Analysis — bools always take the loaded value
@@ -1247,6 +1291,39 @@ func (c *Config) GetErrorsLLMProfile() string {
 // GetSchedulerGCEnabled returns whether the GC scheduled task is enabled.
 func (c *Config) GetSchedulerGCEnabled() bool {
 	return c.data.Scheduler.GC.Enabled
+}
+
+// GetSearchEngine returns the configured search engine name. Default: "like".
+func (c *Config) GetSearchEngine() string {
+	if c.data.Search.Engine != "" {
+		return c.data.Search.Engine
+	}
+	return "like"
+}
+
+// GetSearchFallback returns the fallback search engine name. Default: "like".
+func (c *Config) GetSearchFallback() string {
+	if c.data.Search.Fallback != "" {
+		return c.data.Search.Fallback
+	}
+	return "like"
+}
+
+// GetSearchIndexContent returns whether message content should be indexed.
+func (c *Config) GetSearchIndexContent() bool {
+	if c.data.Search.IndexContent != nil {
+		return *c.data.Search.IndexContent
+	}
+	// Default: true for fts5 and external engines.
+	return c.data.Search.Engine != "" && c.data.Search.Engine != "like"
+}
+
+// GetSearchMaxContentLength returns the max content length for indexing.
+func (c *Config) GetSearchMaxContentLength() int {
+	if c.data.Search.MaxContentLength > 0 {
+		return c.data.Search.MaxContentLength
+	}
+	return 50000
 }
 
 // GetSchedulerGCCron returns the cron expression for the GC task.

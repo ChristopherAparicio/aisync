@@ -90,6 +90,12 @@ Examples:
 				fmt.Fprintf(f.IOStreams.Out, "  Total classified:      %d\n", totalClassified)
 			}
 
+			// Index sessions into search engine (if FTS5 or external engine configured).
+			indexed, indexTotal, indexErr := svc.IndexAllSessions(context.Background())
+			if indexErr == nil && indexed > 0 {
+				fmt.Fprintf(f.IOStreams.Out, "  Search indexed:        %d/%d sessions\n", indexed, indexTotal)
+			}
+
 			return nil
 		},
 	}

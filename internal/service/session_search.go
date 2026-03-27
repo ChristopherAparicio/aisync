@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/ChristopherAparicio/aisync/internal/search"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
@@ -71,7 +73,7 @@ func (s *SessionService) Search(req SearchRequest) (*session.SearchResult, error
 		query.Until = t
 	}
 
-	result, err := s.store.Search(query)
+	result, err := s.searchViaEngine(query)
 	if err != nil {
 		return nil, err
 	}
@@ -106,4 +108,69 @@ func parseFlexibleTime(s string) (time.Time, error) {
 		return t, nil
 	}
 	return time.Time{}, fmt.Errorf("expected RFC3339 (2006-01-02T15:04:05Z) or date (2006-01-02)")
+}
+
+// searchViaEngine routes the search through the configured search engine,
+// falling back to the store's basic LIKE search when no engine is set.
+func (s *SessionService) searchViaEngine(query session.SearchQuery) (*session.SearchResult, error) {
+	// If no search engine or no keyword, use the store directly (structured filters only).
+	if s.searchEngine == nil || query.Keyword == "" {
+		return s.store.Search(query)
+	}
+
+	// Build a search.Query from the session.SearchQuery.
+	sq := search.Query{
+		Text:   query.Keyword,
+		Mode:   search.ModeAuto,
+		Limit:  query.Limit,
+		Offset: query.Offset,
+		Filters: search.Filters{
+			ProjectPath:     query.ProjectPath,
+			RemoteURL:       query.RemoteURL,
+			Branch:          query.Branch,
+			Provider:        string(query.Provider),
+			SessionType:     query.SessionType,
+			ProjectCategory: query.ProjectCategory,
+			Since:           query.Since,
+			Until:           query.Until,
+			HasErrors:       query.HasErrors,
+		},
+	}
+
+	result, err := s.searchEngine.Search(context.Background(), sq)
+	if err != nil {
+		// Fallback to store on engine error.
+		return s.store.Search(query)
+	}
+
+	// Convert search.Result back to session.SearchResult.
+	sr := &session.SearchResult{
+		TotalCount: result.TotalCount,
+		Limit:      query.Limit,
+		Offset:     query.Offset,
+	}
+	for _, hit := range result.Hits {
+		sr.Sessions = append(sr.Sessions, session.Summary{
+			ID:           session.ID(hit.SessionID),
+			Summary:      hit.Summary,
+			ProjectPath:  hit.ProjectPath,
+			RemoteURL:    hit.RemoteURL,
+			Branch:       hit.Branch,
+			Agent:        hit.Agent,
+			Provider:     session.ProviderName(hit.Provider),
+			CreatedAt:    hit.CreatedAt,
+			TotalTokens:  hit.Tokens,
+			MessageCount: hit.Messages,
+			ErrorCount:   hit.Errors,
+		})
+	}
+	return sr, nil
+}
+
+// SearchCapabilities returns what the configured search engine supports.
+func (s *SessionService) SearchCapabilities() search.Capabilities {
+	if s.searchEngine == nil {
+		return search.Capabilities{} // basic LIKE only
+	}
+	return s.searchEngine.Capabilities()
 }

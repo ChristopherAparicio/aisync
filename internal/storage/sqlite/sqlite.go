@@ -166,6 +166,11 @@ type Store struct {
 	db *sql.DB
 }
 
+// DB returns the underlying *sql.DB for advanced use cases (e.g. FTS5 search engine).
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 // New opens (or creates) a SQLite database at the given path and runs migrations.
 func New(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")

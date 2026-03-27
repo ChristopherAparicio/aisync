@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/search"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
@@ -119,6 +120,12 @@ type SessionAnalytics interface {
 
 	// BudgetStatus computes spending vs budget for all projects with budgets.
 	BudgetStatus(ctx context.Context) ([]session.BudgetStatus, error)
+
+	// SearchCapabilities returns what the active search engine supports.
+	SearchCapabilities() search.Capabilities
+
+	// IndexAllSessions indexes all sessions into the search engine.
+	IndexAllSessions(ctx context.Context) (indexed, total int, err error)
 }
 
 // SessionAI provides LLM-powered analysis features.
