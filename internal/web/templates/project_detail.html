@@ -68,8 +68,11 @@
       <span class="kpi-strip-label">tokens</span>
     </div>
     <div class="kpi-strip-item">
-      <span class="kpi-strip-value">{{formatCost .TotalCost}}</span>
-      <span class="kpi-strip-label">cost</span>
+      {{if .HasRealForecast}}<span class="kpi-strip-value">{{formatCost .TotalReal30d}}</span>
+      <span class="kpi-strip-label">real cost / 30d</span>
+      {{else}}<span class="kpi-strip-value">{{formatCost .TotalCost}}</span>
+      <span class="kpi-strip-label">est. cost (API-equiv)</span>
+      {{end}}
     </div>
     {{if gt .TotalErrors 0}}
     <div class="kpi-strip-item">
