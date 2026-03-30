@@ -32,6 +32,30 @@
   {{end}}
 </div>
 
+<!-- ── Token Stats ── -->
+<div class="detail-token-stats">
+  <div class="token-stat">
+    <span class="token-stat-label">Context</span>
+    <span class="token-stat-value font-mono">{{.PeakContextStr}}</span>
+    <span class="token-stat-sub">peak window</span>
+  </div>
+  <div class="token-stat">
+    <span class="token-stat-label">Output</span>
+    <span class="token-stat-value font-mono">{{.TotalOutputStr}}</span>
+    <span class="token-stat-sub">generated</span>
+  </div>
+  <div class="token-stat">
+    <span class="token-stat-label">Billed</span>
+    <span class="token-stat-value font-mono">{{.BilledTokensStr}}</span>
+    <span class="token-stat-sub">{{printf "%.0f" .ContextRatio}}× context re-sent</span>
+  </div>
+  <div class="token-stat">
+    <span class="token-stat-label">Messages</span>
+    <span class="token-stat-value font-mono">{{.Session.TokenUsage.TotalTokens | formatTokens}}</span>
+    <span class="token-stat-sub">{{len .Session.Messages}} messages</span>
+  </div>
+</div>
+
 <!-- ── Context Saturation (lazy loaded via HTMX) ── -->
 <div id="saturation-container">
   <button class="action-btn"
@@ -231,14 +255,15 @@
 {{end}}
 
 <!-- ── File Changes ── -->
-{{if .Session.FileChanges}}
+{{if .HasFileChanges}}
 <div class="section">
-  <h2 class="section-title">File Changes <span class="text-muted">({{len .Session.FileChanges}})</span></h2>
+  <h2 class="section-title">File Changes <span class="text-muted">({{len .FileChanges}})</span></h2>
   <div class="file-list">
-    {{range .Session.FileChanges}}
+    {{range .FileChanges}}
     <div class="file-entry">
       <span class="file-badge file-{{.ChangeType}}">{{.ChangeType}}</span>
       <span class="font-mono">{{.FilePath}}</span>
+      {{if .ToolName}}<span class="text-muted file-tool">{{.ToolName}}</span>{{end}}
     </div>
     {{end}}
   </div>

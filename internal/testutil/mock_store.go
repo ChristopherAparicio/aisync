@@ -324,6 +324,10 @@ func (m *MockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntr
 	return m.BlameEntries, nil
 }
 
+func (m *MockStore) TopFilesForProject(_ string, _ int) ([]session.TopFileEntry, error) {
+	return nil, nil
+}
+
 // ── Lifecycle ──
 
 func (m *MockStore) ReplaceSessionFiles(_ session.ID, _ []session.SessionFileRecord) error {

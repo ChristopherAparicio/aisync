@@ -908,6 +908,39 @@ tr:hover td { background: var(--bg-hover); }
 .font-mono { font-family: "SF Mono", "Fira Code", monospace;   font-size: 0.8125rem;
 }
 
+/* ── Token stats (session detail) ── */
+
+.detail-token-stats {
+  display: flex;
+  gap: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+.token-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.token-stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.token-stat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.token-stat-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
 /* ── Saturation chart ── */
 
 .saturation-panel { margin-top: 1.5rem; }
@@ -1422,6 +1455,7 @@ code {
 .file-modified { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
 .file-deleted  { background: rgba(248, 113, 113, 0.15); color: var(--red); }
 .file-read     { background: rgba(108, 126, 225, 0.15); color: var(--accent-light); }
+.file-tool     { margin-left: auto; font-size: 0.7rem; }
 
 /* ── Links ── */
 

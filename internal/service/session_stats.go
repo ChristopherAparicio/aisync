@@ -316,8 +316,15 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		// File changes + cost + tool usage (requires loading full session)
 		full, getErr := s.store.Get(sm.ID)
 		if getErr == nil {
-			for _, fc := range full.FileChanges {
-				fileCounts[fc.FilePath]++
+			// Prefer file_changes table (from blame extractor) over provider-supplied FileChanges.
+			if records, fcErr := s.store.GetSessionFileChanges(sm.ID); fcErr == nil && len(records) > 0 {
+				for _, r := range records {
+					fileCounts[r.FilePath]++
+				}
+			} else {
+				for _, fc := range full.FileChanges {
+					fileCounts[fc.FilePath]++
+				}
 			}
 
 			// Cost estimation (dual: API-equivalent + actual)

@@ -453,3 +453,10 @@ type SessionFileRecord struct {
 	ToolName   string     `json:"tool_name"`
 	CreatedAt  time.Time  `json:"created_at"` // session creation time (for ordering blame entries)
 }
+
+// TopFileEntry represents a file with its session touch count for "top files" views.
+type TopFileEntry struct {
+	FilePath     string `json:"file_path"`
+	SessionCount int    `json:"session_count"` // number of distinct sessions that touched this file
+	WriteCount   int    `json:"write_count"`   // sessions that created/modified (not just read)
+}

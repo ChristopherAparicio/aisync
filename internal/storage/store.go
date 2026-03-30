@@ -172,6 +172,10 @@ type SearchStore interface {
 	// Results are ordered by created_at DESC. Optional filters narrow by branch/provider.
 	// Limit 0 means return all matching sessions.
 	GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntry, error)
+
+	// TopFilesForProject returns the most frequently touched files for a project,
+	// aggregated from file_changes. Results are sorted by session count descending.
+	TopFilesForProject(projectPath string, limit int) ([]session.TopFileEntry, error)
 }
 
 // AnalysisStore persists and retrieves session analyses.

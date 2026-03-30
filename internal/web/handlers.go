@@ -981,6 +981,15 @@ type sessionDetailPage struct {
 	ErrorRate     float64 // 0-100 percentage
 	RestoreCmd    string
 
+	// Token clarity: billed vs actual context
+	PeakContext     int     // peak input_tokens (real conversation size)
+	PeakContextStr  string  // formatted "220K"
+	TotalOutput     int     // sum of all output_tokens
+	TotalOutputStr  string  // formatted "5.2M"
+	BilledTokens    int     // total_tokens (cumulative input charged by API)
+	BilledTokensStr string  // formatted "1.28B"
+	ContextRatio    float64 // BilledTokens / PeakContext — how many times context was re-sent
+
 	// Session objective (work description)
 	HasObjective bool
 	Objective    *objectiveView
@@ -1000,11 +1009,22 @@ type sessionDetailPage struct {
 	HasSessionLinks bool
 	SessionLinks    []sessionLinkView
 
+	// File changes (from file_changes table, not provider)
+	HasFileChanges bool
+	FileChanges    []fileChangeView
+
 	// Analysis (Step 9)
 	HasAnalysis  bool
 	CanAnalyze   bool // true when analysisSvc is wired
 	Analysis     *analysisView
 	AnalysisData analysisPartialData // pre-built data for the analysis_partial template
+}
+
+// fileChangeView is a template-friendly view of a file operation.
+type fileChangeView struct {
+	FilePath   string
+	ChangeType string // created, modified, read, deleted
+	ToolName   string // e.g. "Write", "Edit", "Bash"
 }
 
 // objectiveView is a template-friendly view of a session's work objective.
@@ -1115,6 +1135,24 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	data := sessionDetailPage{
 		Nav:     "sessions",
 		Session: sess,
+	}
+
+	// Compute token clarity: peak context vs billed total.
+	var peakInput, totalOutput int
+	for _, msg := range sess.Messages {
+		if msg.InputTokens > peakInput {
+			peakInput = msg.InputTokens
+		}
+		totalOutput += msg.OutputTokens
+	}
+	data.PeakContext = peakInput
+	data.PeakContextStr = formatTokens(peakInput)
+	data.TotalOutput = totalOutput
+	data.TotalOutputStr = formatTokens(totalOutput)
+	data.BilledTokens = sess.TokenUsage.TotalTokens
+	data.BilledTokensStr = formatTokens(sess.TokenUsage.TotalTokens)
+	if peakInput > 0 {
+		data.ContextRatio = float64(sess.TokenUsage.TotalTokens) / float64(peakInput)
 	}
 
 	// Count tool calls and errors across all messages.
@@ -1257,6 +1295,34 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 				view.LinkTypeClass = "related"
 			}
 			data.SessionLinks = append(data.SessionLinks, view)
+		}
+	}
+
+	// File changes — populate from file_changes table (extracted file blame data).
+	// The provider-supplied FileChanges is typically empty; the extracted data is richer.
+	// Use the store directly (sessionSvc.GetSessionFiles may not work in remote mode).
+	var fileRecords []session.SessionFileRecord
+	var fcErr error
+	if s.store != nil {
+		fileRecords, fcErr = s.store.GetSessionFileChanges(sess.ID)
+	}
+	if fcErr == nil && len(fileRecords) > 0 {
+		data.HasFileChanges = true
+		for _, fr := range fileRecords {
+			data.FileChanges = append(data.FileChanges, fileChangeView{
+				FilePath:   fr.FilePath,
+				ChangeType: string(fr.ChangeType),
+				ToolName:   fr.ToolName,
+			})
+		}
+	} else if len(sess.FileChanges) > 0 {
+		// Fallback to provider-supplied file changes if no extracted data.
+		data.HasFileChanges = true
+		for _, fc := range sess.FileChanges {
+			data.FileChanges = append(data.FileChanges, fileChangeView{
+				FilePath:   fc.FilePath,
+				ChangeType: string(fc.ChangeType),
+			})
 		}
 	}
 
@@ -2747,6 +2813,10 @@ type projectDetailPage struct {
 	// Recommendations
 	HasRecommendations bool
 	Recommendations    []insightView
+
+	// Top files (from file_changes / blame data)
+	HasTopFiles    bool
+	TopFileEntries []topFileView
 }
 
 // securityCatView is a template-friendly security category count.
@@ -2789,6 +2859,13 @@ type skillROIView struct {
 	Verdict       string
 	VerdictClass  string // CSS class
 	IsGhost       bool
+}
+
+// topFileView is a template-friendly top file entry for the project detail aside.
+type topFileView struct {
+	FilePath     string
+	SessionCount int
+	WriteCount   int
 }
 
 // agentChip is a template-friendly agent count for filter chips.
@@ -3191,6 +3268,21 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 				Priority:  rec.Priority,
 				PrioClass: prioClass,
 			})
+		}
+	}
+
+	// Top files (from file_changes table).
+	if s.store != nil {
+		topFiles, tfErr := s.store.TopFilesForProject(projectPath, 10)
+		if tfErr == nil && len(topFiles) > 0 {
+			data.HasTopFiles = true
+			for _, tf := range topFiles {
+				data.TopFileEntries = append(data.TopFileEntries, topFileView{
+					FilePath:     tf.FilePath,
+					SessionCount: tf.SessionCount,
+					WriteCount:   tf.WriteCount,
+				})
+			}
 		}
 	}
 

@@ -1,8 +1,24 @@
 # aisync — Next Session TODO
 
-> Last updated: 2026-03-27
+> Last updated: 2026-03-29
 
-## Recently Completed (2026-03-27)
+## Recently Completed (2026-03-29)
+
+### Session File Blame (Backend + Web Views)
+- [x] **Domain extractor**: `ExtractFileOperations()` — parses Write/Edit/Read/Bash tool calls, bash heuristics (rm/touch/cp/mv/sed), merge dedup
+- [x] **Storage**: Migration 024 (`tool_name` column, index), `ReplaceSessionFiles()`, `GetSessionFileChanges()`, `CountSessionsWithFiles()`, `TopFilesForProject()`
+- [x] **Service**: `ExtractAndSaveFiles()`, `BackfillFileBlame()`, `GetSessionFiles()`
+- [x] **Config**: `features.file_blame: true` opt-in toggle
+- [x] **Post-capture hook**: auto-extraction after classification when file_blame enabled
+- [x] **CLI**: `aisync backfill files` subcommand, `aisync blame <file>` already worked
+- [x] **Web — Session detail**: File Changes section populated from `file_changes` table (496 entries rendered), shows tool name, color-coded badges
+- [x] **Web — Project detail**: "Top Files" aside panel with session count and write count
+- [x] **Web — Stats**: TopFiles now uses `file_changes` table instead of empty provider-supplied FileChanges
+- [x] 40,343 file records from 1,342 sessions, 2,014 tests passing, 58 extractor tests
+
+---
+
+## Previously Completed (2026-03-27)
 
 ### Per-Tool Cost Analytics
 - [x] `tool_usage_buckets` table — per-tool token/cost tracking with MCP classification
@@ -140,37 +156,12 @@ Displayed as a colored badge on each session card: 🟢 90+, 🟡 70-89, 🔴 <7
 
 ## Priority 1: Search & Discovery
 
-### 1.0 Session File Blame ("git blame by session") ⭐ HIGH VALUE
-For each file in a project, show which sessions modified it and when.
+### 1.0 Session File Blame ("git blame by session") ✅ COMPLETE
+Backend + web views + CLI all working. See "Recently Completed" section above.
 
-**Concept:**
-Like `git blame` but per AI session instead of per commit. Answer:
-"Which sessions touched this file? What did they do? When?"
-
-```
-src/auth/login.go
-  ses_2d5a53 (build)    2026-03-25  [COMMIT] Fix OAuth token refresh
-  ses_2d4fab (explore)   2026-03-24  Audit auth implementation
-  ses_2d3c12 (build)    2026-03-22  [COMMIT] feat: add JWT auth
-```
-
-**Data extraction:**
-- Walk each session's tool calls for Edit/Write/bash operations
-- Parse `Input` JSON to extract `filePath` from Edit/Write tool calls
-- Parse bash commands for `git add`, `git commit`, file creation patterns
-- Store in `session_files` table: (session_id, file_path, operation, timestamp)
-- Operation types: `created`, `modified`, `read`, `deleted`
-
-**Views:**
-- **Project file explorer**: tree view of project files with session count badge
-- **File detail**: list of sessions that touched this file (most recent first)
-- **Session detail**: list of files modified in this session
-- **Reverse lookup**: "Show me all sessions that modified `auth/`" (directory-level)
-
-**Indexing:**
-- Extract at capture time (post-capture hook) — parse tool calls for file paths
-- Backfill command: `aisync backfill files` for existing sessions
-- Lightweight: only store file path + operation type, not content
+Remaining enhancement opportunities:
+- [ ] **File explorer page**: tree view of project files with session count badge (`/projects/{path...}/files`)
+- [ ] **Directory-level blame**: "Show me all sessions that modified `auth/`" (glob/prefix query)
 
 ### 1.1 Search Strategy (Deferred)
 Search is a separate effort. For now FTS5 handles keyword search.

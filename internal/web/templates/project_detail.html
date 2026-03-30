@@ -430,6 +430,23 @@
       </div>
       {{end}}
 
+      {{if .HasTopFiles}}
+      <div class="home-panel">
+        <div class="home-panel-header">
+          <span class="home-panel-title">Top Files</span>
+        </div>
+        <div class="home-branch-list">
+          {{range .TopFileEntries}}
+          <div class="home-branch-row top-file-row">
+            <span class="home-branch-name font-mono" title="{{.FilePath}}">{{truncate .FilePath 28}}</span>
+            <span class="home-branch-stat">{{.SessionCount}} sess</span>
+            {{if gt .WriteCount 0}}<span class="home-branch-stat text-muted">{{.WriteCount}} writes</span>{{end}}
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+
       {{if .HasAnalytics}}
       <div class="home-panel">
         <div class="home-panel-header">

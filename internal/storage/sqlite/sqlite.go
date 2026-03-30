@@ -1272,6 +1272,45 @@ func (s *Store) CountSessionsWithFiles() (int, error) {
 	return count, err
 }
 
+// TopFilesForProject returns the most frequently touched files for a project,
+// aggregated from file_changes joined with sessions. Results are sorted by
+// session count descending.
+func (s *Store) TopFilesForProject(projectPath string, limit int) ([]session.TopFileEntry, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	q := `SELECT fc.file_path,
+	             COUNT(DISTINCT fc.session_id) AS sess_count,
+	             COUNT(DISTINCT CASE WHEN fc.change_type IN ('created','modified','deleted') THEN fc.session_id END) AS write_count
+	      FROM file_changes fc
+	      JOIN sessions s ON s.id = fc.session_id
+	      WHERE s.project_path = ?
+	      GROUP BY fc.file_path
+	      ORDER BY sess_count DESC
+	      LIMIT ?`
+	rows, err := s.db.Query(q, projectPath, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying top files: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entries []session.TopFileEntry
+	for rows.Next() {
+		var e session.TopFileEntry
+		if err := rows.Scan(&e.FilePath, &e.SessionCount, &e.WriteCount); err != nil {
+			return nil, fmt.Errorf("scanning top file: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if entries == nil {
+		entries = []session.TopFileEntry{}
+	}
+	return entries, nil
+}
+
 // ── User methods ──
 
 // SaveUser creates or updates a user. If a user with the same email exists,
