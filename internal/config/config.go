@@ -239,19 +239,24 @@ var DefaultStatusRules = map[string]string{
 
 // projectBudgetConf defines spending limits and alerts for a project.
 type projectBudgetConf struct {
-	// MonthlyLimit is the maximum estimated cost per calendar month (in USD).
+	// MonthlyLimit is the maximum cost per calendar month (in USD).
 	MonthlyLimit float64 `json:"monthly_limit,omitempty"`
 
-	// DailyLimit is the maximum estimated cost per day (in USD).
+	// DailyLimit is the maximum cost per day (in USD).
 	DailyLimit float64 `json:"daily_limit,omitempty"`
 
 	// AlertAtPercent triggers an alert when spend reaches this % of the limit (0-100).
 	// Default: 80.
 	AlertAtPercent float64 `json:"alert_at_percent,omitempty"`
 
+	// CostMode controls which costs are tracked against the budget.
+	//   "actual"    — real spend: API pay-per-token costs only (default)
+	//   "estimated" — API-equivalent cost (what you'd pay if everything was pay-per-token)
+	//   "all"       — API costs + prorated subscription share
+	// Default: "actual".
+	CostMode string `json:"cost_mode,omitempty"`
+
 	// AlertWebhook is the name or URL of a webhook to fire on budget alerts.
-	// If it starts with "http", it's used as a direct URL. Otherwise it's matched
-	// against configured webhook names.
 	AlertWebhook string `json:"alert_webhook,omitempty"`
 }
 

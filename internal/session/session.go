@@ -299,6 +299,7 @@ type BudgetStatus struct {
 	ProjectName string `json:"project_name"`
 	ProjectPath string `json:"project_path,omitempty"`
 	RemoteURL   string `json:"remote_url,omitempty"`
+	CostMode    string `json:"cost_mode"` // "actual", "estimated", "all"
 
 	// Monthly budget
 	MonthlyLimit   float64 `json:"monthly_limit"`           // configured limit ($)

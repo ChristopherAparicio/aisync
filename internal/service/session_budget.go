@@ -26,6 +26,24 @@ func (s *SessionService) BudgetStatus(ctx context.Context) ([]session.BudgetStat
 	dayOfMonth := now.Day()
 	daysRemaining := daysInMonth - dayOfMonth
 
+	// Count total projects with sessions for subscription proration.
+	totalProjectsWithSessions := 0
+	for _, proj := range projects {
+		if proj.SessionCount > 0 {
+			totalProjectsWithSessions++
+		}
+	}
+
+	// Get subscription costs for "all" mode.
+	var totalSubscriptionMonthly float64
+	if s.cfg != nil {
+		for _, billing := range s.cfg.GetAllBackendBilling() {
+			if billing.Type == "subscription" {
+				totalSubscriptionMonthly += billing.MonthlyCost
+			}
+		}
+	}
+
 	var results []session.BudgetStatus
 
 	for _, proj := range projects {
@@ -43,6 +61,11 @@ func (s *SessionService) BudgetStatus(ctx context.Context) ([]session.BudgetStat
 			alertThreshold = 80
 		}
 
+		costMode := budget.CostMode
+		if costMode == "" {
+			costMode = "actual" // default: only real API spend
+		}
+
 		// Query token buckets for this project's monthly spend.
 		buckets, qErr := s.store.QueryTokenBuckets("1h", monthStart, time.Time{}, proj.ProjectPath)
 		if qErr != nil {
@@ -52,12 +75,24 @@ func (s *SessionService) BudgetStatus(ctx context.Context) ([]session.BudgetStat
 		var monthlySpent, dailySpent float64
 		var sessionCount int
 		seenSessions := make(map[string]bool)
+
 		for _, b := range buckets {
-			monthlySpent += b.EstimatedCost
-			if !b.BucketStart.Before(dayStart) {
-				dailySpent += b.EstimatedCost
+			// Select cost based on configured mode.
+			var cost float64
+			switch costMode {
+			case "estimated":
+				cost = b.EstimatedCost
+			case "actual", "all":
+				// ActualCost = real API cost (0 for subscription backends).
+				cost = b.ActualCost
+			default:
+				cost = b.ActualCost
 			}
-			// Approximate session count from bucket data.
+
+			monthlySpent += cost
+			if !b.BucketStart.Before(dayStart) {
+				dailySpent += cost
+			}
 			if b.SessionCount > 0 {
 				key := b.BucketStart.Format("2006-01-02") + b.ProjectPath
 				if !seenSessions[key] {
@@ -67,10 +102,22 @@ func (s *SessionService) BudgetStatus(ctx context.Context) ([]session.BudgetStat
 			}
 		}
 
+		// For "all" mode: add prorated subscription share.
+		if costMode == "all" && totalProjectsWithSessions > 0 && totalSubscriptionMonthly > 0 {
+			subscriptionShare := totalSubscriptionMonthly / float64(totalProjectsWithSessions)
+			// Prorate to days elapsed.
+			if daysInMonth > 0 {
+				dailySubscription := subscriptionShare / float64(daysInMonth)
+				monthlySpent += dailySubscription * float64(dayOfMonth)
+				dailySpent += dailySubscription
+			}
+		}
+
 		bs := session.BudgetStatus{
 			ProjectName:    proj.DisplayName,
 			ProjectPath:    proj.ProjectPath,
 			RemoteURL:      proj.RemoteURL,
+			CostMode:       costMode,
 			AlertThreshold: alertThreshold,
 			SessionCount:   sessionCount,
 			DaysRemaining:  daysRemaining,
@@ -87,7 +134,6 @@ func (s *SessionService) BudgetStatus(ctx context.Context) ([]session.BudgetStat
 				bs.MonthlyAlert = "warning"
 			}
 
-			// Project end-of-month spend.
 			if dayOfMonth > 0 {
 				dailyRate := monthlySpent / float64(dayOfMonth)
 				bs.ProjectedMonth = dailyRate * float64(daysInMonth)

@@ -1925,6 +1925,7 @@ type costDashboardPage struct {
 type budgetOverviewView struct {
 	ProjectName    string
 	ProjectPath    string
+	CostMode       string // "actual", "estimated", "all"
 	MonthlyLimit   float64
 	MonthlySpent   float64
 	MonthlyPercent float64
@@ -2501,6 +2502,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 			data.Budgets = append(data.Budgets, budgetOverviewView{
 				ProjectName:    bs.ProjectName,
 				ProjectPath:    bs.ProjectPath,
+				CostMode:       bs.CostMode,
 				MonthlyLimit:   bs.MonthlyLimit,
 				MonthlySpent:   bs.MonthlySpent,
 				MonthlyPercent: bs.MonthlyPercent,
