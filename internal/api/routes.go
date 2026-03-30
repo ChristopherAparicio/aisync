@@ -13,6 +13,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Sessions
 	mux.HandleFunc("POST /api/v1/sessions/capture", s.handleCapture)
 	mux.HandleFunc("POST /api/v1/sessions/restore", s.handleRestore)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.handleGetMessageWindow)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /api/v1/sessions", s.handleListSessions)
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.handleDeleteSession)

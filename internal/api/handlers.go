@@ -148,6 +148,67 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+// ── Message Window ──
+// GET /api/v1/sessions/{id}/messages?index=5&window=3
+
+func (s *Server) handleGetMessageWindow(w http.ResponseWriter, r *http.Request) {
+	id := session.ID(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "session ID is required")
+		return
+	}
+
+	sess, err := s.sessionSvc.Get(string(id))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	q := r.URL.Query()
+	index, _ := strconv.Atoi(q.Get("index"))
+	window := 3
+	if ws := q.Get("window"); ws != "" {
+		window, _ = strconv.Atoi(ws)
+	}
+	if window < 1 {
+		window = 1
+	}
+	if window > 10 {
+		window = 10
+	}
+
+	total := len(sess.Messages)
+	if index < 0 || index >= total {
+		writeError(w, http.StatusBadRequest, "message index out of range")
+		return
+	}
+	start := index - window
+	if start < 0 {
+		start = 0
+	}
+	end := index + window + 1
+	if end > total {
+		end = total
+	}
+
+	type messageWindowResponse struct {
+		SessionID     session.ID        `json:"session_id"`
+		CenterIndex   int               `json:"center_index"`
+		StartIndex    int               `json:"start_index"`
+		EndIndex      int               `json:"end_index"`
+		TotalMessages int               `json:"total_messages"`
+		Messages      []session.Message `json:"messages"`
+	}
+	writeJSON(w, http.StatusOK, messageWindowResponse{
+		SessionID:     id,
+		CenterIndex:   index,
+		StartIndex:    start,
+		EndIndex:      end - 1,
+		TotalMessages: total,
+		Messages:      sess.Messages[start:end],
+	})
+}
+
 // ── List ──
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
