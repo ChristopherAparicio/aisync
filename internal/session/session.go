@@ -330,11 +330,31 @@ type ContextSaturation struct {
 	SessionsCompacted int     `json:"sessions_compacted"`  // sessions with detected compaction events
 	AvgPeakSaturation float64 `json:"avg_peak_saturation"` // average peak saturation across all sessions (0-100)
 
+	// Compaction aggregate stats (populated by DetectCompactions)
+	TotalCompactionEvents int     `json:"total_compaction_events"` // total compaction events across all sessions
+	TotalTokensLost       int     `json:"total_tokens_lost"`       // total tokens lost to compaction
+	TotalRebuildCost      float64 `json:"total_rebuild_cost"`      // total estimated cost to rebuild context ($)
+	AvgDropPercent        float64 `json:"avg_drop_percent"`        // average drop severity across all events (0-100)
+
 	// Per-model breakdown
 	Models []ModelSaturation `json:"models,omitempty"`
 
 	// Sessions with highest saturation (top 10 worst offenders)
 	WorstSessions []SessionSaturation `json:"worst_sessions,omitempty"`
+
+	// Saturation forecast: predicted messages-to-compaction per model.
+	Forecast *SaturationForecast `json:"forecast,omitempty"`
+
+	// Overload aggregate stats (3.2)
+	SessionsOverloaded int     `json:"sessions_overloaded"` // sessions with overloaded verdict
+	SessionsDeclining  int     `json:"sessions_declining"`  // sessions with declining verdict
+	AvgHealthScore     float64 `json:"avg_health_score"`    // average health score (0-100)
+
+	// Token waste classification (4.2)
+	TokenWaste *TokenWasteBreakdown `json:"token_waste,omitempty"` // aggregate waste breakdown across all sessions
+
+	// Session freshness & diminishing returns (2.3)
+	Freshness *FreshnessAggregate `json:"freshness,omitempty"` // aggregate freshness analysis across all sessions
 }
 
 // ModelSaturation aggregates saturation stats for a single model.
@@ -351,6 +371,20 @@ type ModelSaturation struct {
 	EfficiencyVerdict string  `json:"efficiency_verdict"`  // "oversized", "well-sized", "tight", "saturated"
 	AvgPeakTokens     int     `json:"avg_peak_tokens"`     // average peak tokens across sessions
 	WastedCapacityPct float64 `json:"wasted_capacity_pct"` // 100 - AvgPeakPct (unused context window %)
+
+	// Model context efficiency score (3.1 extended)
+	TotalInputTokens  int     `json:"total_input_tokens"`  // sum of all input tokens for this model
+	TotalOutputTokens int     `json:"total_output_tokens"` // sum of all output tokens for this model
+	TotalCost         float64 `json:"total_cost"`          // total estimated cost ($) for this model
+	TotalMessages     int     `json:"total_messages"`      // total messages across all sessions
+	TotalToolErrors   int     `json:"total_tool_errors"`   // tool call errors for this model
+	TotalToolCalls    int     `json:"total_tool_calls"`    // total tool calls for this model
+	ErrorRate         float64 `json:"error_rate"`          // tool errors / tool calls * 100 (0-100)
+	CostPer1KOutput   float64 `json:"cost_per_1k_output"`  // $ per 1K useful output tokens
+	OutputPerDollar   float64 `json:"output_per_dollar"`   // output tokens per dollar (higher = better)
+	AvgOutputRatio    float64 `json:"avg_output_ratio"`    // avg output/input ratio (higher = more productive)
+	EfficiencyScore   int     `json:"efficiency_score"`    // composite 0-100 (higher = more efficient)
+	EfficiencyGrade   string  `json:"efficiency_grade"`    // "A", "B", "C", "D", "F"
 }
 
 // SessionSaturation captures the peak context usage for a single session.
@@ -378,6 +412,8 @@ type SaturationCurve struct {
 	MsgAtDegraded  int               `json:"msg_at_degraded"` // message # when hitting degraded zone (0 = never)
 	MsgAtCritical  int               `json:"msg_at_critical"` // message # when hitting critical zone (0 = never)
 	Points         []SaturationPoint `json:"points"`
+	Compactions    CompactionSummary `json:"compactions"` // detected compaction events
+	Overload       OverloadAnalysis  `json:"overload"`    // model overload detection results
 }
 
 // SaturationPoint is a single message's contribution to context saturation.
@@ -389,6 +425,41 @@ type SaturationPoint struct {
 	Zone         string  `json:"zone"`         // "optimal", "degraded", "critical"
 	Delta        int     `json:"delta"`        // change from previous message
 	Label        string  `json:"label"`        // short description (e.g. "User msg", "Bash output +8K")
+}
+
+// CompactionEvent records a detected context compaction within a session.
+// Compaction occurs when the AI provider summarizes/compacts the conversation
+// to fit within the context window, causing a significant drop in input tokens.
+type CompactionEvent struct {
+	// Location in the session.
+	BeforeMessageIdx int `json:"before_msg_idx"` // message index before compaction
+	AfterMessageIdx  int `json:"after_msg_idx"`  // message index after compaction
+
+	// Token data.
+	BeforeInputTokens int     `json:"before_input_tokens"` // input tokens before compaction
+	AfterInputTokens  int     `json:"after_input_tokens"`  // input tokens after compaction
+	TokensLost        int     `json:"tokens_lost"`         // BeforeInputTokens - AfterInputTokens
+	DropPercent       float64 `json:"drop_percent"`        // percentage of context lost (0-100)
+
+	// Secondary confirmation: cache invalidation.
+	// After compaction, cache_read drops to ~0 because the conversation is new content.
+	CacheInvalidated bool `json:"cache_invalidated"` // true if cache_read dropped significantly
+
+	// Cost estimation.
+	RebuildCost float64 `json:"rebuild_cost"` // estimated cost to rebuild context ($)
+}
+
+// CompactionSummary aggregates compaction events for a session or set of sessions.
+type CompactionSummary struct {
+	Events            []CompactionEvent `json:"events"`
+	TotalCompactions  int               `json:"total_compactions"`
+	TotalTokensLost   int               `json:"total_tokens_lost"`    // sum of all TokensLost
+	AvgDropPercent    float64           `json:"avg_drop_percent"`     // average drop severity
+	TotalRebuildCost  float64           `json:"total_rebuild_cost"`   // sum of all RebuildCost
+	MedianDropPercent float64           `json:"median_drop_percent"`  // median drop severity
+	SawtoothCycles    int               `json:"sawtooth_cycles"`      // fill→compact→rebuild cycles
+	AvgRecoveryTokens int               `json:"avg_recovery_tokens"`  // avg tokens rebuilt after compaction
+	AvgMessagesToFill int               `json:"avg_messages_to_fill"` // avg messages before hitting compaction
 }
 
 // FileChange records a file touched during a session.

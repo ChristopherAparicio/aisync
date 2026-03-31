@@ -51,14 +51,66 @@
     </div>
     <div class="settings-section-body">
       {{range .Items}}
-      <div class="settings-row">
+      <div class="settings-row" id="setting-{{settingID .ConfigKey}}">
         <div class="settings-row-key">
           <span class="settings-key">{{.Key}}</span>
           {{if .Description}}<span class="settings-desc">{{.Description}}</span>{{end}}
         </div>
         <div class="settings-row-value">
           {{if .IsSecret}}<span class="font-mono text-muted">********</span>
-          {{else}}<span class="font-mono settings-value {{if eq .Value "enabled"}}settings-value--enabled{{end}}{{if eq .Value "disabled"}}settings-value--disabled{{end}}">{{.Value}}</span>
+          {{else if eq .InputType "toggle"}}
+            <label class="settings-toggle"
+              hx-post="/api/settings"
+              hx-target="#setting-{{settingID .ConfigKey}} .settings-row-value"
+              hx-swap="innerHTML"
+              hx-trigger="change"
+              hx-vals='js:{"key": "{{.ConfigKey}}", "value": event.target.checked ? "true" : "false"}'
+            >
+              <input type="checkbox" {{if eq .Value "enabled"}}checked{{end}}>
+              <span class="settings-toggle-slider"></span>
+              <span class="settings-toggle-label font-mono {{if eq .Value "enabled"}}settings-value--enabled{{else}}settings-value--disabled{{end}}">{{.Value}}</span>
+            </label>
+          {{else if eq .InputType "select"}}
+            <form class="settings-inline-form"
+              hx-post="/api/settings"
+              hx-target="#setting-{{settingID .ConfigKey}} .settings-row-value"
+              hx-swap="innerHTML"
+              hx-trigger="change"
+            >
+              <input type="hidden" name="key" value="{{.ConfigKey}}">
+              <select class="settings-select font-mono" name="value">
+                {{$current := .Value}}
+                {{range $opt := split .Options ","}}
+                <option value="{{$opt}}" {{if eq $opt $current}}selected{{end}}>{{$opt}}</option>
+                {{end}}
+              </select>
+            </form>
+          {{else if eq .InputType "text"}}
+            <form class="settings-inline-form"
+              hx-post="/api/settings"
+              hx-target="#setting-{{settingID .ConfigKey}} .settings-row-value"
+              hx-swap="innerHTML"
+            >
+              <input type="hidden" name="key" value="{{.ConfigKey}}">
+              <input type="text" name="value" value="{{.Value}}" class="settings-input font-mono"
+                placeholder="{{.Key}}"
+              >
+              <button type="submit" class="settings-save-btn">Save</button>
+            </form>
+          {{else if eq .InputType "number"}}
+            <form class="settings-inline-form"
+              hx-post="/api/settings"
+              hx-target="#setting-{{settingID .ConfigKey}} .settings-row-value"
+              hx-swap="innerHTML"
+            >
+              <input type="hidden" name="key" value="{{.ConfigKey}}">
+              <input type="number" name="value" value="{{.Value}}" class="settings-input settings-input--number font-mono"
+                min="1"
+              >
+              <button type="submit" class="settings-save-btn">Save</button>
+            </form>
+          {{else}}
+            <span class="font-mono settings-value {{if eq .Value "enabled"}}settings-value--enabled{{end}}{{if eq .Value "disabled"}}settings-value--disabled{{end}}">{{.Value}}</span>
           {{end}}
         </div>
       </div>

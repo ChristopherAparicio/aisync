@@ -577,6 +577,178 @@ func TestExtractSkillContentTags(t *testing.T) {
 	}
 }
 
+func TestExtractSkillContentTagsWithSize(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantCount int
+		wantName  string
+		wantBytes int
+		wantToks  int
+	}{
+		{
+			name:      "no tags",
+			input:     "Just regular text",
+			wantCount: 0,
+		},
+		{
+			name:      "single tag with content",
+			input:     `Some text <skill_content name="replay-tester">This is the skill content here with instructions</skill_content> more text`,
+			wantCount: 1,
+			wantName:  "replay-tester",
+			wantBytes: len("This is the skill content here with instructions"),
+			wantToks:  len("This is the skill content here with instructions") / 4,
+		},
+		{
+			name:      "two tags",
+			input:     `<skill_content name="alpha">AAAA</skill_content> gap <skill_content name="beta">BBBBBBBB</skill_content>`,
+			wantCount: 2,
+		},
+		{
+			name:      "large content",
+			input:     `<skill_content name="big">` + string(make([]byte, 4000)) + `</skill_content>`,
+			wantCount: 1,
+			wantName:  "big",
+			wantBytes: 4000,
+			wantToks:  1000,
+		},
+		{
+			name:      "no closing tag",
+			input:     `<skill_content name="open">this is truncated content without end tag`,
+			wantCount: 1,
+			wantName:  "open",
+		},
+		{
+			name:      "empty name ignored",
+			input:     `<skill_content name="">content</skill_content>`,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tags := extractSkillContentTagsWithSize(tt.input)
+			if len(tags) != tt.wantCount {
+				t.Fatalf("got %d tags, want %d", len(tags), tt.wantCount)
+			}
+			if tt.wantCount > 0 && tt.wantName != "" {
+				if tags[0].Name != tt.wantName {
+					t.Errorf("name: got %q, want %q", tags[0].Name, tt.wantName)
+				}
+			}
+			if tt.wantBytes > 0 {
+				if tags[0].ContentBytes != tt.wantBytes {
+					t.Errorf("content bytes: got %d, want %d", tags[0].ContentBytes, tt.wantBytes)
+				}
+			}
+			if tt.wantToks > 0 {
+				if tags[0].EstimatedTokens != tt.wantToks {
+					t.Errorf("estimated tokens: got %d, want %d", tags[0].EstimatedTokens, tt.wantToks)
+				}
+			}
+		})
+	}
+}
+
+func TestSkillContentTagEvent_PopulatesTokens(t *testing.T) {
+	p := NewProcessor()
+	skillContent := `Here are instructions for the skill that take up 100 characters of text to simulate real skill content.`
+	sess := &session.Session{
+		ID:       "test-skill-tokens",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				Content:   `Some text <skill_content name="my-skill">` + skillContent + `</skill_content> done`,
+			},
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	var skillEvents []Event
+	for _, e := range events {
+		if e.Type == EventSkillLoad {
+			skillEvents = append(skillEvents, e)
+		}
+	}
+
+	if len(skillEvents) != 1 {
+		t.Fatalf("expected 1 skill event, got %d", len(skillEvents))
+	}
+
+	sl := skillEvents[0].SkillLoad
+	if sl.SkillName != "my-skill" {
+		t.Errorf("skill name: got %q, want %q", sl.SkillName, "my-skill")
+	}
+	if sl.EstimatedTokens == 0 {
+		t.Error("expected EstimatedTokens > 0")
+	}
+	if sl.ContentBytes != len(skillContent) {
+		t.Errorf("content bytes: got %d, want %d", sl.ContentBytes, len(skillContent))
+	}
+	expectedTokens := len(skillContent) / 4
+	if sl.EstimatedTokens != expectedTokens {
+		t.Errorf("estimated tokens: got %d, want %d", sl.EstimatedTokens, expectedTokens)
+	}
+}
+
+func TestSkillToolCallEvent_PopulatesTokens(t *testing.T) {
+	p := NewProcessor()
+	skillOutput := `<skill_content name="loaded-skill">These are the loaded skill instructions for the agent to follow.</skill_content>`
+	sess := &session.Session{
+		ID:       "test-skill-toolcall-tokens",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{
+						ID:     "tc-1",
+						Name:   "mcp_skill",
+						State:  session.ToolStateCompleted,
+						Input:  `{"name": "my-skill"}`,
+						Output: skillOutput,
+					},
+				},
+			},
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	var skillEvents []Event
+	for _, e := range events {
+		if e.Type == EventSkillLoad {
+			skillEvents = append(skillEvents, e)
+		}
+	}
+
+	// Should get at least 1 from the tool call. May also get one from content tag detection
+	// on the same message, but tool call event should have tokens from output length.
+	found := false
+	for _, se := range skillEvents {
+		if se.SkillLoad.LoadMethod == "tool_call" {
+			found = true
+			if se.SkillLoad.EstimatedTokens == 0 {
+				t.Error("tool_call skill event should have EstimatedTokens > 0")
+			}
+			if se.SkillLoad.ContentBytes != len(skillOutput) {
+				t.Errorf("content bytes: got %d, want %d", se.SkillLoad.ContentBytes, len(skillOutput))
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a tool_call skill event")
+	}
+}
+
 // ── ToolCategory classification tests ──
 
 func TestProcessor_ToolCategory_Builtin(t *testing.T) {

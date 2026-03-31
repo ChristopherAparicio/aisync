@@ -221,6 +221,10 @@ func (p *Processor) skillToolCallEvent(sess *session.Session, msgIdx int, msg *s
 		return nil
 	}
 
+	// Estimate context footprint from tool output size.
+	contentBytes := len(tc.Output)
+	estimatedTokens := contentBytes / 4
+
 	return &Event{
 		ID:           uuid.New().String(),
 		SessionID:    sess.ID,
@@ -233,22 +237,25 @@ func (p *Processor) skillToolCallEvent(sess *session.Session, msgIdx int, msg *s
 		Provider:     sess.Provider,
 		Agent:        sess.Agent,
 		SkillLoad: &SkillLoadDetail{
-			SkillName:  skillName,
-			LoadMethod: "tool_call",
-			ToolCallID: tc.ID,
+			SkillName:       skillName,
+			LoadMethod:      "tool_call",
+			ToolCallID:      tc.ID,
+			EstimatedTokens: estimatedTokens,
+			ContentBytes:    contentBytes,
 		},
 	}
 }
 
 // skillContentTagEvents extracts skill_load events from <skill_content> tags in assistant messages.
+// Measures the content size between tags for context footprint estimation.
 func (p *Processor) skillContentTagEvents(sess *session.Session, msgIdx int, msg *session.Message) []Event {
-	names := extractSkillContentTags(msg.Content)
-	if len(names) == 0 {
+	tags := extractSkillContentTagsWithSize(msg.Content)
+	if len(tags) == 0 {
 		return nil
 	}
 
-	events := make([]Event, 0, len(names))
-	for _, name := range names {
+	events := make([]Event, 0, len(tags))
+	for _, tag := range tags {
 		events = append(events, Event{
 			ID:           uuid.New().String(),
 			SessionID:    sess.ID,
@@ -261,8 +268,10 @@ func (p *Processor) skillContentTagEvents(sess *session.Session, msgIdx int, msg
 			Provider:     sess.Provider,
 			Agent:        sess.Agent,
 			SkillLoad: &SkillLoadDetail{
-				SkillName:  name,
-				LoadMethod: "content_tag",
+				SkillName:       tag.Name,
+				LoadMethod:      "content_tag",
+				EstimatedTokens: tag.EstimatedTokens,
+				ContentBytes:    tag.ContentBytes,
 			},
 		})
 	}
@@ -488,10 +497,29 @@ func extractSkillName(raw string) string {
 	return ""
 }
 
+// skillContentTag holds the extracted skill name and its estimated context cost.
+type skillContentTag struct {
+	Name            string
+	EstimatedTokens int // ~len(content)/4
+	ContentBytes    int // raw byte size of content between tags
+}
+
 // extractSkillContentTags finds <skill_content name="xxx"> patterns in text.
 func extractSkillContentTags(text string) []string {
-	var names []string
+	tags := extractSkillContentTagsWithSize(text)
+	names := make([]string, len(tags))
+	for i, t := range tags {
+		names[i] = t.Name
+	}
+	return names
+}
+
+// extractSkillContentTagsWithSize finds <skill_content name="xxx">...</skill_content> patterns
+// and measures the content size between the tags for context footprint estimation.
+func extractSkillContentTagsWithSize(text string) []skillContentTag {
+	var tags []skillContentTag
 	const prefix = `<skill_content name="`
+	const closeTag = `</skill_content>`
 
 	remaining := text
 	for {
@@ -505,13 +533,39 @@ func extractSkillContentTags(text string) []string {
 			break
 		}
 		name := remaining[:end]
-		if name != "" {
-			names = append(names, name)
-		}
 		remaining = remaining[end+1:]
+
+		if name == "" {
+			continue
+		}
+
+		// Find the closing > of the opening tag.
+		closeAngle := strings.IndexByte(remaining, '>')
+		if closeAngle < 0 {
+			tags = append(tags, skillContentTag{Name: name})
+			continue
+		}
+		remaining = remaining[closeAngle+1:]
+
+		// Measure content between opening and closing tags.
+		closeIdx := strings.Index(remaining, closeTag)
+		var contentBytes int
+		if closeIdx >= 0 {
+			contentBytes = closeIdx
+			remaining = remaining[closeIdx+len(closeTag):]
+		} else {
+			// No closing tag found — estimate from remaining content (truncated).
+			contentBytes = len(remaining)
+		}
+
+		tags = append(tags, skillContentTag{
+			Name:            name,
+			EstimatedTokens: contentBytes / 4, // rough token estimate
+			ContentBytes:    contentBytes,
+		})
 	}
 
-	return names
+	return tags
 }
 
 // extractCommandString extracts the command string from tool input.

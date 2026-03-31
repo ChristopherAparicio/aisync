@@ -34,9 +34,10 @@ type EventBucket struct {
 	TopMCPServers map[string]int `json:"top_mcp_servers,omitempty"` // MCP server name -> call count
 
 	// Counters — skills
-	SkillLoadCount int            `json:"skill_load_count"`     // total skill loads
-	UniqueSkills   int            `json:"unique_skills"`        // distinct skill names
-	TopSkills      map[string]int `json:"top_skills,omitempty"` // skill name -> count
+	SkillLoadCount int            `json:"skill_load_count"`       // total skill loads
+	UniqueSkills   int            `json:"unique_skills"`          // distinct skill names
+	TopSkills      map[string]int `json:"top_skills,omitempty"`   // skill name -> count
+	SkillTokens    map[string]int `json:"skill_tokens,omitempty"` // skill name -> total estimated tokens
 
 	// Counters — agents/providers
 	SessionCount   int            `json:"session_count"`             // sessions in this bucket

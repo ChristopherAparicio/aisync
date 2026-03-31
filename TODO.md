@@ -4,6 +4,65 @@
 
 ## Recently Completed (2026-03-31)
 
+### Model Context Efficiency Score (3.1) — Sprint C ✅
+- [x] **Domain**: New fields on `ModelSaturation`: `TotalInputTokens`, `TotalOutputTokens`, `TotalCost`, `TotalMessages`, `TotalToolErrors`, `TotalToolCalls`, `ErrorRate`, `CostPer1KOutput`, `OutputPerDollar`, `AvgOutputRatio`, `EfficiencyScore` (0-100), `EfficiencyGrade` (A-F)
+- [x] **`ComputeModelEfficiency()`**: Pure domain function in `efficiency.go` — computes error rate, cost per 1K useful output (adjusted for error overhead), output per dollar, output/input ratio, composite 0-100 score with 4 components (context utilization, output productivity, error discipline, cost efficiency via log-scaled output/dollar)
+- [x] **`contextUtilizationScore()`**: Rewards sweet-spot 40-60% utilization (25 pts), penalizes oversized (<10% → 5 pts) and saturated (>90% → 5 pts)
+- [x] **Service integration**: `ContextSaturation()` now accumulates per-model token counts, cost (via `SessionCost()`), tool call/error counts during the session loop, then calls `ComputeModelEfficiency()` in finalization
+- [x] **Dashboard**: Redesigned "Saturation & Efficiency by Model" table — added Cost/1K Out, Out/$, Error%, Out/In ratio, composite Score (grade badge with 0-100 value). Removed Context Window/Max Peak/Unused columns for cleaner layout.
+- [x] **View structs**: Extended `modelSaturationView` with formatted `CostPer1KOutput`, `OutputPerDollar`, `ErrorRate`, `AvgOutputRatio`, `EfficiencyScore`, `EfficiencyGrade`, `GradeClass`
+- [x] **9 unit tests**: basic metrics, zero cost, high error rate, oversized model, no tool calls, context utilization score (11 data points), score-to-grade (10 data points), clamp (5 data points)
+- [x] **All 2,090 tests passing** across 105 packages
+
+### Context Saturation Forecast (2.2)
+- [x] **Domain**: `SaturationForecast`, `ModelSaturationForecast`, `HistogramBucket`, `SessionForecastInput` structs in `forecast.go`
+- [x] **`ForecastSaturation()`**: Pure domain function — computes per-model predictions from session token growth data, histogram of messages-before-compaction, linear extrapolation to 80%/100% thresholds
+- [x] **`forecastRecommendation()`**: Generates actionable guidance per model (split tasks, underutilized, well-sized, etc.)
+- [x] **`buildCompactionHistogram()`**: Bucketed distribution (20-msg buckets) with trailing empty trim
+- [x] **Service integration**: `ContextSaturation()` now collects `SessionForecastInput` per session (avg token growth, first compaction msg index), calls `ForecastSaturation()`, populates `Forecast` field
+- [x] **Dashboard**: New "Saturation Forecast" section in cost optimization partial — KPIs (growth/msg, avg msgs to compaction, compacted rate), per-model table (predicted msgs to 80%/100%, recommendations), messages-to-compaction histogram
+- [x] **View structs**: `modelForecastView`, `histogramBucketView`, 11 new fields on `costDashboardPage`
+- [x] **CSS**: `.forecast-histogram`, `.forecast-hist-bar`, `.forecast-hist-fill` (purple bars), `.forecast-hist-count`, `.forecast-hist-label`
+- [x] **12 unit tests**: empty input, single session, compacted sessions, multi-model, histogram, skip invalid, recommendation variants, peak cap, mean/median/histogram helpers, itoa
+- [x] **All tests passing** across 105 packages
+
+### Skill Context Footprint Tracking (1.1)
+- [x] **`EstimatedTokens` / `ContentBytes`** added to `SkillLoadDetail` event struct
+- [x] **`extractSkillContentTagsWithSize()`**: Measures actual text between `<skill_content>` open/close tags, returns name + content bytes
+- [x] **Token estimation**: Content tags use `len(content)/4`, tool calls use `len(tc.Output)/4`
+- [x] **`SkillTokens map[string]int`** added to `EventBucket` — tracks per-skill token footprint
+- [x] **Bucket aggregation**: `addEvent()` accumulates skill tokens, `MergeBuckets()` merges maps
+- [x] **`SkillROIAnalysis()`** updated — uses measured avg tokens instead of hardcoded 2000 when data available
+- [x] **Dashboard**: "Skills by Context Cost" table in analytics events page (name, loads, avg tokens, total tokens, share %)
+- [x] **9 new tests**: `TestExtractSkillContentTagsWithSize` (6 sub-tests), `TestSkillContentTagEvent_PopulatesTokens`, `TestSkillToolCallEvent_PopulatesTokens`
+- [x] **2,052+ tests passing** across 105 packages
+
+### Compaction Detection & Cost (2.1)
+- [x] **Domain types**: `CompactionEvent`, `CompactionSummary` structs with token loss, drop percent, cache invalidation, rebuild cost
+- [x] **DetectCompactions()**: Pure domain function — token-drop heuristic (>50% drop with >10K baseline), cache invalidation confirmation, sawtooth cycle detection, fill/recovery stats
+- [x] **20 unit tests**: No compaction, single, sawtooth, cache invalidation, exact threshold, cost estimation, message indices, fill/recovery stats, production-like scenario, median helpers
+- [x] **Service integration**: Replaced boolean `hasCompaction` in both `session_saturation.go` and `session_usage.go` with `DetectCompactions()` call — now tracks per-event data, costs, and aggregates
+- [x] **Compaction labels on saturation curve**: Points annotated with "⚡ Compaction (170K lost)" label at compaction events
+- [x] **Per-session UI** (saturation_partial.html): Purple compaction markers on bar chart, KPI row (count, tokens lost, avg drop, sawtooth cycles, rebuild cost, msgs to fill), legend entry
+- [x] **Project-level UI** (cost_optimization_partial.html): "Compaction Impact" section with aggregate KPIs (total events, tokens lost, avg drop, total rebuild cost)
+- [x] **New domain fields**: `ContextSaturation.TotalCompactionEvents`, `TotalTokensLost`, `TotalRebuildCost`, `AvgDropPercent`
+- [x] **CSS**: `.sat-compaction` (purple #a855f7), `.sat-row-compaction`, `.compaction-summary`, `.compact-kpi-row`, `.compact-kpi`
+- [x] **2,052 tests passing** across 105 packages
+
+### Cost Breakdown Charts (2.3)
+- [x] **MCP pie chart**: `CostPercent` on `mcpServerView`, conic-gradient donut chart computed server-side, `template.CSS` for HTML safety
+- [x] **10-color palette**: `--pie-color-0` through `--pie-color-9`, `.mcp-pie` donut with inner cutout via `::after`
+- [x] **Budget overlay**: Dashed red line on Cost Over Time chart at daily budget sum, bar height rescaling
+- [x] **Threshold**: Pie chart shown with ≥1 MCP server (was 2)
+
+### Settings Inline CRUD (3.4)
+- [x] **4 input types**: toggle (CSS checkbox switch), select (dropdown), text, number — all with HTMX POST
+- [x] **POST /api/settings**: Validates via `Config.Set()`, persists via `Config.Save()`, returns partial HTML with "saved" fade-out
+- [x] **~25 editable keys**: storage_mode, auto_capture, features.file_blame, search.engine, analysis.adapter, analysis.model, dashboard.page_size, scheduler.gc.enabled, etc.
+- [x] **Template functions**: `settingID` (dots→dashes for HTML IDs), `split` (comma-separated options)
+- [x] **CSS**: `.settings-toggle`, `.settings-toggle-slider`, `.settings-inline-form`, `.settings-save-btn`, `.settings-saved-indicator` with fade-out animation
+- [x] **8 tests**: toggle, select, text, number, missing key, invalid value, no config (503), persistence to disk
+
 ### Activity Sparklines (2.2)
 - [x] **Sparkline data model**: `sparklineBar` struct with `Value`, `HeightPct` (0-100%), `Label`
 - [x] **buildSparklineBars / buildSparklineBarsFloat**: Pure functions converting raw values to percentage-height bars (min 2% for non-zero)
@@ -262,10 +321,10 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [x] Session count, tokens, cost, errors sparklines on dashboard + project detail
 - [x] Pure CSS implementation (no JS library), color-coded per metric
 
-### 2.3 Cost Breakdown Charts
-- [ ] Treemap or sunburst: project → backend → model → cost
-- [ ] Timeline chart: daily cost trend with budget line overlay
-- [ ] MCP server cost pie chart
+### 2.3 Cost Breakdown Charts ✅ COMPLETE
+- [x] **MCP server cost pie chart**: Conic-gradient donut chart computed server-side, `template.CSS` for safe style injection, 10-color palette, legend with percentages
+- [x] **Budget overlay line**: Dashed red horizontal line on Cost Over Time chart, sum of project daily limits, bar rescaling when budget exceeds max cost
+- [ ] Treemap or sunburst: project → backend → model → cost (deferred)
 
 ### 2.4 Session Timeline View
 - [ ] Session dependency graph (parent → child → fork relationships)
@@ -297,10 +356,14 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [ ] CSV export for cost data (for accounting)
 - [ ] API for external dashboards (Grafana, Datadog)
 
-### 3.4 Settings Web UI ✅ COMPLETE (read-only)
-- [x] `/settings` page: read-only display of all config sections (11 sections)
+### 3.4 Settings Web UI ✅ COMPLETE (full CRUD)
+- [x] `/settings` page: display of all config sections (11 sections) with inline editing
 - [x] Navbar gear icon, responsive grid layout, enabled/disabled color coding
-- [ ] CRUD for project classifiers, budgets, search engine selection (future: inline editing)
+- [x] **Inline CRUD via HTMX**: 4 input types — toggle (checkbox switch), select (dropdown), text, number
+- [x] **POST /api/settings**: Updates `Config.Set()` + `Config.Save()`, returns HTMX partial with "saved" indicator
+- [x] **~25 editable settings**: storage mode, auto capture, file blame, search engine, analysis adapter/model, tagging, secrets mode, error classifier, dashboard page size/sort, scheduler tasks
+- [x] **8 tests**: toggle, select, text, number, missing key, invalid value, no config, persistence to disk
+- [ ] CRUD for project classifiers and budgets (complex nested objects — future)
 - [ ] Live preview of classification rules against existing sessions (future)
 
 ---

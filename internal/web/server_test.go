@@ -1888,6 +1888,198 @@ func TestSettings_withConfig(t *testing.T) {
 	if !strings.Contains(body, "config.json") {
 		t.Error("expected config.json path reference")
 	}
+
+	// Verify inline editing controls are present.
+	if !strings.Contains(body, "settings-toggle") {
+		t.Error("expected toggle controls for boolean settings")
+	}
+	if !strings.Contains(body, `hx-post="/api/settings"`) {
+		t.Error("expected HTMX POST to /api/settings")
+	}
+	if !strings.Contains(body, "settings-save-btn") {
+		t.Error("expected save buttons for text/number inputs")
+	}
+	if !strings.Contains(body, "settings-select") {
+		t.Error("expected select dropdowns for enum settings")
+	}
+}
+
+// newTestServerWithConfig creates a test server with a real config.
+func newTestServerWithConfig(t *testing.T) (*Server, *config.Config) {
+	t.Helper()
+	store := testutil.MustOpenStore(t)
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+	configDir := t.TempDir()
+	cfg, err := config.New(configDir, "")
+	if err != nil {
+		t.Fatalf("config.New: %v", err)
+	}
+	srv, err := New(Config{
+		SessionService: sessionSvc,
+		AppConfig:      cfg,
+		Addr:           ":0",
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	return srv, cfg
+}
+
+func TestSettingsUpdate_toggle(t *testing.T) {
+	srv, cfg := newTestServerWithConfig(t)
+
+	// auto_capture defaults to false; enable it.
+	form := "key=auto_capture&value=true"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "enabled") {
+		t.Errorf("response should contain 'enabled', got: %s", body)
+	}
+	if !strings.Contains(body, "saved") {
+		t.Errorf("response should contain 'saved' indicator, got: %s", body)
+	}
+	// Verify config was actually updated.
+	if !cfg.IsAutoCapture() {
+		t.Error("expected auto_capture to be true after update")
+	}
+}
+
+func TestSettingsUpdate_select(t *testing.T) {
+	srv, cfg := newTestServerWithConfig(t)
+
+	form := "key=storage_mode&value=full"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "full") {
+		t.Errorf("response should contain 'full', got: %s", body)
+	}
+	if cfg.GetStorageMode() != "full" {
+		t.Errorf("expected storage_mode 'full', got %q", cfg.GetStorageMode())
+	}
+}
+
+func TestSettingsUpdate_text(t *testing.T) {
+	srv, cfg := newTestServerWithConfig(t)
+
+	form := "key=analysis.model&value=claude-3-opus"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	if cfg.GetAnalysisModel() != "claude-3-opus" {
+		t.Errorf("expected analysis.model 'claude-3-opus', got %q", cfg.GetAnalysisModel())
+	}
+}
+
+func TestSettingsUpdate_number(t *testing.T) {
+	srv, cfg := newTestServerWithConfig(t)
+
+	form := "key=dashboard.page_size&value=25"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	if cfg.GetDashboardPageSize() != 25 {
+		t.Errorf("expected dashboard.page_size 25, got %d", cfg.GetDashboardPageSize())
+	}
+}
+
+func TestSettingsUpdate_missingKey(t *testing.T) {
+	srv, _ := newTestServerWithConfig(t)
+
+	form := "value=anything"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestSettingsUpdate_invalidValue(t *testing.T) {
+	srv, _ := newTestServerWithConfig(t)
+
+	// storage_mode only allows "compact" or "full".
+	form := "key=storage_mode&value=invalid_mode"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "text-error") {
+		t.Errorf("expected error response with 'text-error' class, got: %s", body)
+	}
+}
+
+func TestSettingsUpdate_noConfig(t *testing.T) {
+	srv := newTestServer(t) // no AppConfig
+
+	form := "key=auto_capture&value=true"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+}
+
+func TestSettingsUpdate_persistsToDisk(t *testing.T) {
+	srv, cfg := newTestServerWithConfig(t)
+	configDir := cfg.GlobalDir()
+
+	// Set a value via the API.
+	form := "key=features.file_blame&value=true"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	// Re-read config from disk to verify persistence.
+	cfg2, err := config.New(configDir, "")
+	if err != nil {
+		t.Fatalf("config.New reload: %v", err)
+	}
+	if !cfg2.IsFileBlameEnabled() {
+		t.Error("expected features.file_blame to be true after reload from disk")
+	}
 }
 
 func TestDashboard_sparklines_withStore(t *testing.T) {

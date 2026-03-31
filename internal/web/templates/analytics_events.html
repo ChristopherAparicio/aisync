@@ -204,6 +204,35 @@
   {{else}}
   <p class="text-muted">No skills loaded in this period.</p>
   {{end}}
+
+  {{if .HasSkillTokens}}
+  <h3 class="section-subtitle" style="margin-top: 1rem;">Skills by Context Cost</h3>
+  <p class="text-muted" style="margin-bottom: 0.5rem; font-size: 0.8rem;">Each skill injects instructions into the context window. Total context tokens consumed: <strong class="font-mono">{{formatTokens .TotalSkillTokens}}</strong></p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Skill</th>
+          <th class="text-right">Loads</th>
+          <th class="text-right">Avg Tokens</th>
+          <th class="text-right">Total Tokens</th>
+          <th class="text-right">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .SkillContextCosts}}
+        <tr>
+          <td class="font-mono">{{.Name}}</td>
+          <td class="text-right">{{.Loads}}</td>
+          <td class="text-right font-mono">{{formatTokens .AvgTokens}}</td>
+          <td class="text-right font-mono">{{.TotalTokensK}}</td>
+          <td class="text-right">{{printf "%.0f" .ContextPercent}}%</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
 </div>
 
 <!-- ── Commands Breakdown ── -->

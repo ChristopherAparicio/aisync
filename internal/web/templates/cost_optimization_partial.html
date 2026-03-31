@@ -28,6 +28,182 @@
     </div>
   </div>
 
+  {{if .HasCompactionDetails}}
+  <h3 class="section-subtitle" style="margin-top: 1rem;">Compaction Impact</h3>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">When context gets too large, providers summarize the conversation, losing nuance and forcing context rebuild. Each compaction costs time (re-sending context) and money (re-processing tokens).</p>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Compaction Events</div>
+      <div class="value" style="color: #a855f7;">{{.SatCompactionEvents}}</div>
+      <div class="sub">across {{.SatCompacted}} sessions</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Tokens Lost</div>
+      <div class="value" style="color: #a855f7;">{{.SatTotalTokensLostK}}</div>
+      <div class="sub">context discarded by compaction</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Avg Drop</div>
+      <div class="value">{{printf "%.0f" .SatAvgDropPercent}}%</div>
+      <div class="sub">average context reduction per event</div>
+    </div>
+    {{if gt .SatTotalRebuildCost 0.001}}
+    <div class="kpi-card kpi-accent">
+      <div class="label">Rebuild Cost</div>
+      <div class="value text-error">${{printf "%.2f" .SatTotalRebuildCost}}</div>
+      <div class="sub">estimated cost to resend lost context</div>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
+  {{if .HasForecastSat}}
+  <h3 class="section-subtitle" style="margin-top: 1rem;">Saturation Forecast</h3>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Based on historical token growth rates, predicts when sessions will hit degraded (80%) and critical (100%) context zones. "Avg msgs to compaction" is measured from sessions that were actually compacted.</p>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Avg Growth / Msg</div>
+      <div class="value">{{.ForecastAvgGrowthK}}</div>
+      <div class="sub">tokens per message</div>
+    </div>
+    {{if gt .ForecastAvgMsgsToCompaction 0}}
+    <div class="kpi-card kpi-accent">
+      <div class="label">Avg Msgs to Compaction</div>
+      <div class="value" style="color: #a855f7;">{{.ForecastAvgMsgsToCompaction}}</div>
+      <div class="sub">from {{.ForecastSessionsCompacted}} compacted sessions</div>
+    </div>
+    {{end}}
+    <div class="kpi-card">
+      <div class="label">Sessions Analyzed</div>
+      <div class="value">{{.ForecastSessionsAnalyzed}}</div>
+      <div class="sub">with sufficient token data</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Compacted Rate</div>
+      <div class="value{{if gt .ForecastSessionsCompacted 0}} text-error{{end}}">{{printf "%.0f" .ForecastCompactedPct}}%</div>
+      <div class="sub">of analyzed sessions</div>
+    </div>
+  </div>
+
+  {{if .ForecastModels}}
+  <div class="table-wrap" style="margin-top: 0.75rem;">
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Compacted</th>
+          <th class="text-right">Growth/Msg</th>
+          <th class="text-right">Msgs to 80%</th>
+          <th class="text-right">Msgs to 100%</th>
+          <th class="text-right">Avg Msgs to 1st Compact</th>
+          <th>Recommendation</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ForecastModels}}
+        <tr>
+          <td class="font-mono">{{.Model}}</td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right{{if .HasCompactions}} text-error{{end}}">{{.CompactedCount}}</td>
+          <td class="text-right font-mono">{{.AvgTokenGrowthK}}</td>
+          <td class="text-right font-mono">{{if .HasPrediction}}~{{.PredictedMsgsTo80}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="text-right font-mono">{{if gt .PredictedMsgsTo100 0}}~{{.PredictedMsgsTo100}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="text-right font-mono">{{if .HasCompactions}}{{.AvgMsgsToCompacted}}{{if gt .MedianMsgsToCompacted 0}} <span class="text-muted">(med: {{.MedianMsgsToCompacted}})</span>{{end}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="recommendation">{{.Recommendation}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .HasHistogram}}
+  <h4 style="margin-top: 1rem; font-size: 0.85rem; font-weight: 500; color: var(--text-secondary);">Messages Before First Compaction</h4>
+  <div class="forecast-histogram">
+    {{range .ForecastHistogram}}
+    <div class="forecast-hist-bar" title="{{.Label}} msgs: {{.Count}} sessions">
+      <div class="forecast-hist-fill" style="height: {{printf "%.0f" .HeightPct}}%;"></div>
+      <div class="forecast-hist-count">{{.Count}}</div>
+      <div class="forecast-hist-label">{{.Label}}</div>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
+  {{end}}
+
+  {{if .HasWasteData}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Token Waste Classification</h3>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Breaks down where tokens go: productive work, retries from errors, compaction losses, cache misses (full-price re-reads after TTL expiry), and idle context (system prompt overhead).</p>
+  <div style="display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap;">
+    {{if .HasWastePie}}
+    <div style="flex-shrink: 0;">
+      <div style="width: 140px; height: 140px; border-radius: 50%; background: conic-gradient({{.WastePieGradient}}); margin: 0 auto;"></div>
+      <div style="text-align: center; margin-top: 0.5rem;">
+        <span style="font-size: 1.4rem; font-weight: 700; color: var(--success, #22c55e);">{{printf "%.0f" .WasteProductivePct}}%</span>
+        <span class="text-muted" style="font-size: 0.75rem;"> productive</span>
+      </div>
+    </div>
+    {{end}}
+    <div style="flex: 1; min-width: 300px;">
+      <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem;">
+        <div class="kpi-card" style="border-left: 3px solid var(--success, #22c55e);">
+          <div class="kpi-value" style="font-size: 1rem;">{{.WasteProductive.Label}}</div>
+          <div class="kpi-label">Productive</div>
+          <div class="text-muted" style="font-size: 0.7rem;">{{printf "%.1f" .WasteProductive.Percent}}%</div>
+        </div>
+        <div class="kpi-card" style="border-left: 3px solid var(--error, #ef4444);">
+          <div class="kpi-value" style="font-size: 1rem;">{{.WasteRetry.Label}}</div>
+          <div class="kpi-label">Retry</div>
+          <div class="text-muted" style="font-size: 0.7rem;">{{printf "%.1f" .WasteRetry.Percent}}%</div>
+        </div>
+        <div class="kpi-card" style="border-left: 3px solid #a855f7;">
+          <div class="kpi-value" style="font-size: 1rem;">{{.WasteCompaction.Label}}</div>
+          <div class="kpi-label">Compaction</div>
+          <div class="text-muted" style="font-size: 0.7rem;">{{printf "%.1f" .WasteCompaction.Percent}}%</div>
+        </div>
+        <div class="kpi-card" style="border-left: 3px solid #f59e0b;">
+          <div class="kpi-value" style="font-size: 1rem;">{{.WasteCacheMiss.Label}}</div>
+          <div class="kpi-label">Cache Miss</div>
+          <div class="text-muted" style="font-size: 0.7rem;">{{printf "%.1f" .WasteCacheMiss.Percent}}%</div>
+        </div>
+        <div class="kpi-card" style="border-left: 3px solid var(--text-muted, #6b7280);">
+          <div class="kpi-value" style="font-size: 1rem;">{{.WasteIdleContext.Label}}</div>
+          <div class="kpi-label">Idle Context</div>
+          <div class="text-muted" style="font-size: 0.7rem;">{{printf "%.1f" .WasteIdleContext.Percent}}%</div>
+        </div>
+      </div>
+      <div style="margin-top: 0.5rem; font-size: 0.75rem;" class="text-muted">
+        Total: {{formatTokens .WasteTotalTokens}} tokens &bull;
+        Waste: <span style="color: var(--error, #ef4444); font-weight: 600;">{{printf "%.1f" .WasteWastePct}}%</span>
+      </div>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .HasOverloadData}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Session Health Overview</h3>
+  <div class="kpi-grid kpi-grid-4">
+    <div class="kpi-card">
+      <div class="kpi-value"><span class="badge badge-{{.HealthGrade}}">{{.AvgHealthScore}}/100</span></div>
+      <div class="kpi-label">Avg Health Score</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-value{{if gt .OverloadedCount 0}} text-error{{end}}">{{.OverloadedCount}}</div>
+      <div class="kpi-label">Overloaded Sessions</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-value{{if gt .DecliningCount 0}} text-warning{{end}}">{{.DecliningCount}}</div>
+      <div class="kpi-label">Declining Sessions</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-value">{{.SatTotalSessions}}</div>
+      <div class="kpi-label">Total Analyzed</div>
+    </div>
+  </div>
+  {{end}}
+
   {{if .SatModels}}
   <h3 class="section-subtitle" style="margin-top: 1.5rem;">Saturation &amp; Efficiency by Model</h3>
   <div class="table-wrap">
@@ -35,12 +211,14 @@
       <thead>
         <tr>
           <th>Model</th>
-          <th class="text-right">Context Window</th>
           <th class="text-right">Sessions</th>
           <th class="text-right">Avg Peak</th>
-          <th class="text-right">Max Peak</th>
-          <th class="text-right">Unused</th>
-          <th>Efficiency</th>
+          <th>Window Fit</th>
+          <th class="text-right">Cost/1K Out</th>
+          <th class="text-right">Out/$</th>
+          <th class="text-right">Err%</th>
+          <th class="text-right">Out/In</th>
+          <th>Score</th>
           <th class="text-right">Compacted</th>
         </tr>
       </thead>
@@ -48,11 +226,8 @@
         {{range .SatModels}}
         <tr>
           <td class="font-mono">{{.Model}}</td>
-          <td class="text-right font-mono">{{formatTokens .MaxInputTokens}}</td>
           <td class="text-right">{{.SessionCount}}</td>
           <td class="text-right"><span class="badge badge-{{.SatClass}}">{{printf "%.0f" .AvgPeakPct}}%</span></td>
-          <td class="text-right font-mono">{{printf "%.0f" .MaxPeakPct}}%</td>
-          <td class="text-right font-mono text-muted">{{printf "%.0f" .WastedCapacityPct}}%</td>
           <td>
             {{if eq .EfficiencyVerdict "oversized"}}<span class="badge badge-warning">oversized</span>
             {{else if eq .EfficiencyVerdict "well-sized"}}<span class="badge badge-good">well-sized</span>
@@ -60,6 +235,11 @@
             {{else if eq .EfficiencyVerdict "saturated"}}<span class="badge badge-poor">saturated</span>
             {{end}}
           </td>
+          <td class="text-right font-mono">{{if .HasCost}}{{.CostPer1KOutput}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="text-right font-mono">{{if .HasCost}}{{.OutputPerDollar}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="text-right font-mono{{if gt .ErrorRate 10.0}} text-error{{end}}">{{printf "%.1f" .ErrorRate}}%</td>
+          <td class="text-right font-mono">{{printf "%.1f" .AvgOutputRatio}}%</td>
+          <td><span class="badge badge-{{.GradeClass}}" title="Score: {{.EfficiencyScore}}/100">{{.EfficiencyGrade}} ({{.EfficiencyScore}})</span></td>
           <td class="text-right{{if gt .CompactedCount 0}} text-error{{end}}">{{.CompactedCount}}</td>
         </tr>
         {{end}}

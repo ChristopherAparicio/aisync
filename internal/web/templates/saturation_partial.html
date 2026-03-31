@@ -10,13 +10,50 @@
     {{if gt .MsgAtCritical 0}}<span class="text-muted">&middot; Critical at msg #{{.MsgAtCritical}}</span>{{end}}
   </div>
 
+  {{if .HasCompactions}}
+  <div class="compaction-summary">
+    <div class="compact-kpi-row">
+      <div class="compact-kpi">
+        <span class="value">{{.CompactionCount}}</span>
+        <span class="label">Compactions</span>
+      </div>
+      <div class="compact-kpi">
+        <span class="value">{{.TotalTokensLostK}}</span>
+        <span class="label">Tokens Lost</span>
+      </div>
+      <div class="compact-kpi">
+        <span class="value">{{printf "%.0f" .AvgDropPercent}}%</span>
+        <span class="label">Avg Drop</span>
+      </div>
+      {{if gt .SawtoothCycles 1}}
+      <div class="compact-kpi">
+        <span class="value">{{.SawtoothCycles}}</span>
+        <span class="label">Sawtooth Cycles</span>
+      </div>
+      {{end}}
+      {{if gt .TotalRebuildCost 0.001}}
+      <div class="compact-kpi">
+        <span class="value">${{printf "%.2f" .TotalRebuildCost}}</span>
+        <span class="label">Rebuild Cost</span>
+      </div>
+      {{end}}
+      {{if gt .AvgMessagesToFill 0}}
+      <div class="compact-kpi">
+        <span class="value">{{.AvgMessagesToFill}}</span>
+        <span class="label">Msgs to Fill</span>
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+
   <div class="saturation-chart">
     {{range .Points}}
-    <div class="sat-row">
+    <div class="sat-row{{if .IsCompaction}} sat-row-compaction{{end}}">
       <span class="sat-index font-mono">#{{.Index}}</span>
       <span class="sat-role">{{.Role}}</span>
       <div class="sat-bar-container">
-        <div class="sat-bar {{.ZoneClass}}" style="width:{{.BarWidth}}%"></div>
+        {{if .IsCompaction}}<div class="sat-bar sat-compaction" style="width:{{.BarWidth}}%"></div>{{else}}<div class="sat-bar {{.ZoneClass}}" style="width:{{.BarWidth}}%"></div>{{end}}
         {{if gt .BarWidth 8}}<span class="sat-bar-label">{{printf "%.0f" .Percent}}%</span>{{end}}
       </div>
       <span class="sat-tokens font-mono">{{formatTokens .Tokens}}</span>
@@ -29,5 +66,50 @@
     <span class="sat-legend-item"><span class="sat-dot sat-optimal"></span> Optimal (0-40%)</span>
     <span class="sat-legend-item"><span class="sat-dot sat-degraded"></span> Degraded (40-80%)</span>
     <span class="sat-legend-item"><span class="sat-dot sat-critical"></span> Critical (80%+)</span>
+    {{if .HasCompactions}}<span class="sat-legend-item"><span class="sat-dot sat-compaction"></span> Compaction</span>{{end}}
   </div>
+
+  {{if .HasOverload}}
+  <div class="overload-panel" style="margin-top:1rem;">
+    <h4 class="section-subtitle" style="margin-bottom:0.5rem;">
+      Session Health
+      <span class="badge badge-{{.OverloadClass}}" style="margin-left:0.5rem;">{{.OverloadVerdict}} ({{.OverloadScore}}/100)</span>
+    </h4>
+    <p class="text-muted" style="margin:0 0 0.75rem 0; font-size:0.85rem;">{{.OverloadReason}}</p>
+    <div class="compact-kpi-row">
+      <div class="compact-kpi">
+        <span class="value">{{printf "%.1f" .EarlyOutputRatio}}%</span>
+        <span class="label">Early Out/In</span>
+      </div>
+      <div class="compact-kpi">
+        <span class="value">{{printf "%.1f" .LateOutputRatio}}%</span>
+        <span class="label">Late Out/In</span>
+      </div>
+      {{if gt .OutputDecay 0.0}}
+      <div class="compact-kpi">
+        <span class="value{{if gt .OutputDecay 30.0}} text-error{{end}}">-{{printf "%.0f" .OutputDecay}}%</span>
+        <span class="label">Output Decay</span>
+      </div>
+      {{end}}
+      {{if gt .ErrorGrowth 0.0}}
+      <div class="compact-kpi">
+        <span class="value{{if gt .ErrorGrowth 10.0}} text-error{{end}}">+{{printf "%.0f" .ErrorGrowth}}pp</span>
+        <span class="label">Error Growth</span>
+      </div>
+      {{end}}
+      {{if gt .RetryCount 0}}
+      <div class="compact-kpi">
+        <span class="value text-error">{{.RetryCount}}</span>
+        <span class="label">Retry Loops</span>
+      </div>
+      {{end}}
+      {{if .HasInflection}}
+      <div class="compact-kpi">
+        <span class="value">#{{.InflectionAt}}</span>
+        <span class="label">Decline Start</span>
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
 </div>

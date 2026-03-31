@@ -129,9 +129,11 @@ type ToolCallDetail struct {
 
 // SkillLoadDetail captures metadata about a skill being loaded.
 type SkillLoadDetail struct {
-	SkillName  string `json:"skill_name"`             // e.g. "replay-tester", "opencode-sessions"
-	LoadMethod string `json:"load_method,omitempty"`  // "tool_call" or "content_tag"
-	ToolCallID string `json:"tool_call_id,omitempty"` // tool call that loaded it (if via tool)
+	SkillName       string `json:"skill_name"`                 // e.g. "replay-tester", "opencode-sessions"
+	LoadMethod      string `json:"load_method,omitempty"`      // "tool_call" or "content_tag"
+	ToolCallID      string `json:"tool_call_id,omitempty"`     // tool call that loaded it (if via tool)
+	EstimatedTokens int    `json:"estimated_tokens,omitempty"` // estimated context tokens consumed (~len/4)
+	ContentBytes    int    `json:"content_bytes,omitempty"`    // raw byte size of skill content
 }
 
 // AgentDetail captures the detected agent/provider for the session.

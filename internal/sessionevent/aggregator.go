@@ -55,6 +55,7 @@ func (a *BucketAggregator) Aggregate(events []Event, granularity string) []Event
 				TopTools:        make(map[string]int),
 				TopMCPServers:   make(map[string]int),
 				TopSkills:       make(map[string]int),
+				SkillTokens:     make(map[string]int),
 				AgentBreakdown:  make(map[string]int),
 				TopCommands:     make(map[string]int),
 				ErrorByCategory: make(map[session.ErrorCategory]int),
@@ -113,6 +114,12 @@ func (a *BucketAggregator) addEvent(b *EventBucket, e *Event) {
 		b.SkillLoadCount++
 		if e.SkillLoad != nil {
 			b.TopSkills[e.SkillLoad.SkillName]++
+			if e.SkillLoad.EstimatedTokens > 0 {
+				if b.SkillTokens == nil {
+					b.SkillTokens = make(map[string]int)
+				}
+				b.SkillTokens[e.SkillLoad.SkillName] += e.SkillLoad.EstimatedTokens
+			}
 		}
 
 	case EventAgentDetection:
@@ -164,6 +171,12 @@ func MergeBuckets(existing, incoming *EventBucket) {
 	mergeMaps(existing.TopTools, incoming.TopTools)
 	mergeMaps(existing.TopMCPServers, incoming.TopMCPServers)
 	mergeMaps(existing.TopSkills, incoming.TopSkills)
+	if len(incoming.SkillTokens) > 0 {
+		if existing.SkillTokens == nil {
+			existing.SkillTokens = make(map[string]int)
+		}
+		mergeMaps(existing.SkillTokens, incoming.SkillTokens)
+	}
 	mergeMaps(existing.AgentBreakdown, incoming.AgentBreakdown)
 	mergeMaps(existing.TopCommands, incoming.TopCommands)
 	mergeErrorMaps(existing.ErrorByCategory, incoming.ErrorByCategory)

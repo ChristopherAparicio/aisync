@@ -2047,14 +2047,52 @@ type costDashboardPage struct {
 	CVUOrphanCount  int
 
 	// Context saturation
-	HasSaturation    bool
-	SatAvgPeak       float64 // average peak saturation (0-100)
-	SatAbove80       int     // sessions >80% saturation
-	SatAbove90       int     // sessions >90% saturation
-	SatCompacted     int     // sessions that hit compaction
-	SatTotalSessions int
-	SatModels        []modelSaturationView
-	SatWorstSessions []sessionSaturationView
+	HasSaturation        bool
+	SatAvgPeak           float64 // average peak saturation (0-100)
+	SatAbove80           int     // sessions >80% saturation
+	SatAbove90           int     // sessions >90% saturation
+	SatCompacted         int     // sessions that hit compaction
+	SatTotalSessions     int
+	SatModels            []modelSaturationView
+	SatWorstSessions     []sessionSaturationView
+	SatCompactionEvents  int     // total compaction events across all sessions
+	SatTotalTokensLost   int     // total tokens lost to compaction
+	SatTotalTokensLostK  string  // formatted "1.2M" or "170K"
+	SatTotalRebuildCost  float64 // estimated cost to rebuild context ($)
+	SatAvgDropPercent    float64 // average compaction drop severity
+	HasCompactionDetails bool    // true if compaction events > 0
+
+	// Token waste classification (4.2)
+	HasWasteData       bool
+	WasteTotalTokens   int
+	WasteProductive    wasteView
+	WasteRetry         wasteView
+	WasteCompaction    wasteView
+	WasteCacheMiss     wasteView
+	WasteIdleContext   wasteView
+	WasteProductivePct float64
+	WasteWastePct      float64
+	WastePieGradient   template.CSS // conic-gradient for waste pie chart
+	HasWastePie        bool
+
+	// Overload aggregate (3.2)
+	HasOverloadData bool
+	OverloadedCount int
+	DecliningCount  int
+	AvgHealthScore  int
+	HealthGrade     string // "good", "warning", "poor"
+
+	// Saturation forecast
+	HasForecastSat              bool
+	ForecastAvgMsgsToCompaction int
+	ForecastAvgGrowthPerMsg     int
+	ForecastAvgGrowthK          string // formatted "3.5K"
+	ForecastSessionsAnalyzed    int
+	ForecastSessionsCompacted   int
+	ForecastCompactedPct        float64 // compacted / analyzed * 100
+	ForecastModels              []modelForecastView
+	ForecastHistogram           []histogramBucketView
+	HasHistogram                bool
 
 	// Budget overview (all projects with budgets)
 	HasBudgets bool
@@ -2076,6 +2114,13 @@ type budgetOverviewView struct {
 	DailyAlert     string
 	ProjectedMonth float64
 	DaysRemaining  int
+}
+
+// wasteView is a template-friendly view of a token waste category.
+type wasteView struct {
+	Tokens  int
+	Percent float64
+	Label   string // formatted token count (e.g. "1.2M", "170K")
 }
 
 // cacheMissView is a template-friendly view of a cache miss session.
@@ -2200,6 +2245,17 @@ type modelSaturationView struct {
 	EfficiencyVerdict string // "oversized", "well-sized", "tight", "saturated"
 	AvgPeakTokens     int
 	WastedCapacityPct float64
+
+	// Efficiency score (3.1)
+	CostPer1KOutput string // formatted "$0.024"
+	OutputPerDollar string // formatted "40.7K"
+	ErrorRate       float64
+	AvgOutputRatio  float64
+	EfficiencyScore int
+	EfficiencyGrade string
+	GradeClass      string // CSS class for grade badge
+	TotalCost       float64
+	HasCost         bool // true when TotalCost > 0
 }
 
 // sessionSaturationView is a template-friendly per-session saturation entry.
@@ -2213,6 +2269,31 @@ type sessionSaturationView struct {
 	MessageCount    int
 	WasCompacted    bool
 	SatClass        string // CSS class
+}
+
+// modelForecastView is a template-friendly per-model saturation forecast.
+type modelForecastView struct {
+	Model                 string
+	MaxInputTokens        int
+	SessionCount          int
+	CompactedCount        int
+	AvgMsgsToCompacted    int
+	MedianMsgsToCompacted int
+	AvgTokenGrowthPerMsg  int
+	AvgTokenGrowthK       string // formatted "3.5K"
+	AvgPeakUtilization    float64
+	PredictedMsgsTo80     int
+	PredictedMsgsTo100    int
+	Recommendation        string
+	HasCompactions        bool
+	HasPrediction         bool
+}
+
+// histogramBucketView is a template-friendly histogram bucket.
+type histogramBucketView struct {
+	Label     string
+	Count     int
+	HeightPct float64 // 0-100 for bar height
 }
 
 // qacLeaderView is a template-friendly QAC leaderboard entry.
@@ -2517,6 +2598,73 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 		data.SatAbove90 = saturation.SessionsAbove90
 		data.SatCompacted = saturation.SessionsCompacted
 		data.SatTotalSessions = saturation.TotalSessions
+		data.SatCompactionEvents = saturation.TotalCompactionEvents
+		data.SatTotalTokensLost = saturation.TotalTokensLost
+		data.SatTotalRebuildCost = saturation.TotalRebuildCost
+		data.SatAvgDropPercent = saturation.AvgDropPercent
+		data.HasCompactionDetails = saturation.TotalCompactionEvents > 0
+
+		// Overload aggregate (3.2).
+		if saturation.TotalSessions > 0 {
+			data.HasOverloadData = true
+			data.OverloadedCount = saturation.SessionsOverloaded
+			data.DecliningCount = saturation.SessionsDeclining
+			data.AvgHealthScore = int(saturation.AvgHealthScore)
+			switch {
+			case data.AvgHealthScore >= 70:
+				data.HealthGrade = "good"
+			case data.AvgHealthScore >= 40:
+				data.HealthGrade = "warning"
+			default:
+				data.HealthGrade = "poor"
+			}
+		}
+
+		// Token waste classification (4.2).
+		if w := saturation.TokenWaste; w != nil && w.TotalTokens > 0 {
+			data.HasWasteData = true
+			data.WasteTotalTokens = w.TotalTokens
+			data.WasteProductive = wasteView{Tokens: w.Productive.Tokens, Percent: w.Productive.Percent, Label: formatTokensInt(w.Productive.Tokens)}
+			data.WasteRetry = wasteView{Tokens: w.Retry.Tokens, Percent: w.Retry.Percent, Label: formatTokensInt(w.Retry.Tokens)}
+			data.WasteCompaction = wasteView{Tokens: w.Compaction.Tokens, Percent: w.Compaction.Percent, Label: formatTokensInt(w.Compaction.Tokens)}
+			data.WasteCacheMiss = wasteView{Tokens: w.CacheMiss.Tokens, Percent: w.CacheMiss.Percent, Label: formatTokensInt(w.CacheMiss.Tokens)}
+			data.WasteIdleContext = wasteView{Tokens: w.IdleContext.Tokens, Percent: w.IdleContext.Percent, Label: formatTokensInt(w.IdleContext.Tokens)}
+			data.WasteProductivePct = w.ProductivePct
+			data.WasteWastePct = w.WastePct
+			// Build conic-gradient for waste pie chart.
+			type wasteSlice struct {
+				pct   float64
+				color string
+			}
+			slices := []wasteSlice{
+				{w.Productive.Percent, "var(--success, #22c55e)"},
+				{w.Retry.Percent, "var(--error, #ef4444)"},
+				{w.Compaction.Percent, "#a855f7"},
+				{w.CacheMiss.Percent, "#f59e0b"},
+				{w.IdleContext.Percent, "var(--text-muted, #6b7280)"},
+			}
+			cumPct := 0.0
+			var stops []string
+			for _, sl := range slices {
+				if sl.pct < 0.1 {
+					continue
+				}
+				stops = append(stops, fmt.Sprintf("%s %.2f%% %.2f%%", sl.color, cumPct, cumPct+sl.pct))
+				cumPct += sl.pct
+			}
+			if len(stops) >= 2 {
+				data.WastePieGradient = template.CSS(strings.Join(stops, ", "))
+				data.HasWastePie = true
+			}
+		}
+
+		if saturation.TotalTokensLost >= 1_000_000 {
+			data.SatTotalTokensLostK = fmt.Sprintf("%.1fM", float64(saturation.TotalTokensLost)/1_000_000)
+		} else if saturation.TotalTokensLost >= 1000 {
+			data.SatTotalTokensLostK = fmt.Sprintf("%dK", saturation.TotalTokensLost/1000)
+		} else {
+			data.SatTotalTokensLostK = fmt.Sprintf("%d", saturation.TotalTokensLost)
+		}
 
 		for _, ms := range saturation.Models {
 			satClass := "good"
@@ -2524,6 +2672,32 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				satClass = "poor"
 			} else if ms.AvgPeakPct > 60 {
 				satClass = "warning"
+			}
+			// Format efficiency metrics.
+			costPer1K := ""
+			if ms.CostPer1KOutput > 0 {
+				if ms.CostPer1KOutput < 0.01 {
+					costPer1K = fmt.Sprintf("$%.4f", ms.CostPer1KOutput)
+				} else {
+					costPer1K = fmt.Sprintf("$%.3f", ms.CostPer1KOutput)
+				}
+			}
+			outPerDollar := ""
+			if ms.OutputPerDollar > 0 {
+				if ms.OutputPerDollar >= 1_000_000 {
+					outPerDollar = fmt.Sprintf("%.1fM", ms.OutputPerDollar/1_000_000)
+				} else if ms.OutputPerDollar >= 1000 {
+					outPerDollar = fmt.Sprintf("%.1fK", ms.OutputPerDollar/1000)
+				} else {
+					outPerDollar = fmt.Sprintf("%.0f", ms.OutputPerDollar)
+				}
+			}
+			gradeClass := "good"
+			switch ms.EfficiencyGrade {
+			case "C":
+				gradeClass = "warning"
+			case "D", "F":
+				gradeClass = "poor"
 			}
 			data.SatModels = append(data.SatModels, modelSaturationView{
 				Model:             ms.Model,
@@ -2537,6 +2711,15 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				EfficiencyVerdict: ms.EfficiencyVerdict,
 				AvgPeakTokens:     ms.AvgPeakTokens,
 				WastedCapacityPct: ms.WastedCapacityPct,
+				CostPer1KOutput:   costPer1K,
+				OutputPerDollar:   outPerDollar,
+				ErrorRate:         ms.ErrorRate,
+				AvgOutputRatio:    ms.AvgOutputRatio,
+				EfficiencyScore:   ms.EfficiencyScore,
+				EfficiencyGrade:   ms.EfficiencyGrade,
+				GradeClass:        gradeClass,
+				TotalCost:         ms.TotalCost,
+				HasCost:           ms.TotalCost > 0,
 			})
 		}
 
@@ -2558,6 +2741,73 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				WasCompacted:    ws.WasCompacted,
 				SatClass:        satClass,
 			})
+		}
+
+		// Saturation forecast.
+		if saturation.Forecast != nil && saturation.Forecast.SessionsWithForecast > 0 {
+			fc := saturation.Forecast
+			data.HasForecastSat = true
+			data.ForecastAvgMsgsToCompaction = fc.AvgMsgsToCompaction
+			data.ForecastAvgGrowthPerMsg = fc.AvgTokenGrowthPerMsg
+			data.ForecastSessionsAnalyzed = fc.SessionsWithForecast
+			data.ForecastSessionsCompacted = fc.SessionsWithCompacted
+			if fc.SessionsWithForecast > 0 {
+				data.ForecastCompactedPct = float64(fc.SessionsWithCompacted) / float64(fc.SessionsWithForecast) * 100
+			}
+			if fc.AvgTokenGrowthPerMsg >= 1000 {
+				data.ForecastAvgGrowthK = fmt.Sprintf("%.1fK", float64(fc.AvgTokenGrowthPerMsg)/1000)
+			} else {
+				data.ForecastAvgGrowthK = fmt.Sprintf("%d", fc.AvgTokenGrowthPerMsg)
+			}
+
+			for _, mf := range fc.Models {
+				fv := modelForecastView{
+					Model:                 mf.Model,
+					MaxInputTokens:        mf.MaxInputTokens,
+					SessionCount:          mf.SessionCount,
+					CompactedCount:        mf.CompactedCount,
+					AvgMsgsToCompacted:    mf.AvgMsgsToCompacted,
+					MedianMsgsToCompacted: mf.MedianMsgsToCompacted,
+					AvgTokenGrowthPerMsg:  mf.AvgTokenGrowthPerMsg,
+					AvgPeakUtilization:    mf.AvgPeakUtilization,
+					PredictedMsgsTo80:     mf.PredictedMsgsTo80,
+					PredictedMsgsTo100:    mf.PredictedMsgsTo100,
+					Recommendation:        mf.Recommendation,
+					HasCompactions:        mf.CompactedCount > 0,
+					HasPrediction:         mf.PredictedMsgsTo80 > 0,
+				}
+				if mf.AvgTokenGrowthPerMsg >= 1000 {
+					fv.AvgTokenGrowthK = fmt.Sprintf("%.1fK", float64(mf.AvgTokenGrowthPerMsg)/1000)
+				} else {
+					fv.AvgTokenGrowthK = fmt.Sprintf("%d", mf.AvgTokenGrowthPerMsg)
+				}
+				data.ForecastModels = append(data.ForecastModels, fv)
+			}
+
+			// Histogram with bar heights.
+			if len(fc.CompactionHistogram) > 0 {
+				data.HasHistogram = true
+				maxCount := 0
+				for _, b := range fc.CompactionHistogram {
+					if b.Count > maxCount {
+						maxCount = b.Count
+					}
+				}
+				for _, b := range fc.CompactionHistogram {
+					heightPct := 0.0
+					if maxCount > 0 {
+						heightPct = float64(b.Count) / float64(maxCount) * 100
+					}
+					if heightPct < 3 && b.Count > 0 {
+						heightPct = 3
+					}
+					data.ForecastHistogram = append(data.ForecastHistogram, histogramBucketView{
+						Label:     b.Label,
+						Count:     b.Count,
+						HeightPct: heightPct,
+					})
+				}
+			}
 		}
 	}
 
@@ -3581,18 +3831,46 @@ type saturationCurveView struct {
 	MsgAtDegraded int
 	MsgAtCritical int
 	Points        []saturationPointView
+
+	// Compaction summary.
+	CompactionCount   int
+	TotalTokensLost   int
+	TotalTokensLostK  string // formatted "170K"
+	AvgDropPercent    float64
+	SawtoothCycles    int
+	TotalRebuildCost  float64
+	AvgRecoveryTokens int
+	AvgMessagesToFill int
+	HasCompactions    bool // true if CompactionCount > 0
+
+	// Overload detection (3.2).
+	HasOverload      bool
+	OverloadVerdict  string // "healthy", "declining", "overloaded"
+	OverloadClass    string // CSS class: "good", "warning", "poor"
+	OverloadScore    int    // 0-100 health score
+	OverloadReason   string
+	InflectionAt     int // message index where decline starts
+	HasInflection    bool
+	EarlyOutputRatio float64
+	LateOutputRatio  float64
+	OutputDecay      float64 // % decline
+	EarlyErrorRate   float64
+	LateErrorRate    float64
+	ErrorGrowth      float64 // percentage points increase
+	RetryCount       int
 }
 
 type saturationPointView struct {
-	Index     int
-	Role      string
-	Tokens    int
-	Percent   float64
-	Zone      string // "optimal", "degraded", "critical"
-	Delta     int
-	Label     string
-	BarWidth  int    // 0-100 for CSS width
-	ZoneClass string // CSS class
+	Index        int
+	Role         string
+	Tokens       int
+	Percent      float64
+	Zone         string // "optimal", "degraded", "critical"
+	Delta        int
+	Label        string
+	BarWidth     int    // 0-100 for CSS width
+	ZoneClass    string // CSS class
+	IsCompaction bool   // true if this point is a compaction event
 }
 
 func (s *Server) handleSaturationPartial(w http.ResponseWriter, r *http.Request) {
@@ -3619,6 +3897,28 @@ func (s *Server) handleSaturationPartial(w http.ResponseWriter, r *http.Request)
 		view.InitOverheadK = fmt.Sprintf("%d", curve.InitOverhead)
 	}
 
+	// Populate compaction summary.
+	cs := curve.Compactions
+	view.CompactionCount = cs.TotalCompactions
+	view.HasCompactions = cs.TotalCompactions > 0
+	view.TotalTokensLost = cs.TotalTokensLost
+	if cs.TotalTokensLost >= 1000 {
+		view.TotalTokensLostK = fmt.Sprintf("%dK", cs.TotalTokensLost/1000)
+	} else {
+		view.TotalTokensLostK = fmt.Sprintf("%d", cs.TotalTokensLost)
+	}
+	view.AvgDropPercent = cs.AvgDropPercent
+	view.SawtoothCycles = cs.SawtoothCycles
+	view.TotalRebuildCost = cs.TotalRebuildCost
+	view.AvgRecoveryTokens = cs.AvgRecoveryTokens
+	view.AvgMessagesToFill = cs.AvgMessagesToFill
+
+	// Build set of compaction point indices for marking.
+	compactionAtIdx := make(map[int]bool, len(cs.Events))
+	for _, e := range cs.Events {
+		compactionAtIdx[e.AfterMessageIdx] = true
+	}
+
 	for _, pt := range curve.Points {
 		barWidth := int(pt.Percent)
 		if barWidth > 100 {
@@ -3632,16 +3932,43 @@ func (s *Server) handleSaturationPartial(w http.ResponseWriter, r *http.Request)
 		}
 
 		view.Points = append(view.Points, saturationPointView{
-			Index:     pt.MessageIndex + 1,
-			Role:      pt.Role,
-			Tokens:    pt.InputTokens,
-			Percent:   pt.Percent,
-			Zone:      pt.Zone,
-			Delta:     pt.Delta,
-			Label:     pt.Label,
-			BarWidth:  barWidth,
-			ZoneClass: zoneClass,
+			Index:        pt.MessageIndex + 1,
+			Role:         pt.Role,
+			Tokens:       pt.InputTokens,
+			Percent:      pt.Percent,
+			Zone:         pt.Zone,
+			Delta:        pt.Delta,
+			Label:        pt.Label,
+			BarWidth:     barWidth,
+			ZoneClass:    zoneClass,
+			IsCompaction: compactionAtIdx[pt.MessageIndex],
 		})
+	}
+
+	// Populate overload detection (3.2).
+	ol := curve.Overload
+	if ol.TotalMessages >= 10 {
+		view.HasOverload = true
+		view.OverloadVerdict = ol.Verdict
+		view.OverloadScore = ol.HealthScore
+		view.OverloadReason = ol.Reason
+		view.InflectionAt = ol.InflectionAt
+		view.HasInflection = ol.InflectionAt > 0
+		view.EarlyOutputRatio = ol.EarlyOutputRatio
+		view.LateOutputRatio = ol.LateOutputRatio
+		view.OutputDecay = ol.OutputRatioDecay
+		view.EarlyErrorRate = ol.EarlyErrorRate
+		view.LateErrorRate = ol.LateErrorRate
+		view.ErrorGrowth = ol.ErrorRateGrowth
+		view.RetryCount = ol.RetryCount
+		switch ol.Verdict {
+		case "healthy":
+			view.OverloadClass = "good"
+		case "declining":
+			view.OverloadClass = "warning"
+		case "overloaded":
+			view.OverloadClass = "poor"
+		}
 	}
 
 	s.renderPartial(w, "saturation_partial.html", view)
@@ -3755,6 +4082,9 @@ type settingItem struct {
 	Value       string // current value
 	Description string // short explanation
 	IsSecret    bool   // mask the value
+	ConfigKey   string // config key for Set() (empty = read-only)
+	InputType   string // "toggle", "text", "number", "select" (empty = read-only)
+	Options     string // comma-separated options for select type
 }
 
 // settingSection groups related settings.
@@ -3796,8 +4126,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "General",
 		Icon:  "&#x2699;",
 		Items: []settingItem{
-			{Key: "Storage Mode", Value: string(s.cfg.GetStorageMode()), Description: "How sessions are stored (compact, full)"},
-			{Key: "Auto Capture", Value: boolStr(s.cfg.IsAutoCapture()), Description: "Automatically capture new sessions"},
+			{Key: "Storage Mode", Value: string(s.cfg.GetStorageMode()), Description: "How sessions are stored (compact, full)", ConfigKey: "storage_mode", InputType: "select", Options: "compact,full"},
+			{Key: "Auto Capture", Value: boolStr(s.cfg.IsAutoCapture()), Description: "Automatically capture new sessions", ConfigKey: "auto_capture", InputType: "toggle"},
 			{Key: "Providers", Value: joinProviders(s.cfg.GetProviders()), Description: "Enabled session providers"},
 		},
 	}
@@ -3807,8 +4137,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Features",
 		Icon:  "&#x1F6A9;",
 		Items: []settingItem{
-			{Key: "File Blame", Value: boolStr(s.cfg.IsFileBlameEnabled()), Description: "Extract file-level blame from tool calls (opt-in)"},
-			{Key: "Telemetry", Value: boolStr(s.cfg.IsTelemetryEnabled()), Description: "Anonymous usage statistics"},
+			{Key: "File Blame", Value: boolStr(s.cfg.IsFileBlameEnabled()), Description: "Extract file-level blame from tool calls (opt-in)", ConfigKey: "features.file_blame", InputType: "toggle"},
+			{Key: "Telemetry", Value: boolStr(s.cfg.IsTelemetryEnabled()), Description: "Anonymous usage statistics", ConfigKey: "telemetry.enabled", InputType: "toggle"},
 		},
 	}
 
@@ -3817,9 +4147,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Search",
 		Icon:  "&#x1F50D;",
 		Items: []settingItem{
-			{Key: "Engine", Value: s.cfg.GetSearchEngine(), Description: "Primary search engine (like, fts5, elasticsearch, postgres)"},
-			{Key: "Fallback", Value: s.cfg.GetSearchFallback(), Description: "Fallback engine when primary fails"},
-			{Key: "Index Content", Value: boolStr(s.cfg.GetSearchIndexContent()), Description: "Index full message content"},
+			{Key: "Engine", Value: s.cfg.GetSearchEngine(), Description: "Primary search engine (like, fts5, elasticsearch, postgres)", ConfigKey: "search.engine", InputType: "select", Options: "like,fts5"},
+			{Key: "Fallback", Value: s.cfg.GetSearchFallback(), Description: "Fallback engine when primary fails", ConfigKey: "search.fallback", InputType: "select", Options: "like,fts5,none"},
+			{Key: "Index Content", Value: boolStr(s.cfg.GetSearchIndexContent()), Description: "Index full message content", ConfigKey: "search.index_content", InputType: "toggle"},
 			{Key: "Max Content Length", Value: fmt.Sprintf("%d chars", s.cfg.GetSearchMaxContentLength()), Description: "Max indexed content per session"},
 		},
 	}
@@ -3829,12 +4159,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Analysis (LLM)",
 		Icon:  "&#x1F9E0;",
 		Items: []settingItem{
-			{Key: "Auto Analyze", Value: boolStr(s.cfg.IsAnalysisAutoEnabled()), Description: "Run analysis automatically after capture"},
-			{Key: "Adapter", Value: s.cfg.GetAnalysisAdapter(), Description: "LLM adapter for analysis"},
-			{Key: "Model", Value: valueOrDefault(s.cfg.GetAnalysisModel(), "(default)"), Description: "Model override"},
+			{Key: "Auto Analyze", Value: boolStr(s.cfg.IsAnalysisAutoEnabled()), Description: "Run analysis automatically after capture", ConfigKey: "analysis.auto", InputType: "toggle"},
+			{Key: "Adapter", Value: s.cfg.GetAnalysisAdapter(), Description: "LLM adapter for analysis", ConfigKey: "analysis.adapter", InputType: "select", Options: "llm,opencode,ollama,anthropic"},
+			{Key: "Model", Value: valueOrDefault(s.cfg.GetAnalysisModel(), "(default)"), Description: "Model override", ConfigKey: "analysis.model", InputType: "text"},
 			{Key: "Error Threshold", Value: fmt.Sprintf("%.0f%%", s.cfg.GetAnalysisErrorThreshold()), Description: "Error rate threshold for flagging"},
-			{Key: "Min Tool Calls", Value: fmt.Sprintf("%d", s.cfg.GetAnalysisMinToolCalls()), Description: "Minimum tool calls for analysis"},
-			{Key: "Schedule", Value: valueOrDefault(s.cfg.GetAnalysisSchedule(), "(disabled)"), Description: "Cron schedule for batch analysis"},
+			{Key: "Min Tool Calls", Value: fmt.Sprintf("%d", s.cfg.GetAnalysisMinToolCalls()), Description: "Minimum tool calls for analysis", ConfigKey: "analysis.min_tool_calls", InputType: "number"},
+			{Key: "Schedule", Value: valueOrDefault(s.cfg.GetAnalysisSchedule(), "(disabled)"), Description: "Cron schedule for batch analysis", ConfigKey: "analysis.schedule", InputType: "text"},
 		},
 	}
 
@@ -3843,9 +4173,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Tagging",
 		Icon:  "&#x1F3F7;",
 		Items: []settingItem{
-			{Key: "Auto Tag", Value: boolStr(s.cfg.IsTaggingAutoEnabled()), Description: "Auto-classify session types after capture"},
-			{Key: "Profile", Value: valueOrDefault(s.cfg.GetTaggingProfile(), "(default)"), Description: "LLM profile for classification"},
-			{Key: "Custom Tags", Value: joinStrings(s.cfg.GetTaggingTags()), Description: "Custom tag vocabulary (empty = defaults)"},
+			{Key: "Auto Tag", Value: boolStr(s.cfg.IsTaggingAutoEnabled()), Description: "Auto-classify session types after capture", ConfigKey: "tagging.auto", InputType: "toggle"},
+			{Key: "Profile", Value: valueOrDefault(s.cfg.GetTaggingProfile(), "(default)"), Description: "LLM profile for classification", ConfigKey: "tagging.profile", InputType: "text"},
+			{Key: "Custom Tags", Value: joinStrings(s.cfg.GetTaggingTags()), Description: "Custom tag vocabulary (empty = defaults)", ConfigKey: "tagging.tags", InputType: "text"},
 		},
 	}
 
@@ -3854,7 +4184,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Secrets Detection",
 		Icon:  "&#x1F512;",
 		Items: []settingItem{
-			{Key: "Mode", Value: string(s.cfg.GetSecretsMode()), Description: "How secrets are handled (mask, redact, none)"},
+			{Key: "Mode", Value: string(s.cfg.GetSecretsMode()), Description: "How secrets are handled (mask, redact, none)", ConfigKey: "secrets.mode", InputType: "select", Options: "mask,redact,none"},
 			{Key: "Custom Patterns", Value: fmt.Sprintf("%d patterns", len(s.cfg.GetCustomPatterns())), Description: "Additional regex patterns for secret detection"},
 			{Key: "Scan Tool Outputs", Value: boolStr(s.cfg.IsScanToolOutputs()), Description: "Scan tool call outputs for secrets"},
 		},
@@ -3865,9 +4195,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Error Classification",
 		Icon:  "&#x26A0;",
 		Items: []settingItem{
-			{Key: "Classifier", Value: s.cfg.GetErrorsClassifier(), Description: "Error classifier (deterministic, composite)"},
-			{Key: "LLM Fallback", Value: boolStr(s.cfg.IsErrorsLLMFallbackEnabled()), Description: "Use LLM for unclassified errors"},
-			{Key: "LLM Schedule", Value: valueOrDefault(s.cfg.GetErrorsLLMSchedule(), "(disabled)"), Description: "Cron schedule for LLM reclassification"},
+			{Key: "Classifier", Value: s.cfg.GetErrorsClassifier(), Description: "Error classifier (deterministic, composite)", ConfigKey: "errors.classifier", InputType: "select", Options: "deterministic,composite"},
+			{Key: "LLM Fallback", Value: boolStr(s.cfg.IsErrorsLLMFallbackEnabled()), Description: "Use LLM for unclassified errors", ConfigKey: "errors.llm_fallback", InputType: "toggle"},
+			{Key: "LLM Schedule", Value: valueOrDefault(s.cfg.GetErrorsLLMSchedule(), "(disabled)"), Description: "Cron schedule for LLM reclassification", ConfigKey: "errors.llm_schedule", InputType: "text"},
 		},
 	}
 
@@ -3876,10 +4206,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Dashboard",
 		Icon:  "&#x1F4CA;",
 		Items: []settingItem{
-			{Key: "Page Size", Value: fmt.Sprintf("%d", s.cfg.GetDashboardPageSize()), Description: "Sessions per page"},
-			{Key: "Columns", Value: joinStrings(s.cfg.GetDashboardColumns()), Description: "Visible columns in sessions table"},
-			{Key: "Sort By", Value: s.cfg.GetDashboardSortBy(), Description: "Default sort field"},
-			{Key: "Sort Order", Value: s.cfg.GetDashboardSortOrder(), Description: "Default sort direction"},
+			{Key: "Page Size", Value: fmt.Sprintf("%d", s.cfg.GetDashboardPageSize()), Description: "Sessions per page", ConfigKey: "dashboard.page_size", InputType: "number"},
+			{Key: "Columns", Value: joinStrings(s.cfg.GetDashboardColumns()), Description: "Visible columns in sessions table", ConfigKey: "dashboard.columns", InputType: "text"},
+			{Key: "Sort By", Value: s.cfg.GetDashboardSortBy(), Description: "Default sort field", ConfigKey: "dashboard.sort_by", InputType: "select", Options: "created_at,provider,branch,tokens,messages"},
+			{Key: "Sort Order", Value: s.cfg.GetDashboardSortOrder(), Description: "Default sort direction", ConfigKey: "dashboard.sort_order", InputType: "select", Options: "asc,desc"},
 		},
 	}
 
@@ -3900,13 +4230,13 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Title: "Scheduler",
 		Icon:  "&#x23F0;",
 		Items: []settingItem{
-			{Key: "GC Enabled", Value: boolStr(s.cfg.GetSchedulerGCEnabled()), Description: "Garbage collection for old sessions"},
-			{Key: "GC Schedule", Value: valueOrDefault(s.cfg.GetSchedulerGCCron(), "(disabled)"), Description: "GC cron expression"},
-			{Key: "GC Retention", Value: fmt.Sprintf("%d days", s.cfg.GetSchedulerGCRetentionDays()), Description: "Keep sessions for N days"},
-			{Key: "Capture All", Value: boolStr(s.cfg.GetSchedulerCaptureAllEnabled()), Description: "Scheduled capture of all providers"},
-			{Key: "Capture Schedule", Value: valueOrDefault(s.cfg.GetSchedulerCaptureAllCron(), "(disabled)"), Description: "Capture cron expression"},
-			{Key: "Stats Report", Value: boolStr(s.cfg.GetSchedulerStatsReportEnabled()), Description: "Scheduled stats report"},
-			{Key: "Stats Schedule", Value: valueOrDefault(s.cfg.GetSchedulerStatsReportCron(), "(disabled)"), Description: "Stats report cron expression"},
+			{Key: "GC Enabled", Value: boolStr(s.cfg.GetSchedulerGCEnabled()), Description: "Garbage collection for old sessions", ConfigKey: "scheduler.gc.enabled", InputType: "toggle"},
+			{Key: "GC Schedule", Value: valueOrDefault(s.cfg.GetSchedulerGCCron(), "(disabled)"), Description: "GC cron expression", ConfigKey: "scheduler.gc.cron", InputType: "text"},
+			{Key: "GC Retention", Value: fmt.Sprintf("%d days", s.cfg.GetSchedulerGCRetentionDays()), Description: "Keep sessions for N days", ConfigKey: "scheduler.gc.retention_days", InputType: "number"},
+			{Key: "Capture All", Value: boolStr(s.cfg.GetSchedulerCaptureAllEnabled()), Description: "Scheduled capture of all providers", ConfigKey: "scheduler.capture_all.enabled", InputType: "toggle"},
+			{Key: "Capture Schedule", Value: valueOrDefault(s.cfg.GetSchedulerCaptureAllCron(), "(disabled)"), Description: "Capture cron expression", ConfigKey: "scheduler.capture_all.cron", InputType: "text"},
+			{Key: "Stats Report", Value: boolStr(s.cfg.GetSchedulerStatsReportEnabled()), Description: "Scheduled stats report", ConfigKey: "scheduler.stats_report.enabled", InputType: "toggle"},
+			{Key: "Stats Schedule", Value: valueOrDefault(s.cfg.GetSchedulerStatsReportCron(), "(disabled)"), Description: "Stats report cron expression", ConfigKey: "scheduler.stats_report.cron", InputType: "text"},
 		},
 	}
 
@@ -4004,4 +4334,54 @@ func joinStrings(ss []string) string {
 		return "(default)"
 	}
 	return strings.Join(ss, ", ")
+}
+
+// handleSettingsUpdate handles POST /api/settings to update a single config key.
+// Returns an HTMX partial with the updated setting row.
+func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.cfg == nil {
+		http.Error(w, "no config loaded", http.StatusServiceUnavailable)
+		return
+	}
+
+	key := r.FormValue("key")
+	value := r.FormValue("value")
+
+	if key == "" {
+		http.Error(w, "missing key", http.StatusBadRequest)
+		return
+	}
+
+	// For toggle inputs, the form sends "true"/"false" — but some config keys
+	// expect "true"/"false" while the display shows "enabled"/"disabled".
+	if err := s.cfg.Set(key, value); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `<span class="text-error">%s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+
+	if err := s.cfg.Save(); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `<span class="text-error">save failed: %s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+
+	// Return the updated value display.
+	displayValue := value
+	if value == "true" {
+		displayValue = "enabled"
+	} else if value == "false" {
+		displayValue = "disabled"
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	cssClass := "font-mono settings-value"
+	if displayValue == "enabled" {
+		cssClass += " settings-value--enabled"
+	} else if displayValue == "disabled" {
+		cssClass += " settings-value--disabled"
+	}
+	fmt.Fprintf(w, `<span class="%s">%s</span> <span class="settings-saved-indicator">saved</span>`, cssClass, template.HTMLEscapeString(displayValue))
 }

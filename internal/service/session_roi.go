@@ -199,10 +199,12 @@ func (s *SessionService) SkillROIAnalysis(ctx context.Context, projectPath strin
 	}
 
 	type skillAcc struct {
-		loadCount   int
-		sessions    map[string]bool // session IDs where loaded
-		totalErrors int
-		totalTools  int
+		loadCount       int
+		sessions        map[string]bool // session IDs where loaded
+		totalErrors     int
+		totalTools      int
+		totalTokens     int  // sum of EstimatedTokens from all loads
+		tokensPopulated bool // true if at least one load had EstimatedTokens > 0
 	}
 	bySkill := make(map[string]*skillAcc)
 
@@ -234,6 +236,10 @@ func (s *SessionService) SkillROIAnalysis(ctx context.Context, projectPath strin
 			acc.sessions[string(sm.ID)] = true
 			acc.totalErrors += sm.ErrorCount
 			acc.totalTools += sm.ToolCallCount
+			if evt.SkillLoad.EstimatedTokens > 0 {
+				acc.totalTokens += evt.SkillLoad.EstimatedTokens
+				acc.tokensPopulated = true
+			}
 		}
 	}
 
@@ -251,9 +257,14 @@ func (s *SessionService) SkillROIAnalysis(ctx context.Context, projectPath strin
 			entry.UsagePercent = float64(entry.SessionCount) / float64(totalSessions) * 100
 		}
 
-		// Estimate context tokens per skill load (~2000 tokens average for a skill prompt).
-		entry.ContextTokens = 2000 // rough estimate
-		entry.TotalTokenCost = entry.ContextTokens * entry.LoadCount
+		// Context tokens per skill load: use measured data if available, else fallback to ~2000.
+		if acc.tokensPopulated && acc.loadCount > 0 {
+			entry.ContextTokens = acc.totalTokens / acc.loadCount // average tokens per load
+			entry.TotalTokenCost = acc.totalTokens
+		} else {
+			entry.ContextTokens = 2000 // rough estimate
+			entry.TotalTokenCost = entry.ContextTokens * entry.LoadCount
+		}
 
 		// Error rate comparison: with vs without this skill.
 		if acc.totalTools > 0 {

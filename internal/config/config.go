@@ -781,6 +781,8 @@ func (c *Config) Set(key string, value string) error {
 		c.data.Secrets.CustomPatterns = append(c.data.Secrets.CustomPatterns, value)
 	case "auto_capture":
 		c.data.AutoCapture = value == "true"
+	case "features.file_blame":
+		c.data.Features.FileBlame = value == "true"
 	case "summarize.enabled":
 		c.data.Summarize.Enabled = value == "true"
 	case "summarize.model":
@@ -814,6 +816,23 @@ func (c *Config) Set(key string, value string) error {
 		c.data.Analysis.APIKey = value
 	case "analysis.schedule":
 		c.data.Analysis.Schedule = value
+
+	// Search
+	case "search.engine":
+		allowed := map[string]bool{"like": true, "fts5": true, "elasticsearch": true, "postgres": true}
+		if !allowed[value] {
+			return fmt.Errorf("invalid search.engine %q: must be like, fts5, elasticsearch, or postgres", value)
+		}
+		c.data.Search.Engine = value
+	case "search.fallback":
+		allowed := map[string]bool{"like": true, "fts5": true, "none": true, "": true}
+		if !allowed[value] {
+			return fmt.Errorf("invalid search.fallback %q: must be like, fts5, or none", value)
+		}
+		c.data.Search.Fallback = value
+	case "search.index_content":
+		v := value == "true"
+		c.data.Search.IndexContent = &v
 
 	// Project
 	case "project.category":

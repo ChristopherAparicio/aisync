@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -33,6 +34,11 @@ type analyticsEventPage struct {
 	TopAgents    []nameCount
 	TopCommands  []nameCount
 
+	// Skill context cost
+	HasSkillTokens    bool
+	TotalSkillTokens  int
+	SkillContextCosts []skillContextCost
+
 	// Period
 	PeriodLabel string
 	Since       time.Time
@@ -48,6 +54,15 @@ type nameCount struct {
 	Name  string
 	Count int
 	Pct   float64 // percentage of total
+}
+
+type skillContextCost struct {
+	Name           string
+	Loads          int
+	AvgTokens      int
+	TotalTokens    int
+	TotalTokensK   string  // formatted "12K"
+	ContextPercent float64 // percentage of total skill tokens
 }
 
 type dailyActivity struct {
@@ -112,6 +127,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	// Aggregate all daily buckets into totals.
 	allTools := make(map[string]int)
 	allSkills := make(map[string]int)
+	allSkillTokens := make(map[string]int)
 	allAgents := make(map[string]int)
 	allCommands := make(map[string]int)
 
@@ -128,6 +144,9 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		}
 		for k, v := range b.TopSkills {
 			allSkills[k] += v
+		}
+		for k, v := range b.SkillTokens {
+			allSkillTokens[k] += v
 		}
 		for k, v := range b.AgentBreakdown {
 			allAgents[k] += v
@@ -152,6 +171,43 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	data.TopSkills = topN(allSkills, data.TotalSkillLoads, 10)
 	data.TopAgents = topN(allAgents, data.TotalSessions, 10)
 	data.TopCommands = topN(allCommands, data.TotalCommands, 10)
+
+	// Build skill context cost breakdown.
+	if len(allSkillTokens) > 0 {
+		var totalSkillTok int
+		for _, v := range allSkillTokens {
+			totalSkillTok += v
+		}
+		data.HasSkillTokens = true
+		data.TotalSkillTokens = totalSkillTok
+
+		for name, tokens := range allSkillTokens {
+			loads := allSkills[name]
+			avgTok := tokens
+			if loads > 0 {
+				avgTok = tokens / loads
+			}
+			tokK := fmt.Sprintf("%d", tokens)
+			if tokens >= 1000 {
+				tokK = fmt.Sprintf("%dK", tokens/1000)
+			}
+			pct := float64(0)
+			if totalSkillTok > 0 {
+				pct = float64(tokens) / float64(totalSkillTok) * 100
+			}
+			data.SkillContextCosts = append(data.SkillContextCosts, skillContextCost{
+				Name:           name,
+				Loads:          loads,
+				AvgTokens:      avgTok,
+				TotalTokens:    tokens,
+				TotalTokensK:   tokK,
+				ContextPercent: pct,
+			})
+		}
+		sort.Slice(data.SkillContextCosts, func(i, j int) bool {
+			return data.SkillContextCosts[i].TotalTokens > data.SkillContextCosts[j].TotalTokens
+		})
+	}
 
 	s.render(w, "analytics_events.html", data)
 }

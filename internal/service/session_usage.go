@@ -646,7 +646,11 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 	result := &session.ContextSaturation{}
 	modelStats := make(map[string]*session.ModelSaturation)
 	modelPeakTokenSum := make(map[string]int64) // sum of peak tokens per model (for averaging)
+	var totalDropPctSum float64                 // sum of all compaction drop percents (for averaging)
 	var sessionInfos []session.SessionSaturation
+	var forecastInputs []session.SessionForecastInput // for saturation forecast
+	var wasteBreakdowns []session.TokenWasteBreakdown // per-session waste breakdowns for aggregation (4.2)
+	var freshnessResults []session.SessionFreshness   // per-session freshness analysis for aggregation (2.3)
 
 	for _, sm := range summaries {
 		if projectPath != "" && sm.ProjectPath != projectPath {
@@ -661,7 +665,6 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		// Find peak InputTokens and the dominant model.
 		var peakInput int
 		modelCounts := make(map[string]int)
-		hasCompaction := false
 
 		for i := 1; i < len(sess.Messages); i++ {
 			msg := &sess.Messages[i]
@@ -670,20 +673,6 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 			}
 			if msg.Model != "" && msg.Role == session.RoleAssistant {
 				modelCounts[msg.Model]++
-			}
-		}
-
-		// Detect compaction: significant token drop (reuse the same heuristic).
-		var prevAssistantInput int
-		for _, msg := range sess.Messages {
-			if msg.Role == session.RoleAssistant && msg.InputTokens > 0 {
-				if prevAssistantInput > 10000 {
-					dropRatio := float64(msg.InputTokens) / float64(prevAssistantInput)
-					if dropRatio < 0.50 {
-						hasCompaction = true
-					}
-				}
-				prevAssistantInput = msg.InputTokens
 			}
 		}
 
@@ -701,17 +690,23 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 			}
 		}
 
-		// Look up context window from pricing catalog.
+		// Look up context window and pricing from catalog.
 		var maxInputTokens int
+		var inputRate float64
 		if s.pricing != nil && dominantModel != "" {
 			if mp, ok := s.pricing.Lookup(dominantModel); ok {
 				maxInputTokens = mp.MaxInputTokens
+				inputRate = mp.InputPerMToken / 1_000_000
 			}
 		}
 
 		if maxInputTokens == 0 {
 			continue // can't compute saturation without context window size
 		}
+
+		// Detect compaction events using the domain function.
+		compactions := session.DetectCompactions(sess.Messages, inputRate)
+		hasCompaction := compactions.TotalCompactions > 0
 
 		saturationPct := float64(peakInput) / float64(maxInputTokens) * 100
 		if saturationPct > 100 {
@@ -729,6 +724,12 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		}
 		if hasCompaction {
 			result.SessionsCompacted++
+			result.TotalCompactionEvents += compactions.TotalCompactions
+			result.TotalTokensLost += compactions.TotalTokensLost
+			result.TotalRebuildCost += compactions.TotalRebuildCost
+			for _, ce := range compactions.Events {
+				totalDropPctSum += ce.DropPercent
+			}
 		}
 
 		// Per-model stats.
@@ -753,6 +754,80 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 			ms.Above80Count++
 		}
 
+		// Accumulate efficiency metrics (3.1): tokens, cost, tool errors per model.
+		for i := range sess.Messages {
+			msg := &sess.Messages[i]
+			if msg.Model == dominantModel || msg.Model == "" {
+				ms.TotalInputTokens += msg.InputTokens
+				ms.TotalOutputTokens += msg.OutputTokens
+				ms.TotalMessages++
+				for j := range msg.ToolCalls {
+					ms.TotalToolCalls++
+					if msg.ToolCalls[j].State == session.ToolStateError {
+						ms.TotalToolErrors++
+					}
+				}
+			}
+		}
+		// Use pricing estimate for session cost attribution to this model.
+		if s.pricing != nil {
+			estimate := s.pricing.SessionCost(sess)
+			if estimate != nil {
+				ms.TotalCost += estimate.TotalCost.TotalCost
+			}
+		}
+
+		// Compute average token growth per message for forecast.
+		var tokenGrowthPerMsg int
+		if len(sess.Messages) > 2 {
+			// Use messages with token data to compute average growth rate.
+			var prevTokens int
+			var totalDelta int64
+			var deltaCount int
+			for _, m := range sess.Messages {
+				if m.InputTokens == 0 {
+					continue
+				}
+				if prevTokens > 0 && m.InputTokens > prevTokens {
+					totalDelta += int64(m.InputTokens - prevTokens)
+					deltaCount++
+				}
+				prevTokens = m.InputTokens
+			}
+			if deltaCount > 0 {
+				tokenGrowthPerMsg = int(totalDelta / int64(deltaCount))
+			}
+		}
+
+		// Collect forecast input.
+		var msgAtFirstCompaction int
+		if hasCompaction && len(compactions.Events) > 0 {
+			msgAtFirstCompaction = compactions.Events[0].BeforeMessageIdx
+		}
+		forecastInputs = append(forecastInputs, session.SessionForecastInput{
+			Model:                dominantModel,
+			MaxInputTokens:       maxInputTokens,
+			MessageCount:         len(sess.Messages),
+			PeakInputTokens:      peakInput,
+			MsgAtFirstCompaction: msgAtFirstCompaction,
+			TokenGrowthPerMsg:    tokenGrowthPerMsg,
+		})
+
+		// Token waste classification (4.2).
+		wasteBreakdowns = append(wasteBreakdowns, session.ClassifyTokenWaste(sess.Messages, compactions))
+
+		// Session freshness analysis (2.3).
+		freshnessResults = append(freshnessResults, session.AnalyzeFreshness(sess.Messages, compactions))
+
+		// Detect overload signals (3.2) for aggregate stats.
+		overload := session.DetectOverload(sess.Messages)
+		result.AvgHealthScore += float64(overload.HealthScore)
+		if overload.Verdict == "overloaded" {
+			result.SessionsOverloaded++
+		} else if overload.Verdict == "declining" {
+			result.SessionsDeclining++
+		}
+
 		sessionInfos = append(sessionInfos, session.SessionSaturation{
 			ID:              sess.ID,
 			Summary:         sess.Summary,
@@ -767,6 +842,10 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 
 	if result.TotalSessions > 0 {
 		result.AvgPeakSaturation /= float64(result.TotalSessions)
+		result.AvgHealthScore /= float64(result.TotalSessions)
+	}
+	if result.TotalCompactionEvents > 0 {
+		result.AvgDropPercent = totalDropPctSum / float64(result.TotalCompactionEvents)
 	}
 
 	// Finalize per-model averages and efficiency verdicts.
@@ -777,11 +856,18 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		}
 		ms.WastedCapacityPct = 100 - ms.AvgPeakPct
 		ms.EfficiencyVerdict = classifyModelEfficiency(ms.AvgPeakPct, ms.CompactedCount)
+		session.ComputeModelEfficiency(ms)
 		result.Models = append(result.Models, *ms)
 	}
 	sort.Slice(result.Models, func(i, j int) bool {
 		return result.Models[i].AvgPeakPct > result.Models[j].AvgPeakPct
 	})
+
+	// Aggregate token waste across all sessions (4.2).
+	if len(wasteBreakdowns) > 0 {
+		agg := session.AggregateWaste(wasteBreakdowns)
+		result.TokenWaste = &agg
+	}
 
 	// Top 10 worst sessions by saturation.
 	sort.Slice(sessionInfos, func(i, j int) bool {
@@ -792,6 +878,12 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		limit = len(sessionInfos)
 	}
 	result.WorstSessions = sessionInfos[:limit]
+
+	// Compute saturation forecast from collected session data.
+	if len(forecastInputs) > 0 {
+		forecast := session.ForecastSaturation(forecastInputs)
+		result.Forecast = &forecast
+	}
 
 	return result, nil
 }

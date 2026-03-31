@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"html/template"
+	"strings"
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -33,6 +34,8 @@ func templateFuncs() template.FuncMap {
 		},
 		"healthGrade": healthGrade,
 		"healthClass": healthClass,
+		"split":       func(s, sep string) []string { return strings.Split(s, sep) },
+		"settingID":   func(key string) string { return strings.ReplaceAll(key, ".", "-") },
 	}
 }
 

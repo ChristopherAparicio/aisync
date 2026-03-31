@@ -165,6 +165,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /usage", s.handleUsage)
 	mux.HandleFunc("GET /analytics", s.handleAnalytics)
 	mux.HandleFunc("GET /settings", s.handleSettings)
+	mux.HandleFunc("POST /api/settings", s.handleSettingsUpdate)
 
 	// HTMX partials
 	mux.HandleFunc("GET /partials/sessions-table", s.handleSessionsTable)

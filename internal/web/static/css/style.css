@@ -1074,6 +1074,93 @@ tr:hover td { background: var(--bg-hover); }
   display: inline-block;
 }
 
+/* ── Compaction markers ── */
+
+.sat-compaction { background: #a855f7; }
+
+.sat-row-compaction {
+  background: rgba(168, 85, 247, 0.08);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: 1px 0;
+}
+
+.compaction-summary {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  background: rgba(168, 85, 247, 0.06);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  border-radius: var(--radius);
+}
+
+.compact-kpi-row {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.compact-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 60px;
+}
+
+.compact-kpi .value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #a855f7;
+  line-height: 1.2;
+}
+
+.compact-kpi .label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+}
+
+/* ── Forecast histogram ── */
+
+.forecast-histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 100px;
+  padding: 0.5rem 0;
+}
+
+.forecast-hist-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 30px;
+}
+
+.forecast-hist-fill {
+  width: 100%;
+  background: #a855f7;
+  border-radius: 3px 3px 0 0;
+  min-height: 0;
+  transition: height 0.3s ease;
+}
+
+.forecast-hist-count {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.forecast-hist-label {
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  margin-top: 1px;
+  white-space: nowrap;
+}
+
 /* ── Agent filter chips ── */
 
 .agent-chips {
@@ -3787,4 +3874,118 @@ pre {
     width: 120px;
     height: 120px;
   }
+}
+
+/* ── Settings CRUD — Inline Editing ── */
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-toggle input[type="checkbox"] {
+  display: none;
+}
+
+.settings-toggle-slider {
+  width: 36px;
+  height: 20px;
+  background: var(--border);
+  border-radius: 10px;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.settings-toggle-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 0.2s, background 0.2s;
+}
+
+.settings-toggle input:checked + .settings-toggle-slider {
+  background: var(--green);
+}
+
+.settings-toggle input:checked + .settings-toggle-slider::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+.settings-inline-form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.settings-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+  min-width: 120px;
+  max-width: 200px;
+}
+
+.settings-input--number {
+  min-width: 60px;
+  max-width: 80px;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-save-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-save-btn:hover {
+  background: var(--accent-light);
+}
+
+.settings-saved-indicator {
+  color: var(--green);
+  font-size: 0.7rem;
+  margin-left: 0.3rem;
+  animation: settings-fade-out 2s ease-in forwards;
+}
+
+@keyframes settings-fade-out {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
 }

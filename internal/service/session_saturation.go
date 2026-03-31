@@ -53,8 +53,22 @@ func (s *SessionService) SessionSaturationCurve(ctx context.Context, sessID sess
 		MaxInputTokens: maxInputTokens,
 	}
 
+	// Run compaction detection on the full message list.
+	var inputRate float64
+	if s.pricing != nil && dominantModel != "" {
+		if mp, ok := s.pricing.Lookup(dominantModel); ok {
+			inputRate = mp.InputPerMToken / 1_000_000
+		}
+	}
+	compactions := session.DetectCompactions(sess.Messages, inputRate)
+
+	// Build a set of compaction AfterMessageIdx for labeling.
+	compactionAt := make(map[int]bool, len(compactions.Events))
+	for _, e := range compactions.Events {
+		compactionAt[e.AfterMessageIdx] = true
+	}
+
 	var prevInput int
-	hasCompaction := false
 
 	for i, msg := range sess.Messages {
 		if msg.InputTokens == 0 && msg.Role != session.RoleUser {
@@ -90,16 +104,11 @@ func (s *SessionService) SessionSaturationCurve(ctx context.Context, sessID sess
 		// Delta from previous.
 		delta := inputTokens - prevInput
 
-		// Detect compaction (significant token drop).
-		if prevInput > 10000 && inputTokens > 0 {
-			dropRatio := float64(inputTokens) / float64(prevInput)
-			if dropRatio < 0.50 {
-				hasCompaction = true
-			}
-		}
-
-		// Build label.
+		// Build label — annotate compaction events.
 		label := labelForMessage(msg, delta)
+		if compactionAt[i] {
+			label = fmt.Sprintf("⚡ Compaction (%dK lost)", (prevInput-inputTokens)/1000)
+		}
 
 		point := session.SaturationPoint{
 			MessageIndex: i,
@@ -127,7 +136,9 @@ func (s *SessionService) SessionSaturationCurve(ctx context.Context, sessID sess
 		}
 	}
 
-	curve.WasCompacted = hasCompaction
+	curve.WasCompacted = compactions.TotalCompactions > 0
+	curve.Compactions = compactions
+	curve.Overload = session.DetectOverload(sess.Messages)
 	return curve, nil
 }
 
