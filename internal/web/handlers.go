@@ -2075,6 +2075,20 @@ type costDashboardPage struct {
 	WastePieGradient   template.CSS // conic-gradient for waste pie chart
 	HasWastePie        bool
 
+	// Session freshness & diminishing returns (2.3)
+	HasFreshnessData       bool
+	FreshTotalSessions     int
+	FreshCompactedSessions int
+	FreshCompactedPct      float64
+	FreshAvgCompactions    float64 // avg compactions per compacted session
+	FreshAvgErrorGrowth    float64 // % increase in error rate after compaction
+	FreshAvgRetryGrowth    float64 // % increase in retry rate after compaction
+	FreshAvgOutputDecay    float64 // % decrease in output ratio after compaction
+	FreshOptimalMsgIdx     int     // avg optimal message index
+	FreshRecommendation    string  // aggregate recommendation
+	FreshDepthStats        []freshnessDepthView
+	HasFreshDepthStats     bool
+
 	// Overload aggregate (3.2)
 	HasOverloadData bool
 	OverloadedCount int
@@ -2114,6 +2128,17 @@ type budgetOverviewView struct {
 	DailyAlert     string
 	ProjectedMonth float64
 	DaysRemaining  int
+}
+
+// freshnessDepthView is a template-friendly view of quality at a compaction depth.
+type freshnessDepthView struct {
+	Depth        int    // 0 = pre-compaction, 1 = after 1st, 2 = after 2nd, 3 = after 3+
+	DepthLabel   string // "Pre-compaction", "After 1st", etc.
+	SessionCount int
+	AvgErrorRate float64
+	AvgRetryRate float64
+	AvgOutputRat float64
+	ErrorClass   string // "good", "warning", "poor"
 }
 
 // wasteView is a template-friendly view of a token waste category.
@@ -2603,6 +2628,47 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 		data.SatTotalRebuildCost = saturation.TotalRebuildCost
 		data.SatAvgDropPercent = saturation.AvgDropPercent
 		data.HasCompactionDetails = saturation.TotalCompactionEvents > 0
+
+		// Session freshness & diminishing returns (2.3).
+		if f := saturation.Freshness; f != nil && f.TotalSessions > 0 {
+			data.HasFreshnessData = true
+			data.FreshTotalSessions = f.TotalSessions
+			data.FreshCompactedSessions = f.SessionsWithCompaction
+			if f.TotalSessions > 0 {
+				data.FreshCompactedPct = float64(f.SessionsWithCompaction) / float64(f.TotalSessions) * 100
+			}
+			data.FreshAvgCompactions = f.AvgCompactionsPerSession
+			data.FreshAvgErrorGrowth = f.AvgErrorRateGrowth
+			data.FreshAvgRetryGrowth = f.AvgRetryRateGrowth
+			data.FreshAvgOutputDecay = f.AvgOutputRatioDecay
+			data.FreshOptimalMsgIdx = f.AvgOptimalMessageIdx
+			data.FreshRecommendation = f.Recommendation
+			if len(f.ByCompactionCount) > 0 {
+				data.HasFreshDepthStats = true
+				depthLabels := map[int]string{0: "Pre-compaction", 1: "After 1st", 2: "After 2nd", 3: "After 3+"}
+				for _, ds := range f.ByCompactionCount {
+					label := depthLabels[ds.Depth]
+					if label == "" {
+						label = fmt.Sprintf("Depth %d", ds.Depth)
+					}
+					errClass := "good"
+					if ds.AvgErrorRate > 15 {
+						errClass = "poor"
+					} else if ds.AvgErrorRate > 8 {
+						errClass = "warning"
+					}
+					data.FreshDepthStats = append(data.FreshDepthStats, freshnessDepthView{
+						Depth:        ds.Depth,
+						DepthLabel:   label,
+						SessionCount: ds.SessionCount,
+						AvgErrorRate: ds.AvgErrorRate,
+						AvgRetryRate: ds.AvgRetryRate,
+						AvgOutputRat: ds.AvgOutputRat,
+						ErrorClass:   errClass,
+					})
+				}
+			}
+		}
 
 		// Overload aggregate (3.2).
 		if saturation.TotalSessions > 0 {

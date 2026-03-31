@@ -869,6 +869,12 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		result.TokenWaste = &agg
 	}
 
+	// Aggregate session freshness across all sessions (2.3).
+	if len(freshnessResults) > 0 {
+		agg := session.AggregateFreshness(freshnessResults)
+		result.Freshness = &agg
+	}
+
 	// Top 10 worst sessions by saturation.
 	sort.Slice(sessionInfos, func(i, j int) bool {
 		return sessionInfos[i].PeakSaturation > sessionInfos[j].PeakSaturation
