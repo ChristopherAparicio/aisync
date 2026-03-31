@@ -257,10 +257,10 @@ Interactive tree visualization when clicking on a branch in the project page.
 - Visual connector lines between parent/child/fork
 - Color-coded by status: 🟢 completed, 🟡 active, 🔴 errors
 
-### 2.2 Activity Sparklines
-- [ ] Mini bar charts for daily activity on KPI cards
-- [ ] Session count sparkline on project cards
-- [ ] Token usage sparkline on home dashboard
+### 2.2 Activity Sparklines ✅ COMPLETE
+- [x] Mini bar charts (14-day) for daily activity under KPI strip items
+- [x] Session count, tokens, cost, errors sparklines on dashboard + project detail
+- [x] Pure CSS implementation (no JS library), color-coded per metric
 
 ### 2.3 Cost Breakdown Charts
 - [ ] Treemap or sunburst: project → backend → model → cost
@@ -297,10 +297,11 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [ ] CSV export for cost data (for accounting)
 - [ ] API for external dashboards (Grafana, Datadog)
 
-### 3.4 Settings Web UI
-- [ ] `/settings` page: visual editor for per-project config
-- [ ] CRUD for project classifiers, budgets, search engine selection
-- [ ] Live preview of classification rules against existing sessions
+### 3.4 Settings Web UI ✅ COMPLETE (read-only)
+- [x] `/settings` page: read-only display of all config sections (11 sections)
+- [x] Navbar gear icon, responsive grid layout, enabled/disabled color coding
+- [ ] CRUD for project classifiers, budgets, search engine selection (future: inline editing)
+- [ ] Live preview of classification rules against existing sessions (future)
 
 ---
 
