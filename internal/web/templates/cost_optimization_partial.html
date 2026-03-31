@@ -204,6 +204,79 @@
   </div>
   {{end}}
 
+  {{if .HasFreshnessData}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Session Freshness &amp; Diminishing Returns</h3>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">How session quality degrades after compaction events. Each compaction loses context fidelity. Error rates and retry rates typically increase while output quality decreases.</p>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Compacted Sessions</div>
+      <div class="value">{{printf "%.0f" .FreshCompactedPct}}%</div>
+      <div class="sub">{{.FreshCompactedSessions}} of {{.FreshTotalSessions}} sessions</div>
+    </div>
+    {{if gt .FreshCompactedSessions 0}}
+    <div class="kpi-card">
+      <div class="label">Avg Compactions</div>
+      <div class="value">{{printf "%.1f" .FreshAvgCompactions}}</div>
+      <div class="sub">per compacted session</div>
+    </div>
+    {{end}}
+    {{if ne .FreshAvgErrorGrowth 0.0}}
+    <div class="kpi-card{{if gt .FreshAvgErrorGrowth 30.0}} kpi-accent{{end}}">
+      <div class="label">Error Rate Growth</div>
+      <div class="value{{if gt .FreshAvgErrorGrowth 30.0}} text-error{{end}}">{{if gt .FreshAvgErrorGrowth 0.0}}+{{end}}{{printf "%.0f" .FreshAvgErrorGrowth}}%</div>
+      <div class="sub">after compaction</div>
+    </div>
+    {{end}}
+    {{if gt .FreshAvgOutputDecay 0.0}}
+    <div class="kpi-card">
+      <div class="label">Output Quality Decay</div>
+      <div class="value{{if gt .FreshAvgOutputDecay 20.0}} text-error{{end}}">-{{printf "%.0f" .FreshAvgOutputDecay}}%</div>
+      <div class="sub">output ratio decline</div>
+    </div>
+    {{end}}
+    {{if gt .FreshOptimalMsgIdx 0}}
+    <div class="kpi-card">
+      <div class="label">Optimal Length</div>
+      <div class="value" style="color: var(--success, #22c55e);">~{{.FreshOptimalMsgIdx}}</div>
+      <div class="sub">messages (peak quality)</div>
+    </div>
+    {{end}}
+  </div>
+
+  {{if .HasFreshDepthStats}}
+  <div class="table-wrap" style="margin-top: 0.75rem;">
+    <table>
+      <thead>
+        <tr>
+          <th>Compaction Depth</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Avg Error Rate</th>
+          <th class="text-right">Avg Retry Rate</th>
+          <th class="text-right">Avg Output Ratio</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .FreshDepthStats}}
+        <tr>
+          <td>{{.DepthLabel}}</td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right"><span class="badge badge-{{.ErrorClass}}">{{printf "%.1f" .AvgErrorRate}}%</span></td>
+          <td class="text-right font-mono">{{printf "%.1f" .AvgRetryRate}}%</td>
+          <td class="text-right font-mono">{{printf "%.1f" .AvgOutputRat}}%</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .FreshRecommendation}}
+  <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem;">
+    <span style="font-weight: 600;">Recommendation:</span> {{.FreshRecommendation}}
+  </div>
+  {{end}}
+  {{end}}
+
   {{if .SatModels}}
   <h3 class="section-subtitle" style="margin-top: 1.5rem;">Saturation &amp; Efficiency by Model</h3>
   <div class="table-wrap">
