@@ -4,6 +4,26 @@
 
 ## Recently Completed (2026-03-31)
 
+### Activity Sparklines (2.2)
+- [x] **Sparkline data model**: `sparklineBar` struct with `Value`, `HeightPct` (0-100%), `Label`
+- [x] **buildSparklineBars / buildSparklineBarsFloat**: Pure functions converting raw values to percentage-height bars (min 2% for non-zero)
+- [x] **Dashboard sparklines**: 14-day mini bar charts under Sessions, Tokens, Cost, and Errors KPI strips
+- [x] **Project detail sparklines**: Same 14-day sparklines on project KPI strip
+- [x] **Data source**: `store.QueryTokenBuckets("1d")` — direct store access (avoids remote-mode "not supported")
+- [x] **Day aggregation**: Multiple providers/backends aggregated per day, sorted chronologically
+- [x] **CSS**: `.sparkline`, `.sparkline-bar`, color variants (`--sessions`, `--tokens`, `--cost`, `--errors`)
+- [x] **KPI layout**: `.kpi-strip-item--with-sparkline` column layout with `.kpi-strip-top` row
+
+### Settings Web UI (3.4)
+- [x] **`/settings` route**: New page accessible via navbar gear icon
+- [x] **11 configuration sections**: General, Features, Search, Analysis, Tagging, Secrets, Errors, Dashboard, Server, Scheduler, Project Classifiers
+- [x] **Read-only display**: All config values shown with descriptions, enabled/disabled color coding
+- [x] **Config getters added**: `GlobalDir()`, `IsAutoCapture()`, `IsScanToolOutputs()`, `GetAllProjectClassifiers()`
+- [x] **Navbar**: Settings gear icon added to layout navigation bar
+- [x] **CSS**: `.settings-grid`, `.settings-section`, `.settings-row` — responsive 2-column grid
+- [x] **Footer**: CLI usage hint (`aisync config set <key> <value>`)
+- [x] 2,024 tests passing across 105 packages
+
 ### Costs Page Organization (2.5)
 - [x] **HTMX tab navigation**: Overview / Tools & Agents / Optimization — lazy-loaded via partials
 - [x] **Overview tab**: Real costs, Budgets, Cache Efficiency, Backend Breakdown, API-Equivalent KPIs, Cost Over Time

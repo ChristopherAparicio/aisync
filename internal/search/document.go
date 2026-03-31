@@ -51,11 +51,34 @@ func DocumentFromSession(sess *session.Session, maxContentLen int) Document {
 			totalLen += len(text)
 		}
 
-		// Collect unique tool names.
+		// Collect unique tool names + index tool call inputs.
 		for _, tc := range msg.ToolCalls {
 			if !toolSeen[tc.Name] {
 				toolSeen[tc.Name] = true
 				toolNames = append(toolNames, tc.Name)
+			}
+			// Index bash commands and file paths from Edit/Write.
+			if totalLen < maxContentLen {
+				var tcText string
+				switch tc.Name {
+				case "bash", "Bash":
+					// Index the full command (pip install, curl, git, etc.)
+					tcText = tc.Input
+				case "Edit", "edit", "Write", "write":
+					// Index the file path + first part of content
+					tcText = tc.Input
+					if len(tcText) > 2000 {
+						tcText = tcText[:2000]
+					}
+				}
+				if tcText != "" {
+					remaining := maxContentLen - totalLen
+					if len(tcText) > remaining {
+						tcText = tcText[:remaining]
+					}
+					contentParts = append(contentParts, tcText)
+					totalLen += len(tcText)
+				}
 			}
 		}
 	}

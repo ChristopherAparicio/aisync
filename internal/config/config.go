@@ -1584,6 +1584,26 @@ func (c *Config) IsTelemetryEnabled() bool {
 	return c.data.Telemetry.Enabled
 }
 
+// GlobalDir returns the global config directory path.
+func (c *Config) GlobalDir() string {
+	return c.globalDir
+}
+
+// IsAutoCapture returns whether auto-capture is enabled.
+func (c *Config) IsAutoCapture() bool {
+	return c.data.AutoCapture
+}
+
+// IsScanToolOutputs returns whether tool output scanning for secrets is enabled.
+func (c *Config) IsScanToolOutputs() bool {
+	return c.data.Secrets.ScanToolOutputs
+}
+
+// GetAllProjectClassifiers returns all per-project classifier configs.
+func (c *Config) GetAllProjectClassifiers() map[string]ProjectClassifierConf {
+	return c.data.Projects
+}
+
 // AddCustomPattern adds a custom secret pattern in "NAME REGEX" format.
 func (c *Config) AddCustomPattern(pattern string) {
 	c.data.Secrets.CustomPatterns = append(c.data.Secrets.CustomPatterns, pattern)

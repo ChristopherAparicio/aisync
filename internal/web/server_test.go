@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/service"
@@ -1705,5 +1706,257 @@ func TestBuildSessionRows_errorsColumn(t *testing.T) {
 	}
 	if strings.Contains(rows[1].Cells[2].Class, "text-error") {
 		t.Errorf("row2 errors class = %q, should not have text-error", rows[1].Cells[2].Class)
+	}
+}
+
+// ── Sparkline Helpers ──
+
+func TestBuildSparklineBars(t *testing.T) {
+	tests := []struct {
+		name   string
+		values []int
+		labels []string
+		want   []sparklineBar
+	}{
+		{
+			name:   "empty",
+			values: nil,
+			want:   nil,
+		},
+		{
+			name:   "single value",
+			values: []int{50},
+			labels: []string{"Jan 1"},
+			want:   []sparklineBar{{Value: 50, HeightPct: 100, Label: "Jan 1"}},
+		},
+		{
+			name:   "all zeros",
+			values: []int{0, 0, 0},
+			labels: []string{"A", "B", "C"},
+			want: []sparklineBar{
+				{Value: 0, HeightPct: 0, Label: "A"},
+				{Value: 0, HeightPct: 0, Label: "B"},
+				{Value: 0, HeightPct: 0, Label: "C"},
+			},
+		},
+		{
+			name:   "proportional heights",
+			values: []int{10, 50, 100, 25},
+			labels: []string{"A", "B", "C", "D"},
+			want: []sparklineBar{
+				{Value: 10, HeightPct: 10, Label: "A"},
+				{Value: 50, HeightPct: 50, Label: "B"},
+				{Value: 100, HeightPct: 100, Label: "C"},
+				{Value: 25, HeightPct: 25, Label: "D"},
+			},
+		},
+		{
+			name:   "minimum visible bar for non-zero",
+			values: []int{1, 0, 1000},
+			labels: []string{"A", "B", "C"},
+			want: []sparklineBar{
+				{Value: 1, HeightPct: 2, Label: "A"}, // min 2%
+				{Value: 0, HeightPct: 0, Label: "B"},
+				{Value: 1000, HeightPct: 100, Label: "C"},
+			},
+		},
+		{
+			name:   "missing labels",
+			values: []int{10, 20},
+			labels: []string{"A"},
+			want: []sparklineBar{
+				{Value: 10, HeightPct: 50, Label: "A"},
+				{Value: 20, HeightPct: 100, Label: ""},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildSparklineBars(tt.values, tt.labels)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("[%d] = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBuildSparklineBarsFloat(t *testing.T) {
+	values := []float64{1.5, 3.0, 0.0, 6.0}
+	labels := []string{"A", "B", "C", "D"}
+
+	bars := buildSparklineBarsFloat(values, labels)
+	if len(bars) != 4 {
+		t.Fatalf("len = %d, want 4", len(bars))
+	}
+
+	// Max is 6.0, so D should be 100%
+	if bars[3].HeightPct != 100 {
+		t.Errorf("bars[3].HeightPct = %d, want 100", bars[3].HeightPct)
+	}
+	// A = 1.5/6.0 = 25%
+	if bars[0].HeightPct != 25 {
+		t.Errorf("bars[0].HeightPct = %d, want 25", bars[0].HeightPct)
+	}
+	// B = 3.0/6.0 = 50%
+	if bars[1].HeightPct != 50 {
+		t.Errorf("bars[1].HeightPct = %d, want 50", bars[1].HeightPct)
+	}
+	// C = 0 → 0%
+	if bars[2].HeightPct != 0 {
+		t.Errorf("bars[2].HeightPct = %d, want 0", bars[2].HeightPct)
+	}
+}
+
+// ── Settings Page ──
+
+func TestSettings_noConfig(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Settings") {
+		t.Error("expected 'Settings' heading")
+	}
+	if !strings.Contains(body, "No configuration loaded") {
+		t.Error("expected 'No configuration loaded' when AppConfig is nil")
+	}
+}
+
+func TestSettings_withConfig(t *testing.T) {
+	store := testutil.MustOpenStore(t)
+
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+
+	// Create a real config with a temp directory.
+	configDir := t.TempDir()
+	cfg, cfgErr := config.New(configDir, "")
+	if cfgErr != nil {
+		t.Fatalf("config.New: %v", cfgErr)
+	}
+
+	srv, srvErr := New(Config{
+		SessionService: sessionSvc,
+		AppConfig:      cfg,
+		Addr:           ":0",
+	})
+	if srvErr != nil {
+		t.Fatalf("new server: %v", srvErr)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	// Should show config sections.
+	if !strings.Contains(body, "General") {
+		t.Error("expected 'General' section")
+	}
+	if !strings.Contains(body, "Search") {
+		t.Error("expected 'Search' section")
+	}
+	if !strings.Contains(body, "Scheduler") {
+		t.Error("expected 'Scheduler' section")
+	}
+	if !strings.Contains(body, "Analysis") {
+		t.Error("expected 'Analysis' section")
+	}
+	if !strings.Contains(body, "compact") {
+		t.Error("expected storage mode 'compact'")
+	}
+	if !strings.Contains(body, "config.json") {
+		t.Error("expected config.json path reference")
+	}
+}
+
+func TestDashboard_sparklines_withStore(t *testing.T) {
+	store := testutil.MustOpenStore(t)
+
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+
+	// Seed a session so the dashboard isn't empty.
+	sess := testutil.NewSession("spark-test-1")
+	data, _ := json.Marshal(sess)
+	_, err := sessionSvc.Import(service.ImportRequest{
+		Data:         data,
+		SourceFormat: "aisync",
+		IntoTarget:   "aisync",
+	})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Insert token usage buckets for the past 3 days.
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		day := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
+		bucket := session.TokenUsageBucket{
+			BucketStart:    day,
+			BucketEnd:      day.Add(24 * time.Hour),
+			Granularity:    "1d",
+			SessionCount:   (i + 1) * 2,
+			InputTokens:    (i + 1) * 1000,
+			OutputTokens:   (i + 1) * 500,
+			ToolCallCount:  (i + 1) * 10,
+			ToolErrorCount: i,
+			EstimatedCost:  float64(i+1) * 0.50,
+		}
+		if err := store.UpsertTokenBucket(bucket); err != nil {
+			t.Fatalf("upsert bucket[%d]: %v", i, err)
+		}
+	}
+
+	srv, srvErr := New(Config{
+		SessionService: sessionSvc,
+		Store:          store,
+		Addr:           ":0",
+	})
+	if srvErr != nil {
+		t.Fatalf("new server: %v", srvErr)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	// Should contain sparkline markup.
+	if !strings.Contains(body, "sparkline") {
+		t.Error("expected sparkline CSS class in dashboard HTML")
+	}
+	if !strings.Contains(body, "sparkline-bar") {
+		t.Error("expected sparkline-bar elements in dashboard HTML")
+	}
+	if !strings.Contains(body, "Sessions (14d)") {
+		t.Error("expected 'Sessions (14d)' sparkline title attribute")
 	}
 }

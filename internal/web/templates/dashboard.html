@@ -42,25 +42,37 @@
 {{else}}
   <!-- Compact KPI strip -->
   <div class="kpi-strip">
-    <div class="kpi-strip-item">
-      <span class="kpi-strip-value">{{.TotalSessions}}</span>
-      <span class="kpi-strip-label">sessions</span>
+    <div class="kpi-strip-item{{if .HasSparklines}} kpi-strip-item--with-sparkline{{end}}">
+      <div class="kpi-strip-top">
+        <span class="kpi-strip-value">{{.TotalSessions}}</span>
+        <span class="kpi-strip-label">sessions</span>
+      </div>
+      {{if .HasSparklines}}<div class="sparkline sparkline--sessions" title="Sessions (14d)">{{range .SparklineSessions}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
     </div>
-    <div class="kpi-strip-item">
-      <span class="kpi-strip-value">{{formatTokens .TotalTokens}}</span>
-      <span class="kpi-strip-label">tokens</span>
+    <div class="kpi-strip-item{{if .HasSparklines}} kpi-strip-item--with-sparkline{{end}}">
+      <div class="kpi-strip-top">
+        <span class="kpi-strip-value">{{formatTokens .TotalTokens}}</span>
+        <span class="kpi-strip-label">tokens</span>
+      </div>
+      {{if .HasSparklines}}<div class="sparkline sparkline--tokens" title="Tokens (14d)">{{range .SparklineTokens}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
     </div>
-    <div class="kpi-strip-item">
-      {{if .HasRealForecast}}<span class="kpi-strip-value">{{formatCost .TotalReal30d}}</span>
-      <span class="kpi-strip-label">real cost / 30d</span>
-      {{else}}<span class="kpi-strip-value">{{formatCost .TotalCost}}</span>
-      <span class="kpi-strip-label">est. cost (API-equiv)</span>
-      {{end}}
+    <div class="kpi-strip-item{{if .HasSparklines}} kpi-strip-item--with-sparkline{{end}}">
+      <div class="kpi-strip-top">
+        {{if .HasRealForecast}}<span class="kpi-strip-value">{{formatCost .TotalReal30d}}</span>
+        <span class="kpi-strip-label">real cost / 30d</span>
+        {{else}}<span class="kpi-strip-value">{{formatCost .TotalCost}}</span>
+        <span class="kpi-strip-label">est. cost (API-equiv)</span>
+        {{end}}
+      </div>
+      {{if .HasSparklines}}<div class="sparkline sparkline--cost" title="Cost (14d)">{{range .SparklineCost}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}"></div>{{end}}</div>{{end}}
     </div>
     {{if gt .TotalErrors 0}}
-    <div class="kpi-strip-item">
-      <span class="kpi-strip-value kpi-strip-value--error">{{.TotalErrors}}</span>
-      <span class="kpi-strip-label">errors</span>
+    <div class="kpi-strip-item{{if .HasSparklines}} kpi-strip-item--with-sparkline{{end}}">
+      <div class="kpi-strip-top">
+        <span class="kpi-strip-value kpi-strip-value--error">{{.TotalErrors}}</span>
+        <span class="kpi-strip-label">errors</span>
+      </div>
+      {{if .HasSparklines}}<div class="sparkline sparkline--errors" title="Errors (14d)">{{range .SparklineErrors}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
     </div>
     {{end}}
     {{if gt .TotalToolCalls 0}}

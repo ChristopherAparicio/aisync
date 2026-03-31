@@ -86,6 +86,7 @@ func New(cfg Config) (*Server, error) {
 		{"templates/usage.html"},
 		{"templates/analytics.html"},
 		{"templates/analytics_events.html"},
+		{"templates/settings.html"},
 	}
 
 	pages := make(map[string]*template.Template, len(pageSpecs))
@@ -163,6 +164,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /costs", s.handleCosts)
 	mux.HandleFunc("GET /usage", s.handleUsage)
 	mux.HandleFunc("GET /analytics", s.handleAnalytics)
+	mux.HandleFunc("GET /settings", s.handleSettings)
 
 	// HTMX partials
 	mux.HandleFunc("GET /partials/sessions-table", s.handleSessionsTable)

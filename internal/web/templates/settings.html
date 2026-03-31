@@ -1,0 +1,74 @@
+{{define "settings.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Settings — aisync{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4AC;</span> Sessions</a></li>
+      <li><a href="/branches" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F33F;</span> Branches</a></li>
+      <li><a href="/analytics" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4CA;</span> Analytics</a></li>
+      <li><a href="/costs" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4B0;</span> Costs</a></li>
+      <li><a href="/settings" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x2699;</span> Settings</a></li>
+    </ul>
+  </div>
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Your Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/projects{{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
+{{define "content"}}
+<div class="settings-header">
+  <h1 class="page-title">Settings</h1>
+  {{if .ConfigPath}}
+  <span class="settings-config-path font-mono text-muted">{{.ConfigPath}}/config.json</span>
+  {{end}}
+</div>
+
+<div class="settings-grid">
+  {{range .Sections}}
+  <div class="settings-section">
+    <div class="settings-section-header">
+      <span class="settings-section-icon">{{.Icon}}</span>
+      <span class="settings-section-title">{{.Title}}</span>
+    </div>
+    <div class="settings-section-body">
+      {{range .Items}}
+      <div class="settings-row">
+        <div class="settings-row-key">
+          <span class="settings-key">{{.Key}}</span>
+          {{if .Description}}<span class="settings-desc">{{.Description}}</span>{{end}}
+        </div>
+        <div class="settings-row-value">
+          {{if .IsSecret}}<span class="font-mono text-muted">********</span>
+          {{else}}<span class="font-mono settings-value {{if eq .Value "enabled"}}settings-value--enabled{{end}}{{if eq .Value "disabled"}}settings-value--disabled{{end}}">{{.Value}}</span>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+
+<div class="settings-footer">
+  <p class="text-muted">Configuration is read from <code>~/.aisync/config.json</code>. Edit the file directly or use <code>aisync config set &lt;key&gt; &lt;value&gt;</code>.</p>
+</div>
+{{end}}

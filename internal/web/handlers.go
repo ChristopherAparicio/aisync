@@ -302,6 +302,72 @@ type capabilityStat struct {
 	Count int
 }
 
+// sparklineBar is a single bar in a mini sparkline chart.
+// HeightPct is 0-100 representing the bar height relative to the max value in the set.
+type sparklineBar struct {
+	Value     int
+	HeightPct int    // 0-100
+	Label     string // tooltip label (e.g. "Mar 25")
+}
+
+// buildSparklineBars converts a slice of int values into sparkline bars with percentage heights.
+func buildSparklineBars(values []int, labels []string) []sparklineBar {
+	if len(values) == 0 {
+		return nil
+	}
+	maxVal := 0
+	for _, v := range values {
+		if v > maxVal {
+			maxVal = v
+		}
+	}
+	bars := make([]sparklineBar, len(values))
+	for i, v := range values {
+		pct := 0
+		if maxVal > 0 {
+			pct = v * 100 / maxVal
+			if pct == 0 && v > 0 {
+				pct = 2 // minimum visible bar for non-zero values
+			}
+		}
+		lbl := ""
+		if i < len(labels) {
+			lbl = labels[i]
+		}
+		bars[i] = sparklineBar{Value: v, HeightPct: pct, Label: lbl}
+	}
+	return bars
+}
+
+// buildSparklineBarsFloat converts float values into sparkline bars.
+func buildSparklineBarsFloat(values []float64, labels []string) []sparklineBar {
+	if len(values) == 0 {
+		return nil
+	}
+	maxVal := 0.0
+	for _, v := range values {
+		if v > maxVal {
+			maxVal = v
+		}
+	}
+	bars := make([]sparklineBar, len(values))
+	for i, v := range values {
+		pct := 0
+		if maxVal > 0 {
+			pct = int(v * 100 / maxVal)
+			if pct == 0 && v > 0 {
+				pct = 2
+			}
+		}
+		lbl := ""
+		if i < len(labels) {
+			lbl = labels[i]
+		}
+		bars[i] = sparklineBar{Value: int(v * 100), HeightPct: pct, Label: lbl}
+	}
+	return bars
+}
+
 type dashboardPage struct {
 	Nav              string
 	TotalSessions    int
@@ -358,6 +424,13 @@ type dashboardPage struct {
 	ProjectName     string
 	CapabilityStats []capabilityStat
 	MCPServerCount  int
+
+	// Activity sparklines (14-day mini bar charts under KPI strip)
+	HasSparklines     bool
+	SparklineSessions []sparklineBar
+	SparklineTokens   []sparklineBar
+	SparklineCost     []sparklineBar
+	SparklineErrors   []sparklineBar
 }
 
 // trendMetric holds current vs previous values for a single metric.
@@ -547,6 +620,66 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 					Count: cs.Count,
 				})
 			}
+		}
+	}
+
+	// Activity sparklines (14-day mini bar charts).
+	// Use store directly to avoid remote-mode "not supported" issue.
+	if s.store != nil {
+		sparkSince := time.Now().AddDate(0, 0, -14)
+		sparkUntil := time.Now()
+		buckets, sparkErr := s.store.QueryTokenBuckets("1d", sparkSince, sparkUntil, project)
+		if sparkErr == nil && len(buckets) > 0 {
+			// Aggregate buckets per day (multiple providers/backends may produce
+			// multiple rows for the same day).
+			type dayAgg struct {
+				sessions int
+				tokens   int
+				cost     float64
+				errors   int
+				label    string
+			}
+			byDay := make(map[string]*dayAgg)
+			dayOrder := make([]string, 0, 14)
+			for _, b := range buckets {
+				key := b.BucketStart.Format("2006-01-02")
+				agg, ok := byDay[key]
+				if !ok {
+					agg = &dayAgg{label: b.BucketStart.Format("Jan 2")}
+					byDay[key] = agg
+					dayOrder = append(dayOrder, key)
+				}
+				agg.sessions += b.SessionCount
+				agg.tokens += b.InputTokens + b.OutputTokens
+				agg.cost += b.EstimatedCost
+				if b.ActualCost > 0 {
+					agg.cost = b.ActualCost + agg.cost - b.EstimatedCost // prefer actual
+				}
+				agg.errors += b.ToolErrorCount
+			}
+
+			// Sort days chronologically.
+			sort.Strings(dayOrder)
+
+			sessions := make([]int, len(dayOrder))
+			tokens := make([]int, len(dayOrder))
+			costs := make([]float64, len(dayOrder))
+			errors := make([]int, len(dayOrder))
+			labels := make([]string, len(dayOrder))
+			for i, key := range dayOrder {
+				a := byDay[key]
+				sessions[i] = a.sessions
+				tokens[i] = a.tokens
+				costs[i] = a.cost
+				errors[i] = a.errors
+				labels[i] = a.label
+			}
+
+			data.HasSparklines = true
+			data.SparklineSessions = buildSparklineBars(sessions, labels)
+			data.SparklineTokens = buildSparklineBars(tokens, labels)
+			data.SparklineCost = buildSparklineBarsFloat(costs, labels)
+			data.SparklineErrors = buildSparklineBars(errors, labels)
 		}
 	}
 
@@ -2839,6 +2972,13 @@ type projectDetailPage struct {
 	// Top files (from file_changes / blame data)
 	HasTopFiles    bool
 	TopFileEntries []topFileView
+
+	// Activity sparklines (14-day mini bar charts)
+	HasSparklines     bool
+	SparklineSessions []sparklineBar
+	SparklineTokens   []sparklineBar
+	SparklineCost     []sparklineBar
+	SparklineErrors   []sparklineBar
 }
 
 // securityCatView is a template-friendly security category count.
@@ -3308,6 +3448,61 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		}
 	}
 
+	// Activity sparklines (14-day mini bar charts) from token usage buckets.
+	if s.store != nil {
+		sparkSince := time.Now().AddDate(0, 0, -14)
+		sparkUntil := time.Now()
+		buckets, sparkErr := s.store.QueryTokenBuckets("1d", sparkSince, sparkUntil, projectPath)
+		if sparkErr == nil && len(buckets) > 0 {
+			type dayAgg struct {
+				sessions int
+				tokens   int
+				cost     float64
+				errors   int
+				label    string
+			}
+			byDay := make(map[string]*dayAgg)
+			dayOrder := make([]string, 0, 14)
+			for _, b := range buckets {
+				key := b.BucketStart.Format("2006-01-02")
+				agg, ok := byDay[key]
+				if !ok {
+					agg = &dayAgg{label: b.BucketStart.Format("Jan 2")}
+					byDay[key] = agg
+					dayOrder = append(dayOrder, key)
+				}
+				agg.sessions += b.SessionCount
+				agg.tokens += b.InputTokens + b.OutputTokens
+				agg.cost += b.EstimatedCost
+				if b.ActualCost > 0 {
+					agg.cost = b.ActualCost + agg.cost - b.EstimatedCost
+				}
+				agg.errors += b.ToolErrorCount
+			}
+			sort.Strings(dayOrder)
+
+			sessions := make([]int, len(dayOrder))
+			tokens := make([]int, len(dayOrder))
+			costs := make([]float64, len(dayOrder))
+			errors := make([]int, len(dayOrder))
+			labels := make([]string, len(dayOrder))
+			for i, key := range dayOrder {
+				a := byDay[key]
+				sessions[i] = a.sessions
+				tokens[i] = a.tokens
+				costs[i] = a.cost
+				errors[i] = a.errors
+				labels[i] = a.label
+			}
+
+			data.HasSparklines = true
+			data.SparklineSessions = buildSparklineBars(sessions, labels)
+			data.SparklineTokens = buildSparklineBars(tokens, labels)
+			data.SparklineCost = buildSparklineBarsFloat(costs, labels)
+			data.SparklineErrors = buildSparklineBars(errors, labels)
+		}
+	}
+
 	return data
 }
 
@@ -3488,4 +3683,263 @@ func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderPartial(w, "search_results", data)
+}
+
+// ── Settings Page ──
+
+// settingItem is a single configuration key-value pair.
+type settingItem struct {
+	Key         string // display label
+	Value       string // current value
+	Description string // short explanation
+	IsSecret    bool   // mask the value
+}
+
+// settingSection groups related settings.
+type settingSection struct {
+	Title   string
+	Icon    string
+	Items   []settingItem
+	IsEmpty bool
+}
+
+type settingsPage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+	Sections        []settingSection
+	ConfigPath      string // path to config file for reference
+}
+
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	data := settingsPage{
+		Nav:             "settings",
+		SidebarProjects: s.buildSidebarProjects(r.Context(), ""),
+	}
+
+	if s.cfg == nil {
+		data.Sections = []settingSection{{
+			Title:   "Configuration",
+			Icon:    "&#x2699;",
+			IsEmpty: true,
+			Items:   []settingItem{{Key: "Status", Value: "No configuration loaded (using defaults)"}},
+		}}
+		s.render(w, "settings.html", data)
+		return
+	}
+
+	data.ConfigPath = s.cfg.GlobalDir()
+
+	// ── General ──
+	general := settingSection{
+		Title: "General",
+		Icon:  "&#x2699;",
+		Items: []settingItem{
+			{Key: "Storage Mode", Value: string(s.cfg.GetStorageMode()), Description: "How sessions are stored (compact, full)"},
+			{Key: "Auto Capture", Value: boolStr(s.cfg.IsAutoCapture()), Description: "Automatically capture new sessions"},
+			{Key: "Providers", Value: joinProviders(s.cfg.GetProviders()), Description: "Enabled session providers"},
+		},
+	}
+
+	// ── Features ──
+	features := settingSection{
+		Title: "Features",
+		Icon:  "&#x1F6A9;",
+		Items: []settingItem{
+			{Key: "File Blame", Value: boolStr(s.cfg.IsFileBlameEnabled()), Description: "Extract file-level blame from tool calls (opt-in)"},
+			{Key: "Telemetry", Value: boolStr(s.cfg.IsTelemetryEnabled()), Description: "Anonymous usage statistics"},
+		},
+	}
+
+	// ── Search ──
+	searchSec := settingSection{
+		Title: "Search",
+		Icon:  "&#x1F50D;",
+		Items: []settingItem{
+			{Key: "Engine", Value: s.cfg.GetSearchEngine(), Description: "Primary search engine (like, fts5, elasticsearch, postgres)"},
+			{Key: "Fallback", Value: s.cfg.GetSearchFallback(), Description: "Fallback engine when primary fails"},
+			{Key: "Index Content", Value: boolStr(s.cfg.GetSearchIndexContent()), Description: "Index full message content"},
+			{Key: "Max Content Length", Value: fmt.Sprintf("%d chars", s.cfg.GetSearchMaxContentLength()), Description: "Max indexed content per session"},
+		},
+	}
+
+	// ── Analysis ──
+	analysisSec := settingSection{
+		Title: "Analysis (LLM)",
+		Icon:  "&#x1F9E0;",
+		Items: []settingItem{
+			{Key: "Auto Analyze", Value: boolStr(s.cfg.IsAnalysisAutoEnabled()), Description: "Run analysis automatically after capture"},
+			{Key: "Adapter", Value: s.cfg.GetAnalysisAdapter(), Description: "LLM adapter for analysis"},
+			{Key: "Model", Value: valueOrDefault(s.cfg.GetAnalysisModel(), "(default)"), Description: "Model override"},
+			{Key: "Error Threshold", Value: fmt.Sprintf("%.0f%%", s.cfg.GetAnalysisErrorThreshold()), Description: "Error rate threshold for flagging"},
+			{Key: "Min Tool Calls", Value: fmt.Sprintf("%d", s.cfg.GetAnalysisMinToolCalls()), Description: "Minimum tool calls for analysis"},
+			{Key: "Schedule", Value: valueOrDefault(s.cfg.GetAnalysisSchedule(), "(disabled)"), Description: "Cron schedule for batch analysis"},
+		},
+	}
+
+	// ── Tagging ──
+	taggingSec := settingSection{
+		Title: "Tagging",
+		Icon:  "&#x1F3F7;",
+		Items: []settingItem{
+			{Key: "Auto Tag", Value: boolStr(s.cfg.IsTaggingAutoEnabled()), Description: "Auto-classify session types after capture"},
+			{Key: "Profile", Value: valueOrDefault(s.cfg.GetTaggingProfile(), "(default)"), Description: "LLM profile for classification"},
+			{Key: "Custom Tags", Value: joinStrings(s.cfg.GetTaggingTags()), Description: "Custom tag vocabulary (empty = defaults)"},
+		},
+	}
+
+	// ── Secrets ──
+	secretsSec := settingSection{
+		Title: "Secrets Detection",
+		Icon:  "&#x1F512;",
+		Items: []settingItem{
+			{Key: "Mode", Value: string(s.cfg.GetSecretsMode()), Description: "How secrets are handled (mask, redact, none)"},
+			{Key: "Custom Patterns", Value: fmt.Sprintf("%d patterns", len(s.cfg.GetCustomPatterns())), Description: "Additional regex patterns for secret detection"},
+			{Key: "Scan Tool Outputs", Value: boolStr(s.cfg.IsScanToolOutputs()), Description: "Scan tool call outputs for secrets"},
+		},
+	}
+
+	// ── Errors ──
+	errorsSec := settingSection{
+		Title: "Error Classification",
+		Icon:  "&#x26A0;",
+		Items: []settingItem{
+			{Key: "Classifier", Value: s.cfg.GetErrorsClassifier(), Description: "Error classifier (deterministic, composite)"},
+			{Key: "LLM Fallback", Value: boolStr(s.cfg.IsErrorsLLMFallbackEnabled()), Description: "Use LLM for unclassified errors"},
+			{Key: "LLM Schedule", Value: valueOrDefault(s.cfg.GetErrorsLLMSchedule(), "(disabled)"), Description: "Cron schedule for LLM reclassification"},
+		},
+	}
+
+	// ── Dashboard ──
+	dashSec := settingSection{
+		Title: "Dashboard",
+		Icon:  "&#x1F4CA;",
+		Items: []settingItem{
+			{Key: "Page Size", Value: fmt.Sprintf("%d", s.cfg.GetDashboardPageSize()), Description: "Sessions per page"},
+			{Key: "Columns", Value: joinStrings(s.cfg.GetDashboardColumns()), Description: "Visible columns in sessions table"},
+			{Key: "Sort By", Value: s.cfg.GetDashboardSortBy(), Description: "Default sort field"},
+			{Key: "Sort Order", Value: s.cfg.GetDashboardSortOrder(), Description: "Default sort direction"},
+		},
+	}
+
+	// ── Server ──
+	serverSec := settingSection{
+		Title: "Server",
+		Icon:  "&#x1F5A5;",
+		Items: []settingItem{
+			{Key: "URL", Value: valueOrDefault(s.cfg.GetServerURL(), "(standalone)"), Description: "Server URL for daemon mode"},
+			{Key: "Auth Enabled", Value: boolStr(s.cfg.IsAuthEnabled()), Description: "Require authentication"},
+			{Key: "Database Path", Value: valueOrDefault(s.cfg.GetDatabasePath(), "(default)"), Description: "SQLite database location"},
+			{Key: "Database Driver", Value: s.cfg.GetDatabaseDriver(), Description: "Storage driver"},
+		},
+	}
+
+	// ── Scheduler ──
+	schedulerSec := settingSection{
+		Title: "Scheduler",
+		Icon:  "&#x23F0;",
+		Items: []settingItem{
+			{Key: "GC Enabled", Value: boolStr(s.cfg.GetSchedulerGCEnabled()), Description: "Garbage collection for old sessions"},
+			{Key: "GC Schedule", Value: valueOrDefault(s.cfg.GetSchedulerGCCron(), "(disabled)"), Description: "GC cron expression"},
+			{Key: "GC Retention", Value: fmt.Sprintf("%d days", s.cfg.GetSchedulerGCRetentionDays()), Description: "Keep sessions for N days"},
+			{Key: "Capture All", Value: boolStr(s.cfg.GetSchedulerCaptureAllEnabled()), Description: "Scheduled capture of all providers"},
+			{Key: "Capture Schedule", Value: valueOrDefault(s.cfg.GetSchedulerCaptureAllCron(), "(disabled)"), Description: "Capture cron expression"},
+			{Key: "Stats Report", Value: boolStr(s.cfg.GetSchedulerStatsReportEnabled()), Description: "Scheduled stats report"},
+			{Key: "Stats Schedule", Value: valueOrDefault(s.cfg.GetSchedulerStatsReportCron(), "(disabled)"), Description: "Stats report cron expression"},
+		},
+	}
+
+	// ── Projects (per-project classifiers) ──
+	projectsSec := settingSection{
+		Title: "Project Classifiers",
+		Icon:  "&#x1F4C1;",
+	}
+	projectClassifiers := s.cfg.GetAllProjectClassifiers()
+	if len(projectClassifiers) == 0 {
+		projectsSec.IsEmpty = true
+		projectsSec.Items = []settingItem{{Key: "Status", Value: "No project-specific rules configured"}}
+	} else {
+		for name, pc := range projectClassifiers {
+			items := []settingItem{}
+			if pc.TicketPattern != "" {
+				items = append(items, settingItem{Key: "Ticket Pattern", Value: pc.TicketPattern})
+			}
+			if pc.TicketURL != "" {
+				items = append(items, settingItem{Key: "Ticket URL", Value: pc.TicketURL})
+			}
+			if len(pc.BranchRules) > 0 {
+				items = append(items, settingItem{Key: "Branch Rules", Value: fmt.Sprintf("%d rules", len(pc.BranchRules))})
+			}
+			if len(pc.AgentRules) > 0 {
+				items = append(items, settingItem{Key: "Agent Rules", Value: fmt.Sprintf("%d rules", len(pc.AgentRules))})
+			}
+			if pc.Budget != nil {
+				budget := "(active"
+				if pc.Budget.MonthlyLimit > 0 {
+					budget += fmt.Sprintf(", $%.0f/mo", pc.Budget.MonthlyLimit)
+				}
+				if pc.Budget.DailyLimit > 0 {
+					budget += fmt.Sprintf(", $%.0f/day", pc.Budget.DailyLimit)
+				}
+				budget += ")"
+				items = append(items, settingItem{Key: "Budget", Value: budget})
+			}
+			if len(items) == 0 {
+				items = []settingItem{{Key: "Configured", Value: "yes (default rules)"}}
+			}
+			// Prefix each item's key with project name
+			for i := range items {
+				items[i].Key = name + " / " + items[i].Key
+			}
+			projectsSec.Items = append(projectsSec.Items, items...)
+		}
+	}
+
+	data.Sections = []settingSection{
+		general,
+		features,
+		searchSec,
+		analysisSec,
+		taggingSec,
+		secretsSec,
+		errorsSec,
+		dashSec,
+		serverSec,
+		schedulerSec,
+		projectsSec,
+	}
+
+	s.render(w, "settings.html", data)
+}
+
+// boolStr returns "enabled" or "disabled" for a bool value.
+func boolStr(b bool) string {
+	if b {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+// valueOrDefault returns val if non-empty, otherwise def.
+func valueOrDefault(val, def string) string {
+	if val == "" {
+		return def
+	}
+	return val
+}
+
+// joinProviders converts a slice of ProviderName to a comma-separated string.
+func joinProviders(providers []session.ProviderName) string {
+	parts := make([]string, len(providers))
+	for i, p := range providers {
+		parts[i] = string(p)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// joinStrings joins a string slice for display.
+func joinStrings(ss []string) string {
+	if len(ss) == 0 {
+		return "(default)"
+	}
+	return strings.Join(ss, ", ")
 }

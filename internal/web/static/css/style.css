@@ -3482,3 +3482,192 @@ pre {
 #cost-tab-content .htmx-indicator {
   font-size: 0.9rem;
 }
+
+/* ── Activity Sparklines (mini bar charts under KPI strips) ── */
+
+.sparkline {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 24px;
+  vertical-align: bottom;
+  margin-top: 4px;
+}
+
+.sparkline-bar {
+  width: 4px;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+  background: var(--accent);
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.sparkline-bar:hover {
+  opacity: 1;
+}
+
+/* Color variants */
+.sparkline--sessions .sparkline-bar { background: var(--accent); }
+.sparkline--tokens .sparkline-bar { background: var(--accent-light); }
+.sparkline--cost .sparkline-bar { background: var(--green); }
+.sparkline--errors .sparkline-bar { background: var(--red); }
+
+/* KPI strip item layout adjustment for sparklines */
+.kpi-strip-item--with-sparkline {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+
+.kpi-strip-item--with-sparkline .kpi-strip-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+/* Project detail sparkline row */
+.sparkline-row {
+  display: flex;
+  gap: 2rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+}
+
+.sparkline-row-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sparkline-row-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Settings Nav Icon ── */
+
+.navbar-settings {
+  font-size: 1.1rem;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.navbar-settings:hover,
+.navbar-settings.active {
+  opacity: 1;
+}
+
+/* ── Settings Page ── */
+
+.settings-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.settings-config-path {
+  font-size: 0.7rem;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.settings-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+}
+
+.settings-section-icon {
+  font-size: 1rem;
+}
+
+.settings-section-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.settings-section-body {
+  padding: 0.25rem 0;
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.settings-row:last-child {
+  border-bottom: none;
+}
+
+.settings-row-key {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-key {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.settings-desc {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.settings-row-value {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.settings-value {
+  font-size: 0.8rem;
+}
+
+.settings-value--enabled {
+  color: var(--green);
+}
+
+.settings-value--disabled {
+  color: var(--text-muted);
+}
+
+.settings-footer {
+  padding: 1rem 0;
+  font-size: 0.75rem;
+}
+
+.settings-footer code {
+  background: var(--bg-card);
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+}
