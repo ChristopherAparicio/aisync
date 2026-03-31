@@ -1986,8 +1986,11 @@ type costDashboardPage struct {
 	BackendCosts []backendCostView
 
 	// Time buckets
-	Period  string
-	Buckets []costBucket
+	Period              string
+	Buckets             []costBucket
+	BudgetDailyLine     float64 // daily budget limit for overlay (sum of all project daily limits, or single project)
+	BudgetLineHeightPct float64 // budget line as % of chart height (capped at 100)
+	HasBudgetLine       bool    // true when BudgetDailyLine > 0
 
 	// Model breakdown
 	Models []session.ModelForecast
@@ -1996,11 +1999,13 @@ type costDashboardPage struct {
 	BranchCosts []branchCostEntry
 
 	// Per-tool cost (populated when project is selected)
-	HasToolCosts  bool
-	ToolCosts     []toolCostView
-	TopMCPServers []mcpServerView
-	TotalMCPCalls int
-	TotalMCPCost  float64
+	HasToolCosts   bool
+	ToolCosts      []toolCostView
+	TopMCPServers  []mcpServerView
+	TotalMCPCalls  int
+	TotalMCPCost   float64
+	MCPPieGradient template.CSS // pre-computed conic-gradient stops for pie chart (safe CSS)
+	HasMCPPie      bool         // true when there are ≥2 MCP servers with cost
 
 	// Per-agent cost (populated when project is selected)
 	HasAgentCosts bool
@@ -2119,6 +2124,7 @@ type mcpServerView struct {
 	ErrorCount     int
 	EstimatedCost  float64
 	AvgCostPerCall float64
+	CostPercent    float64 // percentage of total MCP cost (0-100)
 }
 
 // agentCostView is a template-friendly view of per-agent cost data.
@@ -2390,6 +2396,24 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 		}
 		data.TotalMCPCalls = toolSummary.TotalMCPCalls
 		data.TotalMCPCost = toolSummary.TotalMCPCost
+		// Compute cost percentages and conic-gradient for pie chart.
+		if data.TotalMCPCost > 0 && len(data.TopMCPServers) >= 1 {
+			cumPct := 0.0
+			var gradientStops []string
+			for i := range data.TopMCPServers {
+				pctVal := (data.TopMCPServers[i].EstimatedCost / data.TotalMCPCost) * 100
+				data.TopMCPServers[i].CostPercent = pctVal
+				stop := fmt.Sprintf("var(--pie-color-%d) %.2f%% %.2f%%", i, cumPct, cumPct+pctVal)
+				gradientStops = append(gradientStops, stop)
+				cumPct += pctVal
+			}
+			data.MCPPieGradient = template.CSS(strings.Join(gradientStops, ", "))
+			data.HasMCPPie = true
+		} else if data.TotalMCPCost > 0 {
+			for i := range data.TopMCPServers {
+				data.TopMCPServers[i].CostPercent = (data.TopMCPServers[i].EstimatedCost / data.TotalMCPCost) * 100
+			}
+		}
 	}
 
 	// Configured vs Used analysis (when project is selected and registry is available).
@@ -2649,6 +2673,44 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				ProjectedMonth: bs.ProjectedMonth,
 				DaysRemaining:  bs.DaysRemaining,
 			})
+		}
+		// Compute daily budget line for Cost Over Time overlay.
+		// When a specific project is filtered, use its daily limit;
+		// otherwise sum all project daily limits.
+		var dailySum float64
+		for _, bs := range budgets {
+			if project == "" || bs.ProjectPath == project {
+				dailySum += bs.DailyLimit
+			}
+		}
+		if dailySum > 0 {
+			data.BudgetDailyLine = dailySum
+			data.HasBudgetLine = true
+			// Compute budget line height as % of chart (relative to max bucket cost).
+			maxBucketCost := 0.0
+			for _, b := range data.Buckets {
+				if b.Cost > maxBucketCost {
+					maxBucketCost = b.Cost
+				}
+			}
+			// Use the larger of maxBucketCost and dailySum as the chart ceiling
+			// so the budget line is always visible even if above all bars.
+			ceiling := maxBucketCost
+			if dailySum > ceiling {
+				ceiling = dailySum
+			}
+			if ceiling > 0 {
+				data.BudgetLineHeightPct = (dailySum / ceiling) * 100
+				// Re-scale all bar heights when budget line exceeds max cost.
+				if dailySum > maxBucketCost && maxBucketCost > 0 {
+					for i := range data.Buckets {
+						data.Buckets[i].HeightPct = (data.Buckets[i].Cost / ceiling) * 100
+						if data.Buckets[i].HeightPct < 2 && data.Buckets[i].Cost > 0 {
+							data.Buckets[i].HeightPct = 2
+						}
+					}
+				}
+			}
 		}
 	}
 

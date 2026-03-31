@@ -62,8 +62,15 @@ func DocumentFromSession(sess *session.Session, maxContentLen int) Document {
 				var tcText string
 				switch tc.Name {
 				case "bash", "Bash":
-					// Index the full command (pip install, curl, git, etc.)
+					// Index command + output (contains versions, errors, results).
 					tcText = tc.Input
+					if tc.Output != "" {
+						out := tc.Output
+						if len(out) > 3000 {
+							out = out[:3000] // cap large outputs (ls, cat, etc.)
+						}
+						tcText += "\n" + out
+					}
 				case "Edit", "edit", "Write", "write":
 					// Index the file path + first part of content
 					tcText = tc.Input

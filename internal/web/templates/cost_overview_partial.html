@@ -231,8 +231,13 @@
 <!-- ── Cost Over Time ── -->
 {{if .Buckets}}
 <div class="section">
-  <h2 class="section-title">Cost Over Time <span class="text-muted">({{.Period}})</span></h2>
-  <div class="cost-chart">
+  <h2 class="section-title">Cost Over Time <span class="text-muted">({{.Period}})</span>{{if .HasBudgetLine}} <span class="text-muted" style="font-size:0.75rem; font-weight:400;">— budget: {{formatCost .BudgetDailyLine}}/day</span>{{end}}</h2>
+  <div class="cost-chart cost-chart--with-overlay">
+    {{if .HasBudgetLine}}
+    <div class="cost-budget-line" style="bottom: {{printf "%.1f" .BudgetLineHeightPct}}%;" title="Daily budget: {{formatCost .BudgetDailyLine}}">
+      <span class="cost-budget-line-label">{{formatCost .BudgetDailyLine}}</span>
+    </div>
+    {{end}}
     {{range .Buckets}}
     <div class="cost-bar-wrap" title="{{formatCost .Cost}} — {{.SessionCount}} sessions">
       <div class="cost-bar" style="height: {{.HeightPct}}%"></div>

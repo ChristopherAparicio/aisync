@@ -14,6 +14,21 @@
       <div class="value">{{formatCost .TotalMCPCost}}</div>
     </div>
   </div>
+  <!-- MCP Cost Pie Chart -->
+  {{if .HasMCPPie}}
+  <div class="mcp-pie-container">
+    <div class="mcp-pie" style="background: conic-gradient({{.MCPPieGradient}});"></div>
+    <div class="mcp-pie-legend">
+      {{range $i, $s := .TopMCPServers}}
+      <div class="mcp-pie-legend-item">
+        <span class="mcp-pie-swatch" style="background: var(--pie-color-{{$i}});"></span>
+        <span class="mcp-pie-legend-name">{{$s.Server}}</span>
+        <span class="mcp-pie-legend-value font-mono">{{formatCost $s.EstimatedCost}} ({{printf "%.0f" $s.CostPercent}}%)</span>
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
   <div class="table-wrap">
     <table>
       <thead>

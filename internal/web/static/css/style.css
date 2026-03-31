@@ -14,6 +14,17 @@
   --yellow: #fbbf24;
   --radius: 8px;
   --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  /* Pie chart palette (up to 10 segments) */
+  --pie-color-0: #6c7ee1;
+  --pie-color-1: #4ade80;
+  --pie-color-2: #fbbf24;
+  --pie-color-3: #f87171;
+  --pie-color-4: #a78bfa;
+  --pie-color-5: #38bdf8;
+  --pie-color-6: #fb923c;
+  --pie-color-7: #e879f9;
+  --pie-color-8: #34d399;
+  --pie-color-9: #f472b6;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -3670,4 +3681,110 @@ pre {
   padding: 0.15rem 0.4rem;
   border-radius: 3px;
   font-size: 0.7rem;
+}
+
+/* ── MCP Cost Pie Chart ── */
+.mcp-pie-container {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.mcp-pie {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+
+/* Inner hole for donut effect */
+.mcp-pie::after {
+  content: "";
+  position: absolute;
+  top: 25%;
+  left: 25%;
+  width: 50%;
+  height: 50%;
+  border-radius: 50%;
+  background: var(--bg-card);
+}
+
+.mcp-pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-pie-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.mcp-pie-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.mcp-pie-legend-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-pie-legend-value {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* ── Budget Overlay Line on Cost Over Time ── */
+.cost-chart--with-overlay {
+  position: relative;
+}
+
+.cost-budget-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px dashed var(--red);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.cost-budget-line-label {
+  position: absolute;
+  right: 0;
+  top: -18px;
+  font-size: 0.65rem;
+  color: var(--red);
+  background: var(--bg-card);
+  padding: 0 0.3rem;
+  border-radius: 2px;
+  pointer-events: auto;
+}
+
+@media (max-width: 600px) {
+  .mcp-pie-container {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .mcp-pie {
+    width: 120px;
+    height: 120px;
+  }
 }
