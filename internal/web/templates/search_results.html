@@ -6,21 +6,36 @@
   <div class="search-empty">Type to search sessions across all projects</div>
   {{end}}
 {{else}}
+  {{if .HasEngine}}
+  <div class="search-engine-badge">
+    <span class="badge badge-billing-api" style="font-size:0.55rem; padding:0.1rem 0.35rem;">{{.Engine}}</span>
+    {{if gt .TotalCount 0}}<span class="text-muted" style="font-size:0.7rem;">{{.TotalCount}} results</span>{{end}}
+  </div>
+  {{end}}
   {{range .Results}}
   <a href="/sessions/{{.ID}}" class="search-result-item">
-    <div class="search-result-title">{{if .Summary}}{{truncate .Summary 80}}{{else}}{{truncate .ID 24}}{{end}}</div>
+    <div class="search-result-title">
+      {{- if .HasHighlights}}{{if .HighlightSummary}}{{.HighlightSummary}}{{else}}{{truncate .Summary 80}}{{end}}
+      {{- else}}{{if .Summary}}{{truncate .Summary 80}}{{else}}{{truncate .ID 24}}{{end}}{{end -}}
+    </div>
+    {{if and .HasHighlights .HighlightContent}}
+    <div class="search-result-snippet">{{.HighlightContent}}</div>
+    {{end}}
     <div class="search-result-meta">
       <span class="badge badge-provider" style="font-size:0.6rem">{{.Provider}}</span>
-      {{if .ProjectPath}}{{projectBaseName .ProjectPath}}{{end}}
+      {{if .ProjectPath}}<span class="search-result-project">{{projectBaseName .ProjectPath}}</span>{{end}}
+      {{if .Branch}}<span class="search-result-branch">{{.Branch}}</span>{{end}}
+      {{if .SessionType}}<span class="badge badge-type" style="font-size:0.55rem">{{.SessionType}}</span>{{end}}
       &middot; {{.MessageCount}} msgs
       &middot; {{formatTokens .TotalTokens}} tok
+      {{if gt .ErrorCount 0}}&middot; <span class="text-error">{{.ErrorCount}} err</span>{{end}}
       &middot; {{if not .UpdatedAt.IsZero}}{{timeAgo .UpdatedAt}}{{else}}{{timeAgo .CreatedAt}}{{end}}
     </div>
   </a>
   {{end}}
   {{if .HasMore}}
   <div class="search-empty">
-    <a href="/sessions?keyword={{.Query}}">View all results &rarr;</a>
+    <a href="/sessions?keyword={{.Query}}">View all {{.TotalCount}} results &rarr;</a>
   </div>
   {{end}}
 {{end}}

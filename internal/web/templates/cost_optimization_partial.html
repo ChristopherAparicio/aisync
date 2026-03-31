@@ -1,0 +1,251 @@
+{{define "cost_optimization_partial"}}
+
+<!-- ── Context Saturation ── -->
+{{if .HasSaturation}}
+<div class="section">
+  <h2 class="section-title">Context Window Saturation <span class="text-muted">(90d)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">How close sessions get to their model's context limit. High saturation (&gt;80%) causes compaction, degrading response quality as the model works with summarized context.</p>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Avg Peak Saturation</div>
+      <div class="value">{{printf "%.0f" .SatAvgPeak}}%</div>
+      <div class="sub">across {{.SatTotalSessions}} sessions</div>
+    </div>
+    <div class="kpi-card{{if gt .SatAbove80 0}} kpi-accent{{end}}">
+      <div class="label">Sessions &gt;80%</div>
+      <div class="value{{if gt .SatAbove80 0}} text-error{{end}}">{{.SatAbove80}}</div>
+      <div class="sub">approaching context limit</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Sessions &gt;90%</div>
+      <div class="value{{if gt .SatAbove90 0}} text-error{{end}}">{{.SatAbove90}}</div>
+      <div class="sub">compaction imminent</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Compacted</div>
+      <div class="value">{{.SatCompacted}}</div>
+      <div class="sub">sessions with detected compaction</div>
+    </div>
+  </div>
+
+  {{if .SatModels}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Saturation &amp; Efficiency by Model</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="text-right">Context Window</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Avg Peak</th>
+          <th class="text-right">Max Peak</th>
+          <th class="text-right">Unused</th>
+          <th>Efficiency</th>
+          <th class="text-right">Compacted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .SatModels}}
+        <tr>
+          <td class="font-mono">{{.Model}}</td>
+          <td class="text-right font-mono">{{formatTokens .MaxInputTokens}}</td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right"><span class="badge badge-{{.SatClass}}">{{printf "%.0f" .AvgPeakPct}}%</span></td>
+          <td class="text-right font-mono">{{printf "%.0f" .MaxPeakPct}}%</td>
+          <td class="text-right font-mono text-muted">{{printf "%.0f" .WastedCapacityPct}}%</td>
+          <td>
+            {{if eq .EfficiencyVerdict "oversized"}}<span class="badge badge-warning">oversized</span>
+            {{else if eq .EfficiencyVerdict "well-sized"}}<span class="badge badge-good">well-sized</span>
+            {{else if eq .EfficiencyVerdict "tight"}}<span class="badge badge-warning">tight</span>
+            {{else if eq .EfficiencyVerdict "saturated"}}<span class="badge badge-poor">saturated</span>
+            {{end}}
+          </td>
+          <td class="text-right{{if gt .CompactedCount 0}} text-error{{end}}">{{.CompactedCount}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .SatWorstSessions}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Most Saturated Sessions</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Session</th>
+          <th>Model</th>
+          <th class="text-right">Peak</th>
+          <th class="text-right">Window</th>
+          <th class="text-right">Saturation</th>
+          <th class="text-right">Msgs</th>
+          <th>Compacted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .SatWorstSessions}}
+        <tr>
+          <td><a href="/sessions/{{.ID}}" class="font-mono">{{.Summary}}</a></td>
+          <td class="font-mono text-muted">{{.Model}}</td>
+          <td class="text-right font-mono">{{formatTokens .PeakInputTokens}}</td>
+          <td class="text-right font-mono text-muted">{{formatTokens .MaxInputTokens}}</td>
+          <td class="text-right"><span class="badge badge-{{.SatClass}}">{{printf "%.0f" .PeakSaturation}}%</span></td>
+          <td class="text-right">{{.MessageCount}}</td>
+          <td>{{if .WasCompacted}}<span class="text-error">yes</span>{{else}}<span class="text-muted">no</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+<!-- ── Model Breakdown ── -->
+{{if .Models}}
+<div class="section">
+  <h2 class="section-title">Cost by Model</h2>
+
+  <!-- Model share bars -->
+  <div class="model-bars">
+    {{range .Models}}
+    <div class="model-bar-row">
+      <div class="model-bar-label">
+        <span class="font-mono">{{.Model}}</span>
+        <span class="text-muted">{{formatCost .Cost}} ({{pct .Share}})</span>
+      </div>
+      <div class="model-bar-track">
+        <div class="model-bar-fill" style="width: {{pct .Share}}"></div>
+      </div>
+    </div>
+    {{end}}
+  </div>
+
+  <!-- Detailed table -->
+  <div class="table-wrap" style="margin-top: 1rem;">
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Share</th>
+          <th>Recommendation</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Models}}
+        <tr>
+          <td class="font-mono">{{.Model}}</td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .Tokens}}</td>
+          <td class="text-right font-mono">{{formatCost .Cost}}</td>
+          <td class="text-right">{{pct .Share}}</td>
+          <td>
+            {{if .Recommendation}}
+            <span class="recommendation">{{.Recommendation}}</span>
+            {{else}}
+            <span class="text-muted">—</span>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Model Alternatives (Benchmark-Based) ── -->
+{{if .HasAlternatives}}
+<div class="section">
+  <h2 class="section-title">Model Alternatives <span class="text-muted">(Aider Polyglot Benchmark)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Cheaper models that could replace your current models, scored against the Aider polyglot coding benchmark (225 exercises, 6 languages). QAC = cost adjusted for quality (lower is better).</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Current Model</th>
+          <th>Alternative</th>
+          <th class="text-right">Score</th>
+          <th class="text-right">Quality</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Savings</th>
+          <th class="text-right">QAC</th>
+          <th>Verdict</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ModelAlternatives}}
+        <tr>
+          <td class="font-mono">{{.CurrentModel}}</td>
+          <td class="font-mono">{{.AltModel}}</td>
+          <td class="text-right">
+            <span class="text-muted">{{printf "%.0f" .CurrentScore}}%</span>
+            &rarr;
+            {{printf "%.0f" .AltScore}}%
+          </td>
+          <td class="text-right">
+            {{if gt .ScoreDelta 0.0}}
+              <span style="color: var(--success);">+{{printf "%.1f" .ScoreDelta}}%</span>
+            {{else if lt .ScoreDelta 0.0}}
+              <span style="color: var(--error);">{{printf "%.1f" .ScoreDelta}}%</span>
+            {{else}}
+              <span class="text-muted">same</span>
+            {{end}}
+          </td>
+          <td class="text-right font-mono">
+            <span class="text-muted">${{printf "%.1f" .CurrentCost}}</span>
+            &rarr;
+            ${{printf "%.1f" .AltCost}}
+          </td>
+          <td class="text-right font-mono" style="font-weight: 600;">{{printf "%.0f" .CostSavings}}%</td>
+          <td class="text-right font-mono text-muted">
+            ${{printf "%.1f" .CurrentQAC}} &rarr; ${{printf "%.1f" .AltQAC}}
+          </td>
+          <td>
+            <span class="badge badge-{{.VerdictClass}}">{{.Verdict}}</span>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── QAC Leaderboard ── -->
+{{if .HasQACLeaderboard}}
+<div class="section">
+  <h2 class="section-title">Quality-Adjusted Cost Leaderboard</h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">All models ranked by true cost: price normalized by coding quality. QAC = $/1M tokens &divide; (benchmark% / 100). Lower QAC = better value. Your current models are highlighted.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="text-right">#</th>
+          <th>Model</th>
+          <th class="text-right">Benchmark</th>
+          <th class="text-right">Cost / 1M</th>
+          <th class="text-right">QAC / 1M</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .QACLeaderboard}}
+        <tr{{if .IsCurrentModel}} style="background: var(--highlight, rgba(99,102,241,0.08)); font-weight: 600;"{{end}}>
+          <td class="text-right text-muted">{{.Rank}}</td>
+          <td class="font-mono">{{.Model}}{{if .IsCurrentModel}} <span class="badge badge-good">you</span>{{end}}</td>
+          <td class="text-right">{{printf "%.1f" .BenchmarkScore}}%</td>
+          <td class="text-right font-mono">${{printf "%.2f" .InputCost}}</td>
+          <td class="text-right font-mono" style="font-weight: 600;">${{printf "%.2f" .QAC}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+{{end}}

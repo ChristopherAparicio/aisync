@@ -148,10 +148,12 @@ func (s *SessionService) searchViaEngine(query session.SearchQuery) (*session.Se
 		TotalCount: result.TotalCount,
 		Limit:      query.Limit,
 		Offset:     query.Offset,
+		Engine:     result.Engine,
 	}
 	for _, hit := range result.Hits {
+		sid := session.ID(hit.SessionID)
 		sr.Sessions = append(sr.Sessions, session.Summary{
-			ID:           session.ID(hit.SessionID),
+			ID:           sid,
 			Summary:      hit.Summary,
 			ProjectPath:  hit.ProjectPath,
 			RemoteURL:    hit.RemoteURL,
@@ -163,6 +165,17 @@ func (s *SessionService) searchViaEngine(query session.SearchQuery) (*session.Se
 			MessageCount: hit.Messages,
 			ErrorCount:   hit.Errors,
 		})
+		// Preserve highlights from the search engine.
+		if len(hit.Highlights) > 0 {
+			if sr.Highlights == nil {
+				sr.Highlights = make(map[session.ID]session.SearchHighlight)
+			}
+			sr.Highlights[sid] = session.SearchHighlight{
+				Summary: hit.Highlights["summary"],
+				Content: hit.Highlights["content"],
+				Score:   hit.Score,
+			}
+		}
 	}
 	return sr, nil
 }

@@ -550,6 +550,7 @@ func TestCosts_withData(t *testing.T) {
 		}
 	}
 
+	// Main page should render tab navigation.
 	req := httptest.NewRequest(http.MethodGet, "/costs", nil)
 	w := httptest.NewRecorder()
 
@@ -561,25 +562,52 @@ func TestCosts_withData(t *testing.T) {
 
 	body := w.Body.String()
 
-	// Should have cost KPIs.
-	if !strings.Contains(body, "Total Cost") {
-		t.Error("expected Total Cost KPI")
+	// Should have tab navigation.
+	if !strings.Contains(body, "cost-tabs") {
+		t.Error("expected cost-tabs navigation")
 	}
-	if !strings.Contains(body, "3 sessions") {
-		t.Error("expected '3 sessions' in total")
+	if !strings.Contains(body, "Overview") {
+		t.Error("expected Overview tab")
 	}
-
-	// Per-branch costs.
-	if !strings.Contains(body, "feature/billing") {
-		t.Error("expected feature/billing in branch costs")
-	}
-	if !strings.Contains(body, "fix/typo") {
-		t.Error("expected fix/typo in branch costs")
+	if !strings.Contains(body, "Optimization") {
+		t.Error("expected Optimization tab")
 	}
 
-	// Should show dollar amounts.
-	if !strings.Contains(body, "$") {
-		t.Error("expected dollar sign in cost display")
+	// Overview partial should contain cost KPIs.
+	req2 := httptest.NewRequest(http.MethodGet, "/partials/cost-overview", nil)
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("overview partial: expected 200, got %d", w2.Code)
+	}
+
+	overview := w2.Body.String()
+	if !strings.Contains(overview, "Total Cost") {
+		t.Error("expected Total Cost KPI in overview partial")
+	}
+	if !strings.Contains(overview, "3 sessions") {
+		t.Error("expected '3 sessions' in overview partial")
+	}
+	if !strings.Contains(overview, "$") {
+		t.Error("expected dollar sign in overview partial")
+	}
+
+	// Tools partial should contain branch costs.
+	req3 := httptest.NewRequest(http.MethodGet, "/partials/cost-tools", nil)
+	w3 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Fatalf("tools partial: expected 200, got %d", w3.Code)
+	}
+
+	tools := w3.Body.String()
+	if !strings.Contains(tools, "feature/billing") {
+		t.Error("expected feature/billing in tools partial")
+	}
+	if !strings.Contains(tools, "fix/typo") {
+		t.Error("expected fix/typo in tools partial")
 	}
 }
 

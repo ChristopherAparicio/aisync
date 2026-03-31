@@ -734,12 +734,22 @@ type SearchQuery struct {
 }
 
 // SearchResult holds a page of search results with metadata.
+// SearchHighlight contains highlighted snippets for a search hit.
+// Field values contain HTML markup (e.g. <mark>match</mark>).
+type SearchHighlight struct {
+	Summary string  `json:"summary,omitempty"` // highlighted summary (HTML)
+	Content string  `json:"content,omitempty"` // highlighted content snippet (HTML)
+	Score   float64 `json:"score,omitempty"`   // relevance score (0-1, higher = better)
+}
+
 type SearchResult struct {
-	Sessions     []Summary      `json:"sessions"`
-	VoiceResults []VoiceSummary `json:"voice_results,omitempty"` // populated only when voice=true
-	TotalCount   int            `json:"total_count"`
-	Limit        int            `json:"limit"`
-	Offset       int            `json:"offset"`
+	Sessions     []Summary              `json:"sessions"`
+	Highlights   map[ID]SearchHighlight `json:"highlights,omitempty"`    // session ID → highlight data
+	VoiceResults []VoiceSummary         `json:"voice_results,omitempty"` // populated only when voice=true
+	Engine       string                 `json:"engine,omitempty"`        // search engine name
+	TotalCount   int                    `json:"total_count"`
+	Limit        int                    `json:"limit"`
+	Offset       int                    `json:"offset"`
 }
 
 // VoiceSummary is a compact, TTS-optimized representation of a session.

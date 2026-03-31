@@ -1,8 +1,32 @@
 # aisync — Next Session TODO
 
-> Last updated: 2026-03-29
+> Last updated: 2026-03-31
 
-## Recently Completed (2026-03-29)
+## Recently Completed (2026-03-31)
+
+### Costs Page Organization (2.5)
+- [x] **HTMX tab navigation**: Overview / Tools & Agents / Optimization — lazy-loaded via partials
+- [x] **Overview tab**: Real costs, Budgets, Cache Efficiency, Backend Breakdown, API-Equivalent KPIs, Cost Over Time
+- [x] **Tools & Agents tab**: MCP Servers, MCP Governance, MCP Matrix, Top 20 Tools, Agents, Branches
+- [x] **Optimization tab**: Context Saturation, Model Breakdown, Model Alternatives (Aider Benchmark), QAC Leaderboard
+- [x] **Page size**: 808-line monolithic template → 75-line shell + 3 partials (~230, ~250, ~230 lines)
+- [x] **Initial render**: 177KB → ~15KB (content lazy-loaded on tab click)
+- [x] **CSS**: Tab styling with active indicator, hover states, HTMX loading state
+- [x] **Project filter preserved**: `?project=` query param flows through to all tab partial URLs
+
+### Advanced Search UI (1.3)
+- [x] **FTS5 highlights surfaced**: `<mark>` tags from FTS5 `highlight()`/`snippet()` now rendered in search results
+- [x] **Content snippets**: `search-result-snippet` shows highlighted excerpt from message content (up to 40 tokens)
+- [x] **Engine badge**: "fts5" badge + result count displayed at top of search dropdown
+- [x] **Rich metadata per result**: project name, branch, session type badge, error count — all shown
+- [x] **Domain preservation**: `session.SearchHighlight` struct carries highlights without `search` import in domain
+- [x] **Service layer**: `searchViaEngine()` now populates `Highlights` map and `Engine` field in `SearchResult`
+- [x] **Template safety**: Highlights rendered via `template.HTML` for safe `<mark>` tag output
+- [x] 2,013 tests passing across 105 packages
+
+---
+
+## Completed (2026-03-29)
 
 ### Session File Blame (Backend + Web Views)
 - [x] **Domain extractor**: `ExtractFileOperations()` — parses Write/Edit/Read/Bash tool calls, bash heuristics (rm/touch/cp/mv/sed), merge dedup
@@ -176,10 +200,11 @@ Future: semantic search needs chunking (sessions are 100K+ tokens).
 - [ ] Fuzzy matching for typo tolerance
 - [ ] Config: `search.engine: "elasticsearch"` + URL
 
-### 1.3 Advanced Search UI
-- [ ] Show search engine capabilities in UI (badge: "FTS5" / "Semantic")
-- [ ] Highlighted snippets in search results (already supported by FTS5)
-- [ ] Facet sidebar: filter by project, branch, type, date range
+### 1.3 Advanced Search UI ✅ COMPLETE (highlights + engine badge)
+- [x] Show search engine capabilities in UI (badge: "FTS5" / "Semantic")
+- [x] Highlighted snippets in search results (FTS5 `<mark>` tags rendered)
+- [x] Rich result metadata: project, branch, type badge, error count
+- [ ] Facet sidebar: filter by project, branch, type, date range (deferred — needs aggregation queries)
 - [ ] Search within a session (find specific tool calls, messages)
 
 ---
@@ -226,11 +251,11 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [ ] Session dependency graph (parent → child → fork relationships)
 - [ ] Timeline of a session: messages, tool calls, errors as a Gantt-like chart
 
-### 2.5 Costs Page Organization
-- [ ] Collapsible sections or tabs (the page is 177KB now)
-- [ ] "Overview" tab: budgets + cache + backend breakdown
-- [ ] "Tools" tab: per-tool, MCP, agent costs
-- [ ] "Optimization" tab: recommendations, saturation, model alternatives
+### 2.5 Costs Page Organization ✅ COMPLETE
+- [x] HTMX tabs: Overview / Tools & Agents / Optimization (lazy-loaded partials)
+- [x] "Overview" tab: budgets + cache + backend breakdown
+- [x] "Tools" tab: per-tool, MCP, agent costs, branches
+- [x] "Optimization" tab: recommendations, saturation, model alternatives
 
 ---
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -1823,6 +1824,7 @@ type costDashboardPage struct {
 	SidebarProjects []sidebarProject
 	HasData         bool
 	Projects        []projectItem
+	ProjectQuery    string  // raw project query param for tab URLs
 	TotalCost       float64 // API-equivalent cost
 	ActualCost      float64 // actual cost from providers
 	Savings         float64 // TotalCost - ActualCost
@@ -2104,7 +2106,7 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	project := r.URL.Query().Get("project")
-	data := costDashboardPage{Nav: "costs", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project)}
+	data := costDashboardPage{Nav: "costs", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project), ProjectQuery: project}
 
 	// Stats for totals + per-branch (cached).
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
@@ -2518,6 +2520,24 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 
 	return data
+}
+
+// handleCostOverviewPartial renders the Overview tab content.
+func (s *Server) handleCostOverviewPartial(w http.ResponseWriter, r *http.Request) {
+	data := s.buildCostsData(r)
+	s.renderPartial(w, "cost_overview_partial", data)
+}
+
+// handleCostToolsPartial renders the Tools & Agents tab content.
+func (s *Server) handleCostToolsPartial(w http.ResponseWriter, r *http.Request) {
+	data := s.buildCostsData(r)
+	s.renderPartial(w, "cost_tools_partial", data)
+}
+
+// handleCostOptimizationPartial renders the Optimization tab content.
+func (s *Server) handleCostOptimizationPartial(w http.ResponseWriter, r *http.Request) {
+	data := s.buildCostsData(r)
+	s.renderPartial(w, "cost_optimization_partial", data)
 }
 
 // capabilityKindLabel returns a human-friendly label for a capability kind.
@@ -3372,10 +3392,35 @@ func (s *Server) handleSaturationPartial(w http.ResponseWriter, r *http.Request)
 
 // ── Global Search (Ctrl+K) ──
 
+// searchResultView is a template-friendly search result with optional highlights.
+type searchResultView struct {
+	ID           string
+	Summary      string
+	Provider     string
+	ProjectPath  string
+	Branch       string
+	Agent        string
+	SessionType  string
+	MessageCount int
+	TotalTokens  int
+	ErrorCount   int
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+
+	// Highlights (HTML with <mark> tags, empty if engine doesn't support).
+	HighlightSummary template.HTML // highlighted summary (safe HTML)
+	HighlightContent template.HTML // highlighted content snippet (safe HTML)
+	HasHighlights    bool
+	Score            float64 // relevance score (0 = no ranking)
+}
+
 type searchResultsData struct {
-	Query   string
-	Results []session.Summary
-	HasMore bool
+	Query      string
+	Results    []searchResultView
+	HasMore    bool
+	Engine     string // search engine name ("fts5", "like", "")
+	HasEngine  bool   // true if a named engine was used
+	TotalCount int    // total matching results (not just displayed)
 }
 
 func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
@@ -3399,14 +3444,47 @@ func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := searchResultsData{
-		Query:   keyword,
-		Results: result.Sessions,
+	hasMore := len(result.Sessions) > searchLimit
+	if hasMore {
+		result.Sessions = result.Sessions[:searchLimit]
 	}
 
-	if len(data.Results) > searchLimit {
-		data.Results = data.Results[:searchLimit]
-		data.HasMore = true
+	views := make([]searchResultView, len(result.Sessions))
+	for i, sum := range result.Sessions {
+		v := searchResultView{
+			ID:           string(sum.ID),
+			Summary:      sum.Summary,
+			Provider:     string(sum.Provider),
+			ProjectPath:  sum.ProjectPath,
+			Branch:       sum.Branch,
+			Agent:        sum.Agent,
+			SessionType:  sum.SessionType,
+			MessageCount: sum.MessageCount,
+			TotalTokens:  sum.TotalTokens,
+			ErrorCount:   sum.ErrorCount,
+			CreatedAt:    sum.CreatedAt,
+			UpdatedAt:    sum.UpdatedAt,
+		}
+		if hl, ok := result.Highlights[sum.ID]; ok {
+			v.HasHighlights = true
+			v.Score = hl.Score
+			if hl.Summary != "" {
+				v.HighlightSummary = template.HTML(hl.Summary)
+			}
+			if hl.Content != "" {
+				v.HighlightContent = template.HTML(hl.Content)
+			}
+		}
+		views[i] = v
+	}
+
+	data := searchResultsData{
+		Query:      keyword,
+		Results:    views,
+		HasMore:    hasMore,
+		Engine:     result.Engine,
+		HasEngine:  result.Engine != "",
+		TotalCount: result.TotalCount,
 	}
 
 	s.renderPartial(w, "search_results", data)

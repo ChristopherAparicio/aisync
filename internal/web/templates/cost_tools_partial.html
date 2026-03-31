@@ -1,0 +1,261 @@
+{{define "cost_tools_partial"}}
+
+<!-- ── Cost by MCP Server ── -->
+{{if .TopMCPServers}}
+<div class="section">
+  <h2 class="section-title">Cost by MCP Server <span class="text-muted">(90d)</span></h2>
+  <div class="kpi-grid" style="margin-bottom: 1rem;">
+    <div class="kpi-card">
+      <div class="label">Total MCP Calls</div>
+      <div class="value">{{.TotalMCPCalls}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Total MCP Cost</div>
+      <div class="value">{{formatCost .TotalMCPCost}}</div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th class="text-right">Tools</th>
+          <th class="text-right">Calls</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Errors</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Avg / Call</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .TopMCPServers}}
+        <tr>
+          <td><span class="badge badge-provider">{{.Server}}</span></td>
+          <td class="text-right">{{.ToolCount}}</td>
+          <td class="text-right">{{.CallCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right{{if gt .ErrorCount 0}} text-error{{end}}">{{.ErrorCount}}</td>
+          <td class="text-right font-mono">{{formatCost .EstimatedCost}}</td>
+          <td class="text-right font-mono text-muted">{{formatCost .AvgCostPerCall}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── MCP Governance: Configured vs Used ── -->
+{{if .HasConfigVsUsed}}
+<div class="section">
+  <h2 class="section-title">MCP Server Governance <span class="text-muted">(90d)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Compares configured MCP servers against actual usage. Ghost servers are configured but never called. Orphan servers appear in usage data but aren't in the current config.</p>
+  <div class="kpi-grid" style="margin-bottom: 1rem;">
+    <div class="kpi-card{{if eq .CVUGhostCount 0}} kpi-accent{{end}}">
+      <div class="label">Active</div>
+      <div class="value">{{.CVUActiveCount}}</div>
+      <div class="sub">configured &amp; used</div>
+    </div>
+    <div class="kpi-card{{if gt .CVUGhostCount 0}} kpi-accent{{end}}">
+      <div class="label">Ghost</div>
+      <div class="value{{if gt .CVUGhostCount 0}} text-error{{end}}">{{.CVUGhostCount}}</div>
+      <div class="sub">configured but never used</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Orphan</div>
+      <div class="value">{{.CVUOrphanCount}}</div>
+      <div class="sub">used but not configured</div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th>Status</th>
+          <th>Scope</th>
+          <th class="text-right">Tools</th>
+          <th class="text-right">Calls</th>
+          <th class="text-right">Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ConfigVsUsed}}
+        <tr>
+          <td><span class="badge badge-provider">{{.Name}}</span></td>
+          <td><span class="badge badge-{{.StatusClass}}">{{.Status}}</span></td>
+          <td class="text-muted">{{if .Scope}}{{.Scope}}{{else}}—{{end}}</td>
+          <td class="text-right">{{if gt .ToolCount 0}}{{.ToolCount}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+          <td class="text-right">{{if gt .CallCount 0}}{{.CallCount}}{{else}}<span class="text-muted">0</span>{{end}}</td>
+          <td class="text-right font-mono">{{if gt .TotalCost 0.0}}{{formatCost .TotalCost}}{{else}}<span class="text-muted">$0.00</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── MCP Server x Project Matrix ── -->
+{{if .HasMCPMatrix}}
+<div class="section">
+  <h2 class="section-title">MCP Servers Across Projects <span class="text-muted">(90d)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Cross-project view: which MCP servers are used by which projects, with estimated costs.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          {{range .MCPMatrix.Servers}}
+          <th class="text-right"><span class="badge badge-provider">{{.}}</span></th>
+          {{end}}
+          <th class="text-right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .MCPMatrix.Projects}}
+        <tr>
+          <td><a href="/projects{{.ProjectPath}}" class="font-mono cell-branch">{{.DisplayName}}</a></td>
+          {{$cells := .Cells}}
+          {{range $.MCPMatrix.Servers}}
+          <td class="text-right font-mono">
+            {{with index $cells .}}
+              {{if .HasData}}
+                <span title="{{.CallCount}} calls, {{formatTokens .TotalTokens}} tokens">{{formatCost .EstimatedCost}}</span>
+              {{else}}
+                <span class="text-muted">—</span>
+              {{end}}
+            {{else}}
+              <span class="text-muted">—</span>
+            {{end}}
+          </td>
+          {{end}}
+          <td class="text-right font-mono" style="font-weight: 600;">{{formatCost .TotalCost}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+      <tfoot>
+        <tr style="font-weight: 600; border-top: 2px solid var(--border);">
+          <td>All Projects</td>
+          {{$totals := .MCPMatrix.Totals}}
+          {{range .MCPMatrix.Servers}}
+          <td class="text-right font-mono">
+            {{with index $totals .}}
+              {{if .HasData}}{{formatCost .EstimatedCost}}{{else}}—{{end}}
+            {{else}}—{{end}}
+          </td>
+          {{end}}
+          <td class="text-right font-mono">{{formatCost .MCPMatrix.TotalCost}}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Cost by Tool ── -->
+{{if .HasToolCosts}}
+<div class="section">
+  <h2 class="section-title">Cost by Tool <span class="text-muted">(top 20, 90d)</span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th>Type</th>
+          <th class="text-right">Calls</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Errors</th>
+          <th class="text-right">Avg Duration</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Avg / Call</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ToolCosts}}
+        <tr>
+          <td class="font-mono cell-branch">{{.Name}}</td>
+          <td>
+            {{if .IsMCP}}<span class="badge badge-billing-api">{{.Category}}</span>
+            {{else}}<span class="badge badge-billing-free">builtin</span>
+            {{end}}
+          </td>
+          <td class="text-right">{{.CallCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right{{if gt .ErrorCount 0}} text-error{{end}}">{{.ErrorCount}}</td>
+          <td class="text-right text-muted">{{if gt .AvgDuration 0}}{{formatDuration .AvgDuration}}{{else}}—{{end}}</td>
+          <td class="text-right font-mono">{{formatCost .EstimatedCost}}</td>
+          <td class="text-right font-mono text-muted">{{formatCost .AvgCostPerCall}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Cost by Agent ── -->
+{{if .HasAgentCosts}}
+<div class="section">
+  <h2 class="section-title">Cost by Agent <span class="text-muted">(90d)</span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Messages</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Tools</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Avg / Session</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .AgentCosts}}
+        <tr>
+          <td><span class="badge badge-provider">{{.Agent}}</span></td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right">{{.MessageCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right">{{.ToolCallCount}}</td>
+          <td class="text-right font-mono">{{formatCost .EstimatedCost}}</td>
+          <td class="text-right font-mono text-muted">{{formatCost .AvgCostPerSession}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<!-- ── Per-Branch Cost ── -->
+{{if .BranchCosts}}
+<div class="section">
+  <h2 class="section-title">Cost by Branch</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Branch</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Tokens</th>
+          <th class="text-right">Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .BranchCosts}}
+        <tr>
+          <td class="font-mono"><a href="/branches#branch-{{.Slug}}">{{.Name}}</a></td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+          <td class="text-right font-mono">{{formatCost .TotalCost}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+{{end}}

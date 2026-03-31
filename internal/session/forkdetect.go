@@ -54,12 +54,25 @@ func DetectForks(sessions []*Session) []ForkRelation {
 		return nil
 	}
 
-	const sampleSize = 200
+	const baseSampleSize = 200
+	const maxSampleSize = 2000 // cap to avoid O(n²) explosion on huge sessions
 
 	fps := make([]sessionFingerprint, 0, len(sessions))
 	for _, s := range sessions {
 		if len(s.Messages) < 3 {
 			continue
+		}
+		// Adaptive sample size: use more samples for larger sessions.
+		// This ensures fork detection works for sessions with 5000+ messages.
+		sampleSize := baseSampleSize
+		if len(s.Messages) > 500 {
+			sampleSize = len(s.Messages) / 3 // sample 1/3 of messages
+			if sampleSize < baseSampleSize {
+				sampleSize = baseSampleSize
+			}
+			if sampleSize > maxSampleSize {
+				sampleSize = maxSampleSize
+			}
 		}
 		limit := len(s.Messages)
 		if limit > sampleSize {
@@ -179,15 +192,26 @@ func compareByContentHash(a, b sessionFingerprint, sessions []*Session) *ForkRel
 		return nil
 	}
 
-	minLen := a.msgCount
-	if b.msgCount < minLen {
-		minLen = b.msgCount
+	// The ratio should be computed against the SAMPLED portion, not the total
+	// message count. When sampleSize=200 and both sessions have 5000 messages,
+	// a prefix of 200/200 sampled = 100% match → clearly a fork.
+	// Previously this was prefix/minLen (200/5000 = 4%) → missed forks.
+	sampledA := len(a.hashes) // min(sampleSize, msgCount)
+	sampledB := len(b.hashes)
+	minSampled := sampledA
+	if sampledB < minSampled {
+		minSampled = sampledB
 	}
-	ratio := float64(prefix) / float64(minLen)
+	ratio := float64(prefix) / float64(minSampled)
 
 	if ratio < 0.5 {
 		return nil
 	}
+
+	// When the entire sampled portion matches, the actual fork point may be
+	// beyond sampleSize. Use the prefix as the fork point (conservative lower bound).
+	// The dedup system will skip messages 0..forkPoint-1 for the fork session.
+	forkPoint := prefix
 
 	originalID, forkID := a.sessionID, b.sessionID
 	if b.msgCount < a.msgCount {
@@ -199,14 +223,14 @@ func compareByContentHash(a, b sessionFingerprint, sessions []*Session) *ForkRel
 
 	for _, s := range sessions {
 		if s.ID == originalID {
-			for k := 0; k < prefix && k < len(s.Messages); k++ {
+			for k := 0; k < forkPoint && k < len(s.Messages); k++ {
 				sharedInput += s.Messages[k].InputTokens
 				sharedOutput += s.Messages[k].OutputTokens
 			}
 		}
 		// Extract the first user message after fork point from the FORK session.
 		if s.ID == forkID {
-			for k := prefix; k < len(s.Messages); k++ {
+			for k := forkPoint; k < len(s.Messages); k++ {
 				if s.Messages[k].Role == RoleUser && s.Messages[k].Content != "" {
 					forkContext = s.Messages[k].Content
 					if len(forkContext) > 500 {
@@ -221,8 +245,8 @@ func compareByContentHash(a, b sessionFingerprint, sessions []*Session) *ForkRel
 	return &ForkRelation{
 		OriginalID:         originalID,
 		ForkID:             forkID,
-		ForkPoint:          prefix,
-		SharedMessages:     prefix,
+		ForkPoint:          forkPoint,
+		SharedMessages:     forkPoint,
 		OverlapRatio:       ratio,
 		ForkContext:        forkContext,
 		SharedInputTokens:  sharedInput,
