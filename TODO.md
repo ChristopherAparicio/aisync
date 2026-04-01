@@ -463,12 +463,13 @@ Interactive tree visualization when clicking on a branch in the project page.
 ## Priority 4: Technical Debt
 
 ### 4.1 Existing
-- [ ] Compute objectives for existing sessions (batch job)
-- [ ] LLM classifier for ambiguous tool errors
-- [ ] `CompositeClassifier` — deterministic first, LLM fallback for "unknown"
+- [x] **Compute objectives for existing sessions (batch job)**: `ObjectiveBackfillTask` — scheduler task running daily at 3:30 AM, processes up to 50 sessions/run with `ComputeObjective()` (Summarize + ExplainShort LLM calls), skips sessions with < 5 messages and those already having objectives; 7 unit tests
+- [x] **LLM classifier for ambiguous tool errors**: `LLMClassifier` (`internal/errorclass/llm.go`) — sends raw error text, tool name, HTTP status, provider info to LLM with structured JSON response; graceful fallback to "unknown" on LLM error/parse failure/timeout; strips markdown code fences; validates category/source; truncates long raw errors (>2K); 10 unit tests
+- [x] **`CompositeClassifier`** (`internal/errorclass/composite.go`) — chains classifiers in priority order (deterministic first, LLM fallback for unknowns); first non-unknown result wins; factory-wired in `default.go` when `errors.classifier: "composite"` is set; auto-creates LLM client from `errors.llm_profile` config; falls back to deterministic-only if LLM client unavailable; 8 unit tests
+- [x] **`NewClient`/`NewClientFromConfig`** added to `llmfactory` — creates `llm.Client` from resolved profile (supports ollama + claude CLI); used by composite classifier factory wiring
 
 ### 4.2 Performance ✅ MOSTLY COMPLETE
-- [ ] Incremental FTS5 indexing (only new/modified sessions)
+- [x] **Incremental FTS5 indexing**: `search.IncrementalIndexer` optional interface + `IndexedSessionIDs()` on FTS5 engine; `IndexAllSessions()` now skips sessions already in the index (was re-indexing all 1,300+ each time); 3 new FTS5 tests (interface, empty, with-docs+delete)
 - [x] **Lazy loading for costs page sections**: HTMX tab partials + `cachedCostsPage()` prevents recomputing on tab switch (60s TTL)
 - [x] **Background pre-compute ContextSaturation()**: `SaturationTask` (every 2h) pre-warms global + per-project results; web handlers use `cachedSaturation()` with 2h TTL, cold-cache fallback
 - [x] **Background pre-compute CacheEfficiency()**: `CacheEfficiencyTask` (every 2h) pre-warms 7d + 90d windows for global + per-project; web handlers use `cachedCacheEfficiency()` with 2h TTL

@@ -649,9 +649,36 @@ func New() *cmdutil.Factory {
 				return
 			}
 
+			// Build the error classifier based on config.
+			var classifier session.ErrorClassifier
+			cfg, cfgErr := f.Config()
+			if cfgErr == nil && cfg.GetErrorsClassifier() == "composite" {
+				// Composite: deterministic first, LLM fallback for unknowns.
+				classifiers := []session.ErrorClassifier{
+					errorclass.NewDeterministicClassifier(),
+				}
+
+				// Create LLM classifier from errors.llm_profile config.
+				llmClient, llmErr := llmfactory.NewClientFromConfig(cfg, cfg.GetErrorsLLMProfile())
+				if llmErr != nil {
+					slog.Warn("composite classifier: LLM client unavailable, using deterministic only",
+						"error", llmErr)
+				} else {
+					classifiers = append(classifiers, errorclass.NewLLMClassifier(errorclass.LLMClassifierConfig{
+						Client: llmClient,
+					}))
+				}
+
+				classifier = errorclass.NewCompositeClassifier(errorclass.CompositeClassifierConfig{
+					Classifiers: classifiers,
+				})
+			} else {
+				classifier = errorclass.NewDeterministicClassifier()
+			}
+
 			cachedErrorSvc = service.NewErrorService(service.ErrorServiceConfig{
 				Store:      store,
-				Classifier: errorclass.NewDeterministicClassifier(),
+				Classifier: classifier,
 			})
 		})
 		return cachedErrorSvc, errorSvcErr

@@ -36,6 +36,14 @@ type Engine interface {
 	Close() error
 }
 
+// IncrementalIndexer is an optional interface that engines can implement
+// to support incremental indexing. When available, IndexAllSessions skips
+// sessions already present in the index.
+type IncrementalIndexer interface {
+	// IndexedSessionIDs returns the set of session IDs already in the index.
+	IndexedSessionIDs() (map[string]bool, error)
+}
+
 // Capabilities describes what a search engine supports.
 type Capabilities struct {
 	FullText   bool `json:"full_text"`   // searches inside message content

@@ -1270,14 +1270,16 @@ type toolUsageEntry struct {
 }
 
 type sessionDetailPage struct {
-	Nav           string
-	Session       *session.Session
-	TotalCost     float64
-	CostBreakdown []session.ModelCost
-	ToolCallCount int
-	ErrorCount    int
-	ErrorRate     float64 // 0-100 percentage
-	RestoreCmd    string
+	Nav               string
+	Session           *session.Session
+	OwnerName         string // resolved from users table (empty if not found)
+	ForkParentSummary string // summary of the parent session (for fork context)
+	TotalCost         float64
+	CostBreakdown     []session.ModelCost
+	ToolCallCount     int
+	ErrorCount        int
+	ErrorRate         float64 // 0-100 percentage
+	RestoreCmd        string
 
 	// Token clarity: billed vs actual context
 	PeakContext     int     // peak input_tokens (real conversation size)
@@ -1433,6 +1435,20 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	data := sessionDetailPage{
 		Nav:     "sessions",
 		Session: sess,
+	}
+
+	// Resolve owner name from users table.
+	if sess.OwnerID != "" && s.store != nil {
+		if user, err := s.store.GetUser(sess.OwnerID); err == nil && user != nil && user.Name != "" {
+			data.OwnerName = user.Name
+		}
+	}
+
+	// Resolve fork parent summary for context.
+	if sess.ParentID != "" {
+		if parent, err := s.sessionSvc.Get(string(sess.ParentID)); err == nil && parent != nil {
+			data.ForkParentSummary = parent.Summary
+		}
 	}
 
 	// Compute token clarity: peak context vs billed total.

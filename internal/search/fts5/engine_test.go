@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -111,5 +112,97 @@ func TestFTS5_CreateAndSearch(t *testing.T) {
 	}
 	if len(result4.Hits) != 0 {
 		t.Fatalf("expected 0 hits, got %d", len(result4.Hits))
+	}
+}
+
+func TestFTS5_ImplementsIncrementalIndexer(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine, err := fts5.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify FTS5 implements search.IncrementalIndexer.
+	var _ search.IncrementalIndexer = engine
+}
+
+func TestFTS5_IndexedSessionIDs_Empty(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine, err := fts5.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := engine.IndexedSessionIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("expected 0 indexed IDs, got %d", len(ids))
+	}
+}
+
+func TestFTS5_IndexedSessionIDs_WithDocs(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine, err := fts5.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// Index 3 documents.
+	for _, id := range []string{"ses_aaa", "ses_bbb", "ses_ccc"} {
+		if err := engine.Index(ctx, search.Document{
+			ID:        id,
+			Summary:   "Test session " + id,
+			CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("Index %s: %v", id, err)
+		}
+	}
+
+	ids, err := engine.IndexedSessionIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 indexed IDs, got %d", len(ids))
+	}
+	for _, id := range []string{"ses_aaa", "ses_bbb", "ses_ccc"} {
+		if !ids[id] {
+			t.Errorf("expected %s in indexed set", id)
+		}
+	}
+
+	// Delete one and verify.
+	if err := engine.Delete(ctx, "ses_bbb"); err != nil {
+		t.Fatal(err)
+	}
+	ids2, err := engine.IndexedSessionIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids2) != 2 {
+		t.Fatalf("expected 2 indexed IDs after delete, got %d", len(ids2))
+	}
+	if ids2["ses_bbb"] {
+		t.Error("ses_bbb should not be in indexed set after delete")
 	}
 }

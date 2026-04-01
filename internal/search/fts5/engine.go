@@ -212,6 +212,26 @@ func (e *Engine) IndexedCount() (int, error) {
 	return count, err
 }
 
+// IndexedSessionIDs returns the set of session IDs currently in the FTS5 index.
+// Used for incremental indexing — only sessions NOT in this set need indexing.
+func (e *Engine) IndexedSessionIDs() (map[string]bool, error) {
+	rows, err := e.db.Query("SELECT session_id FROM sessions_fts")
+	if err != nil {
+		return nil, fmt.Errorf("query indexed sessions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids[id] = true
+	}
+	return ids, rows.Err()
+}
+
 // escapeFTS5 escapes special characters for FTS5 MATCH syntax.
 // Wraps each word in double-quotes to treat it as a literal token.
 func escapeFTS5(text string) string {

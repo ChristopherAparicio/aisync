@@ -8,7 +8,10 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
-// IndexAllSessions indexes all sessions into the search engine.
+// IndexAllSessions indexes sessions into the search engine.
+// It supports incremental indexing: if the engine implements search.IncrementalIndexer,
+// only sessions NOT already in the index are processed. This reduces a full re-index
+// of 1,300+ sessions to indexing only the delta (typically 0-10 new sessions).
 // Returns (indexed, total, error).
 func (s *SessionService) IndexAllSessions(ctx context.Context) (int, int, error) {
 	if s.searchEngine == nil {
@@ -25,8 +28,25 @@ func (s *SessionService) IndexAllSessions(ctx context.Context) (int, int, error)
 		maxContentLen = s.cfg.GetSearchMaxContentLength()
 	}
 
+	// Check if engine supports incremental indexing.
+	var alreadyIndexed map[string]bool
+	if inc, ok := s.searchEngine.(search.IncrementalIndexer); ok {
+		alreadyIndexed, err = inc.IndexedSessionIDs()
+		if err != nil {
+			log.Printf("[search] incremental index lookup failed, falling back to full re-index: %v", err)
+			alreadyIndexed = nil
+		}
+	}
+
 	indexed := 0
+	skipped := 0
 	for _, sm := range summaries {
+		// Skip sessions already in the index (incremental mode).
+		if alreadyIndexed != nil && alreadyIndexed[string(sm.ID)] {
+			skipped++
+			continue
+		}
+
 		sess, getErr := s.store.Get(sm.ID)
 		if getErr != nil {
 			continue
@@ -37,6 +57,10 @@ func (s *SessionService) IndexAllSessions(ctx context.Context) (int, int, error)
 			continue
 		}
 		indexed++
+	}
+
+	if skipped > 0 {
+		log.Printf("[search] incremental: indexed %d new, skipped %d already indexed", indexed, skipped)
 	}
 
 	return indexed, len(summaries), nil

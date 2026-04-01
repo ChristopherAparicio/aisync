@@ -485,6 +485,26 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			}
 		}
 
+		// Objective backfill task — computes work objectives for sessions that lack them.
+		// Runs daily at 3:30 AM; processes up to 50 sessions per run (LLM calls, throttled).
+		// Only works if sessionSvc has an LLM configured — ComputeObjective falls back gracefully.
+		{
+			storeSched, storeErr := f.Store()
+			if storeErr == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: "30 3 * * *", // daily at 3:30 AM
+					Task: scheduler.NewObjectiveBackfillTask(scheduler.ObjectiveBackfillConfig{
+						SessionService: sessionSvc,
+						Store:          storeSched,
+						Logger:         logger,
+						BatchSize:      50,
+						MinMessages:    5,
+					}),
+				})
+				logger.Println("scheduled task: objective_backfill (30 3 * * *)")
+			}
+		}
+
 		// GC task — deletes sessions older than retention period.
 		if appCfg.GetSchedulerGCEnabled() {
 			entries = append(entries, scheduler.Entry{

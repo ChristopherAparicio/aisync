@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -918,6 +919,215 @@ func TestCacheEfficiencyTask_Run_ProjectListError_NonFatal(t *testing.T) {
 	// Global was still computed (2 calls: 7d + 90d).
 	if mock.cacheEffCalled != 2 {
 		t.Errorf("CacheEfficiency called %d times, want 2", mock.cacheEffCalled)
+	}
+}
+
+// ── ObjectiveBackfillTask Tests ──
+
+// mockObjectiveStore implements the List + ListObjectives methods needed.
+type mockObjectiveStore struct {
+	storage.Store // embed interface to satisfy it
+	sessions      []session.Summary
+	objectives    map[session.ID]*session.SessionObjective
+	listErr       error
+	objErr        error
+}
+
+func (m *mockObjectiveStore) List(_ session.ListOptions) ([]session.Summary, error) {
+	return m.sessions, m.listErr
+}
+
+func (m *mockObjectiveStore) ListObjectives(ids []session.ID) (map[session.ID]*session.SessionObjective, error) {
+	if m.objErr != nil {
+		return nil, m.objErr
+	}
+	result := make(map[session.ID]*session.SessionObjective)
+	for _, id := range ids {
+		if obj, ok := m.objectives[id]; ok {
+			result[id] = obj
+		}
+	}
+	return result, nil
+}
+
+// mockObjSessionService extends the base mock with objective-specific tracking.
+type mockObjSessionService struct {
+	mockSessionService
+	computedIDs []string
+	computeErr  error
+}
+
+func (m *mockObjSessionService) ComputeObjective(_ context.Context, req service.ComputeObjectiveRequest) (*session.SessionObjective, error) {
+	if m.computeErr != nil {
+		return nil, m.computeErr
+	}
+	m.computedIDs = append(m.computedIDs, req.SessionID)
+	return &session.SessionObjective{SessionID: session.ID(req.SessionID)}, nil
+}
+
+func TestObjectiveBackfillTask_Name(t *testing.T) {
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{})
+	if task.Name() != "objective_backfill" {
+		t.Errorf("Name() = %q, want %q", task.Name(), "objective_backfill")
+	}
+}
+
+func TestObjectiveBackfillTask_Defaults(t *testing.T) {
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{})
+	if task.batchSize != 50 {
+		t.Errorf("batchSize = %d, want 50", task.batchSize)
+	}
+	if task.minMsgs != 5 {
+		t.Errorf("minMsgs = %d, want 5", task.minMsgs)
+	}
+}
+
+func TestObjectiveBackfillTask_SkipsTooFewMessages(t *testing.T) {
+	store := &mockObjectiveStore{
+		sessions: []session.Summary{
+			{ID: "s1", MessageCount: 2}, // too few
+			{ID: "s2", MessageCount: 1}, // too few
+		},
+		objectives: map[session.ID]*session.SessionObjective{},
+	}
+	svc := &mockObjSessionService{}
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{
+		SessionService: svc,
+		Store:          store,
+		Logger:         log.Default(),
+		MinMessages:    5,
+	})
+
+	err := task.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(svc.computedIDs) != 0 {
+		t.Errorf("expected 0 computed, got %d", len(svc.computedIDs))
+	}
+}
+
+func TestObjectiveBackfillTask_SkipsExistingObjectives(t *testing.T) {
+	store := &mockObjectiveStore{
+		sessions: []session.Summary{
+			{ID: "s1", MessageCount: 10},
+			{ID: "s2", MessageCount: 15},
+		},
+		objectives: map[session.ID]*session.SessionObjective{
+			"s1": {SessionID: "s1"},
+			"s2": {SessionID: "s2"},
+		},
+	}
+	svc := &mockObjSessionService{}
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{
+		SessionService: svc,
+		Store:          store,
+		Logger:         log.Default(),
+	})
+
+	err := task.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(svc.computedIDs) != 0 {
+		t.Errorf("expected 0 computed (all exist), got %d", len(svc.computedIDs))
+	}
+}
+
+func TestObjectiveBackfillTask_ComputesMissingObjectives(t *testing.T) {
+	store := &mockObjectiveStore{
+		sessions: []session.Summary{
+			{ID: "s1", MessageCount: 10},
+			{ID: "s2", MessageCount: 20},
+			{ID: "s3", MessageCount: 8},
+		},
+		objectives: map[session.ID]*session.SessionObjective{
+			"s1": {SessionID: "s1"}, // already has objective
+		},
+	}
+	svc := &mockObjSessionService{}
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{
+		SessionService: svc,
+		Store:          store,
+		Logger:         log.Default(),
+	})
+
+	err := task.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(svc.computedIDs) != 2 {
+		t.Fatalf("expected 2 computed, got %d: %v", len(svc.computedIDs), svc.computedIDs)
+	}
+}
+
+func TestObjectiveBackfillTask_RespectssBatchSize(t *testing.T) {
+	sessions := make([]session.Summary, 20)
+	for i := range sessions {
+		sessions[i] = session.Summary{
+			ID:           session.ID(fmt.Sprintf("s%d", i)),
+			MessageCount: 10,
+		}
+	}
+	store := &mockObjectiveStore{
+		sessions:   sessions,
+		objectives: map[session.ID]*session.SessionObjective{},
+	}
+	svc := &mockObjSessionService{}
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{
+		SessionService: svc,
+		Store:          store,
+		Logger:         log.Default(),
+		BatchSize:      5,
+	})
+
+	err := task.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(svc.computedIDs) != 5 {
+		t.Errorf("expected 5 computed (batch cap), got %d", len(svc.computedIDs))
+	}
+}
+
+func TestObjectiveBackfillTask_ListError(t *testing.T) {
+	store := &mockObjectiveStore{
+		listErr: errors.New("db down"),
+	}
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{
+		SessionService: &mockObjSessionService{},
+		Store:          store,
+		Logger:         log.Default(),
+	})
+
+	err := task.Run(context.Background())
+	if err == nil {
+		t.Error("expected error from List failure")
+	}
+}
+
+func TestObjectiveBackfillTask_ComputeErrorIsCounted(t *testing.T) {
+	store := &mockObjectiveStore{
+		sessions: []session.Summary{
+			{ID: "s1", MessageCount: 10},
+			{ID: "s2", MessageCount: 10},
+		},
+		objectives: map[session.ID]*session.SessionObjective{},
+	}
+	svc := &mockObjSessionService{computeErr: errors.New("llm down")}
+	task := NewObjectiveBackfillTask(ObjectiveBackfillConfig{
+		SessionService: svc,
+		Store:          store,
+		Logger:         log.Default(),
+	})
+
+	// Should not return error — individual failures are logged, not fatal.
+	err := task.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(svc.computedIDs) != 0 {
+		t.Errorf("expected 0 successful computes, got %d", len(svc.computedIDs))
 	}
 }
 

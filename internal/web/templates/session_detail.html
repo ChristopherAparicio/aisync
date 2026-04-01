@@ -15,7 +15,7 @@
     {{if .Session.Branch}}<div class="meta-item"><span class="meta-label">Branch</span><span class="font-mono">{{.Session.Branch}}</span></div>{{end}}
     {{if .Session.CommitSHA}}<div class="meta-item"><span class="meta-label">Commit</span><span class="font-mono">{{truncate .Session.CommitSHA 10}}</span></div>{{end}}
     {{if .Session.Agent}}<div class="meta-item"><span class="meta-label">Agent</span><span>{{.Session.Agent}}</span></div>{{end}}
-    {{if .Session.OwnerID}}<div class="meta-item"><span class="meta-label">Owner</span><span class="font-mono">{{truncate .Session.OwnerID 10}}</span></div>{{end}}
+    {{if .Session.OwnerID}}<div class="meta-item"><span class="meta-label">Owner</span><span>{{if .OwnerName}}{{.OwnerName}}{{else}}<span class="font-mono">{{truncate .Session.OwnerID 10}}</span>{{end}}</span></div>{{end}}
     <div class="meta-item"><span class="meta-label">Created</span><span>{{timeAgo .Session.CreatedAt}}</span></div>
     <div class="meta-item"><span class="meta-label">Mode</span><span>{{.Session.StorageMode}}</span></div>
   </div>
@@ -26,8 +26,10 @@
 
   {{if .Session.ParentID}}
   <div class="detail-parent">
-    Forked from <a href="/sessions/{{.Session.ParentID}}" class="font-mono">{{truncate .Session.ParentID 10}}</a>
+    <span class="detail-parent-icon">↰</span>
+    Forked from <a href="/sessions/{{.Session.ParentID}}" class="font-mono">{{truncate .Session.ParentID 12}}</a>
     {{if gt .Session.ForkedAtMessage 0}} at message #{{.Session.ForkedAtMessage}}{{end}}
+    {{if .ForkParentSummary}}<span class="text-muted">— {{.ForkParentSummary}}</span>{{end}}
   </div>
   {{end}}
 </div>
