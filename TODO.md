@@ -481,7 +481,7 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [x] **12 new tests**: 7 SaturationTask + 5 CacheEfficiencyTask, all passing
 - [x] **Scheduler now has 10 tasks**: gc, capture_all, stats_report, usage_compute, saturation_precompute, cacheeff_precompute, backfill_remote_url, fork_detection, budget_check, reclassify_errors (+ analyze_daily if LLM configured)
 
-### 4.3 Testing
-- [ ] Integration tests for FTS5 search end-to-end
-- [ ] Budget alert webhook delivery tests
-- [ ] Classifier cascade integration tests with mock sessions
+### 4.3 Testing ✅ COMPLETE
+- [x] **FTS5 search integration tests** (`internal/search/fts5/integration_test.go`): Full lifecycle (index 3 docs → search by summary/content/filter/highlights → delete → upsert → verify), incremental reindex simulation, `DocumentFromSession` pipeline (session → doc → FTS5 → search hit + tool output search) — 3 tests
+- [x] **Budget alert webhook delivery tests** (`internal/scheduler/budget_integration_test.go`): Full pipeline BudgetCheckTask → webhook HTTP delivery via httptest, monthly exceeded + daily warning + multiple projects (2 alert, 1 under) + no alerts + nil dispatcher safety — 5 tests
+- [x] **Classifier cascade integration tests** (`internal/errorclass/integration_test.go`): Full pipeline raw errors → CompositeClassifier (deterministic + smart LLM mock) → ErrorService → mock store, tests 6 error types (HTTP 500/429, tool pattern, LLM fallback for TypeScript/segfault, already-classified skip), all-deterministic path (LLM never called), LLM failure graceful fallback, deterministic-only mode — 4 tests
