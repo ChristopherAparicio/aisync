@@ -11,6 +11,13 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
+// treemapModelAgg accumulates backend×model cost data for treemap visualization.
+type treemapModelAgg struct {
+	cost         float64
+	tokens       int
+	sessionCount int
+}
+
 // ── Cost Forecasting ──
 
 // ForecastRequest contains inputs for cost forecasting.
@@ -84,6 +91,9 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 	var apiOnly []sessionCostEntry // entries with actual provider cost (API billing)
 	globalModels := make(map[string]*forecastModelAgg)
 
+	// Backend × model cross-tabulation for treemap visualization.
+	treemapAgg := make(map[string]map[string]*treemapModelAgg)
+
 	for _, sm := range filtered {
 		full, getErr := s.store.Get(sm.ID)
 		if getErr != nil {
@@ -148,7 +158,8 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 		}
 
 		// Aggregate per-backend stats from message-level ProviderID.
-		sessionBackends := make(map[string]bool) // track unique backends per session
+		sessionBackends := make(map[string]bool)                 // track unique backends per session
+		sessionBackendModels := make(map[string]map[string]bool) // track unique backend-model per session
 		for i := range full.Messages {
 			// Fork dedup: skip shared prefix messages.
 			if i < forkOffset {
@@ -171,6 +182,15 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 				sessionBackends[backend] = true
 				agg.sessionCount++
 			}
+
+			// Track backend→model mapping for treemap cross-tabulation.
+			model := msg.Model
+			if model != "" {
+				if sessionBackendModels[backend] == nil {
+					sessionBackendModels[backend] = make(map[string]bool)
+				}
+				sessionBackendModels[backend][model] = true
+			}
 		}
 
 		// Also adjust model breakdown — scale down proportionally for forks.
@@ -178,15 +198,44 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 		if forkOffset > 0 && estimate.TotalCost.TotalCost > 0 {
 			costScale = adjustedCost / estimate.TotalCost.TotalCost
 		}
+
+		// Determine dominant backend for this session (for treemap cross-tab).
+		// Each model may appear in one backend within a session.
+		modelBackend := make(map[string]string) // model → backend
+		for backend, models := range sessionBackendModels {
+			for model := range models {
+				modelBackend[model] = backend
+			}
+		}
+
 		for _, mc := range estimate.PerModel {
 			g, ok := globalModels[mc.Model]
 			if !ok {
 				g = &forecastModelAgg{}
 				globalModels[mc.Model] = g
 			}
-			g.cost += mc.Cost.TotalCost * costScale
-			g.tokens += int(float64(mc.InputTokens+mc.OutputTokens) * costScale)
+			scaledCost := mc.Cost.TotalCost * costScale
+			scaledTokens := int(float64(mc.InputTokens+mc.OutputTokens) * costScale)
+			g.cost += scaledCost
+			g.tokens += scaledTokens
 			g.count++
+
+			// Cross-tabulate into treemap: backend × model.
+			backend := modelBackend[mc.Model]
+			if backend == "" {
+				backend = "(unknown)"
+			}
+			if treemapAgg[backend] == nil {
+				treemapAgg[backend] = make(map[string]*treemapModelAgg)
+			}
+			bma, bmOk := treemapAgg[backend][mc.Model]
+			if !bmOk {
+				bma = &treemapModelAgg{}
+				treemapAgg[backend][mc.Model] = bma
+			}
+			bma.cost += scaledCost
+			bma.tokens += scaledTokens
+			bma.sessionCount++
 		}
 	}
 
@@ -330,7 +379,32 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 		BackendCosts: backendCosts,
 
 		ModelBreakdown: modelBreakdown,
+
+		// Cost treemap: backend → model hierarchy
+		Treemap: buildTreemapNodes(treemapAgg),
 	}, nil
+}
+
+// buildTreemapNodes converts the backend×model aggregation map into treemap nodes.
+func buildTreemapNodes(agg map[string]map[string]*treemapModelAgg) []session.CostTreemapNode {
+	if len(agg) == 0 {
+		return nil
+	}
+
+	data := make(map[string]map[string]session.CostTreemapNode)
+	for backend, models := range agg {
+		data[backend] = make(map[string]session.CostTreemapNode)
+		for model, bma := range models {
+			data[backend][model] = session.CostTreemapNode{
+				Name:         model,
+				Cost:         bma.cost,
+				Tokens:       bma.tokens,
+				SessionCount: bma.sessionCount,
+			}
+		}
+	}
+
+	return session.BuildCostTreemap(data)
 }
 
 // buildCostBuckets groups session costs into time buckets.

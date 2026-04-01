@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -1719,5 +1720,184 @@ func TestErrorsConfig_LoadFromJSON(t *testing.T) {
 	}
 	if got := cfg.GetErrorsLLMProfile(); got != "cloud" {
 		t.Errorf("GetErrorsLLMProfile() = %q, want %q", got, "cloud")
+	}
+}
+
+// ── Project Classifier Config Tests ──────────────────────────────────────
+
+func TestSetProjectClassifier_basic(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	pc := ProjectClassifierConf{
+		TicketPattern: `DEMO-\d+`,
+		TicketSource:  "jira",
+		TicketURL:     "https://jira.example.com/{id}",
+	}
+	if err := cfg.SetProjectClassifier("test-org/repo", pc); err != nil {
+		t.Fatalf("SetProjectClassifier: %v", err)
+	}
+
+	pcs := cfg.GetAllProjectClassifiers()
+	if len(pcs) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(pcs))
+	}
+	got := pcs["test-org/repo"]
+	if got.TicketPattern != `DEMO-\d+` {
+		t.Errorf("TicketPattern = %q, want DEMO-\\d+", got.TicketPattern)
+	}
+	if got.TicketSource != "jira" {
+		t.Errorf("TicketSource = %q, want jira", got.TicketSource)
+	}
+}
+
+func TestSetProjectClassifier_emptyName(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = cfg.SetProjectClassifier("", ProjectClassifierConf{})
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
+}
+
+func TestSetProjectClassifier_invalidRegex(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	pc := ProjectClassifierConf{TicketPattern: "[invalid"}
+	err = cfg.SetProjectClassifier("proj", pc)
+	if err == nil {
+		t.Fatal("expected error for invalid regex")
+	}
+	if !strings.Contains(err.Error(), "ticket_pattern") {
+		t.Errorf("error should mention ticket_pattern: %v", err)
+	}
+}
+
+func TestSetProjectClassifier_invalidBudget(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Negative monthly limit.
+	pc := ProjectClassifierConf{Budget: &ProjectBudgetConf{MonthlyLimit: -10}}
+	err = cfg.SetProjectClassifier("proj", pc)
+	if err == nil {
+		t.Fatal("expected error for negative monthly limit")
+	}
+
+	// Invalid cost mode.
+	pc = ProjectClassifierConf{Budget: &ProjectBudgetConf{CostMode: "bogus"}}
+	err = cfg.SetProjectClassifier("proj", pc)
+	if err == nil {
+		t.Fatal("expected error for invalid cost mode")
+	}
+
+	// Alert percent out of range.
+	pc = ProjectClassifierConf{Budget: &ProjectBudgetConf{AlertAtPercent: 200}}
+	err = cfg.SetProjectClassifier("proj", pc)
+	if err == nil {
+		t.Fatal("expected error for alert percent > 100")
+	}
+}
+
+func TestDeleteProjectClassifier(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Add and then delete.
+	if err := cfg.SetProjectClassifier("org/repo", ProjectClassifierConf{}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := cfg.DeleteProjectClassifier("org/repo"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	pcs := cfg.GetAllProjectClassifiers()
+	if _, ok := pcs["org/repo"]; ok {
+		t.Error("expected project to be deleted")
+	}
+}
+
+func TestDeleteProjectClassifier_notFound(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = cfg.DeleteProjectClassifier("nonexistent")
+	if err == nil {
+		t.Fatal("expected error deleting nonexistent project")
+	}
+}
+
+func TestSetProjectClassifier_persistRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	pc := ProjectClassifierConf{
+		TicketPattern: `TICK-\d+`,
+		TicketSource:  "linear",
+		BranchRules:   map[string]string{"feature/*": "feature", "fix/*": "bug"},
+		AgentRules:    map[string]string{"review": "review"},
+		CommitRules:   map[string]string{"fix": "bug", "feat": "feature"},
+		StatusRules:   map[string]string{"[WIP]": "active"},
+		Tags:          []string{"feature", "bug", "refactor"},
+		Budget: &ProjectBudgetConf{
+			MonthlyLimit:   500,
+			DailyLimit:     25,
+			AlertAtPercent: 80,
+			CostMode:       "estimated",
+			AlertWebhook:   "slack",
+		},
+	}
+	if err := cfg.SetProjectClassifier("round/trip", pc); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Reload.
+	cfg2, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("New reload: %v", err)
+	}
+	got := cfg2.GetAllProjectClassifiers()["round/trip"]
+	if got.TicketPattern != `TICK-\d+` {
+		t.Errorf("TicketPattern = %q", got.TicketPattern)
+	}
+	if len(got.BranchRules) != 2 {
+		t.Errorf("BranchRules = %d, want 2", len(got.BranchRules))
+	}
+	if len(got.Tags) != 3 {
+		t.Errorf("Tags = %v, want 3 elements", got.Tags)
+	}
+	if got.Budget == nil {
+		t.Fatal("Budget should not be nil")
+	}
+	if got.Budget.MonthlyLimit != 500 {
+		t.Errorf("MonthlyLimit = %f, want 500", got.Budget.MonthlyLimit)
+	}
+	if got.Budget.CostMode != "estimated" {
+		t.Errorf("CostMode = %q, want estimated", got.Budget.CostMode)
 	}
 }

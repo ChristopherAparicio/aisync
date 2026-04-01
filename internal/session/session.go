@@ -1054,6 +1054,9 @@ type ForecastResult struct {
 
 	// Model recommendations
 	ModelBreakdown []ModelForecast `json:"model_breakdown"` // per-model cost breakdown + recommendation
+
+	// Cost treemap: backend → model hierarchy
+	Treemap []CostTreemapNode `json:"treemap,omitempty"` // hierarchical cost breakdown for treemap visualization
 }
 
 // BackendCostSummary aggregates cost data for a single LLM backend (e.g. "anthropic", "amazon-bedrock").
@@ -1086,6 +1089,69 @@ type ModelForecast struct {
 	SessionCount   int     `json:"session_count"`            // sessions using this model
 	Share          float64 `json:"share"`                    // percentage of total cost (0-100)
 	Recommendation string  `json:"recommendation,omitempty"` // e.g. "Switch to Sonnet to save ~60%"
+}
+
+// ── Cost Treemap Types ──
+
+// CostTreemapNode represents a node in a hierarchical cost treemap.
+// Structure: root → backend → model, each with cost and proportional sizing.
+type CostTreemapNode struct {
+	Name         string            `json:"name"`               // backend name or model name
+	Cost         float64           `json:"cost"`               // total cost for this node
+	Tokens       int               `json:"tokens"`             // total tokens
+	SessionCount int               `json:"session_count"`      // sessions using this node
+	Share        float64           `json:"share"`              // percentage of parent (0-100)
+	Children     []CostTreemapNode `json:"children,omitempty"` // child nodes (models under backend)
+}
+
+// BuildCostTreemap constructs a hierarchical treemap from backend×model cost data.
+// Input: map[backend]map[model]{cost, tokens, sessions} — output: sorted tree of nodes.
+func BuildCostTreemap(data map[string]map[string]CostTreemapNode) []CostTreemapNode {
+	if len(data) == 0 {
+		return nil
+	}
+
+	var totalCost float64
+	var nodes []CostTreemapNode
+
+	for backend, models := range data {
+		node := CostTreemapNode{Name: backend}
+		for _, m := range models {
+			node.Cost += m.Cost
+			node.Tokens += m.Tokens
+			node.SessionCount += m.SessionCount
+			node.Children = append(node.Children, m)
+		}
+		totalCost += node.Cost
+		nodes = append(nodes, node)
+	}
+
+	// Compute shares and sort by cost descending.
+	for i := range nodes {
+		if totalCost > 0 {
+			nodes[i].Share = nodes[i].Cost / totalCost * 100
+		}
+		// Compute child shares relative to parent.
+		for j := range nodes[i].Children {
+			if nodes[i].Cost > 0 {
+				nodes[i].Children[j].Share = nodes[i].Children[j].Cost / nodes[i].Cost * 100
+			}
+		}
+		// Sort children by cost descending.
+		sortTreemapNodes(nodes[i].Children)
+	}
+	sortTreemapNodes(nodes)
+
+	return nodes
+}
+
+// sortTreemapNodes sorts nodes by cost descending (simple insertion sort — small N).
+func sortTreemapNodes(nodes []CostTreemapNode) {
+	for i := 1; i < len(nodes); i++ {
+		for j := i; j > 0 && nodes[j].Cost > nodes[j-1].Cost; j-- {
+			nodes[j], nodes[j-1] = nodes[j-1], nodes[j]
+		}
+	}
 }
 
 // User represents an aisync user, identified by their git identity.

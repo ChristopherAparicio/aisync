@@ -1,0 +1,76 @@
+{{define "cost_treemap_partial"}}
+{{if .HasTreemap}}
+<section class="card" style="margin-top: 1rem;">
+  <h3 class="card-title">Cost Treemap — Backend × Model</h3>
+  <p class="text-muted" style="margin-bottom: 1rem;">
+    Proportional visualization of spend by LLM backend and model. Larger cells = higher cost.
+  </p>
+
+  <!-- ── Treemap ── -->
+  <div class="tm-container">
+    {{range .TreemapNodes}}
+    <div class="tm-backend" style="width: {{.WidthPct}}; background: var(--pie-color-{{.ColorIdx}});">
+      <div class="tm-backend-header">
+        <span class="tm-backend-name">{{.Name}}</span>
+        <span class="tm-backend-cost">{{.Cost}}</span>
+        <span class="tm-backend-share">{{printf "%.0f" .Share}}%</span>
+      </div>
+      {{if .Children}}
+      <div class="tm-models">
+        {{range .Children}}
+        <div class="tm-model" style="width: {{.WidthPct}};" title="{{.Name}}: {{.Cost}} ({{printf "%.1f" .Share}}% of backend) — {{.Tokens}} tokens, {{.SessionCount}} sessions">
+          <div class="tm-model-name">{{.Name}}</div>
+          <div class="tm-model-cost">{{.Cost}}</div>
+          <div class="tm-model-meta">{{.Tokens}} · {{.SessionCount}} sess</div>
+        </div>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  <!-- ── Legend Table ── -->
+  <table class="data-table" style="margin-top: 1.5rem;">
+    <thead>
+      <tr>
+        <th>Backend</th>
+        <th>Model</th>
+        <th style="text-align:right">Cost</th>
+        <th style="text-align:right">Tokens</th>
+        <th style="text-align:right">Sessions</th>
+        <th style="text-align:right">Share</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .TreemapNodes}}
+      <tr class="tm-row-backend" style="background: color-mix(in srgb, var(--pie-color-{{.ColorIdx}}) 15%, transparent);">
+        <td><strong>{{.Name}}</strong></td>
+        <td class="text-muted">—</td>
+        <td style="text-align:right"><strong>{{.Cost}}</strong></td>
+        <td style="text-align:right">{{.Tokens}}</td>
+        <td style="text-align:right">{{.SessionCount}}</td>
+        <td style="text-align:right"><strong>{{printf "%.1f" .Share}}%</strong></td>
+      </tr>
+      {{range .Children}}
+      <tr>
+        <td></td>
+        <td class="font-mono" style="font-size: 0.85em;">{{.Name}}</td>
+        <td style="text-align:right">{{.Cost}}</td>
+        <td style="text-align:right">{{.Tokens}}</td>
+        <td style="text-align:right">{{.SessionCount}}</td>
+        <td style="text-align:right">{{printf "%.1f" .Share}}%</td>
+      </tr>
+      {{end}}
+      {{end}}
+    </tbody>
+  </table>
+</section>
+
+{{else}}
+<div class="empty-state" style="margin-top: 2rem;">
+  <p>No treemap data available.</p>
+  <p class="hint">Cost treemap requires session data with backend and model information.</p>
+</div>
+{{end}}
+{{end}}

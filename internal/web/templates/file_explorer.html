@@ -1,4 +1,4 @@
-{{define "title"}}Files — {{.ProjectName}} — aisync{{end}}
+{{define "title"}}Git — {{.ProjectName}} — aisync{{end}}
 
 {{define "content"}}
 <div class="page-header">
@@ -6,7 +6,7 @@
     {{if .ProjectPath}}
     <a href="/projects{{.ProjectPath}}" class="back-link">&larr;</a>
     {{end}}
-    File Explorer
+    Git
     {{if .ProjectName}}<span class="text-muted">· {{.ProjectName}}</span>{{end}}
   </h1>
 
@@ -40,20 +40,21 @@
 
 {{if not .HasRows}}
 <div class="empty-state">
-  <p>No file changes recorded{{if .DirPrefix}} in this directory{{else}} for this project{{end}}.</p>
+  <p>No files found{{if .DirPrefix}} in this directory{{else}} for this project{{end}}.</p>
   {{if not .DirPrefix}}
   <p class="hint">Enable file blame with <code>aisync config set features.file_blame true</code> then run <code>aisync backfill files</code>.</p>
   {{end}}
 </div>
 {{else}}
 
-<!-- ── File Table (GitHub-style unified list) ── -->
+<!-- ── File Table (GitHub-style) ── -->
 <div class="fe-table-wrap">
   <table class="fe-table">
     <thead>
       <tr>
         <th class="fe-th-name">Name</th>
-        <th class="fe-th-summary">Last session</th>
+        <th class="fe-th-commit">Last commit</th>
+        <th class="fe-th-ai">AI session</th>
         <th class="fe-th-when">Updated</th>
       </tr>
     </thead>
@@ -67,23 +68,30 @@
             <span class="font-mono">{{.Name}}</span>
           </a>
         </td>
-        <td class="fe-cell-summary text-muted"></td>
-        <td class="fe-cell-when text-muted"></td>
+        <td class="fe-cell-commit"></td>
+        <td class="fe-cell-ai"></td>
+        <td class="fe-cell-when"></td>
       </tr>
       {{else}}
-      <tr class="fe-row fe-row-file">
+      <tr class="fe-row fe-row-file{{if .HasAI}} fe-row-ai{{end}}">
         <td class="fe-cell-name">
           <span class="fe-link-file">
             <svg class="fe-icon fe-icon-file" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/></svg>
             <span class="font-mono">{{.Name}}</span>
           </span>
         </td>
-        <td class="fe-cell-summary">
-          {{if .LastSessionID}}
-          <a href="/sessions/{{.LastSessionID}}" class="fe-summary-link text-muted" title="{{.LastSummary}}">{{.LastSummary}}</a>
+        <td class="fe-cell-commit">
+          {{if .LastCommitMsg}}<span class="fe-commit-msg text-muted">{{.LastCommitMsg}}</span>{{end}}
+        </td>
+        <td class="fe-cell-ai">
+          {{if .HasAI}}
+          <a href="/sessions/{{.LastSessionID}}" class="fe-ai-link" title="{{.LastSummary}}">
+            <span class="fe-ai-badge">AI</span>
+            <span class="fe-ai-count">{{.SessionCount}}</span>
+          </a>
           {{end}}
         </td>
-        <td class="fe-cell-when text-muted">{{.LastTimeAgo}}</td>
+        <td class="fe-cell-when text-muted">{{if .LastCommitAgo}}{{.LastCommitAgo}}{{else}}{{.LastTimeAgo}}{{end}}</td>
       </tr>
       {{end}}
       {{end}}

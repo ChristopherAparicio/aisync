@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/config"
+	"github.com/ChristopherAparicio/aisync/internal/gittree"
 	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -1785,10 +1788,57 @@ func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
 // ── Branch Timeline ──
 
 type branchTimelinePage struct {
-	Nav        string
-	BranchName string
-	Entries    []timelineEntryView
-	HasEntries bool
+	Nav             string
+	SidebarProjects []sidebarProject
+	BranchName      string
+	Entries         []timelineEntryView
+	HasEntries      bool
+
+	// Session tree (parent-child hierarchy + forks).
+	Tree          []branchTreeNodeView
+	HasTree       bool
+	TreeStats     branchTreeStats
+	ForkRelations []branchForkView
+}
+
+// branchTreeNodeView is a view model for a session tree node.
+type branchTreeNodeView struct {
+	ID          string
+	IDShort     string
+	Summary     string
+	Agent       string
+	Provider    string
+	SessionType string
+	Status      string
+	StatusClass string
+	Messages    int
+	Tokens      string
+	Errors      int
+	TimeAgo     string
+	IsFork      bool
+	Depth       int // nesting depth (0 = root)
+	IndentPx    int // pre-computed left indent in pixels (Depth * 24)
+	HasChildren bool
+	Children    []branchTreeNodeView
+}
+
+// branchTreeStats holds aggregate stats for the session tree.
+type branchTreeStats struct {
+	TotalSessions int
+	RootSessions  int
+	ForkCount     int
+	MaxDepth      int
+}
+
+// branchForkView holds a fork relationship for display.
+type branchForkView struct {
+	OriginalID    string
+	OriginalShort string
+	ForkID        string
+	ForkShort     string
+	ForkPoint     int
+	SharedMsgs    int
+	Reason        string
 }
 
 type timelineEntryView struct {
@@ -1817,18 +1867,18 @@ func (s *Server) handleBranchTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := branchTimelinePage{
-		Nav:        "branches",
-		BranchName: branchName,
+		Nav:             "branches",
+		SidebarProjects: s.buildSidebarProjects(r.Context(), ""),
+		BranchName:      branchName,
 	}
 
+	// ── Timeline entries (flat, with commits) ──
 	entries, err := s.sessionSvc.BranchTimeline(r.Context(), service.TimelineRequest{
 		Branch: branchName,
 		Limit:  50,
 	})
 	if err != nil {
 		s.logger.Printf("branch timeline error: %v", err)
-		s.render(w, "branch_timeline.html", data)
-		return
 	}
 
 	for _, e := range entries {
@@ -1863,7 +1913,139 @@ func (s *Server) handleBranchTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	data.HasEntries = len(data.Entries) > 0
 
+	// ── Session tree (parent-child hierarchy) ──
+	tree, treeErr := s.sessionSvc.ListTree(r.Context(), service.ListRequest{
+		Branch: branchName,
+		All:    true,
+	})
+	if treeErr != nil {
+		s.logger.Printf("branch tree error: %v", treeErr)
+	}
+
+	if len(tree) > 0 {
+		data.HasTree = true
+		var maxDepth int
+		var forkCount int
+		for _, node := range tree {
+			data.Tree = append(data.Tree, buildBranchTreeNodeView(node, 0, &maxDepth, &forkCount))
+		}
+		data.TreeStats = branchTreeStats{
+			TotalSessions: countTreeNodes(tree),
+			RootSessions:  len(tree),
+			ForkCount:     forkCount,
+			MaxDepth:      maxDepth,
+		}
+
+		// ── Fork relations ──
+		if s.store != nil {
+			// Collect all session IDs in the tree.
+			var sessionIDs []session.ID
+			collectTreeIDs(tree, &sessionIDs)
+
+			// Bulk load fork relations for all sessions.
+			seen := make(map[string]bool)
+			for _, sid := range sessionIDs {
+				rels, relErr := s.store.GetForkRelations(sid)
+				if relErr != nil {
+					continue
+				}
+				for _, rel := range rels {
+					key := string(rel.OriginalID) + "→" + string(rel.ForkID)
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					data.ForkRelations = append(data.ForkRelations, branchForkView{
+						OriginalID:    string(rel.OriginalID),
+						OriginalShort: truncateID(string(rel.OriginalID), 10),
+						ForkID:        string(rel.ForkID),
+						ForkShort:     truncateID(string(rel.ForkID), 10),
+						ForkPoint:     rel.ForkPoint,
+						SharedMsgs:    rel.SharedMessages,
+						Reason:        rel.Reason,
+					})
+				}
+			}
+		}
+	}
+
 	s.render(w, "branch_timeline.html", data)
+}
+
+// buildBranchTreeNodeView converts a SessionTreeNode to a view model.
+func buildBranchTreeNodeView(node session.SessionTreeNode, depth int, maxDepth *int, forkCount *int) branchTreeNodeView {
+	if depth > *maxDepth {
+		*maxDepth = depth
+	}
+	if node.IsFork {
+		*forkCount++
+	}
+
+	statusClass := ""
+	switch node.Summary.Status {
+	case "active":
+		statusClass = "bt-status--active"
+	case "completed":
+		statusClass = "bt-status--completed"
+	case "review":
+		statusClass = "bt-status--review"
+	case "idle":
+		statusClass = "bt-status--idle"
+	}
+
+	v := branchTreeNodeView{
+		ID:          string(node.Summary.ID),
+		IDShort:     truncateID(string(node.Summary.ID), 12),
+		Summary:     node.Summary.Summary,
+		Agent:       node.Summary.Agent,
+		Provider:    string(node.Summary.Provider),
+		SessionType: node.Summary.SessionType,
+		Status:      string(node.Summary.Status),
+		StatusClass: statusClass,
+		Messages:    node.Summary.MessageCount,
+		Tokens:      formatTokens(node.Summary.TotalTokens),
+		Errors:      node.Summary.ErrorCount,
+		TimeAgo:     timeAgoString(node.Summary.CreatedAt),
+		IsFork:      node.IsFork,
+		Depth:       depth,
+		IndentPx:    depth * 24,
+		HasChildren: len(node.Children) > 0,
+	}
+
+	if len(v.Summary) > 60 {
+		v.Summary = v.Summary[:57] + "..."
+	}
+
+	for _, child := range node.Children {
+		v.Children = append(v.Children, buildBranchTreeNodeView(child, depth+1, maxDepth, forkCount))
+	}
+
+	return v
+}
+
+// countTreeNodes counts total nodes in a tree.
+func countTreeNodes(nodes []session.SessionTreeNode) int {
+	count := len(nodes)
+	for _, n := range nodes {
+		count += countTreeNodes(n.Children)
+	}
+	return count
+}
+
+// collectTreeIDs collects all session IDs from a tree.
+func collectTreeIDs(nodes []session.SessionTreeNode, ids *[]session.ID) {
+	for _, n := range nodes {
+		*ids = append(*ids, n.Summary.ID)
+		collectTreeIDs(n.Children, ids)
+	}
+}
+
+// truncateID truncates an ID to maxLen chars.
+func truncateID(id string, maxLen int) string {
+	if len(id) <= maxLen {
+		return id
+	}
+	return id[:maxLen]
 }
 
 // timeAgoString converts a timestamp to a human-readable "X ago" string.
@@ -2132,6 +2314,19 @@ type branchCostEntry struct {
 	TotalCost    float64
 }
 
+// treemapNodeView is the view-layer representation of a treemap node.
+type treemapNodeView struct {
+	Name         string
+	Cost         string  // formatted "$X.XX"
+	CostRaw      float64 // raw cost for width calculations
+	Tokens       string  // formatted "123K"
+	SessionCount int
+	Share        float64 // percentage of parent (0-100)
+	WidthPct     string  // pre-computed CSS width percentage
+	ColorIdx     int     // index into --pie-color-N palette
+	Children     []treemapNodeView
+}
+
 type costDashboardPage struct {
 	Nav             string
 	SidebarProjects []sidebarProject
@@ -2174,6 +2369,10 @@ type costDashboardPage struct {
 
 	// Model breakdown
 	Models []session.ModelForecast
+
+	// Cost treemap: backend → model hierarchy
+	HasTreemap   bool
+	TreemapNodes []treemapNodeView
 
 	// Per-branch cost
 	BranchCosts []branchCostEntry
@@ -2715,6 +2914,12 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 		data.TrendDir = forecast.TrendDir
 		data.Period = forecast.Period
 		data.Models = forecast.ModelBreakdown
+
+		// Cost treemap: backend → model hierarchy.
+		if len(forecast.Treemap) > 0 {
+			data.HasTreemap = true
+			data.TreemapNodes = buildTreemapViews(forecast.Treemap)
+		}
 
 		// Real cost forecast (API-only + subscriptions).
 		if forecast.TotalReal30d > 0 || forecast.APIProjected30d > 0 || forecast.SubscriptionMonthly > 0 {
@@ -3496,6 +3701,71 @@ func (s *Server) handleCostOptimizationPartial(w http.ResponseWriter, r *http.Re
 	s.renderPartial(w, "cost_optimization_partial", data)
 }
 
+func (s *Server) handleCostTreemapPartial(w http.ResponseWriter, r *http.Request) {
+	data := s.cachedCostsPage(r)
+	s.renderPartial(w, "cost_treemap_partial", data)
+}
+
+// buildTreemapViews converts domain CostTreemapNode to view-layer treemapNodeView.
+func buildTreemapViews(nodes []session.CostTreemapNode) []treemapNodeView {
+	views := make([]treemapNodeView, len(nodes))
+	for i, n := range nodes {
+		views[i] = treemapNodeView{
+			Name:         n.Name,
+			Cost:         formatCostValue(n.Cost),
+			CostRaw:      n.Cost,
+			Tokens:       formatTokensShort(n.Tokens),
+			SessionCount: n.SessionCount,
+			Share:        n.Share,
+			WidthPct:     fmt.Sprintf("%.1f%%", clampTreemapWidth(n.Share)),
+			ColorIdx:     i % 10, // cycle through --pie-color-0 to --pie-color-9
+		}
+		if len(n.Children) > 0 {
+			views[i].Children = make([]treemapNodeView, len(n.Children))
+			for j, c := range n.Children {
+				views[i].Children[j] = treemapNodeView{
+					Name:         c.Name,
+					Cost:         formatCostValue(c.Cost),
+					CostRaw:      c.Cost,
+					Tokens:       formatTokensShort(c.Tokens),
+					SessionCount: c.SessionCount,
+					Share:        c.Share,
+					WidthPct:     fmt.Sprintf("%.1f%%", clampTreemapWidth(c.Share)),
+					ColorIdx:     i % 10, // inherit parent color
+				}
+			}
+		}
+	}
+	return views
+}
+
+// clampTreemapWidth ensures minimum visible width for small-share nodes.
+func clampTreemapWidth(share float64) float64 {
+	if share < 3 && share > 0 {
+		return 3 // minimum 3% width for visibility
+	}
+	return share
+}
+
+// formatCostValue formats a cost as "$X.XX".
+func formatCostValue(cost float64) string {
+	if cost >= 1 {
+		return fmt.Sprintf("$%.2f", cost)
+	}
+	return fmt.Sprintf("$%.4f", cost)
+}
+
+// formatTokensShort formats tokens as "123K" or "1.2M".
+func formatTokensShort(tokens int) string {
+	if tokens >= 1000000 {
+		return fmt.Sprintf("%.1fM", float64(tokens)/1000000)
+	}
+	if tokens >= 1000 {
+		return fmt.Sprintf("%.0fK", float64(tokens)/1000)
+	}
+	return fmt.Sprintf("%d", tokens)
+}
+
 // capabilityKindLabel returns a human-friendly label for a capability kind.
 func capabilityKindLabel(kind string) string {
 	switch registry.CapabilityKind(kind) {
@@ -3569,13 +3839,17 @@ type fileRow struct {
 	Name           string // display name (e.g. "internal" or "handlers.go")
 	DirPath        string // for dirs: link target (relative, e.g. "internal/web")
 	FileCount      int    // for dirs: number of files inside
-	SessionCount   int    // for files: number of sessions that wrote this file
+	SessionCount   int    // for files: number of AI sessions that wrote this file
+	HasAI          bool   // true if this file was modified by at least one AI session
 	LastChangeType string
 	ChangeClass    string // CSS class for badge
 	LastSessionID  string
-	LastSummary    string
+	LastSummary    string // AI session summary
 	LastBranch     string
-	LastTimeAgo    string
+	LastTimeAgo    string // time since last AI modification
+	// Git commit info (from TreeProvider).
+	LastCommitMsg string // last git commit message for this file
+	LastCommitAgo string // time since last git commit
 }
 
 func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
@@ -3695,61 +3969,161 @@ func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
 		relEntries = append(relEntries, relEntry{entry: e, relPath: rel, subPath: sub})
 	}
 
-	// Build unified row list: directories first (sorted by name), then files (sorted by name).
-	// Skip bare directory names that also appear as aggregated dirs.
+	// Build AI overlay map: relative path → AI info.
 	dirNames := make(map[string]struct{}, len(dirCounts))
 	for dir := range dirCounts {
 		dirNames[filepath.Base(dir)] = struct{}{}
 	}
 
-	// Directory rows (sorted alphabetically).
-	var dirRows []fileRow
-	for dir, count := range dirCounts {
-		dirRows = append(dirRows, fileRow{
-			IsDir:     true,
-			Name:      filepath.Base(dir),
-			DirPath:   dir,
-			FileCount: count,
-		})
+	type aiInfo struct {
+		SessionCount   int
+		LastChangeType string
+		LastSessionID  string
+		LastSummary    string
+		LastBranch     string
+		LastTimeAgo    string
 	}
-	sort.Slice(dirRows, func(i, j int) bool {
-		return dirRows[i].Name < dirRows[j].Name
-	})
-
-	// File rows (sorted alphabetically).
-	var fileRows []fileRow
+	aiMap := make(map[string]aiInfo) // basename → AI data
 	for _, re := range relEntries {
 		subParts := splitPath(re.subPath)
 		if len(subParts) > 1 {
-			continue // aggregated into a directory row
+			continue // in a subdirectory, not at current level
 		}
 		base := filepath.Base(re.relPath)
 		if _, isDirName := dirNames[base]; isDirName && filepath.Ext(base) == "" {
-			continue // bare directory name, skip
+			continue
 		}
-
-		changeClass := "file-modified"
-		switch re.entry.LastChangeType {
-		case "created":
-			changeClass = "file-created"
-		case "deleted":
-			changeClass = "file-deleted"
-		}
-
-		fileRows = append(fileRows, fileRow{
-			Name:           base,
+		aiMap[base] = aiInfo{
 			SessionCount:   re.entry.SessionCount,
 			LastChangeType: string(re.entry.LastChangeType),
-			ChangeClass:    changeClass,
 			LastSessionID:  string(re.entry.LastSessionID),
 			LastSummary:    truncStr(re.entry.LastSummary, 80),
 			LastBranch:     re.entry.LastBranch,
 			LastTimeAgo:    timeAgoString(re.entry.LastSessionTime),
-		})
+		}
 	}
-	sort.Slice(fileRows, func(i, j int) bool {
-		return fileRows[i].Name < fileRows[j].Name
-	})
+
+	// Try to use git tree for the full listing.
+	useGitTree := s.gitTree != nil && s.gitTree.Available(projectPath)
+
+	var dirRows, fileRows []fileRow
+
+	if useGitTree {
+		// Full git tree + AI overlay.
+		gitEntries, gitErr := s.gitTree.ListFiles(projectPath, "", dirPrefix)
+		if gitErr != nil {
+			s.logger.Printf("file explorer git tree: %v", gitErr)
+			useGitTree = false
+		} else {
+			// Collect file paths for batch last-commit lookup.
+			var filePaths []string
+			for _, ge := range gitEntries {
+				if ge.IsDir {
+					dp := ge.Path
+					dirRows = append(dirRows, fileRow{
+						IsDir:   true,
+						Name:    filepath.Base(dp),
+						DirPath: dp,
+					})
+				} else {
+					filePaths = append(filePaths, ge.Path)
+				}
+			}
+
+			// Fetch last commit for all files in one batch.
+			commitMap := make(map[string]gittree.FileCommit)
+			if len(filePaths) > 0 {
+				if commits, err := s.gitTree.LastCommitForFiles(projectPath, "", filePaths); err == nil {
+					for _, fc := range commits {
+						commitMap[fc.Path] = fc
+					}
+				}
+			}
+
+			for _, ge := range gitEntries {
+				if ge.IsDir {
+					continue
+				}
+				base := filepath.Base(ge.Path)
+				row := fileRow{
+					Name: base,
+				}
+
+				// Git commit info.
+				if fc, ok := commitMap[ge.Path]; ok {
+					row.LastCommitMsg = truncStr(fc.Message, 80)
+					row.LastCommitAgo = timeAgoString(fc.Date)
+				}
+
+				// AI overlay.
+				if ai, ok := aiMap[base]; ok {
+					row.HasAI = true
+					row.SessionCount = ai.SessionCount
+					row.LastChangeType = ai.LastChangeType
+					row.LastSessionID = ai.LastSessionID
+					row.LastSummary = ai.LastSummary
+					row.LastBranch = ai.LastBranch
+					row.LastTimeAgo = ai.LastTimeAgo
+
+					switch ai.LastChangeType {
+					case "created":
+						row.ChangeClass = "file-created"
+					case "deleted":
+						row.ChangeClass = "file-deleted"
+					default:
+						row.ChangeClass = "file-modified"
+					}
+				}
+
+				fileRows = append(fileRows, row)
+			}
+		}
+	}
+
+	if !useGitTree {
+		// Fallback: AI-only listing (no git tree available).
+		for dir, count := range dirCounts {
+			dirRows = append(dirRows, fileRow{
+				IsDir:     true,
+				Name:      filepath.Base(dir),
+				DirPath:   dir,
+				FileCount: count,
+			})
+		}
+
+		for _, re := range relEntries {
+			subParts := splitPath(re.subPath)
+			if len(subParts) > 1 {
+				continue
+			}
+			base := filepath.Base(re.relPath)
+			if _, isDirName := dirNames[base]; isDirName && filepath.Ext(base) == "" {
+				continue
+			}
+			changeClass := "file-modified"
+			switch re.entry.LastChangeType {
+			case "created":
+				changeClass = "file-created"
+			case "deleted":
+				changeClass = "file-deleted"
+			}
+			fileRows = append(fileRows, fileRow{
+				Name:           base,
+				HasAI:          true,
+				SessionCount:   re.entry.SessionCount,
+				LastChangeType: string(re.entry.LastChangeType),
+				ChangeClass:    changeClass,
+				LastSessionID:  string(re.entry.LastSessionID),
+				LastSummary:    truncStr(re.entry.LastSummary, 80),
+				LastBranch:     re.entry.LastBranch,
+				LastTimeAgo:    timeAgoString(re.entry.LastSessionTime),
+			})
+		}
+	}
+
+	// Sort dirs and files alphabetically.
+	sort.Slice(dirRows, func(i, j int) bool { return dirRows[i].Name < dirRows[j].Name })
+	sort.Slice(fileRows, func(i, j int) bool { return fileRows[i].Name < fileRows[j].Name })
 
 	// Merge: dirs first, then files.
 	data.Rows = append(data.Rows, dirRows...)
@@ -4849,10 +5223,11 @@ type settingSection struct {
 }
 
 type settingsPage struct {
-	Nav             string
-	SidebarProjects []sidebarProject
-	Sections        []settingSection
-	ConfigPath      string // path to config file for reference
+	Nav                string
+	SidebarProjects    []sidebarProject
+	Sections           []settingSection
+	ProjectClassifiers []projectClassifierView
+	ConfigPath         string // path to config file for reference
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -4993,51 +5368,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// ── Projects (per-project classifiers) ──
-	projectsSec := settingSection{
-		Title: "Project Classifiers",
-		Icon:  "&#x1F4C1;",
-	}
-	projectClassifiers := s.cfg.GetAllProjectClassifiers()
-	if len(projectClassifiers) == 0 {
-		projectsSec.IsEmpty = true
-		projectsSec.Items = []settingItem{{Key: "Status", Value: "No project-specific rules configured"}}
-	} else {
-		for name, pc := range projectClassifiers {
-			items := []settingItem{}
-			if pc.TicketPattern != "" {
-				items = append(items, settingItem{Key: "Ticket Pattern", Value: pc.TicketPattern})
-			}
-			if pc.TicketURL != "" {
-				items = append(items, settingItem{Key: "Ticket URL", Value: pc.TicketURL})
-			}
-			if len(pc.BranchRules) > 0 {
-				items = append(items, settingItem{Key: "Branch Rules", Value: fmt.Sprintf("%d rules", len(pc.BranchRules))})
-			}
-			if len(pc.AgentRules) > 0 {
-				items = append(items, settingItem{Key: "Agent Rules", Value: fmt.Sprintf("%d rules", len(pc.AgentRules))})
-			}
-			if pc.Budget != nil {
-				budget := "(active"
-				if pc.Budget.MonthlyLimit > 0 {
-					budget += fmt.Sprintf(", $%.0f/mo", pc.Budget.MonthlyLimit)
-				}
-				if pc.Budget.DailyLimit > 0 {
-					budget += fmt.Sprintf(", $%.0f/day", pc.Budget.DailyLimit)
-				}
-				budget += ")"
-				items = append(items, settingItem{Key: "Budget", Value: budget})
-			}
-			if len(items) == 0 {
-				items = []settingItem{{Key: "Configured", Value: "yes (default rules)"}}
-			}
-			// Prefix each item's key with project name
-			for i := range items {
-				items[i].Key = name + " / " + items[i].Key
-			}
-			projectsSec.Items = append(projectsSec.Items, items...)
-		}
-	}
+	// ── Projects (per-project classifiers) — rendered via dedicated partial ──
+	data.ProjectClassifiers = buildProjectClassifierViews(s.cfg.GetAllProjectClassifiers())
 
 	data.Sections = []settingSection{
 		general,
@@ -5050,7 +5382,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		dashSec,
 		serverSec,
 		schedulerSec,
-		projectsSec,
 	}
 
 	s.render(w, "settings.html", data)
@@ -5137,6 +5468,288 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		cssClass += " settings-value--disabled"
 	}
 	fmt.Fprintf(w, `<span class="%s">%s</span> <span class="settings-saved-indicator">saved</span>`, cssClass, template.HTMLEscapeString(displayValue))
+}
+
+// ── Project Classifier CRUD ──────────────────────────────────────────────
+
+// projectClassifierView is the view model for a single project classifier card.
+type projectClassifierView struct {
+	Name          string
+	TicketPattern string
+	TicketSource  string
+	TicketURL     string
+	BranchRules   []ruleView // sorted for stable rendering
+	AgentRules    []ruleView
+	CommitRules   []ruleView
+	StatusRules   []ruleView
+	Tags          string // comma-separated
+	HasBudget     bool
+	MonthlyLimit  string
+	DailyLimit    string
+	AlertPercent  string
+	CostMode      string
+	AlertWebhook  string
+}
+
+type ruleView struct {
+	Pattern string // the key (branch glob, agent name, commit prefix, summary prefix)
+	Type    string // the value (session type or status)
+}
+
+// buildProjectClassifierViews builds sorted view models from config.
+func buildProjectClassifierViews(projects map[string]config.ProjectClassifierConf) []projectClassifierView {
+	if len(projects) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(projects))
+	for n := range projects {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	views := make([]projectClassifierView, 0, len(names))
+	for _, name := range names {
+		pc := projects[name]
+		v := projectClassifierView{
+			Name:          name,
+			TicketPattern: pc.TicketPattern,
+			TicketSource:  pc.TicketSource,
+			TicketURL:     pc.TicketURL,
+			Tags:          strings.Join(pc.Tags, ", "),
+		}
+		v.BranchRules = mapToRuleViews(pc.BranchRules)
+		v.AgentRules = mapToRuleViews(pc.AgentRules)
+		v.CommitRules = mapToRuleViews(pc.CommitRules)
+		v.StatusRules = mapToRuleViews(pc.StatusRules)
+		if pc.Budget != nil {
+			v.HasBudget = true
+			v.MonthlyLimit = formatBudgetValue(pc.Budget.MonthlyLimit)
+			v.DailyLimit = formatBudgetValue(pc.Budget.DailyLimit)
+			v.AlertPercent = formatBudgetValue(pc.Budget.AlertAtPercent)
+			v.CostMode = pc.Budget.CostMode
+			if v.CostMode == "" {
+				v.CostMode = "actual"
+			}
+			v.AlertWebhook = pc.Budget.AlertWebhook
+		}
+		views = append(views, v)
+	}
+	return views
+}
+
+func mapToRuleViews(m map[string]string) []ruleView {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	views := make([]ruleView, 0, len(keys))
+	for _, k := range keys {
+		views = append(views, ruleView{Pattern: k, Type: m[k]})
+	}
+	return views
+}
+
+func formatBudgetValue(v float64) string {
+	if v == 0 {
+		return ""
+	}
+	if v == float64(int(v)) {
+		return fmt.Sprintf("%.0f", v)
+	}
+	return fmt.Sprintf("%.2f", v)
+}
+
+// handleProjectClassifierSave handles POST /api/settings/project — create/update a project classifier.
+// Returns the HTMX partial for the updated project classifiers section.
+func (s *Server) handleProjectClassifierSave(w http.ResponseWriter, r *http.Request) {
+	if s.cfg == nil {
+		http.Error(w, "no config loaded", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form data", http.StatusBadRequest)
+		return
+	}
+
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `<span class="text-error">project name is required</span>`)
+		return
+	}
+
+	pc := config.ProjectClassifierConf{
+		TicketPattern: strings.TrimSpace(r.FormValue("ticket_pattern")),
+		TicketSource:  strings.TrimSpace(r.FormValue("ticket_source")),
+		TicketURL:     strings.TrimSpace(r.FormValue("ticket_url")),
+	}
+
+	// Parse tags.
+	if tags := strings.TrimSpace(r.FormValue("tags")); tags != "" {
+		var parsed []string
+		for _, t := range strings.Split(tags, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				parsed = append(parsed, t)
+			}
+		}
+		pc.Tags = parsed
+	}
+
+	// Parse rule maps from repeated form fields: branch_rule_pattern[], branch_rule_type[].
+	pc.BranchRules = parseRulesFromForm(r, "branch_rule")
+	pc.AgentRules = parseRulesFromForm(r, "agent_rule")
+	pc.CommitRules = parseRulesFromForm(r, "commit_rule")
+	pc.StatusRules = parseRulesFromForm(r, "status_rule")
+
+	// Parse budget.
+	monthlyStr := strings.TrimSpace(r.FormValue("budget_monthly"))
+	dailyStr := strings.TrimSpace(r.FormValue("budget_daily"))
+	alertStr := strings.TrimSpace(r.FormValue("budget_alert_percent"))
+	costMode := strings.TrimSpace(r.FormValue("budget_cost_mode"))
+	alertWebhook := strings.TrimSpace(r.FormValue("budget_alert_webhook"))
+
+	if monthlyStr != "" || dailyStr != "" || alertStr != "" || costMode != "" || alertWebhook != "" {
+		pc.Budget = &config.ProjectBudgetConf{}
+		if monthlyStr != "" {
+			v, err := strconv.ParseFloat(monthlyStr, 64)
+			if err != nil {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, `<span class="text-error">invalid monthly limit: %s</span>`, template.HTMLEscapeString(err.Error()))
+				return
+			}
+			pc.Budget.MonthlyLimit = v
+		}
+		if dailyStr != "" {
+			v, err := strconv.ParseFloat(dailyStr, 64)
+			if err != nil {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, `<span class="text-error">invalid daily limit: %s</span>`, template.HTMLEscapeString(err.Error()))
+				return
+			}
+			pc.Budget.DailyLimit = v
+		}
+		if alertStr != "" {
+			v, err := strconv.ParseFloat(alertStr, 64)
+			if err != nil {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, `<span class="text-error">invalid alert percent: %s</span>`, template.HTMLEscapeString(err.Error()))
+				return
+			}
+			pc.Budget.AlertAtPercent = v
+		}
+		pc.Budget.CostMode = costMode
+		pc.Budget.AlertWebhook = alertWebhook
+	}
+
+	if err := s.cfg.SetProjectClassifier(name, pc); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `<span class="text-error">%s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+	if err := s.cfg.Save(); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `<span class="text-error">save failed: %s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+
+	// Return updated project classifiers section.
+	s.renderProjectClassifiersPartial(w)
+}
+
+// handleProjectClassifierDelete handles DELETE /api/settings/project — remove a project classifier.
+// Note: Go's ParseForm only reads body for POST/PUT/PATCH, so we parse manually for DELETE.
+func (s *Server) handleProjectClassifierDelete(w http.ResponseWriter, r *http.Request) {
+	if s.cfg == nil {
+		http.Error(w, "no config loaded", http.StatusServiceUnavailable)
+		return
+	}
+
+	// For DELETE, manually parse the URL-encoded body since Go only parses body for POST/PUT/PATCH.
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		// Try body parsing for HTMX hx-vals (sends as form-encoded body).
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
+		if len(body) > 0 {
+			vals, err := url.ParseQuery(string(body))
+			if err == nil {
+				name = vals.Get("name")
+			}
+		}
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `<span class="text-error">project name is required</span>`)
+		return
+	}
+
+	if err := s.cfg.DeleteProjectClassifier(name); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `<span class="text-error">%s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+	if err := s.cfg.Save(); err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `<span class="text-error">save failed: %s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+
+	s.renderProjectClassifiersPartial(w)
+}
+
+// renderProjectClassifiersPartial renders the project-classifiers partial
+// and writes it to the response. Used by both save and delete handlers.
+func (s *Server) renderProjectClassifiersPartial(w http.ResponseWriter) {
+	projects := s.cfg.GetAllProjectClassifiers()
+	views := buildProjectClassifierViews(projects)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.partials.ExecuteTemplate(w, "project-classifiers", views); err != nil {
+		s.logger.Printf("render project-classifiers partial: %v", err)
+	}
+}
+
+// parseRulesFromForm reads repeated form fields like "prefix_pattern[]" and "prefix_type[]"
+// and returns a map. Empty patterns are skipped.
+func parseRulesFromForm(r *http.Request, prefix string) map[string]string {
+	patterns := r.Form[prefix+"_pattern[]"]
+	types := r.Form[prefix+"_type[]"]
+	if len(patterns) == 0 {
+		return nil
+	}
+	m := make(map[string]string)
+	for i, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		t := ""
+		if i < len(types) {
+			t = strings.TrimSpace(types[i])
+		}
+		if t != "" {
+			m[p] = t
+		}
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // ── Session Timeline Partial ─────────────────────────────────────────────

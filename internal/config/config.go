@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -200,7 +201,7 @@ type ProjectClassifierConf struct {
 	StatusRules map[string]string `json:"status_rules,omitempty"`
 
 	// Budget defines spending limits for this project.
-	Budget *projectBudgetConf `json:"budget,omitempty"`
+	Budget *ProjectBudgetConf `json:"budget,omitempty"`
 }
 
 // DefaultCommitRules maps Conventional Commit prefixes to session types.
@@ -237,8 +238,8 @@ var DefaultStatusRules = map[string]string{
 	"[COMMIT]": "completed",
 }
 
-// projectBudgetConf defines spending limits and alerts for a project.
-type projectBudgetConf struct {
+// ProjectBudgetConf defines spending limits and alerts for a project.
+type ProjectBudgetConf struct {
 	// MonthlyLimit is the maximum cost per calendar month (in USD).
 	MonthlyLimit float64 `json:"monthly_limit,omitempty"`
 
@@ -1621,6 +1622,52 @@ func (c *Config) IsScanToolOutputs() bool {
 // GetAllProjectClassifiers returns all per-project classifier configs.
 func (c *Config) GetAllProjectClassifiers() map[string]ProjectClassifierConf {
 	return c.data.Projects
+}
+
+// SetProjectClassifier creates or replaces a project classifier config.
+// The name is the project key (typically the remote URL display name, e.g. "Omogen-ai/backend").
+func (c *Config) SetProjectClassifier(name string, pc ProjectClassifierConf) error {
+	if name == "" {
+		return fmt.Errorf("project name must not be empty")
+	}
+	if c.data.Projects == nil {
+		c.data.Projects = make(map[string]ProjectClassifierConf)
+	}
+	// Validate ticket pattern if set.
+	if pc.TicketPattern != "" {
+		if _, err := regexp.Compile(pc.TicketPattern); err != nil {
+			return fmt.Errorf("invalid ticket_pattern %q: %w", pc.TicketPattern, err)
+		}
+	}
+	// Validate budget if set.
+	if pc.Budget != nil {
+		if pc.Budget.MonthlyLimit < 0 {
+			return fmt.Errorf("monthly_limit must be non-negative, got %.2f", pc.Budget.MonthlyLimit)
+		}
+		if pc.Budget.DailyLimit < 0 {
+			return fmt.Errorf("daily_limit must be non-negative, got %.2f", pc.Budget.DailyLimit)
+		}
+		if pc.Budget.AlertAtPercent < 0 || pc.Budget.AlertAtPercent > 100 {
+			return fmt.Errorf("alert_at_percent must be 0-100, got %.0f", pc.Budget.AlertAtPercent)
+		}
+		if pc.Budget.CostMode != "" && pc.Budget.CostMode != "actual" && pc.Budget.CostMode != "estimated" && pc.Budget.CostMode != "all" {
+			return fmt.Errorf("invalid cost_mode %q: must be actual, estimated, or all", pc.Budget.CostMode)
+		}
+	}
+	c.data.Projects[name] = pc
+	return nil
+}
+
+// DeleteProjectClassifier removes a project classifier by name.
+func (c *Config) DeleteProjectClassifier(name string) error {
+	if c.data.Projects == nil || len(c.data.Projects) == 0 {
+		return fmt.Errorf("no project classifiers configured")
+	}
+	if _, ok := c.data.Projects[name]; !ok {
+		return fmt.Errorf("project classifier %q not found", name)
+	}
+	delete(c.data.Projects, name)
+	return nil
 }
 
 // AddCustomPattern adds a custom secret pattern in "NAME REGEX" format.

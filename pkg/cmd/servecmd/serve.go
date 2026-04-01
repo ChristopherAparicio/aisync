@@ -25,6 +25,7 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/api"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
+	"github.com/ChristopherAparicio/aisync/internal/gittree"
 	"github.com/ChristopherAparicio/aisync/internal/llmfactory"
 	"github.com/ChristopherAparicio/aisync/internal/llmqueue"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
@@ -401,6 +402,7 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		BenchmarkRecommender: benchRec,
 		Store:                store,
 		SecurityDetector:     secDetector,
+		GitTreeProvider:      gittree.NewLocalAdapter(),
 		AppConfig:            appCfg,
 		Addr:                 addr, // not used for listen
 		Logger:               logger,

@@ -4,6 +4,29 @@
 
 ## Recently Completed (2026-04-01)
 
+### Branch Session Tree (2.1) ✅
+- [x] **Enhanced handler**: `handleBranchTimeline` now calls `ListTree()` for parent-child hierarchy + `GetForkRelations()` for fork connections on top of the existing flat timeline
+- [x] **View models**: `branchTreeNodeView` (ID, summary, agent, provider, type, status, tokens, errors, depth, indent, fork flag), `branchTreeStats` (total sessions, roots, forks, max depth), `branchForkView` (original→fork with fork point + shared msgs)
+- [x] **Tree builder**: `buildBranchTreeNodeView()` recursive — converts `SessionTreeNode` to view with pre-computed `IndentPx`, status CSS class, summary truncation; counts forks and max depth
+- [x] **Helpers**: `countTreeNodes()`, `collectTreeIDs()`, `truncateID()`
+- [x] **Template**: `branch_timeline.html` — Session Tree section (stats strip, indented tree nodes with connector lines/dots, color-coded by status, fork badges, error counts) + Fork Relationships panel + existing Timeline section
+- [x] **CSS**: `.bt-*` classes (~120 lines) — tree nodes with indent, connector lines (`bt-connector-fork`/`bt-connector-line`), colored dots (active/completed/review/idle/error), fork badges, stats strip, fork entry links
+- [x] **Sidebar**: Added `SidebarProjects` to branch timeline page for consistent navigation
+- [x] **6 tests**: empty branch, branch with parent-child sessions (verifies tree rendering), redirect on empty name, `buildBranchTreeNodeView` (depth/indent/status/truncation/children), `countTreeNodes`, `truncateID`
+- [x] **All 2,273 tests passing** across 105 packages
+
+### Settings CRUD for Project Classifiers & Budgets ✅
+- [x] **Config layer**: `SetProjectClassifier(name, pc)` and `DeleteProjectClassifier(name)` methods — validates regex patterns, budget limits (non-negative, 0-100 alert %), cost mode enum; `ProjectBudgetConf` exported
+- [x] **API endpoints**: `POST /api/settings/project` (create/update), `DELETE /api/settings/project` (delete) — full form parsing for all `ProjectClassifierConf` fields including nested rule maps and budget
+- [x] **Form parsing**: `parseRulesFromForm()` — reads repeated `prefix_pattern[]`/`prefix_type[]` form fields into `map[string]string`; handles branch, agent, commit, and status rules
+- [x] **View models**: `projectClassifierView` + `ruleView` structs, `buildProjectClassifierViews()` builder (sorted by name, formatted budget values)
+- [x] **Settings page**: Replaced read-only display with full CRUD — per-project cards with read/edit toggle, inline forms for all fields (ticket pattern/source/URL, tags, 4 rule types, budget with 5 fields), add/delete buttons
+- [x] **HTMX partial**: `project_classifiers_partial.html` — standalone partial for HTMX responses after save/delete, identical structure to settings page section
+- [x] **CSS**: `.pc-*` classes — card layout, read-only fields, form inputs, rule rows with dynamic add/remove, fieldsets, budget fields, action buttons (edit/delete/save/cancel/add)
+- [x] **JavaScript**: `pcToggleEdit()`/`pcCancelEdit()` for view↔edit toggle, `addRuleRow()` for dynamic rule row creation
+- [x] **18 tests**: 7 config tests (basic set, empty name, invalid regex, invalid budget, delete, delete not found, persist roundtrip) + 11 web tests (new project, with rules, with budget, update existing, empty name, invalid regex, delete, delete not found, persist to disk, no config, settings page display, tags)
+- [x] **All 2,267 tests passing** across 105 packages
+
 ### File Explorer Page ✅
 - [x] **Domain struct**: `ProjectFileEntry` in `fileops.go` — `FilePath`, `SessionCount`, `WriteCount`, `LastChangeType`, `LastSessionID`, `LastSessionTime`, `LastSummary`, `LastBranch`, `LastProvider`
 - [x] **Store interface**: `FilesForProject(projectPath, dirPrefix, limit)` added to `SearchStore` in `store.go`
@@ -373,31 +396,16 @@ Future: semantic search needs chunking (sessions are 100K+ tokens).
 
 ## Priority 2: Dashboard & Visualization
 
-### 2.1 Branch Session Tree ⭐ HIGH VALUE
-Interactive tree visualization when clicking on a branch in the project page.
-
-**Concept:**
-- Click on a branch → opens a tree view showing all sessions on that branch
-- Tree root = first session created on this branch
-- Children = subsequent sessions, forks, subagents (parallel work)
-- Each node shows: summary, agent badge, status, token count, errors
-- Click a node → navigate to session detail
-- Parallel sessions visible side-by-side (same branch, overlapping time)
-- Fork relationships shown as branch-off from parent
-- Inspired by OpenAPI tree / git graph visualization
-
-**Data model:**
-- Group sessions by branch + project
-- Order by `created_at`
-- Connect forks via `session_forks` table
-- Connect subagents via `parent_id`
-- Detect concurrent sessions (overlapping time ranges on same branch)
-
-**UI:**
-- Collapsible tree (HTMX or lightweight JS)
-- Each level: session card with agent badge, status, token count
-- Visual connector lines between parent/child/fork
-- Color-coded by status: 🟢 completed, 🟡 active, 🔴 errors
+### 2.1 Branch Session Tree ✅ COMPLETE
+- [x] Tree visualization on branch timeline page (`/branches/{name}`)
+- [x] Parent-child hierarchy via `ListTree()` + `SessionTreeNode`
+- [x] Fork relationships via `GetForkRelations()` with fork point and shared message count
+- [x] Color-coded dots by status (active/completed/review/idle/error)
+- [x] Visual connectors with indented nesting (24px per depth level)
+- [x] Agent/provider/type/status/fork badges per node
+- [x] Stats strip (total sessions, forks, max depth)
+- [x] Fork Relationships panel with linked session IDs
+- [x] 6 tests (empty, with sessions, redirect, node builder, tree counter, ID truncation)
 
 ### 2.2 Activity Sparklines ✅ COMPLETE
 - [x] Mini bar charts (14-day) for daily activity under KPI strip items
@@ -407,7 +415,7 @@ Interactive tree visualization when clicking on a branch in the project page.
 ### 2.3 Cost Breakdown Charts ✅ COMPLETE
 - [x] **MCP server cost pie chart**: Conic-gradient donut chart computed server-side, `template.CSS` for safe style injection, 10-color palette, legend with percentages
 - [x] **Budget overlay line**: Dashed red horizontal line on Cost Over Time chart, sum of project daily limits, bar rescaling when budget exceeds max cost
-- [ ] Treemap or sunburst: project → backend → model → cost (deferred)
+- [x] **Cost Treemap**: Backend → model hierarchical treemap visualization — `CostTreemapNode` domain struct with `BuildCostTreemap()` pure function (sort + share computation); cross-tabulation in `Forecast()` using `estimate.PerModel` + message-level backend mapping; `treemapNodeView` with pre-computed widths + color indices; pure CSS flexbox rectangles (`.tm-container`, `.tm-backend`, `.tm-model`); 4th "Cost Map" tab on costs page; legend table with per-backend/model breakdown; 6 unit tests; verified on production data (1,302 sessions)
 
 ### 2.4 Session Timeline View ✅ COMPLETE
 - [x] Session dependency graph (parent → child → fork relationships)
@@ -455,7 +463,7 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [x] **POST /api/settings**: Updates `Config.Set()` + `Config.Save()`, returns HTMX partial with "saved" indicator
 - [x] **~25 editable settings**: storage mode, auto capture, file blame, search engine, analysis adapter/model, tagging, secrets mode, error classifier, dashboard page size/sort, scheduler tasks
 - [x] **8 tests**: toggle, select, text, number, missing key, invalid value, no config, persistence to disk
-- [ ] CRUD for project classifiers and budgets (complex nested objects — future)
+- [x] CRUD for project classifiers and budgets — full inline editing with HTMX, 4 rule types + budget with 5 fields, dynamic add/remove rule rows
 - [ ] Live preview of classification rules against existing sessions (future)
 
 ---

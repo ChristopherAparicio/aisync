@@ -120,7 +120,298 @@
   {{end}}
 </div>
 
+{{/* ── Project Classifiers (full CRUD) ── */}}
+<div class="settings-section settings-section--full-width">
+  <div class="settings-section-header">
+    <span class="settings-section-icon">&#x1F4C1;</span>
+    <span class="settings-section-title">Project Classifiers</span>
+  </div>
+  <div class="settings-section-body pc-body">
+    <div id="project-classifiers-container">
+      {{if .ProjectClassifiers}}
+      {{range .ProjectClassifiers}}
+      <div class="pc-card" id="pc-card-{{settingID .Name}}">
+        <div class="pc-card-header">
+          <span class="pc-card-name">{{.Name}}</span>
+          <div class="pc-card-actions">
+            <button class="pc-btn pc-btn--edit" onclick="pcToggleEdit(this)">Edit</button>
+            <button class="pc-btn pc-btn--delete"
+              hx-delete="/api/settings/project"
+              hx-vals='{"name": "{{.Name}}"}'
+              hx-target="#project-classifiers-container"
+              hx-swap="innerHTML"
+              hx-confirm="Delete project classifier &quot;{{.Name}}&quot;?"
+            >Delete</button>
+          </div>
+        </div>
+        <div class="pc-card-view">
+          <div class="pc-fields">
+            {{if .TicketPattern}}<div class="pc-field"><span class="pc-label">Ticket Pattern</span><span class="pc-value font-mono">{{.TicketPattern}}</span></div>{{end}}
+            {{if .TicketSource}}<div class="pc-field"><span class="pc-label">Ticket Source</span><span class="pc-value">{{.TicketSource}}</span></div>{{end}}
+            {{if .TicketURL}}<div class="pc-field"><span class="pc-label">Ticket URL</span><span class="pc-value font-mono">{{.TicketURL}}</span></div>{{end}}
+            {{if .Tags}}<div class="pc-field"><span class="pc-label">Tags</span><span class="pc-value">{{.Tags}}</span></div>{{end}}
+            {{if .BranchRules}}
+            <div class="pc-field pc-field--rules">
+              <span class="pc-label">Branch Rules</span>
+              <div class="pc-rules">{{range .BranchRules}}<span class="pc-rule"><code>{{.Pattern}}</code> &rarr; {{.Type}}</span>{{end}}</div>
+            </div>
+            {{end}}
+            {{if .AgentRules}}
+            <div class="pc-field pc-field--rules">
+              <span class="pc-label">Agent Rules</span>
+              <div class="pc-rules">{{range .AgentRules}}<span class="pc-rule"><code>{{.Pattern}}</code> &rarr; {{.Type}}</span>{{end}}</div>
+            </div>
+            {{end}}
+            {{if .CommitRules}}
+            <div class="pc-field pc-field--rules">
+              <span class="pc-label">Commit Rules</span>
+              <div class="pc-rules">{{range .CommitRules}}<span class="pc-rule"><code>{{.Pattern}}</code> &rarr; {{.Type}}</span>{{end}}</div>
+            </div>
+            {{end}}
+            {{if .StatusRules}}
+            <div class="pc-field pc-field--rules">
+              <span class="pc-label">Status Rules</span>
+              <div class="pc-rules">{{range .StatusRules}}<span class="pc-rule"><code>{{.Pattern}}</code> &rarr; {{.Type}}</span>{{end}}</div>
+            </div>
+            {{end}}
+            {{if .HasBudget}}
+            <div class="pc-field pc-field--budget">
+              <span class="pc-label">Budget</span>
+              <div class="pc-budget-summary">
+                {{if .MonthlyLimit}}<span class="pc-budget-item">${{.MonthlyLimit}}/mo</span>{{end}}
+                {{if .DailyLimit}}<span class="pc-budget-item">${{.DailyLimit}}/day</span>{{end}}
+                {{if .AlertPercent}}<span class="pc-budget-item">alert at {{.AlertPercent}}%</span>{{end}}
+                <span class="pc-budget-item">mode: {{.CostMode}}</span>
+              </div>
+            </div>
+            {{end}}
+          </div>
+        </div>
+        <div class="pc-card-form" style="display:none;">
+          {{template "pc-edit-form" .}}
+        </div>
+      </div>
+      {{end}}
+      {{else}}
+      <div class="pc-empty">No project classifiers configured. Add one below.</div>
+      {{end}}
+
+      <div class="pc-add-section" id="pc-add-section">
+        <button class="pc-btn pc-btn--add" onclick="document.getElementById('pc-new-form').style.display='block'; this.style.display='none';">+ Add Project</button>
+        <div id="pc-new-form" class="pc-card pc-card--new" style="display:none;">
+          <div class="pc-card-header">
+            <span class="pc-card-name">New Project Classifier</span>
+            <button class="pc-btn pc-btn--cancel" onclick="document.getElementById('pc-new-form').style.display='none'; document.querySelector('.pc-btn--add').style.display='inline-flex';">Cancel</button>
+          </div>
+          <div class="pc-card-form" style="display:block;">
+            {{template "pc-new-form" .}}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="settings-footer">
   <p class="text-muted">Configuration is read from <code>~/.aisync/config.json</code>. Edit the file directly or use <code>aisync config set &lt;key&gt; &lt;value&gt;</code>.</p>
 </div>
+
+<script>
+function pcToggleEdit(btn) {
+  var card = btn.closest('.pc-card');
+  card.querySelector('.pc-card-view').style.display = 'none';
+  card.querySelector('.pc-card-form').style.display = 'block';
+}
+function pcCancelEdit(btn) {
+  var card = btn.closest('.pc-card');
+  card.querySelector('.pc-card-view').style.display = 'block';
+  card.querySelector('.pc-card-form').style.display = 'none';
+}
+function addRuleRow(btn, prefix, phPattern, phType) {
+  var list = btn.previousElementSibling;
+  var row = document.createElement('div');
+  row.className = 'pc-rule-row';
+  row.innerHTML = '<input type="text" name="' + prefix + '_pattern[]" class="pc-form-input pc-form-input--sm font-mono" placeholder="' + phPattern + '">' +
+    '<span class="pc-arrow">&rarr;</span>' +
+    '<input type="text" name="' + prefix + '_type[]" class="pc-form-input pc-form-input--sm" placeholder="' + phType + '">' +
+    '<button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button>';
+  list.appendChild(row);
+}
+</script>
+{{end}}
+
+{{/* ── Edit form for existing project (name is hidden input) ── */}}
+{{define "pc-edit-form"}}
+<form class="pc-form-inner"
+  hx-post="/api/settings/project"
+  hx-target="#project-classifiers-container"
+  hx-swap="innerHTML"
+>
+  <input type="hidden" name="name" value="{{.Name}}">
+  <div class="pc-form-row">
+    <label class="pc-form-label">Project</label>
+    <span class="pc-form-static font-mono">{{.Name}}</span>
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Ticket Pattern</label>
+    <input type="text" name="ticket_pattern" class="pc-form-input font-mono" placeholder="e.g. PROJ-\d+" value="{{.TicketPattern}}">
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Ticket Source</label>
+    <select name="ticket_source" class="pc-form-select">
+      <option value="">—</option>
+      <option value="jira" {{if eq .TicketSource "jira"}}selected{{end}}>jira</option>
+      <option value="notion" {{if eq .TicketSource "notion"}}selected{{end}}>notion</option>
+      <option value="linear" {{if eq .TicketSource "linear"}}selected{{end}}>linear</option>
+      <option value="github" {{if eq .TicketSource "github"}}selected{{end}}>github</option>
+    </select>
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Ticket URL</label>
+    <input type="text" name="ticket_url" class="pc-form-input font-mono" placeholder="https://.../{id}" value="{{.TicketURL}}">
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Tags</label>
+    <input type="text" name="tags" class="pc-form-input" placeholder="feature, bug, refactor, ..." value="{{.Tags}}">
+  </div>
+  {{template "pc-rule-fieldsets" .}}
+  {{template "pc-budget-fieldset" .}}
+  <div class="pc-form-actions">
+    <button type="submit" class="pc-btn pc-btn--save">Save</button>
+    <button type="button" class="pc-btn pc-btn--cancel" onclick="pcCancelEdit(this)">Cancel</button>
+  </div>
+</form>
+{{end}}
+
+{{/* ── New project form (name is editable) ── */}}
+{{define "pc-new-form"}}
+<form class="pc-form-inner"
+  hx-post="/api/settings/project"
+  hx-target="#project-classifiers-container"
+  hx-swap="innerHTML"
+>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Project Name</label>
+    <input type="text" name="name" class="pc-form-input font-mono" placeholder="e.g. owner/repo" required>
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Ticket Pattern</label>
+    <input type="text" name="ticket_pattern" class="pc-form-input font-mono" placeholder="e.g. PROJ-\d+">
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Ticket Source</label>
+    <select name="ticket_source" class="pc-form-select">
+      <option value="" selected>—</option>
+      <option value="jira">jira</option>
+      <option value="notion">notion</option>
+      <option value="linear">linear</option>
+      <option value="github">github</option>
+    </select>
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Ticket URL</label>
+    <input type="text" name="ticket_url" class="pc-form-input font-mono" placeholder="https://.../{id}">
+  </div>
+  <div class="pc-form-row">
+    <label class="pc-form-label">Tags</label>
+    <input type="text" name="tags" class="pc-form-input" placeholder="feature, bug, refactor, ...">
+  </div>
+  {{template "pc-rule-fieldsets-empty" .}}
+  {{template "pc-budget-fieldset-empty" .}}
+  <div class="pc-form-actions">
+    <button type="submit" class="pc-btn pc-btn--save">Save</button>
+  </div>
+</form>
+{{end}}
+
+{{/* ── Reusable rule fieldsets for edit form ── */}}
+{{define "pc-rule-fieldsets"}}
+  <fieldset class="pc-fieldset">
+    <legend>Branch Rules</legend>
+    <div class="pc-rule-list">
+      {{range .BranchRules}}
+      <div class="pc-rule-row">
+        <input type="text" name="branch_rule_pattern[]" class="pc-form-input pc-form-input--sm font-mono" placeholder="feature/*" value="{{.Pattern}}">
+        <span class="pc-arrow">&rarr;</span>
+        <input type="text" name="branch_rule_type[]" class="pc-form-input pc-form-input--sm" placeholder="feature" value="{{.Type}}">
+        <button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button>
+      </div>
+      {{end}}
+    </div>
+    <button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'branch_rule', 'feature/*', 'feature')">+ Rule</button>
+  </fieldset>
+  <fieldset class="pc-fieldset">
+    <legend>Agent Rules</legend>
+    <div class="pc-rule-list">
+      {{range .AgentRules}}
+      <div class="pc-rule-row">
+        <input type="text" name="agent_rule_pattern[]" class="pc-form-input pc-form-input--sm font-mono" placeholder="review" value="{{.Pattern}}">
+        <span class="pc-arrow">&rarr;</span>
+        <input type="text" name="agent_rule_type[]" class="pc-form-input pc-form-input--sm" placeholder="review" value="{{.Type}}">
+        <button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button>
+      </div>
+      {{end}}
+    </div>
+    <button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'agent_rule', 'review', 'review')">+ Rule</button>
+  </fieldset>
+  <fieldset class="pc-fieldset">
+    <legend>Commit Rules</legend>
+    <div class="pc-rule-list">
+      {{range .CommitRules}}
+      <div class="pc-rule-row">
+        <input type="text" name="commit_rule_pattern[]" class="pc-form-input pc-form-input--sm font-mono" placeholder="fix" value="{{.Pattern}}">
+        <span class="pc-arrow">&rarr;</span>
+        <input type="text" name="commit_rule_type[]" class="pc-form-input pc-form-input--sm" placeholder="bug" value="{{.Type}}">
+        <button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button>
+      </div>
+      {{end}}
+    </div>
+    <button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'commit_rule', 'fix', 'bug')">+ Rule</button>
+  </fieldset>
+  <fieldset class="pc-fieldset">
+    <legend>Status Rules</legend>
+    <div class="pc-rule-list">
+      {{range .StatusRules}}
+      <div class="pc-rule-row">
+        <input type="text" name="status_rule_pattern[]" class="pc-form-input pc-form-input--sm font-mono" placeholder="[WIP]" value="{{.Pattern}}">
+        <span class="pc-arrow">&rarr;</span>
+        <input type="text" name="status_rule_type[]" class="pc-form-input pc-form-input--sm" placeholder="active" value="{{.Type}}">
+        <button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button>
+      </div>
+      {{end}}
+    </div>
+    <button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'status_rule', '[WIP]', 'active')">+ Rule</button>
+  </fieldset>
+{{end}}
+
+{{/* ── Empty rule fieldsets for new project form ── */}}
+{{define "pc-rule-fieldsets-empty"}}
+  <fieldset class="pc-fieldset"><legend>Branch Rules</legend><div class="pc-rule-list"></div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'branch_rule', 'feature/*', 'feature')">+ Rule</button></fieldset>
+  <fieldset class="pc-fieldset"><legend>Agent Rules</legend><div class="pc-rule-list"></div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'agent_rule', 'review', 'review')">+ Rule</button></fieldset>
+  <fieldset class="pc-fieldset"><legend>Commit Rules</legend><div class="pc-rule-list"></div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'commit_rule', 'fix', 'bug')">+ Rule</button></fieldset>
+  <fieldset class="pc-fieldset"><legend>Status Rules</legend><div class="pc-rule-list"></div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'status_rule', '[WIP]', 'active')">+ Rule</button></fieldset>
+{{end}}
+
+{{/* ── Budget fieldset for edit form ── */}}
+{{define "pc-budget-fieldset"}}
+  <fieldset class="pc-fieldset">
+    <legend>Budget</legend>
+    <div class="pc-form-row"><label class="pc-form-label">Monthly ($)</label><input type="number" name="budget_monthly" class="pc-form-input pc-form-input--num" step="0.01" min="0" placeholder="0" value="{{.MonthlyLimit}}"></div>
+    <div class="pc-form-row"><label class="pc-form-label">Daily ($)</label><input type="number" name="budget_daily" class="pc-form-input pc-form-input--num" step="0.01" min="0" placeholder="0" value="{{.DailyLimit}}"></div>
+    <div class="pc-form-row"><label class="pc-form-label">Alert (%)</label><input type="number" name="budget_alert_percent" class="pc-form-input pc-form-input--num" step="1" min="0" max="100" placeholder="80" value="{{.AlertPercent}}"></div>
+    <div class="pc-form-row"><label class="pc-form-label">Cost Mode</label><select name="budget_cost_mode" class="pc-form-select"><option value="actual" {{if eq .CostMode "actual"}}selected{{end}}>actual</option><option value="estimated" {{if eq .CostMode "estimated"}}selected{{end}}>estimated</option><option value="all" {{if eq .CostMode "all"}}selected{{end}}>all</option></select></div>
+    <div class="pc-form-row"><label class="pc-form-label">Webhook</label><input type="text" name="budget_alert_webhook" class="pc-form-input font-mono" placeholder="slack" value="{{.AlertWebhook}}"></div>
+  </fieldset>
+{{end}}
+
+{{/* ── Empty budget fieldset for new project form ── */}}
+{{define "pc-budget-fieldset-empty"}}
+  <fieldset class="pc-fieldset">
+    <legend>Budget</legend>
+    <div class="pc-form-row"><label class="pc-form-label">Monthly ($)</label><input type="number" name="budget_monthly" class="pc-form-input pc-form-input--num" step="0.01" min="0" placeholder="0"></div>
+    <div class="pc-form-row"><label class="pc-form-label">Daily ($)</label><input type="number" name="budget_daily" class="pc-form-input pc-form-input--num" step="0.01" min="0" placeholder="0"></div>
+    <div class="pc-form-row"><label class="pc-form-label">Alert (%)</label><input type="number" name="budget_alert_percent" class="pc-form-input pc-form-input--num" step="1" min="0" max="100" placeholder="80"></div>
+    <div class="pc-form-row"><label class="pc-form-label">Cost Mode</label><select name="budget_cost_mode" class="pc-form-select"><option value="actual" selected>actual</option><option value="estimated">estimated</option><option value="all">all</option></select></div>
+    <div class="pc-form-row"><label class="pc-form-label">Webhook</label><input type="text" name="budget_alert_webhook" class="pc-form-input font-mono" placeholder="slack"></div>
+  </fieldset>
 {{end}}

@@ -75,6 +75,15 @@
           onclick="document.querySelectorAll('.cost-tab').forEach(t=>t.classList.remove('active'));this.classList.add('active')">
     Optimization
   </button>
+  {{if .HasTreemap}}
+  <button class="cost-tab"
+          hx-get="/partials/cost-treemap{{if .ProjectQuery}}?project={{.ProjectQuery}}{{end}}"
+          hx-target="#cost-tab-content"
+          hx-swap="innerHTML"
+          onclick="document.querySelectorAll('.cost-tab').forEach(t=>t.classList.remove('active'));this.classList.add('active')">
+    Cost Map
+  </button>
+  {{end}}
 </div>
 
 <!-- ── Tab Content (loaded via HTMX, first tab preloaded) ── -->

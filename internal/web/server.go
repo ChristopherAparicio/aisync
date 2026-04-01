@@ -19,6 +19,7 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/config"
+	"github.com/ChristopherAparicio/aisync/internal/gittree"
 	"github.com/ChristopherAparicio/aisync/internal/security"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
@@ -40,6 +41,7 @@ type Server struct {
 	benchmarkRec     *benchmark.Recommender   // optional — nil disables model alternatives
 	store            storage.Store            // optional — nil disables user preferences
 	securityDetector *security.Detector       // optional — nil disables security scanning
+	gitTree          gittree.TreeProvider     // optional — nil disables git tree overlay in file explorer
 	cfg              *config.Config           // optional — nil uses defaults
 	httpServer       *http.Server
 	pages            map[string]*template.Template // page templates (layout + page)
@@ -56,6 +58,7 @@ type Config struct {
 	BenchmarkRecommender *benchmark.Recommender   // optional — nil disables model alternatives
 	Store                storage.Store            // optional — nil disables user preferences
 	SecurityDetector     *security.Detector       // optional — nil disables security scanning
+	GitTreeProvider      gittree.TreeProvider     // optional — nil disables git tree overlay in file explorer
 	AppConfig            *config.Config           // optional — nil uses defaults
 	Addr                 string                   // e.g. ":8372" or "127.0.0.1:8372"
 	Logger               *log.Logger              // optional — defaults to stderr
@@ -114,6 +117,8 @@ func New(cfg Config) (*Server, error) {
 		"templates/cost_overview_partial.html",
 		"templates/cost_tools_partial.html",
 		"templates/cost_optimization_partial.html",
+		"templates/cost_treemap_partial.html",
+		"templates/project_classifiers_partial.html",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("parse partials: %w", err)
@@ -127,6 +132,7 @@ func New(cfg Config) (*Server, error) {
 		benchmarkRec:     cfg.BenchmarkRecommender,
 		store:            cfg.Store,
 		securityDetector: cfg.SecurityDetector,
+		gitTree:          cfg.GitTreeProvider,
 		cfg:              cfg.AppConfig,
 		pages:            pages,
 		partials:         partials,
@@ -169,6 +175,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /analytics", s.handleAnalytics)
 	mux.HandleFunc("GET /settings", s.handleSettings)
 	mux.HandleFunc("POST /api/settings", s.handleSettingsUpdate)
+	mux.HandleFunc("POST /api/settings/project", s.handleProjectClassifierSave)
+	mux.HandleFunc("DELETE /api/settings/project", s.handleProjectClassifierDelete)
 
 	// HTMX partials
 	mux.HandleFunc("GET /partials/sessions-table", s.handleSessionsTable)
@@ -184,6 +192,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /partials/cost-overview", s.handleCostOverviewPartial)
 	mux.HandleFunc("GET /partials/cost-tools", s.handleCostToolsPartial)
 	mux.HandleFunc("GET /partials/cost-optimization", s.handleCostOptimizationPartial)
+	mux.HandleFunc("GET /partials/cost-treemap", s.handleCostTreemapPartial)
 
 	// API endpoints (JSON)
 	mux.HandleFunc("GET /api/projects", s.handleAPIProjects)

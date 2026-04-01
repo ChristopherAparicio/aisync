@@ -4,6 +4,35 @@
 
 {{define "title"}}{{.BranchName}} — Timeline{{end}}
 
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4AC;</span> Sessions</a></li>
+      <li><a href="/branches" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x1F33F;</span> Branches</a></li>
+      <li><a href="/analytics" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4CA;</span> Analytics</a></li>
+      <li><a href="/costs" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4B0;</span> Costs</a></li>
+    </ul>
+  </div>
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Your Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/projects{{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
 {{define "content"}}
 <div class="page-header">
   <h1 class="page-title">
@@ -12,58 +41,133 @@
   </h1>
 </div>
 
-{{if not .HasEntries}}
+{{if not (or .HasTree .HasEntries)}}
 <div class="empty-state">
   <p>No activity found on this branch.</p>
 </div>
 {{else}}
-<div class="branch-timeline">
-  {{range .Entries}}
-  {{if eq .Type "session"}}
-  <div class="tl-entry tl-session">
-    <div class="tl-marker tl-marker-session" title="AI Session"></div>
-    <div class="tl-content">
-      <div class="tl-header">
-        <a href="/sessions/{{.SessionID}}" class="tl-id font-mono">{{truncate .SessionID 12}}</a>
-        <span class="badge badge-provider">{{.SessionProvider}}</span>
-        {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
-        <span class="tl-when text-muted">{{.TimeAgo}}</span>
-        <span class="tl-stats font-mono text-muted">{{.SessionMessages}} msgs · {{formatTokens .SessionTokens}}</span>
-      </div>
-      {{if .SessionSummary}}
-      <div class="tl-summary">{{.SessionSummary}}</div>
-      {{end}}
-      {{if or .Intent .Outcome}}
-      <div class="tl-objective">
-        {{if .Intent}}<div class="tl-intent"><strong>Intent:</strong> {{.Intent}}</div>{{end}}
-        {{if .Outcome}}<div class="tl-outcome"><strong>Outcome:</strong> {{.Outcome}}</div>{{end}}
-      </div>
-      {{end}}
-      {{if .ExplainShort}}
-      <div class="tl-explain">{{.ExplainShort}}</div>
-      {{end}}
+
+{{/* ── Session Tree ── */}}
+{{if .HasTree}}
+<div class="bt-section">
+  <div class="bt-section-header">
+    <span class="bt-section-title">Session Tree</span>
+    <div class="bt-stats">
+      <span class="bt-stat">{{.TreeStats.TotalSessions}} session{{if ne .TreeStats.TotalSessions 1}}s{{end}}</span>
+      {{if gt .TreeStats.ForkCount 0}}<span class="bt-stat">{{.TreeStats.ForkCount}} fork{{if ne .TreeStats.ForkCount 1}}s{{end}}</span>{{end}}
+      {{if gt .TreeStats.MaxDepth 0}}<span class="bt-stat">depth {{.TreeStats.MaxDepth}}</span>{{end}}
     </div>
   </div>
+  <div class="bt-tree">
+    {{range .Tree}}
+    {{template "bt-node" .}}
+    {{end}}
+  </div>
 
-  {{else if eq .Type "commit"}}
-  <div class="tl-entry tl-commit">
-    <div class="tl-marker tl-marker-commit" title="Git Commit"></div>
-    <div class="tl-content">
-      <div class="tl-header">
-        <span class="tl-sha font-mono">{{truncate .CommitSHA 8}}</span>
-        <span class="tl-commit-msg">{{.CommitMessage}}</span>
-        <span class="tl-when text-muted">{{.TimeAgo}}</span>
-      </div>
-      <div class="tl-commit-meta text-muted">
-        by {{.CommitAuthor}}
-        {{if .LinkedSessionID}}
-        · <a href="/sessions/{{.LinkedSessionID}}" class="text-muted">linked to {{truncate .LinkedSessionID 10}}</a>
+  {{/* Fork relationships */}}
+  {{if .ForkRelations}}
+  <div class="bt-forks">
+    <div class="bt-forks-title">Fork Relationships</div>
+    {{range .ForkRelations}}
+    <div class="bt-fork-entry">
+      <a href="/sessions/{{.OriginalID}}" class="bt-fork-id font-mono">{{.OriginalShort}}</a>
+      <span class="bt-fork-arrow">&rarr;</span>
+      <a href="/sessions/{{.ForkID}}" class="bt-fork-id font-mono">{{.ForkShort}}</a>
+      <span class="bt-fork-meta text-muted">at msg #{{.ForkPoint}}</span>
+      {{if .SharedMsgs}}<span class="bt-fork-meta text-muted">({{.SharedMsgs}} shared)</span>{{end}}
+      {{if .Reason}}<span class="bt-fork-reason text-muted">{{.Reason}}</span>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{/* ── Timeline (flat, chronological) ── */}}
+{{if .HasEntries}}
+<div class="bt-section">
+  <div class="bt-section-header">
+    <span class="bt-section-title">Timeline</span>
+  </div>
+  <div class="branch-timeline">
+    {{range .Entries}}
+    {{if eq .Type "session"}}
+    <div class="tl-entry tl-session">
+      <div class="tl-marker tl-marker-session" title="AI Session"></div>
+      <div class="tl-content">
+        <div class="tl-header">
+          <a href="/sessions/{{.SessionID}}" class="tl-id font-mono">{{truncate .SessionID 12}}</a>
+          <span class="badge badge-provider">{{.SessionProvider}}</span>
+          {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
+          <span class="tl-when text-muted">{{.TimeAgo}}</span>
+          <span class="tl-stats font-mono text-muted">{{.SessionMessages}} msgs · {{formatTokens .SessionTokens}}</span>
+        </div>
+        {{if .SessionSummary}}
+        <div class="tl-summary">{{.SessionSummary}}</div>
+        {{end}}
+        {{if or .Intent .Outcome}}
+        <div class="tl-objective">
+          {{if .Intent}}<div class="tl-intent"><strong>Intent:</strong> {{.Intent}}</div>{{end}}
+          {{if .Outcome}}<div class="tl-outcome"><strong>Outcome:</strong> {{.Outcome}}</div>{{end}}
+        </div>
+        {{end}}
+        {{if .ExplainShort}}
+        <div class="tl-explain">{{.ExplainShort}}</div>
         {{end}}
       </div>
     </div>
+    {{else if eq .Type "commit"}}
+    <div class="tl-entry tl-commit">
+      <div class="tl-marker tl-marker-commit" title="Git Commit"></div>
+      <div class="tl-content">
+        <div class="tl-header">
+          <span class="tl-sha font-mono">{{truncate .CommitSHA 8}}</span>
+          <span class="tl-commit-msg">{{.CommitMessage}}</span>
+          <span class="tl-when text-muted">{{.TimeAgo}}</span>
+        </div>
+        <div class="tl-commit-meta text-muted">
+          by {{.CommitAuthor}}
+          {{if .LinkedSessionID}}
+          · <a href="/sessions/{{.LinkedSessionID}}" class="text-muted">linked to {{truncate .LinkedSessionID 10}}</a>
+          {{end}}
+        </div>
+      </div>
+    </div>
+    {{end}}
+    {{end}}
   </div>
-  {{end}}
-  {{end}}
 </div>
+{{end}}
+
+{{end}}
+{{end}}
+
+{{/* ── Recursive tree node ── */}}
+{{define "bt-node"}}
+<div class="bt-node {{if .IsFork}}bt-node--fork{{end}} {{.StatusClass}}" style="margin-left:{{.IndentPx}}px">
+  <div class="bt-connector">
+    {{if .IsFork}}<span class="bt-connector-fork">&lfloor;</span>{{else}}<span class="bt-connector-line">|</span>{{end}}
+    <span class="bt-dot {{if .IsFork}}bt-dot--fork{{end}} {{if .Errors}}bt-dot--error{{end}}"></span>
+  </div>
+  <div class="bt-node-body">
+    <div class="bt-node-header">
+      <a href="/sessions/{{.ID}}" class="bt-node-id font-mono">{{.IDShort}}</a>
+      <span class="badge badge-provider">{{.Provider}}</span>
+      {{if .Agent}}<span class="badge badge-agent">{{.Agent}}</span>{{end}}
+      {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
+      {{if .Status}}<span class="badge badge-status-{{.Status}}">{{.Status}}</span>{{end}}
+      {{if .IsFork}}<span class="badge bt-badge-fork">fork</span>{{end}}
+    </div>
+    <div class="bt-node-meta">
+      {{if .Summary}}<span class="bt-node-summary">{{.Summary}}</span>{{end}}
+      <span class="bt-node-stats font-mono text-muted">{{.Messages}} msgs · {{.Tokens}}{{if .Errors}} · <span class="text-error">{{.Errors}} err</span>{{end}}</span>
+      <span class="bt-node-when text-muted">{{.TimeAgo}}</span>
+    </div>
+  </div>
+</div>
+{{if .HasChildren}}
+{{range .Children}}
+{{template "bt-node" .}}
+{{end}}
 {{end}}
 {{end}}
