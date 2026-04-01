@@ -1291,6 +1291,163 @@ func TestGetSessionsByFile_FilterByProvider(t *testing.T) {
 	}
 }
 
+// ── FilesForProject ──
+
+func TestFilesForProject_Basic(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("fp-basic-1")
+	sess.ProjectPath = "/home/user/myproj"
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "/home/user/myproj/src/handler.go", ChangeType: session.ChangeModified},
+		{FilePath: "/home/user/myproj/src/main.go", ChangeType: session.ChangeCreated},
+		{FilePath: "/home/user/myproj/README.md", ChangeType: session.ChangeModified},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	entries, err := store.FilesForProject("/home/user/myproj", "", 100)
+	if err != nil {
+		t.Fatalf("FilesForProject() error = %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+
+	// Verify one of the entries.
+	found := false
+	for _, e := range entries {
+		if e.FilePath == "/home/user/myproj/src/handler.go" {
+			found = true
+			if e.SessionCount != 1 {
+				t.Errorf("SessionCount = %d, want 1", e.SessionCount)
+			}
+			if e.LastSessionID != "fp-basic-1" {
+				t.Errorf("LastSessionID = %q, want fp-basic-1", e.LastSessionID)
+			}
+			if e.LastChangeType != session.ChangeModified {
+				t.Errorf("LastChangeType = %q, want modified", e.LastChangeType)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected to find src/handler.go in results")
+	}
+}
+
+func TestFilesForProject_MultipleSessions(t *testing.T) {
+	store := mustOpenStore(t)
+
+	now := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+
+	sess1 := testSession("fp-multi-1")
+	sess1.ProjectPath = "/home/user/proj2"
+	sess1.CreatedAt = now
+	sess1.FileChanges = []session.FileChange{
+		{FilePath: "/home/user/proj2/app.go", ChangeType: session.ChangeModified},
+	}
+
+	sess2 := testSession("fp-multi-2")
+	sess2.ProjectPath = "/home/user/proj2"
+	sess2.CreatedAt = now.Add(1 * time.Hour)
+	sess2.Summary = "Second session"
+	sess2.FileChanges = []session.FileChange{
+		{FilePath: "/home/user/proj2/app.go", ChangeType: session.ChangeCreated},
+	}
+
+	if err := store.Save(sess1); err != nil {
+		t.Fatalf("Save(1) error = %v", err)
+	}
+	if err := store.Save(sess2); err != nil {
+		t.Fatalf("Save(2) error = %v", err)
+	}
+
+	entries, err := store.FilesForProject("/home/user/proj2", "", 100)
+	if err != nil {
+		t.Fatalf("FilesForProject() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry (aggregated), got %d", len(entries))
+	}
+	e := entries[0]
+	if e.SessionCount != 2 {
+		t.Errorf("SessionCount = %d, want 2", e.SessionCount)
+	}
+	// Last session should be the more recent one.
+	if e.LastSessionID != "fp-multi-2" {
+		t.Errorf("LastSessionID = %q, want fp-multi-2", e.LastSessionID)
+	}
+}
+
+func TestFilesForProject_DirPrefix(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("fp-dir-1")
+	sess.ProjectPath = "/home/user/proj3"
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "/home/user/proj3/src/handler.go", ChangeType: session.ChangeModified},
+		{FilePath: "/home/user/proj3/src/main.go", ChangeType: session.ChangeCreated},
+		{FilePath: "/home/user/proj3/docs/README.md", ChangeType: session.ChangeModified},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Filter by "src" prefix.
+	entries, err := store.FilesForProject("/home/user/proj3", "/home/user/proj3/src", 100)
+	if err != nil {
+		t.Fatalf("FilesForProject() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries under src/, got %d", len(entries))
+	}
+	for _, e := range entries {
+		if e.FilePath != "/home/user/proj3/src/handler.go" && e.FilePath != "/home/user/proj3/src/main.go" {
+			t.Errorf("unexpected file: %s", e.FilePath)
+		}
+	}
+}
+
+func TestFilesForProject_ExcludesOutsidePaths(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("fp-outside-1")
+	sess.ProjectPath = "/home/user/proj4"
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "/home/user/proj4/app.go", ChangeType: session.ChangeModified},
+		{FilePath: "/home/user/.config/tool.json", ChangeType: session.ChangeRead},
+		{FilePath: "2>/dev/null", ChangeType: session.ChangeRead},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	entries, err := store.FilesForProject("/home/user/proj4", "", 100)
+	if err != nil {
+		t.Fatalf("FilesForProject() error = %v", err)
+	}
+	// Only app.go should be returned (paths outside project are excluded).
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry (project files only), got %d", len(entries))
+	}
+	if entries[0].FilePath != "/home/user/proj4/app.go" {
+		t.Errorf("FilePath = %q, want /home/user/proj4/app.go", entries[0].FilePath)
+	}
+}
+
+func TestFilesForProject_Empty(t *testing.T) {
+	store := mustOpenStore(t)
+
+	entries, err := store.FilesForProject("/nonexistent/project", "", 100)
+	if err != nil {
+		t.Fatalf("FilesForProject() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(entries))
+	}
+}
+
 // ── DeleteOlderThan ──
 
 func TestDeleteOlderThan(t *testing.T) {

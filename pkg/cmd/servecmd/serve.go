@@ -34,6 +34,7 @@ import (
 	securityRules "github.com/ChristopherAparicio/aisync/internal/security/rules"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver/llmanalyzer"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/web"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
@@ -510,12 +511,17 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			logger.Printf("scheduled task: capture_all (%s)", appCfg.GetSchedulerCaptureAllCron())
 		}
 
-		// Stats report task — warms the stats cache periodically.
+		// Stats report task — warms global + per-project stats caches periodically.
 		if appCfg.GetSchedulerStatsReportEnabled() {
+			var statStore storage.Store
+			if st, stErr := f.Store(); stErr == nil {
+				statStore = st
+			}
 			entries = append(entries, scheduler.Entry{
 				Schedule: appCfg.GetSchedulerStatsReportCron(),
 				Task: scheduler.NewStatsReportTask(scheduler.StatsReportTaskConfig{
 					SessionService: sessionSvc,
+					Store:          statStore,
 					Logger:         logger,
 				}),
 			})
@@ -531,6 +537,70 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			}),
 		})
 		logger.Println("scheduled task: token_usage_compute (30 3 * * *)")
+
+		// Context saturation pre-compute task — runs every 2 hours.
+		// Pre-computes the expensive ContextSaturation analysis in the background
+		// so web handlers serve cached results instantly instead of scanning all sessions.
+		if storeSched, storeErr := f.Store(); storeErr == nil {
+			entries = append(entries, scheduler.Entry{
+				Schedule: "15 */2 * * *", // every 2 hours at :15
+				Task: scheduler.NewSaturationTask(scheduler.SaturationTaskConfig{
+					SessionService: sessionSvc,
+					Store:          storeSched,
+					Logger:         logger,
+				}),
+			})
+			logger.Println("scheduled task: saturation_precompute (15 */2 * * *)")
+		}
+
+		// Cache efficiency pre-compute task — runs every 2 hours (offset from saturation).
+		// Pre-computes the expensive CacheEfficiency analysis (7d + 90d windows) in the background
+		// so web handlers serve cached results instantly.
+		if storeSched, storeErr := f.Store(); storeErr == nil {
+			entries = append(entries, scheduler.Entry{
+				Schedule: "45 */2 * * *", // every 2 hours at :45 (offset from saturation at :15)
+				Task: scheduler.NewCacheEfficiencyTask(scheduler.CacheEfficiencyTaskConfig{
+					SessionService: sessionSvc,
+					Store:          storeSched,
+					Logger:         logger,
+				}),
+			})
+			logger.Println("scheduled task: cacheeff_precompute (45 */2 * * *)")
+		}
+
+		// Backfill remote URLs task — resolves git remote URLs for sessions that lack them.
+		// Runs daily at 4:00 AM; lightweight scan so no perf concern.
+		entries = append(entries, scheduler.Entry{
+			Schedule: "0 4 * * *", // daily at 4:00 AM
+			Task: scheduler.NewBackfillRemoteURLTask(scheduler.BackfillRemoteURLConfig{
+				SessionService: sessionSvc,
+				Logger:         logger,
+			}),
+		})
+		logger.Println("scheduled task: backfill_remote_url (0 4 * * *)")
+
+		// Fork detection task — detects session forks and persists relationships.
+		// Runs daily at 4:30 AM; scans recent sessions for common ancestry.
+		entries = append(entries, scheduler.Entry{
+			Schedule: "30 4 * * *", // daily at 4:30 AM
+			Task: scheduler.NewForkDetectionTask(scheduler.ForkDetectionConfig{
+				SessionService: sessionSvc,
+				Logger:         logger,
+			}),
+		})
+		logger.Println("scheduled task: fork_detection (30 4 * * *)")
+
+		// Budget check task — checks project budgets and logs alerts.
+		// Runs every hour at :50 to catch daily/monthly overages promptly.
+		entries = append(entries, scheduler.Entry{
+			Schedule: "50 * * * *", // every hour at :50
+			Task: scheduler.NewBudgetCheckTask(scheduler.BudgetCheckConfig{
+				SessionService: sessionSvc,
+				Dispatcher:     nil, // no webhook dispatcher wired yet — logs only
+				Logger:         logger,
+			}),
+		})
+		logger.Println("scheduled task: budget_check (50 * * * *)")
 
 		// Error reclassification task — reclassifies unknown errors via LLM.
 		if schedule := appCfg.GetErrorsLLMSchedule(); schedule != "" {

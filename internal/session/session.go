@@ -355,6 +355,12 @@ type ContextSaturation struct {
 
 	// Session freshness & diminishing returns (2.3)
 	Freshness *FreshnessAggregate `json:"freshness,omitempty"` // aggregate freshness analysis across all sessions
+
+	// System prompt impact analysis (5.3)
+	PromptImpact *SystemPromptImpact `json:"prompt_impact,omitempty"` // CLAUDE.md / system prompt size analysis
+
+	// Model fitness profiles (6.4)
+	Fitness *FitnessAnalysis `json:"fitness,omitempty"` // per-task-type model fitness rankings
 }
 
 // ModelSaturation aggregates saturation stats for a single model.

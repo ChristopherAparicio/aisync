@@ -328,6 +328,10 @@ func (m *MockStore) TopFilesForProject(_ string, _ int) ([]session.TopFileEntry,
 	return nil, nil
 }
 
+func (m *MockStore) FilesForProject(_ string, _ string, _ int) ([]session.ProjectFileEntry, error) {
+	return nil, nil
+}
+
 // ── Lifecycle ──
 
 func (m *MockStore) ReplaceSessionFiles(_ session.ID, _ []session.SessionFileRecord) error {

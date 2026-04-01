@@ -56,6 +56,16 @@
   </div>
 </div>
 
+<!-- ── Session Timeline (lazy loaded via HTMX) ── -->
+<div id="timeline-container">
+  <button class="action-btn"
+          hx-get="/partials/session-timeline/{{.Session.ID}}"
+          hx-target="#timeline-container"
+          hx-swap="innerHTML">
+    Show Timeline
+  </button>
+</div>
+
 <!-- ── Context Saturation (lazy loaded via HTMX) ── -->
 <div id="saturation-container">
   <button class="action-btn"

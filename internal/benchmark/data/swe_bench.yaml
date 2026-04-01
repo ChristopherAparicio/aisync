@@ -1,0 +1,78 @@
+# SWE-bench Verified — Real GitHub Issue Resolution
+#
+# Measures end-to-end software engineering: understanding an issue,
+# localizing the bug, and generating a correct patch.
+# Score = percentage of issues resolved correctly.
+#
+# Source: https://www.swebench.com/
+# Captured: 2026-03-27
+#
+# Only includes models also present in other benchmarks for cross-referencing.
+
+source: swe_bench
+date: "2026-03-27"
+category: problem_solving
+
+entries:
+  # ─── Top tier (>50%) ──────────────────────────────────────────────
+  - model: claude-opus-4
+    score: 72.5
+    aliases: ["claude-opus-4-20250514", "claude-opus-4-1", "anthropic.claude-opus-4-6-v1"]
+
+  - model: claude-sonnet-4
+    score: 72.7
+    aliases: ["claude-sonnet-4-20250514", "anthropic.claude-sonnet-4-20250514-v1:0"]
+
+  - model: o3
+    score: 69.1
+    aliases: ["o3-2025", "o3-2025-01-01"]
+
+  - model: gemini-2.5-pro
+    score: 63.8
+    aliases: ["gemini-2.5-pro-latest", "gemini-2.5-pro-preview"]
+
+  - model: gpt-5
+    score: 66.2
+    aliases: ["gpt-5-0125", "gpt-5-latest"]
+
+  - model: claude-sonnet-3.7
+    score: 62.3
+    aliases: ["claude-3-7-sonnet", "claude-3.7-sonnet", "claude-sonnet-3-7-20250219"]
+
+  # ─── Mid tier (30-50%) ──────────────────────────────────────────
+  - model: deepseek-r1
+    score: 49.2
+    aliases: ["deepseek-r1-reasoner", "deepseek/deepseek-r1"]
+
+  - model: gpt-4.1
+    score: 54.6
+    aliases: ["gpt-4.1-2025"]
+
+  - model: deepseek-v3
+    score: 42.0
+    aliases: ["deepseek-v3.2", "deepseek-v3-chat", "deepseek/deepseek-chat"]
+
+  - model: gemini-2.5-flash
+    score: 49.0
+    aliases: ["gemini-2.5-flash-latest", "gemini-2.5-flash-preview"]
+
+  - model: gpt-4o
+    score: 38.4
+    aliases: ["gpt-4o-2025", "gpt-4o-2024-11-20", "gpt-4o-latest"]
+
+  - model: kimi-k2
+    score: 41.6
+    aliases: ["kimi-k2-0711", "moonshot/kimi-k2"]
+
+  # ─── Lower tier (<30%) ──────────────────────────────────────────
+  - model: gpt-4o-mini
+    score: 23.6
+    aliases: ["gpt-4o-mini-2024-07-18"]
+
+  - model: claude-haiku-3.5
+    score: 33.6
+    aliases: ["claude-3-5-haiku", "claude-3-5-haiku-20241022"]
+
+  - model: gpt-4.1-mini
+    score: 32.9
+    aliases: ["gpt-4.1-mini-2025"]

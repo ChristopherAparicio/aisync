@@ -670,7 +670,8 @@ func New() *cmdutil.Factory {
 	}
 
 	f.BenchmarkRecommenderFunc = func() (*benchmark.Recommender, error) {
-		benchCat, err := benchmark.NewEmbeddedCatalog()
+		// Use MultiEmbeddedCatalog for multi-source composite scoring.
+		benchCat, err := benchmark.NewMultiEmbeddedCatalog(benchmark.MultiCatalogConfig{})
 		if err != nil {
 			return nil, err
 		}

@@ -277,6 +277,137 @@
   {{end}}
   {{end}}
 
+  <!-- ── System Prompt Impact (5.3) ── -->
+  {{if .HasPromptImpact}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">System Prompt Impact <span class="text-muted">(CLAUDE.md / MCP)</span></h3>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Estimated system prompt size (CLAUDE.md + AGENTS.md + MCP tool descriptions) and its impact on session cost and quality. Based on cache write data from {{.PromptTotalSessions}} sessions.</p>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">Avg Prompt Size</div>
+      <div class="value">{{.PromptAvgEstimate}}</div>
+      <div class="sub">median: {{.PromptMedianEstimate}}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Range</div>
+      <div class="value font-mono" style="font-size: 1.2rem;">{{.PromptMinEstimate}} – {{.PromptMaxEstimate}}</div>
+      <div class="sub">min – max tokens</div>
+    </div>
+    <div class="kpi-card{{if gt .PromptAvgCostPct 30.0}} kpi-accent{{end}}">
+      <div class="label">Input Cost %</div>
+      <div class="value{{if gt .PromptAvgCostPct 30.0}} text-error{{end}}">{{printf "%.1f" .PromptAvgCostPct}}%</div>
+      <div class="sub">of input tokens per session</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Trend</div>
+      <div class="value">{{.PromptTrendIcon}} {{.PromptTrend}}</div>
+      <div class="sub">prompt size over time</div>
+    </div>
+  </div>
+
+  {{if .HasPromptBuckets}}
+  <h4 style="margin-top: 1rem; margin-bottom: 0.5rem; font-size: 0.85rem; font-weight: 600;">Quality by Prompt Size</h4>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Size Bucket</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Error Rate</th>
+          <th class="text-right">Retry Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if gt .PromptSmallCount 0}}
+        <tr>
+          <td><span class="badge badge-good">Small</span> <span class="text-muted">&lt;3K</span></td>
+          <td class="text-right">{{.PromptSmallCount}}</td>
+          <td class="text-right font-mono">{{printf "%.1f" .PromptSmallErrorRate}}%</td>
+          <td class="text-right font-mono">{{printf "%.1f" .PromptSmallRetryRate}}%</td>
+        </tr>
+        {{end}}
+        {{if gt .PromptMediumCount 0}}
+        <tr>
+          <td><span class="badge badge-warning">Medium</span> <span class="text-muted">3K–8K</span></td>
+          <td class="text-right">{{.PromptMediumCount}}</td>
+          <td class="text-right font-mono">{{printf "%.1f" .PromptMediumErrorRate}}%</td>
+          <td class="text-right font-mono">{{printf "%.1f" .PromptMediumRetryRate}}%</td>
+        </tr>
+        {{end}}
+        {{if gt .PromptLargeCount 0}}
+        <tr>
+          <td><span class="badge badge-poor">Large</span> <span class="text-muted">&gt;8K</span></td>
+          <td class="text-right">{{.PromptLargeCount}}</td>
+          <td class="text-right font-mono{{if gt .PromptLargeErrorRate 15.0}} text-error{{end}}">{{printf "%.1f" .PromptLargeErrorRate}}%</td>
+          <td class="text-right font-mono">{{printf "%.1f" .PromptLargeRetryRate}}%</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .PromptRecommendation}}
+  <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem;">
+    <span style="font-weight: 600;">Recommendation:</span> {{.PromptRecommendation}}
+  </div>
+  {{end}}
+  {{end}}
+
+  <!-- ── Model Fitness Profiles (6.4) ── -->
+  {{if .HasFitness}}
+  <h3 class="section-subtitle" style="margin-top: 1.5rem;">Model Fitness by Task Type</h3>
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">How well each model performs for different task types (feature, bug, refactor, etc.), ranked by a composite fitness score (error discipline, retry rate, cost efficiency, productivity). Based on {{.FitnessTotalSessions}} classified sessions.</p>
+
+  {{range .FitnessTaskTypes}}
+  <div style="margin-bottom: 1rem;">
+    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+      <span class="badge badge-{{.GradeClass}}" style="text-transform: capitalize; font-size: 0.8rem;">{{.TaskType}}</span>
+      <span class="text-muted" style="font-size: 0.8rem;">{{.SessionCount}} sessions</span>
+      {{if .BestModel}}<span class="text-muted" style="font-size: 0.8rem;">· best: <span class="font-mono">{{.BestModel}}</span></span>{{end}}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th class="text-right">Sessions</th>
+            <th class="text-right">Avg Cost</th>
+            <th class="text-right">Avg Msgs</th>
+            <th class="text-right">Err%</th>
+            <th class="text-right">Retry%</th>
+            <th>Fitness</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Models}}
+          <tr{{if .IsBest}} style="background: var(--bg-hover);"{{end}}>
+            <td class="font-mono">{{if .IsBest}}★ {{end}}{{.Model}}</td>
+            <td class="text-right">{{.SessionCount}}</td>
+            <td class="text-right font-mono">{{.AvgCost}}</td>
+            <td class="text-right font-mono">{{.AvgMessages}}</td>
+            <td class="text-right font-mono{{if gt .ErrorRate 15.0}} text-error{{end}}">{{printf "%.1f" .ErrorRate}}%</td>
+            <td class="text-right font-mono">{{printf "%.0f" .RetryRate}}%</td>
+            <td><span class="badge badge-{{.GradeClass}}" title="Score: {{.FitnessScore}}/100">{{.FitnessGrade}} ({{.FitnessScore}})</span></td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .HasFitnessRecs}}
+  <div style="margin-top: 0.5rem; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.85rem;">
+    <span style="font-weight: 600;">Recommendations:</span>
+    <ul style="margin: 0.5rem 0 0 1rem; padding: 0; list-style-type: disc;">
+      {{range .FitnessRecs}}
+      <li style="margin-bottom: 0.25rem;">{{.}}</li>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+  {{end}}
+
   {{if .SatModels}}
   <h3 class="section-subtitle" style="margin-top: 1.5rem;">Saturation &amp; Efficiency by Model</h3>
   <div class="table-wrap">
@@ -414,8 +545,18 @@
 <!-- ── Model Alternatives (Benchmark-Based) ── -->
 {{if .HasAlternatives}}
 <div class="section">
+  {{if .HasMultiBenchmark}}
+  <h2 class="section-title">Model Alternatives <span class="text-muted">(Multi-Benchmark Composite)</span></h2>
+  <p class="text-muted" style="margin-bottom: 0.5rem; font-size: 0.8rem;">Cheaper models scored across multiple benchmarks. Composite = weighted average of all available scores. QAC = cost adjusted for quality (lower is better).</p>
+  <div class="bench-sources" style="margin-bottom: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+    {{range .BenchmarkSources}}
+    <span class="badge bench-badge {{.Key}}" title="Weight: {{.WeightPct}}%">{{.Name}} {{.WeightPct}}%</span>
+    {{end}}
+  </div>
+  {{else}}
   <h2 class="section-title">Model Alternatives <span class="text-muted">(Aider Polyglot Benchmark)</span></h2>
   <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">Cheaper models that could replace your current models, scored against the Aider polyglot coding benchmark (225 exercises, 6 languages). QAC = cost adjusted for quality (lower is better).</p>
+  {{end}}
   <div class="table-wrap">
     <table>
       <thead>
@@ -439,6 +580,13 @@
             <span class="text-muted">{{printf "%.0f" .CurrentScore}}%</span>
             &rarr;
             {{printf "%.0f" .AltScore}}%
+            {{if .HasBreakdown}}
+            <div class="bench-breakdown">
+              {{range .AltScores}}
+              <span class="bench-mini {{.SourceClass}}" title="{{.Source}}: {{printf "%.0f" .Score}}%">{{printf "%.0f" .Score}}</span>
+              {{end}}
+            </div>
+            {{end}}
           </td>
           <td class="text-right">
             {{if gt .ScoreDelta 0.0}}
@@ -473,14 +621,19 @@
 {{if .HasQACLeaderboard}}
 <div class="section">
   <h2 class="section-title">Quality-Adjusted Cost Leaderboard</h2>
+  {{if .HasMultiBenchmark}}
+  <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">All models ranked by true cost: price normalized by multi-benchmark composite quality. QAC = $/1M tokens &divide; (composite% / 100). Lower QAC = better value. Your current models are highlighted.</p>
+  {{else}}
   <p class="text-muted" style="margin-bottom: 0.75rem; font-size: 0.8rem;">All models ranked by true cost: price normalized by coding quality. QAC = $/1M tokens &divide; (benchmark% / 100). Lower QAC = better value. Your current models are highlighted.</p>
+  {{end}}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
           <th class="text-right">#</th>
           <th>Model</th>
-          <th class="text-right">Benchmark</th>
+          <th class="text-right">{{if .HasMultiBenchmark}}Composite{{else}}Benchmark{{end}}</th>
+          {{if .HasMultiBenchmark}}<th class="text-right">Sources</th>{{end}}
           <th class="text-right">Cost / 1M</th>
           <th class="text-right">QAC / 1M</th>
         </tr>
@@ -491,6 +644,19 @@
           <td class="text-right text-muted">{{.Rank}}</td>
           <td class="font-mono">{{.Model}}{{if .IsCurrentModel}} <span class="badge badge-good">you</span>{{end}}</td>
           <td class="text-right">{{printf "%.1f" .BenchmarkScore}}%</td>
+          {{if $.HasMultiBenchmark}}
+          <td class="text-right">
+            {{if .HasBreakdown}}
+            <div class="bench-breakdown">
+              {{range .Scores}}
+              <span class="bench-mini {{.SourceClass}}" title="{{.Source}}: {{printf "%.0f" .Score}}%">{{printf "%.0f" .Score}}</span>
+              {{end}}
+            </div>
+            {{else}}
+            <span class="text-muted">-</span>
+            {{end}}
+          </td>
+          {{end}}
           <td class="text-right font-mono">${{printf "%.2f" .InputCost}}</td>
           <td class="text-right font-mono" style="font-weight: 600;">${{printf "%.2f" .QAC}}</td>
         </tr>

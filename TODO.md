@@ -1,8 +1,91 @@
 # aisync — Next Session TODO
 
-> Last updated: 2026-03-31
+> Last updated: 2026-04-01
 
-## Recently Completed (2026-03-31)
+## Recently Completed (2026-04-01)
+
+### File Explorer Page ✅
+- [x] **Domain struct**: `ProjectFileEntry` in `fileops.go` — `FilePath`, `SessionCount`, `WriteCount`, `LastChangeType`, `LastSessionID`, `LastSessionTime`, `LastSummary`, `LastBranch`, `LastProvider`
+- [x] **Store interface**: `FilesForProject(projectPath, dirPrefix, limit)` added to `SearchStore` in `store.go`
+- [x] **SQLite implementation**: CTE-based query in `sqlite.go` — aggregates per file, joins back to get last session info, filters to project-only paths
+- [x] **Handler**: `handleFileExplorer()` — two-pass directory aggregation, project-forced redirect, clickable breadcrumbs, garbage path filtering
+- [x] **Template**: `file_explorer.html` — project selector, breadcrumb navigation, KPI strip (files/directories), directory grid cards, file table (name, sessions, last change, session link, branch, when)
+- [x] **CSS**: `.fe-*` classes — directory grid, file cells, breadcrumbs, summary ellipsis
+- [x] **Route**: `GET /files/{path...}` with `?dir=` parameter for directory navigation
+- [x] **Navbar**: "Files" link added
+- [x] **Project detail**: "Explore →" link in Top Files panel
+- [x] **5 unit tests**: basic, multiple sessions, dir prefix, exclude outside paths, empty project
+- [x] **All 2,200 tests passing** across 105 packages
+
+## Previously Completed (2026-03-31)
+
+### Performance Optimization — Background Caching & Scheduler ✅
+- [x] **`SaturationTask`** (`saturation_task.go`): Pre-computes `ContextSaturation()` for global + all projects every 2h, writes to cache table
+- [x] **`CacheEfficiencyTask`** (`cacheeff_task.go`): Pre-computes `CacheEfficiency()` for 7d + 90d windows, global + per-project, every 2h
+- [x] **`cachedSaturation()`**: Cache-first accessor with 2h TTL, cold-cache fallback to live compute
+- [x] **`cachedCacheEfficiency()`**: Cache-first accessor with 2h TTL, dual window support (7d/90d)
+- [x] **`cachedTrends()`**: Cache-first accessor with 5min TTL for Trends() (2 full scans per call)
+- [x] **`cachedSidebarGroups()`**: Cache-first accessor with 2min TTL — `ListProjects()` called on 11+ pages
+- [x] **`cachedCostsPage()`**: Caches full cost dashboard struct (60s TTL) — prevents 3 tab partials from recomputing
+- [x] **`StatsReportTask` enhanced**: Now warms global + per-project stats (was global only), writes directly to cache table
+- [x] **3 unwired tasks wired**: `backfill_remote_url` (daily 4:00), `fork_detection` (daily 4:30), `budget_check` (hourly :50)
+- [x] **12 new tests**: 7 SaturationTask + 5 CacheEfficiencyTask (name, defaults, global-only, with-projects, error, non-fatal project list error)
+- [x] **Scheduler now has 10 tasks** (was 6), all cron-scheduled with staggered times to avoid contention
+- [x] **All 84 packages passing**, 0 regressions
+
+### Model Fitness Profiles (6.4) — Sprint E ✅
+- [x] **Domain** (`fitness.go`): `ModelFitnessProfile`, `TaskTypeProfile`, `FitnessAnalysis`, `SessionFitnessData` structs — per-task-type model fitness scoring
+- [x] **`AnalyzeModelFitness()`**: Pure domain function — groups sessions by (task_type, model), computes fitness scores, ranks models within each task type, generates recommendations
+- [x] **`computeFitnessScore()`**: 4-component composite (error discipline 25pts, retry discipline 25pts, cost efficiency 25pts via log10, productivity 25pts) — 0-100 scale with grade via `scoreToGrade()`
+- [x] **`buildFitnessRecommendations()`**: Model switching (fitness gap >15pts), cost saving (>50% cheaper at similar fitness), high error rate (>30%) — capped at 5 recommendations
+- [x] **`log10Approx()`**: Custom log10 without `math` import — iterative digit-count approach
+- [x] **Service integration**: `ContextSaturation()` collects `SessionFitnessData` per session (model, task type, cost, messages, errors, retries, total tokens), aggregates via `AnalyzeModelFitness()`, stores in `result.Fitness`
+- [x] **View structs**: `fitnessTaskTypeView`, `fitnessModelView` with pre-computed formatted fields; 9 new fields on `costDashboardPage`
+- [x] **Dashboard**: "Model Fitness by Task Type" section — per-task-type expandable tables (model, sessions, avg cost, avg msgs, err%, retry%, fitness grade), recommendations list
+- [x] **17 unit tests**: empty input, no valid data, single model/type, multiple models, multiple task types, error rate impact, retry rate impact, perfect score, terrible score, bounds check, log10 approx (2 cases), recommendations (empty, significant gap, cost saving, max five), avg metrics verification
+- [x] **All tests passing** (84 packages, 0 failures)
+
+### CLAUDE.md Impact Analysis (5.3) — Sprint E ✅
+- [x] **Domain**: `SystemPromptEstimate()` — estimates system prompt tokens from first assistant message's `CacheWriteTokens` (Method A) with fallback to `InputTokens - roughTokenEstimate(userContent)` (Method B); `roughTokenEstimate()` — `len(content)/4` approximation
+- [x] **Domain**: `SystemPromptImpact` struct — aggregate analysis with size buckets (small <3K, medium 3K-8K, large >8K), quality correlation (error rate, retry rate per bucket), trend detection, cost impact
+- [x] **Domain**: `SessionPromptData` struct — per-session input data; `AnalyzeSystemPromptImpact()` — pure domain function computing basic stats, size bucket distribution, quality correlation, trend analysis (first vs last quarter), recommendation engine
+- [x] **Domain**: `computePromptTrend()` — compares first vs last quarter of sessions (>20% change = growing/shrinking); `buildPromptRecommendation()` — generates actionable advice based on size, trend, error correlation
+- [x] **Service integration**: `ContextSaturation()` collects `SessionPromptData` per session (prompt estimate, total input, error rate, retry rate), calls `AnalyzeSystemPromptImpact()`, stores in `result.PromptImpact`
+- [x] **Dashboard**: "System Prompt Impact (CLAUDE.md / MCP)" section — KPIs (avg/median size, range, cost %, trend), quality-by-prompt-size table (error/retry rates per bucket), recommendation box
+- [x] **22 unit tests**: empty messages, no assistant, Method A cache write, cache write edge case, Method B input-minus-user, Method B too small, fallback raw input, fallback too small, rough token estimate (4 cases), impact analysis (empty, all zero, basic stats, size buckets, cost pct), trend (growing, stable, shrinking, too few), recommendations (large+errors, growing, very large, normal range), format helpers
+- [x] **All tests passing** (84 packages, 0 failures)
+
+### Multi-Benchmark Aggregation (6.3) — Sprint E ✅
+- [x] **Domain types**: `BenchmarkScore`, `CompositeWeights`, `CompositeEntry` structs; new sources `SourceSWEBench`, `SourceToolBench`, `SourceArenaELO`, `SourceHumanEval`
+- [x] **`MultiCatalog` port interface**: Extends `Catalog` with `LookupScores()`, `CompositeScore()`, `Sources()` — supports multi-source benchmark aggregation
+- [x] **`MultiEmbeddedCatalog`**: go:embed adapter loading multiple YAML files from `data/` directory + original Aider catalog; configurable weights; weight renormalization for missing sources
+- [x] **Benchmark data files**: `swe_bench.yaml` (15 models, real GitHub issue resolution), `toolbench.yaml` (16 models, tool/API usage), `arena_elo.yaml` (18 models, human preference ELO normalized to 0-100)
+- [x] **Default weights**: Aider 40%, SWE-bench 30%, ToolBench 20%, Arena ELO 10% (per NEXT.md spec)
+- [x] **Recommender updates**: `Benchmarks()` accessor, auto-populates `CurrentScores`/`AltScores` on `ModelAlternative` and `Scores`/`SourceCount` on `QACLeaderEntry` when `MultiCatalog` is detected
+- [x] **Factory wiring**: `BenchmarkRecommenderFunc` now uses `NewMultiEmbeddedCatalog` instead of `NewEmbeddedCatalog`
+- [x] **Dashboard**: "Multi-Benchmark Composite" header with source weight badges; per-source mini-badges in Score and Sources columns for both Model Alternatives and QAC Leaderboard tables; conditional rendering for single vs multi benchmark mode
+- [x] **CSS**: `.bench-badge`, `.bench-mini`, `.bench-breakdown` styles with per-source colors (Aider blue, SWE-bench purple, ToolBench amber, Arena ELO green)
+- [x] **14 unit tests**: multi-catalog creation, composite lookup, multi-source scores, alias lookup, not-found, weight renormalization, all-sources composite, custom weights, list sorting, composite entries, default weights sum, recommender with multi-benchmark, empty composite, source sorting
+- [x] **All tests passing** (84 packages, 0 failures)
+
+### Session Freshness & Diminishing Returns (2.3) — Sprint D ✅
+- [x] **Domain**: `SessionFreshness`, `FreshnessPhase`, `FreshnessAggregate`, `CompactionDepthStats` structs in `freshness.go`
+- [x] **`AnalyzeFreshness()`**: Pure domain function — segments session into phases bounded by compaction events, measures error rate / retry rate / output ratio per phase, detects quality degradation, finds optimal message index via sliding window
+- [x] **`AggregateFreshness()`**: Combines per-session results — averages error growth, retry growth, output decay; builds per-compaction-depth quality stats (depth 0, 1, 2, 3+)
+- [x] **Recommendation engine**: `buildFreshnessRecommendation()` and `buildAggregateRecommendation()` generate actionable guidance based on error rate growth, output decay, compaction count
+- [x] **Service integration**: `ContextSaturation()` calls `AnalyzeFreshness()` per session, aggregates via `AggregateFreshness()`, stores in `result.Freshness`
+- [x] **Dashboard**: "Session Freshness & Diminishing Returns" section — KPIs (compacted %, avg compactions, error rate growth, output decay, optimal length), per-depth quality table, recommendation box
+- [x] **10 unit tests**: no compaction, one compaction, multiple compactions, empty session, optimal message idx, aggregate basic, aggregate empty, depth stats, recommendation variants
+
+### Token Waste Classification (4.2) — Sprint D ✅
+- [x] **Domain**: `TokenWasteBreakdown`, `WasteBucket`, `WasteCategory` structs in `waste.go`
+- [x] **`ClassifyTokenWaste()`**: Pure domain function — classifies session tokens into productive, retry, compaction, cache_miss, idle_context categories
+- [x] **`AggregateWaste()`**: Combines waste breakdowns across sessions with re-computed percentages
+- [x] **`identifyRetryMessages()`**: Detects retry of failed tool calls (same tool called after error)
+- [x] **`identifyCacheMissMessages()`**: Detects assistant msgs after >5min cache TTL expiry from last assistant response
+- [x] **Service integration**: `ContextSaturation()` calls `ClassifyTokenWaste()` per session, aggregates via `AggregateWaste()`, stores in `result.TokenWaste`
+- [x] **Dashboard**: "Token Waste Classification" section — pie chart (conic-gradient), 5-category KPI cards with colored borders, waste % summary
+- [x] **10 unit tests**: empty session, all productive, retries, compaction, cache miss, idle context, percentages, aggregate, retry messages, cache miss messages
 
 ### Model Context Efficiency Score (3.1) — Sprint C ✅
 - [x] **Domain**: New fields on `ModelSaturation`: `TotalInputTokens`, `TotalOutputTokens`, `TotalCost`, `TotalMessages`, `TotalToolErrors`, `TotalToolCalls`, `ErrorRate`, `CostPer1KOutput`, `OutputPerDollar`, `AvgOutputRatio`, `EfficiencyScore` (0-100), `EfficiencyGrade` (A-F)
@@ -263,8 +346,8 @@ Displayed as a colored badge on each session card: 🟢 90+, 🟡 70-89, 🔴 <7
 Backend + web views + CLI all working. See "Recently Completed" section above.
 
 Remaining enhancement opportunities:
-- [ ] **File explorer page**: tree view of project files with session count badge (`/projects/{path...}/files`)
-- [ ] **Directory-level blame**: "Show me all sessions that modified `auth/`" (glob/prefix query)
+- [x] **File explorer page**: `/files/{path...}` — browse project files, directory navigation, session blame per file ✅
+- [x] **Directory-level blame**: `?dir=` prefix filtering supports browsing any directory scope ✅
 
 ### 1.1 Search Strategy (Deferred)
 Search is a separate effort. For now FTS5 handles keyword search.
@@ -326,9 +409,18 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [x] **Budget overlay line**: Dashed red horizontal line on Cost Over Time chart, sum of project daily limits, bar rescaling when budget exceeds max cost
 - [ ] Treemap or sunburst: project → backend → model → cost (deferred)
 
-### 2.4 Session Timeline View
-- [ ] Session dependency graph (parent → child → fork relationships)
-- [ ] Timeline of a session: messages, tool calls, errors as a Gantt-like chart
+### 2.4 Session Timeline View ✅ COMPLETE
+- [x] Session dependency graph (parent → child → fork relationships)
+- [x] Timeline of a session: messages, tool calls, errors as a Gantt-like chart
+- [x] HTMX lazy-loaded partial: `GET /partials/session-timeline/{id}`
+- [x] Gantt bars colored by role (user/assistant/system), positioned by timestamp
+- [x] Tool call chips with state icons (✅/❌/⏳) and duration
+- [x] Saturation zone overlay (optimal/degraded/critical) with % display
+- [x] Compaction markers (purple bars)
+- [x] Fork point markers (⑂)
+- [x] Overload inflection dashed line + health badge
+- [x] Mini dependency graph: parent → self → children/forks with clickable links
+- [x] Pure CSS (no external JS), dark theme consistent
 
 ### 2.5 Costs Page Organization ✅ COMPLETE
 - [x] HTMX tabs: Overview / Tools & Agents / Optimization (lazy-loaded partials)
@@ -375,10 +467,18 @@ Interactive tree visualization when clicking on a branch in the project page.
 - [ ] LLM classifier for ambiguous tool errors
 - [ ] `CompositeClassifier` — deterministic first, LLM fallback for "unknown"
 
-### 4.2 Performance
+### 4.2 Performance ✅ MOSTLY COMPLETE
 - [ ] Incremental FTS5 indexing (only new/modified sessions)
-- [ ] Lazy loading for costs page sections (HTMX partial load)
-- [ ] Cache expensive computations (CacheEfficiency, BudgetStatus)
+- [x] **Lazy loading for costs page sections**: HTMX tab partials + `cachedCostsPage()` prevents recomputing on tab switch (60s TTL)
+- [x] **Background pre-compute ContextSaturation()**: `SaturationTask` (every 2h) pre-warms global + per-project results; web handlers use `cachedSaturation()` with 2h TTL, cold-cache fallback
+- [x] **Background pre-compute CacheEfficiency()**: `CacheEfficiencyTask` (every 2h) pre-warms 7d + 90d windows for global + per-project; web handlers use `cachedCacheEfficiency()` with 2h TTL
+- [x] **Cache Trends()**: `cachedTrends()` with 5min TTL — avoids 2 full-scan period comparisons on every dashboard/project page load
+- [x] **Cache sidebar projects**: `cachedSidebarGroups()` with 2min TTL — `ListProjects()` was called on 11+ page loads, now cached centrally
+- [x] **Fix cost tab partials**: `cachedCostsPage()` caches the full `costDashboardPage` struct (60s TTL) so HTMX tab switches don't recompute ~150 fields
+- [x] **Wire unwired tasks**: `backfill_remote_url` (daily 4:00), `fork_detection` (daily 4:30), `budget_check` (hourly :50)
+- [x] **Stats warming per project**: `StatsReportTask` enhanced to warm global + per-project stats caches via `store.SetCache()`
+- [x] **12 new tests**: 7 SaturationTask + 5 CacheEfficiencyTask, all passing
+- [x] **Scheduler now has 10 tasks**: gc, capture_all, stats_report, usage_compute, saturation_precompute, cacheeff_precompute, backfill_remote_url, fork_detection, budget_check, reclassify_errors (+ analyze_daily if LLM configured)
 
 ### 4.3 Testing
 - [ ] Integration tests for FTS5 search end-to-end

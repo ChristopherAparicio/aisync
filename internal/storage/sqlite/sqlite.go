@@ -1311,6 +1311,89 @@ func (s *Store) TopFilesForProject(projectPath string, limit int) ([]session.Top
 	return entries, nil
 }
 
+// FilesForProject returns all files touched in a project with blame summary.
+// Each entry includes session count, write count, and the most recent session info.
+// If dirPrefix is non-empty, only files under that directory prefix are returned.
+func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int) ([]session.ProjectFileEntry, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+
+	// Only include files that were actually written (created/modified/deleted),
+	// not merely read. Also filter to files under the project directory.
+	where := "WHERE s.project_path = ? AND fc.file_path LIKE ? AND fc.change_type IN ('created','modified','deleted')"
+	args := []any{projectPath, strings.TrimSuffix(projectPath, "/") + "/%"}
+	if dirPrefix != "" {
+		where += " AND fc.file_path LIKE ?"
+		args = append(args, dirPrefix+"%")
+	}
+	args = append(args, limit)
+
+	// Subquery: aggregate per file, then join back to get the last session info.
+	q := `
+	WITH file_agg AS (
+		SELECT fc.file_path,
+		       COUNT(DISTINCT fc.session_id) AS sess_count,
+		       COUNT(DISTINCT fc.session_id) AS write_count,
+		       MAX(s.created_at) AS last_time
+		  FROM file_changes fc
+		  JOIN sessions s ON s.id = fc.session_id
+		  ` + where + `
+		  GROUP BY fc.file_path
+	),
+	last_session AS (
+		SELECT fa.file_path, fa.sess_count, fa.write_count, fa.last_time,
+		       s.id AS last_session_id,
+		       COALESCE(s.summary, '') AS last_summary,
+		       COALESCE(s.branch, '') AS last_branch,
+		       COALESCE(s.provider, '') AS last_provider,
+		       COALESCE(fc.change_type, '') AS last_change_type
+		  FROM file_agg fa
+		  JOIN sessions s ON s.project_path = ? AND s.created_at = fa.last_time
+		  JOIN file_changes fc ON fc.session_id = s.id AND fc.file_path = fa.file_path
+	)
+	SELECT file_path, sess_count, write_count, last_change_type,
+	       last_session_id, last_time, last_summary, last_branch, last_provider
+	  FROM last_session
+	  ORDER BY last_time DESC
+	  LIMIT ?`
+
+	// We need to add projectPath again for the second WHERE in last_session join.
+	allArgs := make([]any, 0, len(args)+1)
+	allArgs = append(allArgs, args[:len(args)-1]...) // where args without limit
+	allArgs = append(allArgs, projectPath)           // for the second project_path match
+	allArgs = append(allArgs, args[len(args)-1])     // limit
+
+	rows, err := s.db.Query(q, allArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying files for project: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entries []session.ProjectFileEntry
+	for rows.Next() {
+		var e session.ProjectFileEntry
+		var provider, changeType, lastTime string
+		if err := rows.Scan(
+			&e.FilePath, &e.SessionCount, &e.WriteCount, &changeType,
+			&e.LastSessionID, &lastTime, &e.LastSummary, &e.LastBranch, &provider,
+		); err != nil {
+			return nil, fmt.Errorf("scanning project file: %w", err)
+		}
+		e.LastSessionTime, _ = time.Parse("2006-01-02T15:04:05Z", lastTime)
+		e.LastProvider = session.ProviderName(provider)
+		e.LastChangeType = session.ChangeType(changeType)
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if entries == nil {
+		entries = []session.ProjectFileEntry{}
+	}
+	return entries, nil
+}
+
 // ── User methods ──
 
 // SaveUser creates or updates a user. If a user with the same email exists,
@@ -1986,10 +2069,17 @@ func (s *Store) GetFreshness(id session.ID) (int, int64, error) {
 // ListProjects returns all distinct projects, grouped by remote_url when available,
 // or by project_path for non-git projects. Sorted by session count descending.
 func (s *Store) ListProjects() ([]session.ProjectGroup, error) {
+	// Prefer non-worktree paths when grouping. The COALESCE+NULLIF trick
+	// tries MIN() of non-worktree paths first, falling back to any path.
 	rows, err := s.db.Query(`
 		SELECT
 			COALESCE(MAX(remote_url), '') AS remote_url,
-			MIN(project_path) AS project_path,
+			COALESCE(
+				MIN(CASE WHEN project_path NOT LIKE '%/worktree/%'
+				          AND project_path NOT LIKE '%/.opencode-worktrees/%'
+				     THEN project_path END),
+				MIN(project_path)
+			) AS project_path,
 			MAX(provider) AS provider,
 			COALESCE(MAX(project_category), '') AS category,
 			COUNT(*) AS session_count,
@@ -2432,6 +2522,21 @@ func runMigrations(db *sql.DB) error {
 		// Add composite index for efficient blame queries.
 		if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(session_id)"); err != nil {
 			return fmt.Errorf("migration 024 (file_changes session index): %w", err)
+		}
+	}
+
+	// ── Migration 025: add top_mcp_servers, skill_tokens, compaction_count to event_buckets ──
+	{
+		for _, col := range []struct{ name, ddl string }{
+			{"top_mcp_servers", "ALTER TABLE event_buckets ADD COLUMN top_mcp_servers TEXT NOT NULL DEFAULT '{}'"},
+			{"skill_tokens", "ALTER TABLE event_buckets ADD COLUMN skill_tokens TEXT NOT NULL DEFAULT '{}'"},
+			{"compaction_count", "ALTER TABLE event_buckets ADD COLUMN compaction_count INTEGER NOT NULL DEFAULT 0"},
+		} {
+			if !columnExists(db, "event_buckets", col.name) {
+				if _, err := db.Exec(col.ddl); err != nil {
+					return fmt.Errorf("migration 025 (%s): %w", col.name, err)
+				}
+			}
 		}
 	}
 

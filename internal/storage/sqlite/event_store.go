@@ -182,13 +182,15 @@ func (s *Store) UpsertEventBuckets(buckets []sessionevent.EventBucket) error {
 		INSERT INTO event_buckets (
 			bucket_start, granularity, project_path, remote_url, provider,
 			tool_call_count, tool_error_count, unique_tools, top_tools,
-			skill_load_count, unique_skills, top_skills,
+			top_mcp_servers,
+			skill_load_count, unique_skills, top_skills, skill_tokens,
 			session_count, agent_breakdown,
 			command_count, command_error_count, top_commands,
 			error_count, error_by_category,
 			image_count, image_tokens,
+			compaction_count,
 			computed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(bucket_start, granularity, project_path, provider) DO UPDATE SET
 			tool_call_count   = event_buckets.tool_call_count   + excluded.tool_call_count,
 			tool_error_count  = event_buckets.tool_error_count  + excluded.tool_error_count,
@@ -199,9 +201,12 @@ func (s *Store) UpsertEventBuckets(buckets []sessionevent.EventBucket) error {
 			error_count       = event_buckets.error_count       + excluded.error_count,
 			image_count       = event_buckets.image_count       + excluded.image_count,
 			image_tokens      = event_buckets.image_tokens      + excluded.image_tokens,
+			compaction_count  = event_buckets.compaction_count  + excluded.compaction_count,
 			top_tools         = excluded.top_tools,
+			top_mcp_servers   = excluded.top_mcp_servers,
 			unique_tools      = excluded.unique_tools,
 			top_skills        = excluded.top_skills,
+			skill_tokens      = excluded.skill_tokens,
 			unique_skills     = excluded.unique_skills,
 			agent_breakdown   = excluded.agent_breakdown,
 			top_commands      = excluded.top_commands,
@@ -214,7 +219,9 @@ func (s *Store) UpsertEventBuckets(buckets []sessionevent.EventBucket) error {
 
 	for _, b := range buckets {
 		topToolsJSON, _ := json.Marshal(b.TopTools)
+		topMCPJSON, _ := json.Marshal(b.TopMCPServers)
 		topSkillsJSON, _ := json.Marshal(b.TopSkills)
+		skillTokensJSON, _ := json.Marshal(b.SkillTokens)
 		agentBreakdownJSON, _ := json.Marshal(b.AgentBreakdown)
 		topCommandsJSON, _ := json.Marshal(b.TopCommands)
 		errorByCategoryJSON, _ := json.Marshal(b.ErrorByCategory)
@@ -222,11 +229,13 @@ func (s *Store) UpsertEventBuckets(buckets []sessionevent.EventBucket) error {
 		if _, err := stmt.Exec(
 			b.BucketStart.Format(time.RFC3339), b.Granularity, b.ProjectPath, b.RemoteURL, string(b.Provider),
 			b.ToolCallCount, b.ToolErrorCount, b.UniqueTools, string(topToolsJSON),
-			b.SkillLoadCount, b.UniqueSkills, string(topSkillsJSON),
+			string(topMCPJSON),
+			b.SkillLoadCount, b.UniqueSkills, string(topSkillsJSON), string(skillTokensJSON),
 			b.SessionCount, string(agentBreakdownJSON),
 			b.CommandCount, b.CommandErrorCount, string(topCommandsJSON),
 			b.ErrorCount, string(errorByCategoryJSON),
 			b.ImageCount, b.ImageTokens,
+			b.CompactionCount,
 		); err != nil {
 			return fmt.Errorf("upsert bucket %s: %w", b.BucketStart.Format(time.RFC3339), err)
 		}
@@ -261,13 +270,15 @@ func (s *Store) ReplaceEventBuckets(buckets []sessionevent.EventBucket) error {
 	insStmt, err := tx.Prepare(`INSERT INTO event_buckets (
 		bucket_start, granularity, project_path, remote_url, provider,
 		tool_call_count, tool_error_count, unique_tools, top_tools,
-		skill_load_count, unique_skills, top_skills,
+		top_mcp_servers,
+		skill_load_count, unique_skills, top_skills, skill_tokens,
 		session_count, agent_breakdown,
 		command_count, command_error_count, top_commands,
 		error_count, error_by_category,
 		image_count, image_tokens,
+		compaction_count,
 		computed_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
 	if err != nil {
 		return fmt.Errorf("prepare insert: %w", err)
 	}
@@ -283,7 +294,9 @@ func (s *Store) ReplaceEventBuckets(buckets []sessionevent.EventBucket) error {
 
 		// Insert new.
 		topToolsJSON, _ := json.Marshal(b.TopTools)
+		topMCPJSON, _ := json.Marshal(b.TopMCPServers)
 		topSkillsJSON, _ := json.Marshal(b.TopSkills)
+		skillTokensJSON, _ := json.Marshal(b.SkillTokens)
 		agentBreakdownJSON, _ := json.Marshal(b.AgentBreakdown)
 		topCommandsJSON, _ := json.Marshal(b.TopCommands)
 		errorByCategoryJSON, _ := json.Marshal(b.ErrorByCategory)
@@ -291,11 +304,13 @@ func (s *Store) ReplaceEventBuckets(buckets []sessionevent.EventBucket) error {
 		if _, err := insStmt.Exec(
 			startStr, b.Granularity, b.ProjectPath, b.RemoteURL, string(b.Provider),
 			b.ToolCallCount, b.ToolErrorCount, b.UniqueTools, string(topToolsJSON),
-			b.SkillLoadCount, b.UniqueSkills, string(topSkillsJSON),
+			string(topMCPJSON),
+			b.SkillLoadCount, b.UniqueSkills, string(topSkillsJSON), string(skillTokensJSON),
 			b.SessionCount, string(agentBreakdownJSON),
 			b.CommandCount, b.CommandErrorCount, string(topCommandsJSON),
 			b.ErrorCount, string(errorByCategoryJSON),
 			b.ImageCount, b.ImageTokens,
+			b.CompactionCount,
 		); err != nil {
 			return fmt.Errorf("insert bucket %s: %w", startStr, err)
 		}
@@ -371,11 +386,13 @@ func (s *Store) QueryEventBuckets(query sessionevent.BucketQuery) ([]sessioneven
 
 	sql := `SELECT bucket_start, granularity, project_path, remote_url, provider,
 	               tool_call_count, tool_error_count, unique_tools, COALESCE(top_tools, '{}'),
-	               skill_load_count, unique_skills, COALESCE(top_skills, '{}'),
+	               COALESCE(top_mcp_servers, '{}'),
+	               skill_load_count, unique_skills, COALESCE(top_skills, '{}'), COALESCE(skill_tokens, '{}'),
 	               session_count, COALESCE(agent_breakdown, '{}'),
 	               command_count, command_error_count, COALESCE(top_commands, '{}'),
 	               error_count, COALESCE(error_by_category, '{}'),
-	               image_count, image_tokens
+	               image_count, image_tokens,
+	               COALESCE(compaction_count, 0)
 	        FROM event_buckets`
 
 	if len(conditions) > 0 {
@@ -393,16 +410,18 @@ func (s *Store) QueryEventBuckets(query sessionevent.BucketQuery) ([]sessioneven
 	for rows.Next() {
 		var b sessionevent.EventBucket
 		var startStr, provStr string
-		var topToolsJSON, topSkillsJSON, agentJSON, topCmdsJSON, errCatJSON string
+		var topToolsJSON, topMCPJSON, topSkillsJSON, skillTokensJSON, agentJSON, topCmdsJSON, errCatJSON string
 
 		if err := rows.Scan(
 			&startStr, &b.Granularity, &b.ProjectPath, &b.RemoteURL, &provStr,
 			&b.ToolCallCount, &b.ToolErrorCount, &b.UniqueTools, &topToolsJSON,
-			&b.SkillLoadCount, &b.UniqueSkills, &topSkillsJSON,
+			&topMCPJSON,
+			&b.SkillLoadCount, &b.UniqueSkills, &topSkillsJSON, &skillTokensJSON,
 			&b.SessionCount, &agentJSON,
 			&b.CommandCount, &b.CommandErrorCount, &topCmdsJSON,
 			&b.ErrorCount, &errCatJSON,
 			&b.ImageCount, &b.ImageTokens,
+			&b.CompactionCount,
 		); err != nil {
 			continue
 		}
@@ -414,8 +433,12 @@ func (s *Store) QueryEventBuckets(query sessionevent.BucketQuery) ([]sessioneven
 		// Unmarshal JSON maps.
 		b.TopTools = make(map[string]int)
 		_ = json.Unmarshal([]byte(topToolsJSON), &b.TopTools)
+		b.TopMCPServers = make(map[string]int)
+		_ = json.Unmarshal([]byte(topMCPJSON), &b.TopMCPServers)
 		b.TopSkills = make(map[string]int)
 		_ = json.Unmarshal([]byte(topSkillsJSON), &b.TopSkills)
+		b.SkillTokens = make(map[string]int)
+		_ = json.Unmarshal([]byte(skillTokensJSON), &b.SkillTokens)
 		b.AgentBreakdown = make(map[string]int)
 		_ = json.Unmarshal([]byte(agentJSON), &b.AgentBreakdown)
 		b.TopCommands = make(map[string]int)

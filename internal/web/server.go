@@ -87,6 +87,7 @@ func New(cfg Config) (*Server, error) {
 		{"templates/analytics.html"},
 		{"templates/analytics_events.html"},
 		{"templates/settings.html"},
+		{"templates/file_explorer.html"},
 	}
 
 	pages := make(map[string]*template.Template, len(pageSpecs))
@@ -109,6 +110,7 @@ func New(cfg Config) (*Server, error) {
 		"templates/search_results.html",
 		"templates/project_sessions_partial.html",
 		"templates/saturation_partial.html",
+		"templates/session_timeline_partial.html",
 		"templates/cost_overview_partial.html",
 		"templates/cost_tools_partial.html",
 		"templates/cost_optimization_partial.html",
@@ -161,6 +163,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /branches/{name...}", s.handleBranchTimeline)
 	mux.HandleFunc("GET /projects", s.handleProjects)
 	mux.HandleFunc("GET /projects/{path...}", s.handleProjectDetail)
+	mux.HandleFunc("GET /files/{path...}", s.handleFileExplorer)
 	mux.HandleFunc("GET /costs", s.handleCosts)
 	mux.HandleFunc("GET /usage", s.handleUsage)
 	mux.HandleFunc("GET /analytics", s.handleAnalytics)
@@ -176,6 +179,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /partials/agent-detail", s.handleAgentDetailPartial)
 	mux.HandleFunc("GET /partials/session-events/{id}", s.handleSessionEventsPartial)
 	mux.HandleFunc("GET /partials/saturation/{id}", s.handleSaturationPartial)
+	mux.HandleFunc("GET /partials/session-timeline/{id}", s.handleSessionTimelinePartial)
 	mux.HandleFunc("GET /partials/search-results", s.handleSearchResults)
 	mux.HandleFunc("GET /partials/cost-overview", s.handleCostOverviewPartial)
 	mux.HandleFunc("GET /partials/cost-tools", s.handleCostToolsPartial)

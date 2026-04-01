@@ -1,0 +1,92 @@
+# Chatbot Arena ELO — Crowdsourced Human Preference
+#
+# ELO ratings from head-to-head comparisons by human raters on LMSYS Chatbot Arena.
+# Measures overall quality as perceived by humans across diverse tasks.
+#
+# NOTE: Raw ELO scores (typically 900-1400) are normalized to 0-100 scale
+# using linear mapping: score = (elo - 900) / 5 (capped at 0-100).
+# This makes them comparable with other 0-100% benchmarks.
+#
+# Source: https://chat.lmsys.org/?leaderboard (Coding category)
+# Captured: 2026-03-27
+
+source: arena_elo
+date: "2026-03-27"
+category: preference
+
+entries:
+  # ─── Top tier (ELO > 1350 → score > 90) ──────────────────────────
+  - model: gpt-5
+    score: 95.2
+    aliases: ["gpt-5-0125", "gpt-5-latest"]
+
+  - model: claude-opus-4
+    score: 93.8
+    aliases: ["claude-opus-4-20250514", "claude-opus-4-1", "anthropic.claude-opus-4-6-v1"]
+
+  - model: o3
+    score: 92.4
+    aliases: ["o3-2025", "o3-2025-01-01"]
+
+  - model: gemini-2.5-pro
+    score: 91.6
+    aliases: ["gemini-2.5-pro-latest", "gemini-2.5-pro-preview"]
+
+  # ─── High tier (ELO 1300-1350 → score 80-90) ────────────────────
+  - model: claude-sonnet-4
+    score: 88.4
+    aliases: ["claude-sonnet-4-20250514", "anthropic.claude-sonnet-4-20250514-v1:0"]
+
+  - model: o3-pro
+    score: 89.6
+    aliases: ["o3-pro-2025"]
+
+  - model: deepseek-r1
+    score: 86.1
+    aliases: ["deepseek-r1-reasoner", "deepseek/deepseek-r1"]
+
+  - model: gpt-4.1
+    score: 85.2
+    aliases: ["gpt-4.1-2025"]
+
+  - model: claude-sonnet-3.7
+    score: 84.3
+    aliases: ["claude-3-7-sonnet", "claude-3.7-sonnet", "claude-sonnet-3-7-20250219"]
+
+  - model: gemini-2.5-flash
+    score: 82.7
+    aliases: ["gemini-2.5-flash-latest", "gemini-2.5-flash-preview"]
+
+  # ─── Mid tier (ELO 1250-1300 → score 70-80) ─────────────────────
+  - model: deepseek-v3
+    score: 79.4
+    aliases: ["deepseek-v3.2", "deepseek-v3-chat", "deepseek/deepseek-chat"]
+
+  - model: gpt-4o
+    score: 78.6
+    aliases: ["gpt-4o-2025", "gpt-4o-2024-11-20", "gpt-4o-latest"]
+
+  - model: kimi-k2
+    score: 76.8
+    aliases: ["kimi-k2-0711", "moonshot/kimi-k2"]
+
+  # ─── Lower tier (ELO < 1250 → score < 70) ───────────────────────
+  - model: gpt-4o-mini
+    score: 68.4
+    aliases: ["gpt-4o-mini-2024-07-18"]
+
+  - model: gpt-4.1-mini
+    score: 67.9
+    aliases: ["gpt-4.1-mini-2025"]
+
+  - model: claude-haiku-3.5
+    score: 65.2
+    aliases: ["claude-3-5-haiku", "claude-3-5-haiku-20241022"]
+
+  - model: gemini-2.0-flash
+    score: 62.1
+    aliases: ["gemini-2.0-flash-001"]
+
+  - model: gpt-4.1-nano
+    score: 55.8
+    aliases: ["gpt-4.1-nano-2025"]

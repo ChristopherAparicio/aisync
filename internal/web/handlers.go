@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/service"
@@ -22,8 +23,13 @@ import (
 
 // Cache TTLs for dashboard statistics.
 const (
-	statsCacheTTL    = 30 * time.Second
-	forecastCacheTTL = 5 * time.Minute
+	statsCacheTTL       = 30 * time.Second
+	forecastCacheTTL    = 5 * time.Minute
+	saturationCacheTTL  = 2 * time.Hour
+	cacheEfficiencyCTTL = 2 * time.Hour
+	costPageCacheTTL    = 60 * time.Second
+	trendsCacheTTL      = 5 * time.Minute
+	sidebarCacheTTL     = 2 * time.Minute
 )
 
 // cachedStats returns Stats from cache if fresh, otherwise computes and caches.
@@ -86,6 +92,162 @@ func (s *Server) cachedForecast(ctx context.Context, req service.ForecastRequest
 	return result, nil
 }
 
+// cachedSaturation returns ContextSaturation from cache if fresh, otherwise computes and caches.
+// The background SaturationTask pre-warms this cache every 2 hours, so most requests
+// are instant cache hits. On first startup (cold cache), the handler computes on demand.
+func (s *Server) cachedSaturation(ctx context.Context, project string, since time.Time) (*session.ContextSaturation, error) {
+	cacheKey := "saturation:" + project
+
+	// 1. Try cache.
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, saturationCacheTTL); data != nil {
+			var result session.ContextSaturation
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
+	// 2. Compute (cold cache fallback).
+	result, err := s.sessionSvc.ContextSaturation(ctx, project, since)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Cache for next request.
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return result, nil
+}
+
+// cachedCacheEfficiency returns CacheEfficiency from cache if fresh, otherwise computes on demand.
+// The background CacheEfficiencyTask pre-warms this cache every 2 hours for both 7d and 90d windows.
+// sinceLabel is "7d" or "90d" to select the correct cache key.
+func (s *Server) cachedCacheEfficiency(ctx context.Context, project string, since time.Time, sinceLabel string) (*session.CacheEfficiency, error) {
+	cacheKey := "cacheeff:" + sinceLabel + ":" + project
+
+	// 1. Try cache.
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, cacheEfficiencyCTTL); data != nil {
+			var result session.CacheEfficiency
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
+	// 2. Compute (cold cache fallback).
+	result, err := s.sessionSvc.CacheEfficiency(ctx, project, since)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Cache for next request.
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return result, nil
+}
+
+// cachedTrends returns Trends from cache if fresh, otherwise computes and caches.
+// Trends compare current vs previous period and are moderately expensive (2 full scans).
+func (s *Server) cachedTrends(ctx context.Context, req service.TrendRequest) (*service.TrendResult, error) {
+	cacheKey := "trends:" + req.ProjectPath
+
+	// 1. Try cache.
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, trendsCacheTTL); data != nil {
+			var result service.TrendResult
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
+	// 2. Compute.
+	result, err := s.sessionSvc.Trends(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Cache.
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return result, nil
+}
+
+// cachedSidebarGroups returns the project groups for the sidebar from cache if fresh.
+// The raw groups are cached centrally; the caller applies the active path locally.
+func (s *Server) cachedSidebarGroups(ctx context.Context) []session.ProjectGroup {
+	const cacheKey = "sidebar_groups"
+
+	// 1. Try cache.
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, sidebarCacheTTL); data != nil {
+			var groups []session.ProjectGroup
+			if err := json.Unmarshal(data, &groups); err == nil {
+				return groups
+			}
+		}
+	}
+
+	// 2. Compute.
+	groups, err := s.sessionSvc.ListProjects(ctx)
+	if err != nil || len(groups) == 0 {
+		return nil
+	}
+
+	// 3. Cache.
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(groups); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return groups
+}
+
+// cachedCostsPage returns the full cost dashboard data from cache if fresh,
+// otherwise computes via buildCostsData and caches for subsequent tab switches.
+// This prevents each HTMX tab partial from recomputing the entire cost page.
+func (s *Server) cachedCostsPage(r *http.Request) costDashboardPage {
+	project := r.URL.Query().Get("project")
+	cacheKey := "costs_page:" + project
+
+	// 1. Try cache.
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, costPageCacheTTL); data != nil {
+			var result costDashboardPage
+			if err := json.Unmarshal(data, &result); err == nil {
+				return result
+			}
+		}
+	}
+
+	// 2. Compute.
+	data := s.buildCostsData(r)
+
+	// 3. Cache for tab switches.
+	if s.store != nil {
+		if payload, marshalErr := json.Marshal(data); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, payload)
+		}
+	}
+
+	return data
+}
+
 // ── Shared ──
 
 type branchStat struct {
@@ -112,9 +274,11 @@ type sidebarProject struct {
 }
 
 // buildSidebarProjects returns project data for the sidebar, sorted by recent activity.
+// Uses cachedSidebarGroups() so the expensive ListProjects() call is not repeated
+// on every page load (11+ call sites).
 func (s *Server) buildSidebarProjects(ctx context.Context, activePath string) []sidebarProject {
-	groups, err := s.sessionSvc.ListProjects(ctx)
-	if err != nil || len(groups) == 0 {
+	groups := s.cachedSidebarGroups(ctx)
+	if len(groups) == 0 {
 		return nil
 	}
 
@@ -576,7 +740,7 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 
 	// Cache efficiency (quick stats).
 	since7d := time.Now().AddDate(0, 0, -7)
-	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(r.Context(), project, since7d)
+	cacheEff, cacheErr := s.cachedCacheEfficiency(r.Context(), project, since7d, "7d")
 	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
 		data.HasCacheStats = true
 		data.DashCacheHitRate = cacheEff.CacheHitRate
@@ -586,7 +750,7 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 	}
 
 	// Weekly trends (current vs previous 7 days)
-	trends, trendsErr := s.sessionSvc.Trends(r.Context(), service.TrendRequest{
+	trends, trendsErr := s.cachedTrends(r.Context(), service.TrendRequest{
 		Period: 7 * 24 * time.Hour,
 	})
 	if trendsErr == nil && (trends.Current.SessionCount > 0 || trends.Previous.SessionCount > 0) {
@@ -2039,6 +2203,10 @@ type costDashboardPage struct {
 	HasQACLeaderboard bool
 	QACLeaderboard    []qacLeaderView
 
+	// Multi-benchmark sources (6.3)
+	HasMultiBenchmark bool                  // true when MultiCatalog is used
+	BenchmarkSources  []benchmarkSourceView // available benchmark sources
+
 	// Configured vs Used (MCP server governance)
 	HasConfigVsUsed bool
 	ConfigVsUsed    []mcpStatusView
@@ -2108,9 +2276,65 @@ type costDashboardPage struct {
 	ForecastHistogram           []histogramBucketView
 	HasHistogram                bool
 
+	// System prompt impact (5.3)
+	HasPromptImpact       bool
+	PromptAvgEstimate     string // formatted "4.2K"
+	PromptMedianEstimate  string // formatted "3.8K"
+	PromptMinEstimate     string // formatted "1.2K"
+	PromptMaxEstimate     string // formatted "12K"
+	PromptTotalSessions   int
+	PromptAvgCostPct      float64 // avg % of input tokens consumed by system prompt
+	PromptTotalTokens     string  // formatted "1.2M"
+	PromptSmallCount      int
+	PromptMediumCount     int
+	PromptLargeCount      int
+	PromptSmallErrorRate  float64
+	PromptMediumErrorRate float64
+	PromptLargeErrorRate  float64
+	PromptSmallRetryRate  float64
+	PromptMediumRetryRate float64
+	PromptLargeRetryRate  float64
+	PromptTrend           string // "growing", "stable", "shrinking"
+	PromptTrendIcon       string // "↗", "→", "↘"
+	PromptRecommendation  string
+	HasPromptBuckets      bool // true when at least 2 size buckets have data
+
+	// Model fitness profiles (6.4)
+	HasFitness           bool
+	FitnessTotalSessions int
+	FitnessTaskTypes     []fitnessTaskTypeView
+	FitnessRecs          []string
+	HasFitnessRecs       bool
+
 	// Budget overview (all projects with budgets)
 	HasBudgets bool
 	Budgets    []budgetOverviewView
+}
+
+// fitnessTaskTypeView is a template-friendly view of a task type profile.
+type fitnessTaskTypeView struct {
+	TaskType     string
+	SessionCount int
+	BestModel    string
+	BestScore    int
+	BestGrade    string
+	GradeClass   string // "good", "warning", "poor"
+	Models       []fitnessModelView
+	HasMultiple  bool // true when >1 model
+}
+
+// fitnessModelView is a template-friendly view of a model fitness profile.
+type fitnessModelView struct {
+	Model        string
+	SessionCount int
+	AvgCost      string // formatted "$0.12"
+	AvgMessages  string // formatted "23.5"
+	ErrorRate    float64
+	RetryRate    float64
+	FitnessScore int
+	FitnessGrade string
+	GradeClass   string // "good", "warning", "poor"
+	IsBest       bool   // true if this is the top model for the task type
 }
 
 // budgetOverviewView is a template-friendly view of a project budget.
@@ -2238,7 +2462,7 @@ type mcpCellView struct {
 // modelAlternativeView is a template-friendly model swap recommendation.
 type modelAlternativeView struct {
 	CurrentModel string
-	CurrentScore float64 // 0-100 benchmark %
+	CurrentScore float64 // 0-100 benchmark % (composite when multi-benchmark)
 	CurrentCost  float64 // $ per 1M input tokens
 
 	AltModel string
@@ -2255,6 +2479,74 @@ type modelAlternativeView struct {
 	CurrentQAC   float64 // quality-adjusted cost for current model
 	AltQAC       float64 // quality-adjusted cost for alternative
 	QACSavings   float64 // % saved on QAC basis
+
+	// Multi-benchmark breakdown (6.3).
+	CurrentScores []benchmarkScoreView // per-source scores for current model
+	AltScores     []benchmarkScoreView // per-source scores for alternative
+	HasBreakdown  bool                 // true when multi-source data available
+}
+
+// benchmarkScoreView is a template-friendly per-source benchmark score.
+type benchmarkScoreView struct {
+	Source      string  // e.g. "Aider", "SWE-bench", "ToolBench", "Arena"
+	SourceClass string  // CSS class for badge styling
+	Score       float64 // 0-100
+	Category    string  // e.g. "code_editing", "problem_solving", "tool_use", "preference"
+}
+
+// benchmarkSourceView is a template-friendly benchmark source descriptor.
+type benchmarkSourceView struct {
+	Name      string  // human-readable name
+	Key       string  // source key (e.g. "aider_polyglot")
+	Category  string  // e.g. "code_editing"
+	Weight    float64 // 0-1 weight in composite
+	WeightPct int     // weight as integer percent
+}
+
+// benchmarkSourceDisplayName returns a human-readable name for a benchmark source.
+func benchmarkSourceDisplayName(source benchmark.BenchmarkSource) string {
+	switch source {
+	case benchmark.SourceAiderPolyglot:
+		return "Aider"
+	case benchmark.SourceSWEBench:
+		return "SWE-bench"
+	case benchmark.SourceToolBench:
+		return "ToolBench"
+	case benchmark.SourceArenaELO:
+		return "Arena ELO"
+	default:
+		return string(source)
+	}
+}
+
+// benchmarkSourceClass returns a CSS class for styling a benchmark source badge.
+func benchmarkSourceClass(source benchmark.BenchmarkSource) string {
+	switch source {
+	case benchmark.SourceAiderPolyglot:
+		return "bench-aider"
+	case benchmark.SourceSWEBench:
+		return "bench-swe"
+	case benchmark.SourceToolBench:
+		return "bench-tool"
+	case benchmark.SourceArenaELO:
+		return "bench-arena"
+	default:
+		return "bench-other"
+	}
+}
+
+// toBenchmarkScoreViews converts domain benchmark scores to template-friendly views.
+func toBenchmarkScoreViews(scores []benchmark.BenchmarkScore) []benchmarkScoreView {
+	views := make([]benchmarkScoreView, 0, len(scores))
+	for _, s := range scores {
+		views = append(views, benchmarkScoreView{
+			Source:      benchmarkSourceDisplayName(s.Source),
+			SourceClass: benchmarkSourceClass(s.Source),
+			Score:       s.Score,
+			Category:    s.Category,
+		})
+	}
+	return views
 }
 
 // modelSaturationView is a template-friendly per-model context saturation summary.
@@ -2325,10 +2617,15 @@ type histogramBucketView struct {
 type qacLeaderView struct {
 	Rank           int
 	Model          string
-	BenchmarkScore float64
+	BenchmarkScore float64 // composite score when multi-benchmark
 	InputCost      float64 // $ per 1M input tokens
 	QAC            float64
 	IsCurrentModel bool // true if the user currently uses this model
+
+	// Multi-benchmark breakdown (6.3).
+	Scores       []benchmarkScoreView // per-source scores
+	SourceCount  int                  // how many sources have data
+	HasBreakdown bool                 // true when multi-source data available
 }
 
 // mcpStatusView is a template-friendly MCP server governance entry.
@@ -2569,7 +2866,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 
 	// Cache efficiency analysis.
-	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(r.Context(), project, since90d)
+	cacheEff, cacheErr := s.cachedCacheEfficiency(r.Context(), project, since90d, "90d")
 
 	// Cross-project MCP matrix (only when no project filter — global view).
 	if project == "" {
@@ -2615,7 +2912,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 
 	// Context saturation analysis.
-	saturation, satErr := s.sessionSvc.ContextSaturation(r.Context(), project, since90d)
+	saturation, satErr := s.cachedSaturation(r.Context(), project, since90d)
 	if satErr == nil && saturation != nil && saturation.TotalSessions > 0 {
 		data.HasSaturation = true
 		data.SatAvgPeak = saturation.AvgPeakSaturation
@@ -2875,6 +3172,105 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				}
 			}
 		}
+
+		// System prompt impact (5.3).
+		if pi := saturation.PromptImpact; pi != nil && pi.TotalSessions > 0 {
+			data.HasPromptImpact = true
+			data.PromptTotalSessions = pi.TotalSessions
+			data.PromptAvgEstimate = formatTokensInt(pi.AvgEstimate)
+			data.PromptMedianEstimate = formatTokensInt(pi.MedianEst)
+			data.PromptMinEstimate = formatTokensInt(pi.MinEstimate)
+			data.PromptMaxEstimate = formatTokensInt(pi.MaxEstimate)
+			data.PromptAvgCostPct = pi.AvgPromptCostPct
+			data.PromptTotalTokens = formatTokensInt(pi.TotalPromptTokens)
+			data.PromptSmallCount = pi.SmallCount
+			data.PromptMediumCount = pi.MediumCount
+			data.PromptLargeCount = pi.LargeCount
+			data.PromptSmallErrorRate = pi.SmallErrorRate
+			data.PromptMediumErrorRate = pi.MediumErrorRate
+			data.PromptLargeErrorRate = pi.LargeErrorRate
+			data.PromptSmallRetryRate = pi.SmallRetryRate
+			data.PromptMediumRetryRate = pi.MediumRetryRate
+			data.PromptLargeRetryRate = pi.LargeRetryRate
+			data.PromptTrend = pi.Trend
+			data.PromptRecommendation = pi.Recommendation
+			switch pi.Trend {
+			case "growing":
+				data.PromptTrendIcon = "↗"
+			case "shrinking":
+				data.PromptTrendIcon = "↘"
+			default:
+				data.PromptTrendIcon = "→"
+			}
+			// At least 2 buckets with data.
+			nonEmpty := 0
+			if pi.SmallCount > 0 {
+				nonEmpty++
+			}
+			if pi.MediumCount > 0 {
+				nonEmpty++
+			}
+			if pi.LargeCount > 0 {
+				nonEmpty++
+			}
+			data.HasPromptBuckets = nonEmpty >= 2
+		}
+
+		// Model fitness profiles (6.4).
+		if fit := saturation.Fitness; fit != nil && fit.TotalSessions > 0 {
+			data.HasFitness = true
+			data.FitnessTotalSessions = fit.TotalSessions
+			data.FitnessRecs = fit.Recommendations
+			data.HasFitnessRecs = len(fit.Recommendations) > 0
+			for _, tp := range fit.TaskTypes {
+				gradeClass := "good"
+				switch {
+				case tp.BestScore < 40:
+					gradeClass = "poor"
+				case tp.BestScore < 70:
+					gradeClass = "warning"
+				}
+				bestGrade := ""
+				if len(tp.Models) > 0 {
+					bestGrade = tp.Models[0].FitnessGrade
+				}
+				ttv := fitnessTaskTypeView{
+					TaskType:     tp.TaskType,
+					SessionCount: tp.SessionCount,
+					BestModel:    tp.BestModel,
+					BestScore:    tp.BestScore,
+					BestGrade:    bestGrade,
+					GradeClass:   gradeClass,
+					HasMultiple:  len(tp.Models) > 1,
+				}
+				for i, m := range tp.Models {
+					mGradeClass := "good"
+					switch {
+					case m.FitnessScore < 40:
+						mGradeClass = "poor"
+					case m.FitnessScore < 70:
+						mGradeClass = "warning"
+					}
+					costStr := fmt.Sprintf("$%.3f", m.AvgCost)
+					if m.AvgCost >= 1.0 {
+						costStr = fmt.Sprintf("$%.2f", m.AvgCost)
+					}
+					ttv.Models = append(ttv.Models, fitnessModelView{
+						Model:        m.Model,
+						SessionCount: m.SessionCount,
+						AvgCost:      costStr,
+						AvgMessages:  fmt.Sprintf("%.0f", m.AvgMessages),
+						ErrorRate:    m.ErrorRate,
+						RetryRate:    m.RetryRate,
+						FitnessScore: m.FitnessScore,
+						FitnessGrade: m.FitnessGrade,
+						GradeClass:   mGradeClass,
+						IsBest:       i == 0,
+					})
+				}
+				data.FitnessTaskTypes = append(data.FitnessTaskTypes, ttv)
+			}
+		}
 	}
 
 	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
@@ -2908,6 +3304,24 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 
 	// Model alternatives (benchmark-based recommendations).
 	if s.benchmarkRec != nil && data.HasForecast && len(data.Models) > 0 {
+		// Detect if we're using multi-benchmark catalog.
+		isMulti := false
+		if mc, ok := s.benchmarkRec.Benchmarks().(benchmark.MultiCatalog); ok {
+			isMulti = true
+			// Populate benchmark source metadata.
+			data.HasMultiBenchmark = true
+			weights := benchmark.DefaultCompositeWeights()
+			for _, src := range mc.Sources() {
+				w := weights[src]
+				data.BenchmarkSources = append(data.BenchmarkSources, benchmarkSourceView{
+					Name:      benchmarkSourceDisplayName(src),
+					Key:       string(src),
+					Weight:    w,
+					WeightPct: int(w * 100),
+				})
+			}
+		}
+
 		for _, m := range data.Models {
 			alts := s.benchmarkRec.Recommend(m.Model, 0)
 			// Take top 3 alternatives per model.
@@ -2923,7 +3337,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				case "risky":
 					verdictClass = "poor"
 				}
-				data.ModelAlternatives = append(data.ModelAlternatives, modelAlternativeView{
+				av := modelAlternativeView{
 					CurrentModel: alt.CurrentModel,
 					CurrentScore: alt.CurrentScore,
 					CurrentCost:  alt.CurrentCost,
@@ -2939,7 +3353,13 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 					CurrentQAC:   alt.CurrentQAC,
 					AltQAC:       alt.AltQAC,
 					QACSavings:   alt.QACSavings,
-				})
+				}
+				if isMulti && len(alt.CurrentScores) > 0 {
+					av.CurrentScores = toBenchmarkScoreViews(alt.CurrentScores)
+					av.AltScores = toBenchmarkScoreViews(alt.AltScores)
+					av.HasBreakdown = true
+				}
+				data.ModelAlternatives = append(data.ModelAlternatives, av)
 			}
 		}
 		if len(data.ModelAlternatives) > 0 {
@@ -2957,14 +3377,20 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 
 			data.HasQACLeaderboard = true
 			for _, entry := range leaderboard {
-				data.QACLeaderboard = append(data.QACLeaderboard, qacLeaderView{
+				lv := qacLeaderView{
 					Rank:           entry.Rank,
 					Model:          entry.Model,
 					BenchmarkScore: entry.BenchmarkScore,
 					InputCost:      entry.InputCost,
 					QAC:            entry.QAC,
 					IsCurrentModel: currentModels[entry.Model],
-				})
+				}
+				if isMulti && len(entry.Scores) > 0 {
+					lv.Scores = toBenchmarkScoreViews(entry.Scores)
+					lv.SourceCount = entry.SourceCount
+					lv.HasBreakdown = true
+				}
+				data.QACLeaderboard = append(data.QACLeaderboard, lv)
 			}
 		}
 	}
@@ -3034,20 +3460,23 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 }
 
 // handleCostOverviewPartial renders the Overview tab content.
+// Uses cachedCostsPage to avoid recomputing the full cost page on each tab switch.
 func (s *Server) handleCostOverviewPartial(w http.ResponseWriter, r *http.Request) {
-	data := s.buildCostsData(r)
+	data := s.cachedCostsPage(r)
 	s.renderPartial(w, "cost_overview_partial", data)
 }
 
 // handleCostToolsPartial renders the Tools & Agents tab content.
+// Uses cachedCostsPage to avoid recomputing the full cost page on each tab switch.
 func (s *Server) handleCostToolsPartial(w http.ResponseWriter, r *http.Request) {
-	data := s.buildCostsData(r)
+	data := s.cachedCostsPage(r)
 	s.renderPartial(w, "cost_tools_partial", data)
 }
 
 // handleCostOptimizationPartial renders the Optimization tab content.
+// Uses cachedCostsPage to avoid recomputing the full cost page on each tab switch.
 func (s *Server) handleCostOptimizationPartial(w http.ResponseWriter, r *http.Request) {
-	data := s.buildCostsData(r)
+	data := s.cachedCostsPage(r)
 	s.renderPartial(w, "cost_optimization_partial", data)
 }
 
@@ -3093,6 +3522,248 @@ func capabilityKindIcon(kind string) string {
 // projectBaseName returns just the basename from a project path.
 func projectBaseName(path string) string {
 	return filepath.Base(path)
+}
+
+// ── File Explorer ──
+
+type fileExplorerPage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+	Projects        []projectItem
+	ProjectPath     string
+	ProjectName     string
+	DirPrefix       string // current directory filter (empty = root)
+	Breadcrumbs     []breadcrumb
+	Rows            []fileRow // unified list: directories first, then files
+	HasRows         bool
+	TotalFiles      int // count of file rows only
+	TotalDirs       int // count of directory rows only
+}
+
+type breadcrumb struct {
+	Name      string
+	Path      string // cumulative path for the link (e.g. "internal/web")
+	IsCurrent bool
+}
+
+// fileRow is a unified row in the GitHub-style file list.
+// It can be either a directory (IsDir=true) or a file.
+type fileRow struct {
+	IsDir          bool
+	Name           string // display name (e.g. "internal" or "handlers.go")
+	DirPath        string // for dirs: link target (relative, e.g. "internal/web")
+	FileCount      int    // for dirs: number of files inside
+	SessionCount   int    // for files: number of sessions that wrote this file
+	LastChangeType string
+	ChangeClass    string // CSS class for badge
+	LastSessionID  string
+	LastSummary    string
+	LastBranch     string
+	LastTimeAgo    string
+}
+
+func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
+	projectPath := "/" + r.PathValue("path")
+	if projectPath == "/" {
+		// No project selected — redirect to first available project.
+		projects := s.buildProjectList("")
+		if len(projects) > 0 {
+			http.Redirect(w, r, "/files"+projects[0].Path, http.StatusFound)
+			return
+		}
+		s.render(w, "file_explorer.html", fileExplorerPage{Nav: "files"})
+		return
+	}
+
+	dirPrefix := strings.TrimSuffix(r.URL.Query().Get("dir"), "/")
+	if dirPrefix == "." {
+		dirPrefix = ""
+	}
+
+	data := fileExplorerPage{
+		Nav:             "files",
+		SidebarProjects: s.buildSidebarProjects(r.Context(), projectPath),
+		Projects:        s.buildProjectList(projectPath),
+		ProjectPath:     projectPath,
+		ProjectName:     projectBaseName(projectPath),
+		DirPrefix:       dirPrefix,
+	}
+
+	// Build clickable breadcrumbs from dirPrefix segments.
+	if dirPrefix != "" {
+		segments := strings.Split(dirPrefix, "/")
+		cumulative := ""
+		for i, seg := range segments {
+			if seg == "" {
+				continue
+			}
+			if cumulative == "" {
+				cumulative = seg
+			} else {
+				cumulative += "/" + seg
+			}
+			data.Breadcrumbs = append(data.Breadcrumbs, breadcrumb{
+				Name:      seg,
+				Path:      cumulative,
+				IsCurrent: i == len(segments)-1,
+			})
+		}
+	}
+
+	if s.store == nil {
+		s.render(w, "file_explorer.html", data)
+		return
+	}
+
+	// File paths in the DB are absolute. Convert the relative dirPrefix
+	// the user sees into an absolute prefix for the SQL query.
+	absPrefix := ""
+	if dirPrefix != "" {
+		absPrefix = strings.TrimSuffix(projectPath, "/") + "/" + dirPrefix
+	}
+
+	entries, err := s.store.FilesForProject(projectPath, absPrefix, 500)
+	if err != nil {
+		s.logger.Printf("file explorer: %v", err)
+		s.render(w, "file_explorer.html", data)
+		return
+	}
+
+	// Build directory aggregation and file list.
+	// File paths from DB are absolute — strip project path prefix for display.
+	projPrefix := strings.TrimSuffix(projectPath, "/") + "/"
+	currentPfx := "" // e.g. "" or "internal/web/"
+	if dirPrefix != "" {
+		currentPfx = dirPrefix + "/"
+	}
+
+	// Compute relative sub-paths for all entries.
+	type relEntry struct {
+		entry   session.ProjectFileEntry
+		relPath string // relative to project root
+		subPath string // relative to current dirPrefix
+	}
+	var relEntries []relEntry
+	dirCounts := make(map[string]int) // relative dir → file count
+
+	for _, e := range entries {
+		// Make path relative to project root.
+		rel := e.FilePath
+		if strings.HasPrefix(rel, projPrefix) {
+			rel = rel[len(projPrefix):]
+		} else {
+			continue // outside project tree
+		}
+
+		// Strip the current dir prefix.
+		sub := rel
+		if currentPfx != "" {
+			if strings.HasPrefix(sub, currentPfx) {
+				sub = sub[len(currentPfx):]
+			} else {
+				continue // doesn't match the current dir filter
+			}
+		}
+
+		// Count sub-directories.
+		subParts := splitPath(sub)
+		if len(subParts) > 1 {
+			topDir := dirPrefix
+			if topDir != "" {
+				topDir += "/"
+			}
+			topDir += subParts[0]
+			dirCounts[topDir]++
+		}
+
+		relEntries = append(relEntries, relEntry{entry: e, relPath: rel, subPath: sub})
+	}
+
+	// Build unified row list: directories first (sorted by name), then files (sorted by name).
+	// Skip bare directory names that also appear as aggregated dirs.
+	dirNames := make(map[string]struct{}, len(dirCounts))
+	for dir := range dirCounts {
+		dirNames[filepath.Base(dir)] = struct{}{}
+	}
+
+	// Directory rows (sorted alphabetically).
+	var dirRows []fileRow
+	for dir, count := range dirCounts {
+		dirRows = append(dirRows, fileRow{
+			IsDir:     true,
+			Name:      filepath.Base(dir),
+			DirPath:   dir,
+			FileCount: count,
+		})
+	}
+	sort.Slice(dirRows, func(i, j int) bool {
+		return dirRows[i].Name < dirRows[j].Name
+	})
+
+	// File rows (sorted alphabetically).
+	var fileRows []fileRow
+	for _, re := range relEntries {
+		subParts := splitPath(re.subPath)
+		if len(subParts) > 1 {
+			continue // aggregated into a directory row
+		}
+		base := filepath.Base(re.relPath)
+		if _, isDirName := dirNames[base]; isDirName && filepath.Ext(base) == "" {
+			continue // bare directory name, skip
+		}
+
+		changeClass := "file-modified"
+		switch re.entry.LastChangeType {
+		case "created":
+			changeClass = "file-created"
+		case "deleted":
+			changeClass = "file-deleted"
+		}
+
+		fileRows = append(fileRows, fileRow{
+			Name:           base,
+			SessionCount:   re.entry.SessionCount,
+			LastChangeType: string(re.entry.LastChangeType),
+			ChangeClass:    changeClass,
+			LastSessionID:  string(re.entry.LastSessionID),
+			LastSummary:    truncStr(re.entry.LastSummary, 80),
+			LastBranch:     re.entry.LastBranch,
+			LastTimeAgo:    timeAgoString(re.entry.LastSessionTime),
+		})
+	}
+	sort.Slice(fileRows, func(i, j int) bool {
+		return fileRows[i].Name < fileRows[j].Name
+	})
+
+	// Merge: dirs first, then files.
+	data.Rows = append(data.Rows, dirRows...)
+	data.Rows = append(data.Rows, fileRows...)
+	data.HasRows = len(data.Rows) > 0
+	data.TotalFiles = len(fileRows)
+	data.TotalDirs = len(dirRows)
+
+	s.render(w, "file_explorer.html", data)
+}
+
+// truncStr truncates a string to maxLen characters, appending "…" if shortened.
+func truncStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
+}
+
+// splitPath splits a file path into its components.
+func splitPath(p string) []string {
+	var parts []string
+	for p != "" && p != "." && p != "/" {
+		dir, file := filepath.Split(p)
+		if file != "" {
+			parts = append([]string{file}, parts...)
+		}
+		p = filepath.Clean(dir)
+	}
+	return parts
 }
 
 // ── Analysis ──
@@ -3577,7 +4248,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 	}
 
 	// Weekly trends (project-scoped).
-	trends, trendsErr := s.sessionSvc.Trends(ctx, service.TrendRequest{
+	trends, trendsErr := s.cachedTrends(ctx, service.TrendRequest{
 		Period:      7 * 24 * time.Hour,
 		ProjectPath: projectPath,
 	})
@@ -3625,7 +4296,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 
 	// Cache efficiency (7-day window, project-scoped).
 	since7d := time.Now().AddDate(0, 0, -7)
-	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(ctx, projectPath, since7d)
+	cacheEff, cacheErr := s.cachedCacheEfficiency(ctx, projectPath, since7d, "7d")
 	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
 		data.HasCacheStats = true
 		data.DashCacheHitRate = cacheEff.CacheHitRate
@@ -3707,7 +4378,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 
 	// Context saturation.
 	since90d := time.Now().AddDate(0, 0, -90)
-	satResult, satErr := s.sessionSvc.ContextSaturation(ctx, projectPath, since90d)
+	satResult, satErr := s.cachedSaturation(ctx, projectPath, since90d)
 	if satErr == nil && satResult != nil && satResult.TotalSessions > 0 {
 		data.HasSaturation = true
 		data.SatAvgPeak = satResult.AvgPeakSaturation
@@ -4450,4 +5121,344 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		cssClass += " settings-value--disabled"
 	}
 	fmt.Fprintf(w, `<span class="%s">%s</span> <span class="settings-saved-indicator">saved</span>`, cssClass, template.HTMLEscapeString(displayValue))
+}
+
+// ── Session Timeline Partial ─────────────────────────────────────────────
+
+// timelineData is the top-level data passed to session_timeline_partial.html.
+type timelineData struct {
+	SessionID string
+
+	// Time axis metadata.
+	StartTime  time.Time
+	EndTime    time.Time
+	DurationMs int64 // total session duration in ms
+
+	// Per-message entries on the Gantt chart.
+	Messages []timelineMessage
+
+	// Dependency graph: parent → this → children/forks.
+	HasGraph     bool
+	GraphEntries []timelineGraphEntry
+
+	// Saturation overlay.
+	HasSaturation   bool
+	HasCompactions  bool
+	HasOverload     bool
+	InflectionAt    int // message index (1-based, 0 = none)
+	InflectionPct   float64
+	OverloadVerdict string
+	OverloadScore   int
+}
+
+// timelineMessage represents one message bar on the Gantt chart.
+type timelineMessage struct {
+	Index     int    // 0-based
+	IndexHum  int    // 1-based for display
+	Role      string // "user", "assistant", "system", "tool"
+	RoleClass string // CSS class: "tl-user", "tl-assistant", "tl-system", "tl-tool"
+
+	// Position on the timeline (percentage of total duration).
+	OffsetPct float64
+	WidthPct  float64
+
+	// Token info.
+	InputTokens  string
+	OutputTokens string
+	Tokens       string // combined display
+
+	// Saturation zone (if available).
+	Zone      string // "optimal", "degraded", "critical", ""
+	ZoneClass string // "tl-zone-optimal", etc.
+	Percent   float64
+
+	// Tool calls (sub-bars).
+	HasTools bool
+	Tools    []timelineTool
+
+	// Error flag.
+	HasError bool
+
+	// Compaction marker.
+	IsCompaction bool
+
+	// Fork point marker.
+	IsForkPoint bool
+}
+
+// timelineTool represents a tool call sub-bar within a message.
+type timelineTool struct {
+	Name       string
+	State      string // "completed", "error", "pending", "running"
+	StateIcon  string // "✅", "❌", "⏳", "⏳"
+	StateClass string // "tl-tool-ok", "tl-tool-err", "tl-tool-pending"
+	DurationMs int
+}
+
+// timelineGraphEntry represents a node in the dependency mini-tree.
+type timelineGraphEntry struct {
+	SessionID string
+	Label     string // truncated summary or ID
+	Relation  string // "parent", "self", "child", "fork"
+	Class     string // "tl-graph-parent", "tl-graph-self", etc.
+	Link      string // URL to session detail
+}
+
+// handleSessionTimelinePartial renders the timeline Gantt chart for a session.
+func (s *Server) handleSessionTimelinePartial(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		w.Write([]byte(`<div class="text-muted" style="padding:1rem;">Timeline unavailable.</div>`))
+		return
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil || len(sess.Messages) == 0 {
+		w.Write([]byte(`<div class="text-muted" style="padding:1rem;">Timeline unavailable — no messages.</div>`))
+		return
+	}
+
+	// Load saturation curve (optional — may fail for short sessions).
+	curve, _ := s.sessionSvc.SessionSaturationCurve(r.Context(), sess.ID)
+
+	// Build saturation index: msgIndex → SaturationPoint.
+	satMap := make(map[int]*session.SaturationPoint)
+	compactionSet := make(map[int]bool)
+	if curve != nil && len(curve.Points) > 0 {
+		for i := range curve.Points {
+			satMap[curve.Points[i].MessageIndex] = &curve.Points[i]
+		}
+		for _, e := range curve.Compactions.Events {
+			compactionSet[e.AfterMessageIdx] = true
+		}
+	}
+
+	// Determine time bounds.
+	startTime := sess.Messages[0].Timestamp
+	endTime := sess.Messages[len(sess.Messages)-1].Timestamp
+	totalDur := endTime.Sub(startTime)
+	if totalDur <= 0 {
+		totalDur = time.Second // prevent div-by-zero for single-message sessions
+	}
+
+	data := timelineData{
+		SessionID:  id,
+		StartTime:  startTime,
+		EndTime:    endTime,
+		DurationMs: totalDur.Milliseconds(),
+	}
+
+	// Fork point detection: if this session is a fork, mark the ForkedAtMessage.
+	forkPoint := sess.ForkedAtMessage // 1-based, 0 means not a fork
+
+	// Build message bars.
+	for i := range sess.Messages {
+		msg := &sess.Messages[i]
+		offset := msg.Timestamp.Sub(startTime)
+		offsetPct := float64(offset) / float64(totalDur) * 100
+		if offsetPct < 0 {
+			offsetPct = 0
+		}
+		if offsetPct > 100 {
+			offsetPct = 100
+		}
+
+		// Width: use gap to next message, or min 0.5%.
+		var widthPct float64
+		if i < len(sess.Messages)-1 {
+			gap := sess.Messages[i+1].Timestamp.Sub(msg.Timestamp)
+			widthPct = float64(gap) / float64(totalDur) * 100
+		} else {
+			widthPct = 100 - offsetPct
+		}
+		if widthPct < 0.5 {
+			widthPct = 0.5
+		}
+		if offsetPct+widthPct > 100 {
+			widthPct = 100 - offsetPct
+		}
+
+		// Role class.
+		role := string(msg.Role)
+		roleClass := "tl-assistant"
+		switch msg.Role {
+		case session.RoleUser:
+			roleClass = "tl-user"
+		case session.RoleSystem:
+			roleClass = "tl-system"
+		}
+
+		tm := timelineMessage{
+			Index:        i,
+			IndexHum:     i + 1,
+			Role:         role,
+			RoleClass:    roleClass,
+			OffsetPct:    offsetPct,
+			WidthPct:     widthPct,
+			InputTokens:  formatTokens(msg.InputTokens),
+			OutputTokens: formatTokens(msg.OutputTokens),
+			Tokens:       formatTokens(msg.InputTokens + msg.OutputTokens),
+			IsCompaction: compactionSet[i],
+			IsForkPoint:  forkPoint > 0 && i+1 == forkPoint,
+		}
+
+		// Saturation overlay.
+		if pt, ok := satMap[i]; ok {
+			tm.Zone = pt.Zone
+			tm.Percent = pt.Percent
+			switch pt.Zone {
+			case "degraded":
+				tm.ZoneClass = "tl-zone-degraded"
+			case "critical":
+				tm.ZoneClass = "tl-zone-critical"
+			default:
+				tm.ZoneClass = "tl-zone-optimal"
+			}
+		}
+
+		// Tool calls.
+		for _, tc := range msg.ToolCalls {
+			stateIcon := "✅"
+			stateClass := "tl-tool-ok"
+			switch tc.State {
+			case session.ToolStateError:
+				stateIcon = "❌"
+				stateClass = "tl-tool-err"
+				tm.HasError = true
+			case session.ToolStatePending:
+				stateIcon = "⏳"
+				stateClass = "tl-tool-pending"
+			case session.ToolStateRunning:
+				stateIcon = "⏳"
+				stateClass = "tl-tool-pending"
+			}
+			tm.Tools = append(tm.Tools, timelineTool{
+				Name:       tc.Name,
+				State:      string(tc.State),
+				StateIcon:  stateIcon,
+				StateClass: stateClass,
+				DurationMs: tc.DurationMs,
+			})
+		}
+		tm.HasTools = len(tm.Tools) > 0
+
+		data.Messages = append(data.Messages, tm)
+	}
+
+	// Saturation summary.
+	if curve != nil {
+		data.HasSaturation = len(curve.Points) > 0
+		data.HasCompactions = curve.Compactions.TotalCompactions > 0
+		if curve.Overload.TotalMessages >= 10 {
+			data.HasOverload = true
+			data.OverloadVerdict = curve.Overload.Verdict
+			data.OverloadScore = curve.Overload.HealthScore
+			if curve.Overload.InflectionAt > 0 {
+				data.InflectionAt = curve.Overload.InflectionAt + 1 // 1-based
+				// Calculate inflection position as percentage.
+				if curve.Overload.InflectionAt < len(data.Messages) {
+					data.InflectionPct = data.Messages[curve.Overload.InflectionAt].OffsetPct
+				}
+			}
+		}
+	}
+
+	// Build dependency graph.
+	data.GraphEntries = s.buildTimelineGraph(sess)
+	data.HasGraph = len(data.GraphEntries) > 1 // only show if there's more than just "self"
+
+	s.renderPartial(w, "session_timeline_partial.html", data)
+}
+
+// buildTimelineGraph creates the mini dependency tree for the session.
+func (s *Server) buildTimelineGraph(sess *session.Session) []timelineGraphEntry {
+	var entries []timelineGraphEntry
+
+	// Parent (if any).
+	if sess.ParentID != "" {
+		label := string(sess.ParentID)
+		if len(label) > 12 {
+			label = label[:12]
+		}
+		entries = append(entries, timelineGraphEntry{
+			SessionID: string(sess.ParentID),
+			Label:     label,
+			Relation:  "parent",
+			Class:     "tl-graph-parent",
+			Link:      "/sessions/" + string(sess.ParentID),
+		})
+	}
+
+	// Self.
+	selfLabel := string(sess.ID)
+	if len(selfLabel) > 12 {
+		selfLabel = selfLabel[:12]
+	}
+	entries = append(entries, timelineGraphEntry{
+		SessionID: string(sess.ID),
+		Label:     selfLabel,
+		Relation:  "self",
+		Class:     "tl-graph-self",
+		Link:      "/sessions/" + string(sess.ID),
+	})
+
+	// Children.
+	for _, child := range sess.Children {
+		childLabel := string(child.ID)
+		if len(childLabel) > 12 {
+			childLabel = childLabel[:12]
+		}
+		entries = append(entries, timelineGraphEntry{
+			SessionID: string(child.ID),
+			Label:     childLabel,
+			Relation:  "child",
+			Class:     "tl-graph-child",
+			Link:      "/sessions/" + string(child.ID),
+		})
+	}
+
+	// Fork relations.
+	if s.store != nil {
+		forkRels, err := s.store.GetForkRelations(sess.ID)
+		if err == nil {
+			for _, rel := range forkRels {
+				var linkedID session.ID
+				relation := "fork"
+				if rel.OriginalID == sess.ID {
+					linkedID = rel.ForkID
+				} else {
+					linkedID = rel.OriginalID
+					relation = "parent" // already shown above? skip duplicates
+				}
+				// Avoid duplicating parent/children already shown.
+				dup := false
+				for _, e := range entries {
+					if e.SessionID == string(linkedID) {
+						dup = true
+						break
+					}
+				}
+				if dup {
+					continue
+				}
+				fLabel := string(linkedID)
+				if len(fLabel) > 12 {
+					fLabel = fLabel[:12]
+				}
+				cssClass := "tl-graph-fork"
+				if relation == "parent" {
+					cssClass = "tl-graph-parent"
+				}
+				entries = append(entries, timelineGraphEntry{
+					SessionID: string(linkedID),
+					Label:     fLabel,
+					Relation:  relation,
+					Class:     cssClass,
+					Link:      "/sessions/" + string(linkedID),
+				})
+			}
+		}
+	}
+
+	return entries
 }

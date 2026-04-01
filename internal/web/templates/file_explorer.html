@@ -1,0 +1,97 @@
+{{define "title"}}Files — {{.ProjectName}} — aisync{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <h1 class="page-title">
+    {{if .ProjectPath}}
+    <a href="/projects{{.ProjectPath}}" class="back-link">&larr;</a>
+    {{end}}
+    File Explorer
+    {{if .ProjectName}}<span class="text-muted">· {{.ProjectName}}</span>{{end}}
+  </h1>
+
+  {{if .Projects}}
+  <div class="fe-project-filter">
+    <select class="project-select" onchange="if(this.value){location.href='/files'+this.value}">
+      {{range .Projects}}
+      <option value="{{.Path}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+      {{end}}
+    </select>
+  </div>
+  {{end}}
+</div>
+
+<!-- ── Breadcrumb ── -->
+<div class="fe-breadcrumb">
+  {{if .DirPrefix}}
+  <a href="/files{{.ProjectPath}}" class="fe-crumb font-mono">{{.ProjectName}}</a>
+  {{range .Breadcrumbs}}
+  <span class="fe-crumb-sep">/</span>
+  {{if .IsCurrent}}
+  <span class="fe-crumb-current font-mono">{{.Name}}</span>
+  {{else}}
+  <a href="/files{{$.ProjectPath}}?dir={{.Path}}" class="fe-crumb font-mono">{{.Name}}</a>
+  {{end}}
+  {{end}}
+  {{else}}
+  <span class="fe-crumb-current font-mono">{{.ProjectName}}</span>
+  {{end}}
+</div>
+
+{{if not .HasRows}}
+<div class="empty-state">
+  <p>No file changes recorded{{if .DirPrefix}} in this directory{{else}} for this project{{end}}.</p>
+  {{if not .DirPrefix}}
+  <p class="hint">Enable file blame with <code>aisync config set features.file_blame true</code> then run <code>aisync backfill files</code>.</p>
+  {{end}}
+</div>
+{{else}}
+
+<!-- ── File Table (GitHub-style unified list) ── -->
+<div class="fe-table-wrap">
+  <table class="fe-table">
+    <thead>
+      <tr>
+        <th class="fe-th-name">Name</th>
+        <th class="fe-th-summary">Last session</th>
+        <th class="fe-th-when">Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}
+      {{if .IsDir}}
+      <tr class="fe-row fe-row-dir">
+        <td class="fe-cell-name">
+          <a href="/files{{$.ProjectPath}}?dir={{.DirPath}}/" class="fe-link-dir">
+            <svg class="fe-icon fe-icon-dir" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg>
+            <span class="font-mono">{{.Name}}</span>
+          </a>
+        </td>
+        <td class="fe-cell-summary text-muted"></td>
+        <td class="fe-cell-when text-muted"></td>
+      </tr>
+      {{else}}
+      <tr class="fe-row fe-row-file">
+        <td class="fe-cell-name">
+          <span class="fe-link-file">
+            <svg class="fe-icon fe-icon-file" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/></svg>
+            <span class="font-mono">{{.Name}}</span>
+          </span>
+        </td>
+        <td class="fe-cell-summary">
+          {{if .LastSessionID}}
+          <a href="/sessions/{{.LastSessionID}}" class="fe-summary-link text-muted" title="{{.LastSummary}}">{{.LastSummary}}</a>
+          {{end}}
+        </td>
+        <td class="fe-cell-when text-muted">{{.LastTimeAgo}}</td>
+      </tr>
+      {{end}}
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+{{end}}
+{{end}}
+
+{{template "layout" .}}

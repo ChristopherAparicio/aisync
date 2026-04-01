@@ -2139,6 +2139,116 @@ pre {
   border-color: var(--accent);
 }
 
+/* ── File Explorer (GitHub-style) ── */
+
+.fe-project-filter {
+  margin-top: 0.75rem;
+}
+.fe-project-filter .project-select {
+  min-width: 240px;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+}
+
+/* Breadcrumb */
+.fe-breadcrumb {
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.fe-crumb {
+  color: var(--accent);
+  text-decoration: none;
+}
+.fe-crumb:hover { text-decoration: underline; }
+.fe-crumb-sep { color: var(--text-muted); user-select: none; }
+.fe-crumb-current { color: var(--text); font-weight: 600; }
+
+/* Table */
+.fe-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.fe-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.fe-table thead {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+.fe-table th {
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.fe-th-name { width: 35%; }
+.fe-th-summary { }
+.fe-th-when { width: 100px; text-align: right; }
+
+/* Rows */
+.fe-row {
+  border-bottom: 1px solid var(--border);
+}
+.fe-row:last-child { border-bottom: none; }
+.fe-row:hover { background: var(--bg-hover); }
+
+.fe-row td {
+  padding: 0.45rem 0.75rem;
+  vertical-align: middle;
+}
+
+/* Name cell */
+.fe-cell-name {
+  white-space: nowrap;
+}
+.fe-link-dir,
+.fe-link-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  text-decoration: none;
+  color: var(--text);
+}
+.fe-link-dir { color: var(--accent); }
+.fe-link-dir:hover { text-decoration: underline; }
+
+/* Icons */
+.fe-icon {
+  flex-shrink: 0;
+}
+.fe-icon-dir { color: #54aeff; }
+.fe-icon-file { color: var(--text-muted); }
+
+/* Summary cell */
+.fe-cell-summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0; /* allows ellipsis to work in table cell */
+}
+.fe-summary-link {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.fe-summary-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* When cell */
+.fe-cell-when {
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* ── Capability Bar ── */
 
 .capability-bar {
@@ -3988,4 +4098,297 @@ pre {
   0% { opacity: 1; }
   70% { opacity: 1; }
   100% { opacity: 0; }
+}
+
+/* ── Multi-Benchmark (6.3) ── */
+
+.bench-badge {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.bench-badge.aider_polyglot { background: rgba(59,130,246,0.15); color: #3b82f6; }
+.bench-badge.swe_bench { background: rgba(168,85,247,0.15); color: #a855f7; }
+.bench-badge.toolbench { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.bench-badge.arena_elo { background: rgba(34,197,94,0.15); color: #22c55e; }
+.bench-badge.humaneval { background: rgba(236,72,153,0.15); color: #ec4899; }
+
+.bench-breakdown {
+  display: inline-flex;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.bench-mini {
+  display: inline-block;
+  font-size: 0.6rem;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-weight: 600;
+  cursor: help;
+  line-height: 1.3;
+}
+
+.bench-mini.bench-aider { background: rgba(59,130,246,0.15); color: #3b82f6; }
+.bench-mini.bench-swe { background: rgba(168,85,247,0.15); color: #a855f7; }
+.bench-mini.bench-tool { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.bench-mini.bench-arena { background: rgba(34,197,94,0.15); color: #22c55e; }
+.bench-mini.bench-other { background: rgba(148,163,184,0.15); color: var(--text-muted); }
+
+.bench-sources {
+  margin-bottom: 0.75rem;
+}
+
+/* ── Session Timeline ─────────────────────────────────────────────────── */
+
+.tl-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+
+/* ── Dependency Graph ── */
+
+.tl-graph {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: var(--bg);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.tl-graph-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+
+.tl-graph-parent  { background: rgba(96,165,250,0.12); border: 1px solid rgba(96,165,250,0.3); }
+.tl-graph-self    { background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.4); font-weight: 600; }
+.tl-graph-child   { background: rgba(251,146,60,0.12); border: 1px solid rgba(251,146,60,0.3); }
+.tl-graph-fork    { background: rgba(168,85,247,0.12); border: 1px solid rgba(168,85,247,0.3); }
+
+.tl-graph-arrow   { font-size: 0.85rem; }
+.tl-graph-icon    { font-size: 0.7rem; color: var(--green); }
+.tl-graph-label   { font-size: 0.75rem; }
+.tl-graph-rel     { font-size: 0.65rem; }
+
+.tl-graph-connector {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin: 0 0.15rem;
+}
+
+/* ── Legend ── */
+
+.tl-legend, .tl-zone-legend {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.tl-zone-legend {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}
+
+.tl-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.tl-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* ── Overload indicator ── */
+
+.tl-overload {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+}
+
+/* ── Gantt Chart ── */
+
+.tl-chart {
+  position: relative;
+  border-left: 2px solid var(--border);
+  padding-left: 0;
+}
+
+.tl-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1.5rem 1fr 3.5rem 3rem;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2px 0;
+  font-size: 0.75rem;
+  min-height: 22px;
+}
+
+.tl-row:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.tl-row-error {
+  background: rgba(239,68,68,0.06);
+}
+
+.tl-row-compaction {
+  background: rgba(168,85,247,0.08);
+}
+
+.tl-idx {
+  color: var(--text-muted);
+  text-align: right;
+  font-size: 0.65rem;
+}
+
+.tl-role-icon {
+  text-align: center;
+  font-size: 0.7rem;
+}
+
+/* ── Bar Track ── */
+
+.tl-bar-track {
+  position: relative;
+  height: 16px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.tl-bar {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 3px;
+  min-width: 3px;
+  transition: opacity 0.15s;
+}
+
+.tl-bar:hover {
+  opacity: 0.8;
+}
+
+/* Role colors */
+.tl-user      { background: var(--accent); }
+.tl-assistant { background: var(--green); }
+.tl-system    { background: #64748b; }
+
+/* Saturation zone overlays — semi-transparent border */
+.tl-zone-optimal  { border-bottom: 2px solid #22c55e; background-color: #22c55e; }
+.tl-zone-degraded { border-bottom: 2px solid #f59e0b; background-color: #f59e0b; }
+.tl-zone-critical { border-bottom: 2px solid #ef4444; background-color: #ef4444; }
+
+/* Zone dots in legend */
+.tl-dot.tl-zone-optimal  { background: #22c55e; }
+.tl-dot.tl-zone-degraded { background: #f59e0b; }
+.tl-dot.tl-zone-critical { background: #ef4444; }
+
+/* Compaction bar */
+.tl-compaction { background: #a855f7; }
+.tl-dot.tl-compaction { background: #a855f7; }
+
+/* Fork marker */
+.tl-fork-marker {
+  position: absolute;
+  top: -2px;
+  left: 0;
+  font-size: 0.7rem;
+  color: #a855f7;
+  text-shadow: 0 0 3px var(--bg);
+}
+
+/* Inflection line */
+.tl-inflection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: repeating-linear-gradient(
+    to bottom,
+    #ef4444 0px,
+    #ef4444 4px,
+    transparent 4px,
+    transparent 8px
+  );
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+/* Token/percent columns */
+.tl-tokens {
+  text-align: right;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.tl-pct {
+  text-align: right;
+  font-size: 0.6rem;
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+.tl-pct.tl-zone-optimal  { color: #22c55e; background: none; border-bottom: none; }
+.tl-pct.tl-zone-degraded { color: #f59e0b; background: none; border-bottom: none; }
+.tl-pct.tl-zone-critical { color: #ef4444; background: none; border-bottom: none; }
+
+/* ── Tool Chips Row ── */
+
+.tl-tools-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1.5rem 1fr;
+  gap: 0.25rem;
+  padding: 0 0 2px 0;
+}
+
+.tl-tools-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.tl-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+}
+
+.tl-tool-ok      { background: rgba(34,197,94,0.1); color: var(--green); }
+.tl-tool-err     { background: rgba(239,68,68,0.1); color: #ef4444; }
+.tl-tool-pending { background: rgba(245,158,11,0.1); color: #f59e0b; }
+
+.tl-dot.tl-tool-ok  { background: var(--green); }
+.tl-dot.tl-tool-err { background: #ef4444; }
+
+.tl-tool-dur {
+  font-size: 0.6rem;
+  margin-left: 0.15rem;
 }

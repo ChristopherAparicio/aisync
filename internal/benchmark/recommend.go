@@ -19,6 +19,12 @@ func NewRecommender(benchmarks Catalog, prices pricing.Catalog) *Recommender {
 	return &Recommender{benchmarks: benchmarks, prices: prices}
 }
 
+// Benchmarks returns the underlying benchmark catalog.
+// The caller can type-assert to MultiCatalog for multi-source features.
+func (r *Recommender) Benchmarks() Catalog {
+	return r.benchmarks
+}
+
 // Recommend returns model alternatives for the given model, sorted by
 // verdict quality (no-brainers first, then tradeoffs, then risky).
 //
@@ -100,6 +106,12 @@ func (r *Recommender) Recommend(model string, monthlyInputTokens int) []ModelAlt
 
 		alt.Verdict = classifyAlternative(alt)
 
+		// Populate multi-benchmark score breakdowns if available.
+		if mc, ok := r.benchmarks.(MultiCatalog); ok {
+			alt.CurrentScores = mc.LookupScores(model)
+			alt.AltScores = mc.LookupScores(entry.Model)
+		}
+
 		// Only include alternatives that save money.
 		if alt.CostSavings > 0 {
 			alts = append(alts, alt)
@@ -156,12 +168,20 @@ func (r *Recommender) QACLeaderboard() []QACLeaderEntry {
 			continue
 		}
 
-		entries = append(entries, QACLeaderEntry{
+		entry := QACLeaderEntry{
 			Model:          be.Model,
 			BenchmarkScore: be.Score,
 			InputCost:      price.InputPerMToken,
 			QAC:            qac,
-		})
+		}
+
+		// Populate multi-benchmark score breakdowns if available.
+		if mc, ok := r.benchmarks.(MultiCatalog); ok {
+			entry.Scores = mc.LookupScores(be.Model)
+			entry.SourceCount = len(entry.Scores)
+		}
+
+		entries = append(entries, entry)
 	}
 
 	// Sort by QAC ascending (best value first).

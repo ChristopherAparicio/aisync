@@ -176,6 +176,11 @@ type SearchStore interface {
 	// TopFilesForProject returns the most frequently touched files for a project,
 	// aggregated from file_changes. Results are sorted by session count descending.
 	TopFilesForProject(projectPath string, limit int) ([]session.TopFileEntry, error)
+
+	// FilesForProject returns all files touched in a project with blame summary
+	// (session count, last session info). Results are sorted by last_session_time DESC.
+	// If dirPrefix is non-empty, only files under that directory are returned.
+	FilesForProject(projectPath string, dirPrefix string, limit int) ([]session.ProjectFileEntry, error)
 }
 
 // AnalysisStore persists and retrieves session analyses.

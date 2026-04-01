@@ -1,0 +1,98 @@
+{{define "session_timeline_partial.html"}}
+<div class="tl-panel">
+  <h3 class="section-subtitle">Session Timeline</h3>
+
+  {{if .HasGraph}}
+  <!-- ── Dependency Graph ── -->
+  <div class="tl-graph">
+    {{range .GraphEntries}}
+    <div class="tl-graph-node {{.Class}}">
+      {{if eq .Relation "parent"}}<span class="tl-graph-arrow">↑</span>{{end}}
+      {{if eq .Relation "self"}}<span class="tl-graph-icon">●</span>{{end}}
+      {{if eq .Relation "child"}}<span class="tl-graph-arrow">↓</span>{{end}}
+      {{if eq .Relation "fork"}}<span class="tl-graph-arrow">⑂</span>{{end}}
+      {{if eq .Relation "self"}}
+        <span class="font-mono tl-graph-label">{{.Label}}</span>
+      {{else}}
+        <a href="{{.Link}}" class="font-mono tl-graph-label">{{.Label}}</a>
+      {{end}}
+      <span class="tl-graph-rel text-muted">{{.Relation}}</span>
+    </div>
+    {{if ne .Relation "self"}}{{if ne .Relation "fork"}}<span class="tl-graph-connector">│</span>{{end}}{{end}}
+    {{end}}
+  </div>
+  {{end}}
+
+  <!-- ── Legend ── -->
+  <div class="tl-legend">
+    <span class="tl-legend-item"><span class="tl-dot tl-user"></span>User</span>
+    <span class="tl-legend-item"><span class="tl-dot tl-assistant"></span>Assistant</span>
+    <span class="tl-legend-item"><span class="tl-dot tl-system"></span>System</span>
+    <span class="tl-legend-item"><span class="tl-dot tl-tool-ok"></span>Tool ✅</span>
+    <span class="tl-legend-item"><span class="tl-dot tl-tool-err"></span>Tool ❌</span>
+    {{if .HasCompactions}}<span class="tl-legend-item"><span class="tl-dot tl-compaction"></span>Compaction</span>{{end}}
+  </div>
+
+  <!-- ── Overload indicator ── -->
+  {{if .HasOverload}}
+  <div class="tl-overload">
+    <span class="text-muted">Health:</span>
+    <span class="badge badge-{{if ge .OverloadScore 70}}good{{else if ge .OverloadScore 40}}warning{{else}}poor{{end}}">
+      {{.OverloadVerdict}} ({{.OverloadScore}}/100)
+    </span>
+    {{if gt .InflectionAt 0}}
+    <span class="text-muted">· Inflection at msg #{{.InflectionAt}}</span>
+    {{end}}
+  </div>
+  {{end}}
+
+  <!-- ── Gantt Chart ── -->
+  <div class="tl-chart">
+    {{if gt .InflectionAt 0}}
+    <div class="tl-inflection" style="left:{{printf "%.1f" .InflectionPct}}%" title="Inflection point at msg #{{.InflectionAt}}"></div>
+    {{end}}
+
+    {{range .Messages}}
+    <div class="tl-row{{if .HasError}} tl-row-error{{end}}{{if .IsCompaction}} tl-row-compaction{{end}}" title="#{{.IndexHum}} {{.Role}} — {{.Tokens}} tokens{{if .HasError}} — ERROR{{end}}{{if .IsCompaction}} — COMPACTION{{end}}">
+      <span class="tl-idx font-mono">#{{.IndexHum}}</span>
+      <span class="tl-role-icon">{{if eq .Role "user"}}👤{{else if eq .Role "assistant"}}🤖{{else if eq .Role "system"}}⚙{{else}}💬{{end}}</span>
+      <div class="tl-bar-track">
+        {{if .IsCompaction}}
+        <div class="tl-bar tl-compaction" style="left:{{printf "%.2f" .OffsetPct}}%; width:{{printf "%.2f" .WidthPct}}%"></div>
+        {{else}}
+        <div class="tl-bar {{.RoleClass}}{{if .ZoneClass}} {{.ZoneClass}}{{end}}" style="left:{{printf "%.2f" .OffsetPct}}%; width:{{printf "%.2f" .WidthPct}}%">
+          {{if .IsForkPoint}}<span class="tl-fork-marker" title="Fork point">⑂</span>{{end}}
+        </div>
+        {{end}}
+      </div>
+      <span class="tl-tokens font-mono">{{.Tokens}}</span>
+      {{if .Zone}}<span class="tl-pct font-mono {{.ZoneClass}}">{{printf "%.0f" .Percent}}%</span>{{end}}
+    </div>
+
+    {{if .HasTools}}
+    <div class="tl-tools-row">
+      <span class="tl-idx"></span>
+      <span class="tl-role-icon"></span>
+      <div class="tl-tools-list">
+        {{range .Tools}}
+        <span class="tl-tool-chip {{.StateClass}}" title="{{.Name}} — {{.State}}{{if gt .DurationMs 0}} ({{formatDuration .DurationMs}}){{end}}">
+          {{.StateIcon}} <span class="font-mono">{{.Name}}</span>
+          {{if gt .DurationMs 0}}<span class="text-muted tl-tool-dur">{{formatDuration .DurationMs}}</span>{{end}}
+        </span>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+    {{end}}
+  </div>
+
+  <!-- ── Saturation zone background legend ── -->
+  {{if .HasSaturation}}
+  <div class="tl-zone-legend">
+    <span class="tl-legend-item"><span class="tl-dot tl-zone-optimal"></span>Optimal</span>
+    <span class="tl-legend-item"><span class="tl-dot tl-zone-degraded"></span>Degraded</span>
+    <span class="tl-legend-item"><span class="tl-dot tl-zone-critical"></span>Critical</span>
+  </div>
+  {{end}}
+</div>
+{{end}}

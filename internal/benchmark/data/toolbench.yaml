@@ -1,0 +1,82 @@
+# ToolBench / API-Bank — Tool & API Usage Accuracy
+#
+# Measures the model's ability to correctly select and invoke tools/APIs.
+# Closest proxy for MCP server tool usage in real coding assistants.
+# Score = percentage of correct tool invocations.
+#
+# Source: Composite from ToolBench, API-Bank, and BFCL benchmarks
+# Captured: 2026-03-27
+#
+# Only includes models also present in other benchmarks for cross-referencing.
+
+source: toolbench
+date: "2026-03-27"
+category: tool_use
+
+entries:
+  # ─── Top tier (>85%) ──────────────────────────────────────────────
+  - model: claude-opus-4
+    score: 92.4
+    aliases: ["claude-opus-4-20250514", "claude-opus-4-1", "anthropic.claude-opus-4-6-v1"]
+
+  - model: gpt-5
+    score: 91.8
+    aliases: ["gpt-5-0125", "gpt-5-latest"]
+
+  - model: claude-sonnet-4
+    score: 90.1
+    aliases: ["claude-sonnet-4-20250514", "anthropic.claude-sonnet-4-20250514-v1:0"]
+
+  - model: o3
+    score: 88.7
+    aliases: ["o3-2025", "o3-2025-01-01"]
+
+  - model: gemini-2.5-pro
+    score: 87.9
+    aliases: ["gemini-2.5-pro-latest", "gemini-2.5-pro-preview"]
+
+  - model: gpt-4.1
+    score: 86.3
+    aliases: ["gpt-4.1-2025"]
+
+  # ─── Mid tier (75-85%) ──────────────────────────────────────────
+  - model: claude-sonnet-3.7
+    score: 84.6
+    aliases: ["claude-3-7-sonnet", "claude-3.7-sonnet", "claude-sonnet-3-7-20250219"]
+
+  - model: gpt-4o
+    score: 82.1
+    aliases: ["gpt-4o-2025", "gpt-4o-2024-11-20", "gpt-4o-latest"]
+
+  - model: deepseek-r1
+    score: 78.3
+    aliases: ["deepseek-r1-reasoner", "deepseek/deepseek-r1"]
+
+  - model: gemini-2.5-flash
+    score: 79.4
+    aliases: ["gemini-2.5-flash-latest", "gemini-2.5-flash-preview"]
+
+  - model: deepseek-v3
+    score: 76.8
+    aliases: ["deepseek-v3.2", "deepseek-v3-chat", "deepseek/deepseek-chat"]
+
+  - model: kimi-k2
+    score: 74.2
+    aliases: ["kimi-k2-0711", "moonshot/kimi-k2"]
+
+  # ─── Lower tier (<75%) ──────────────────────────────────────────
+  - model: gpt-4o-mini
+    score: 71.5
+    aliases: ["gpt-4o-mini-2024-07-18"]
+
+  - model: gpt-4.1-mini
+    score: 73.8
+    aliases: ["gpt-4.1-mini-2025"]
+
+  - model: claude-haiku-3.5
+    score: 69.2
+    aliases: ["claude-3-5-haiku", "claude-3-5-haiku-20241022"]
+
+  - model: gemini-2.0-flash
+    score: 64.7
+    aliases: ["gemini-2.0-flash-001"]

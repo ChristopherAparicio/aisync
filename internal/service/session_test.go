@@ -940,6 +940,9 @@ func (m *mockStore) GetSessionsByFile(_ session.BlameQuery) ([]session.BlameEntr
 func (m *mockStore) TopFilesForProject(_ string, _ int) ([]session.TopFileEntry, error) {
 	return nil, nil
 }
+func (m *mockStore) FilesForProject(_ string, _ string, _ int) ([]session.ProjectFileEntry, error) {
+	return nil, nil
+}
 func (m *mockStore) SaveAnalysis(a *analysis.SessionAnalysis) error {
 	if m.analyses == nil {
 		m.analyses = make(map[string]*analysis.SessionAnalysis)

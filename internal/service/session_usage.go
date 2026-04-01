@@ -648,9 +648,11 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 	modelPeakTokenSum := make(map[string]int64) // sum of peak tokens per model (for averaging)
 	var totalDropPctSum float64                 // sum of all compaction drop percents (for averaging)
 	var sessionInfos []session.SessionSaturation
-	var forecastInputs []session.SessionForecastInput // for saturation forecast
-	var wasteBreakdowns []session.TokenWasteBreakdown // per-session waste breakdowns for aggregation (4.2)
-	var freshnessResults []session.SessionFreshness   // per-session freshness analysis for aggregation (2.3)
+	var forecastInputs []session.SessionForecastInput  // for saturation forecast
+	var wasteBreakdowns []session.TokenWasteBreakdown  // per-session waste breakdowns for aggregation (4.2)
+	var freshnessResults []session.SessionFreshness    // per-session freshness analysis for aggregation (2.3)
+	var promptDataPoints []session.SessionPromptData   // per-session system prompt data for impact analysis (5.3)
+	var fitnessDataPoints []session.SessionFitnessData // per-session fitness data for model fitness profiles (6.4)
 
 	for _, sm := range summaries {
 		if projectPath != "" && sm.ProjectPath != projectPath {
@@ -819,6 +821,93 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		// Session freshness analysis (2.3).
 		freshnessResults = append(freshnessResults, session.AnalyzeFreshness(sess.Messages, compactions))
 
+		// System prompt estimation (5.3).
+		promptEst := session.SystemPromptEstimate(sess.Messages)
+		if promptEst > 0 {
+			var totalInput int
+			var toolCalls, toolErrors int
+			var retryMsgs int
+			for mi := range sess.Messages {
+				totalInput += sess.Messages[mi].InputTokens
+				for tj := range sess.Messages[mi].ToolCalls {
+					toolCalls++
+					if sess.Messages[mi].ToolCalls[tj].State == session.ToolStateError {
+						toolErrors++
+					}
+				}
+				// Count retries: assistant messages where the previous assistant had a tool error.
+				if mi > 1 && sess.Messages[mi].Role == session.RoleAssistant {
+					for prev := mi - 1; prev >= 0; prev-- {
+						if sess.Messages[prev].Role == session.RoleAssistant {
+							for _, tc := range sess.Messages[prev].ToolCalls {
+								if tc.State == session.ToolStateError {
+									retryMsgs++
+								}
+							}
+							break
+						}
+					}
+				}
+			}
+			var errRate, retryRate float64
+			if toolCalls > 0 {
+				errRate = float64(toolErrors) / float64(toolCalls) * 100
+			}
+			if len(sess.Messages) > 0 {
+				retryRate = float64(retryMsgs) / float64(len(sess.Messages)) * 100
+			}
+			promptDataPoints = append(promptDataPoints, session.SessionPromptData{
+				PromptTokens: promptEst,
+				TotalInput:   totalInput,
+				ErrorRate:    errRate,
+				RetryRate:    retryRate,
+				CreatedAt:    sess.CreatedAt.Unix(),
+			})
+		}
+
+		// Model fitness data (6.4).
+		if dominantModel != "" && sess.SessionType != "" {
+			var fitToolCalls, fitToolErrors int
+			var fitOutputTokens int
+			var fitHasRetries bool
+			for mi := range sess.Messages {
+				fitOutputTokens += sess.Messages[mi].OutputTokens
+				for tj := range sess.Messages[mi].ToolCalls {
+					fitToolCalls++
+					if sess.Messages[mi].ToolCalls[tj].State == session.ToolStateError {
+						fitToolErrors++
+					}
+				}
+				// Simple retry detection: assistant message following an assistant with a tool error.
+				if mi > 0 && sess.Messages[mi].Role == session.RoleAssistant && sess.Messages[mi-1].Role == session.RoleAssistant {
+					for _, tc := range sess.Messages[mi-1].ToolCalls {
+						if tc.State == session.ToolStateError {
+							fitHasRetries = true
+							break
+						}
+					}
+				}
+			}
+			var fitCost float64
+			if s.pricing != nil {
+				est := s.pricing.SessionCost(sess)
+				if est != nil {
+					fitCost = est.TotalCost.TotalCost
+				}
+			}
+			fitnessDataPoints = append(fitnessDataPoints, session.SessionFitnessData{
+				Model:         dominantModel,
+				SessionType:   sess.SessionType,
+				TotalTokens:   peakInput, // use peak as proxy for total context used
+				OutputTokens:  fitOutputTokens,
+				MessageCount:  len(sess.Messages),
+				ToolCalls:     fitToolCalls,
+				ToolErrors:    fitToolErrors,
+				EstimatedCost: fitCost,
+				HasRetries:    fitHasRetries,
+			})
+		}
+
 		// Detect overload signals (3.2) for aggregate stats.
 		overload := session.DetectOverload(sess.Messages)
 		result.AvgHealthScore += float64(overload.HealthScore)
@@ -873,6 +962,18 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 	if len(freshnessResults) > 0 {
 		agg := session.AggregateFreshness(freshnessResults)
 		result.Freshness = &agg
+	}
+
+	// Aggregate system prompt impact across all sessions (5.3).
+	if len(promptDataPoints) > 0 {
+		impact := session.AnalyzeSystemPromptImpact(promptDataPoints)
+		result.PromptImpact = &impact
+	}
+
+	// Aggregate model fitness profiles across all sessions (6.4).
+	if len(fitnessDataPoints) > 0 {
+		fitness := session.AnalyzeModelFitness(fitnessDataPoints)
+		result.Fitness = &fitness
 	}
 
 	// Top 10 worst sessions by saturation.
