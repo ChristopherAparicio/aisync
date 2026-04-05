@@ -28,11 +28,15 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/gittree"
 	"github.com/ChristopherAparicio/aisync/internal/llmfactory"
 	"github.com/ChristopherAparicio/aisync/internal/llmqueue"
+	"github.com/ChristopherAparicio/aisync/internal/notification"
+	notifslack "github.com/ChristopherAparicio/aisync/internal/notification/adapter/slack"
+	notifwebhook "github.com/ChristopherAparicio/aisync/internal/notification/adapter/webhook"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
 	"github.com/ChristopherAparicio/aisync/internal/replay"
 	"github.com/ChristopherAparicio/aisync/internal/scheduler"
 	"github.com/ChristopherAparicio/aisync/internal/security"
 	securityRules "github.com/ChristopherAparicio/aisync/internal/security/rules"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver/llmanalyzer"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
@@ -413,6 +417,28 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 	webSrv.RegisterRoutes(mux)
 	logger.Println("Web dashboard enabled")
 
+	// ── MCP tool prefix auto-configuration ──
+	// 1. Load user-configured prefixes from config.json.
+	if appCfg != nil {
+		if cfgPrefixes := appCfg.GetMCPPrefixes(); len(cfgPrefixes) > 0 {
+			session.SetExtraMCPPrefixes(cfgPrefixes)
+			logger.Printf("loaded %d MCP tool prefix(es) from config", len(cfgPrefixes))
+		}
+	}
+	// 2. Auto-discover from registry (adds prefixes for servers not already known).
+	if registrySvc != nil {
+		if proj, scanErr := registrySvc.ScanProject("."); scanErr == nil {
+			var serverNames []string
+			for _, s := range proj.MCPServers {
+				serverNames = append(serverNames, s.Name)
+			}
+			if len(serverNames) > 0 {
+				session.RegisterMCPServerPrefixes(serverNames)
+				logger.Printf("auto-registered %d MCP server prefix(es) from registry", len(serverNames))
+			}
+		}
+	}
+
 	// ── HTTP server lifecycle ──
 	srv := &http.Server{
 		Addr:              addr,
@@ -590,6 +616,20 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			logger.Println("scheduled task: cacheeff_precompute (45 */2 * * *)")
 		}
 
+		// Dashboard warm task — pre-computes forecast and trends caches.
+		// Runs every 5 minutes to keep the dashboard snappy; also runs at startup via WarmUp.
+		if storeSched, storeErr := f.Store(); storeErr == nil {
+			entries = append(entries, scheduler.Entry{
+				Schedule: "*/5 * * * *", // every 5 minutes
+				Task: scheduler.NewDashboardWarmTask(scheduler.DashboardWarmTaskConfig{
+					SessionService: sessionSvc,
+					Store:          storeSched,
+					Logger:         logger,
+				}),
+			})
+			logger.Println("scheduled task: dashboard_warm (*/5 * * * *)")
+		}
+
 		// Backfill remote URLs task — resolves git remote URLs for sessions that lack them.
 		// Runs daily at 4:00 AM; lightweight scan so no perf concern.
 		entries = append(entries, scheduler.Entry{
@@ -612,17 +652,259 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		})
 		logger.Println("scheduled task: fork_detection (30 4 * * *)")
 
-		// Budget check task — checks project budgets and logs alerts.
+		// Cost backfill task — populates denormalized cost columns for pre-migration sessions.
+		// Runs every 30 minutes and at startup via WarmUp. Each run processes up to 200 sessions.
+		// Once all sessions are backfilled, the task becomes a no-op.
+		if storeSched, storeErr := f.Store(); storeErr == nil {
+			entries = append(entries, scheduler.Entry{
+				Schedule: "*/30 * * * *", // every 30 minutes
+				Task: scheduler.NewCostBackfillTask(scheduler.CostBackfillConfig{
+					Store:   storeSched,
+					Pricing: pricing.NewCalculator(),
+					Logger:  logger,
+				}),
+			})
+			logger.Println("scheduled task: cost_backfill (*/30 * * * *)")
+		}
+
+		// Registry scan task — periodically scans all projects for capability changes.
+		// Persists both JSON snapshots (audit trail) and flat capability records (queryable index).
+		if registrySvc != nil {
+			cronExpr := appCfg.GetSchedulerRegistryScanCron()
+			entries = append(entries, scheduler.Entry{
+				Schedule: cronExpr,
+				Task: scheduler.NewRegistryScanTask(scheduler.RegistryScanTaskConfig{
+					Scanner: registrySvc,
+					Logger:  logger,
+				}),
+			})
+			logger.Printf("scheduled task: registry_scan (%s)", cronExpr)
+		}
+
+		// ── Notification service (optional, shared across scheduler tasks) ──
+		var notifSvc *notification.Service
+		var slackClient *notifslack.Client
+		if appCfg.IsNotificationEnabled() {
+			var channels []notification.ChannelWithFormatter
+
+			slackClient = notifslack.NewClient(notifslack.ClientConfig{
+				WebhookURL: appCfg.GetNotificationSlackWebhookURL(),
+				BotToken:   appCfg.GetNotificationSlackBotToken(),
+			})
+			if slackClient != nil {
+				channels = append(channels, notification.ChannelWithFormatter{
+					Channel:   slackClient,
+					Formatter: notifslack.NewFormatter(),
+				})
+			}
+
+			whClient := notifwebhook.NewClient(notifwebhook.ClientConfig{
+				URL:    appCfg.GetNotificationWebhookURL(),
+				Secret: appCfg.GetNotificationWebhookSecret(),
+			})
+			if whClient != nil {
+				channels = append(channels, notification.ChannelWithFormatter{
+					Channel:   whClient,
+					Formatter: notifwebhook.NewFormatter(),
+				})
+			}
+
+			router := notification.NewDefaultRouter(notification.RoutingConfig{
+				DefaultChannel:  appCfg.GetNotificationDefaultChannel(),
+				ProjectChannels: appCfg.GetNotificationProjectChannels(),
+				Alerts: notification.AlertConfig{
+					Budget:          appCfg.IsNotificationAlertBudgetEnabled(),
+					Errors:          appCfg.IsNotificationAlertErrorsEnabled(),
+					Capture:         appCfg.IsNotificationAlertCaptureEnabled(),
+					ErrorThreshold:  appCfg.GetNotificationErrorThreshold(),
+					ErrorWindowMins: appCfg.GetNotificationErrorWindowMins(),
+				},
+				Digest: notification.DigestConfig{
+					Daily:    appCfg.IsNotificationDigestDailyEnabled(),
+					Weekly:   appCfg.IsNotificationDigestWeeklyEnabled(),
+					Personal: appCfg.IsNotificationDigestPersonalEnabled(),
+				},
+			})
+
+			notifSvc = notification.NewService(notification.ServiceConfig{
+				Channels:     channels,
+				Router:       router,
+				Deduplicator: notification.NewDeduplicator(notification.DeduplicatorConfig{}),
+				Logger:       logger,
+			})
+			if notifSvc != nil {
+				logger.Println("notification service initialized")
+			}
+		}
+
+		dashboardURL := appCfg.GetNotificationDashboardURL()
+
+		// Budget check task — checks project budgets and fires notifications.
 		// Runs every hour at :50 to catch daily/monthly overages promptly.
 		entries = append(entries, scheduler.Entry{
 			Schedule: "50 * * * *", // every hour at :50
 			Task: scheduler.NewBudgetCheckTask(scheduler.BudgetCheckConfig{
 				SessionService: sessionSvc,
-				Dispatcher:     nil, // no webhook dispatcher wired yet — logs only
+				Dispatcher:     nil, // legacy webhook dispatcher — not wired in serve.go
+				NotifService:   notifSvc,
+				DashboardURL:   dashboardURL,
 				Logger:         logger,
 			}),
 		})
 		logger.Println("scheduled task: budget_check (50 * * * *)")
+
+		// Error spike detection task — detects error bursts and fires notifications.
+		// Runs every 15 minutes. Only fires when error count exceeds threshold within window.
+		if appCfg.IsNotificationAlertErrorsEnabled() && notifSvc != nil {
+			errStoreSched, errStoreErr := f.Store()
+			if errStoreErr == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: "*/15 * * * *", // every 15 minutes
+					Task: scheduler.NewErrorSpikeTask(scheduler.ErrorSpikeConfig{
+						Store:        errStoreSched,
+						NotifService: notifSvc,
+						DashboardURL: dashboardURL,
+						Threshold:    appCfg.GetNotificationErrorThreshold(),
+						WindowMins:   appCfg.GetNotificationErrorWindowMins(),
+						Logger:       logger,
+					}),
+				})
+				logger.Println("scheduled task: error_spike (*/15 * * * *)")
+			}
+		}
+
+		// User kind backfill task — reclassifies all users based on machine patterns.
+		// Runs daily at 5 AM.
+		{
+			storeSched, storeErr := f.Store()
+			if storeErr == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: "0 5 * * *", // daily at 5 AM
+					Task: scheduler.NewUserKindBackfillTask(scheduler.UserKindBackfillConfig{
+						Store:  storeSched,
+						Config: appCfg,
+						Logger: logger,
+					}),
+				})
+				logger.Println("scheduled task: user_kind_backfill (0 5 * * *)")
+			}
+		}
+
+		// Daily digest task — sends daily notification with session stats.
+		if appCfg.IsNotificationDigestDailyEnabled() && notifSvc != nil {
+			storeSched, storeErr := f.Store()
+			if storeErr == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: appCfg.GetNotificationDailyDigestCron(),
+					Task: scheduler.NewDailyDigestTask(scheduler.DailyDigestConfig{
+						SessionService: sessionSvc,
+						Store:          storeSched,
+						NotifService:   notifSvc,
+						DashboardURL:   dashboardURL,
+						Logger:         logger,
+					}),
+				})
+				logger.Printf("scheduled task: daily_digest (%s)", appCfg.GetNotificationDailyDigestCron())
+			}
+		}
+
+		// Weekly report task — sends weekly notification with trends and leaderboard.
+		if appCfg.IsNotificationDigestWeeklyEnabled() && notifSvc != nil {
+			storeSched, storeErr := f.Store()
+			if storeErr == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: appCfg.GetNotificationWeeklyReportCron(),
+					Task: scheduler.NewWeeklyReportTask(scheduler.WeeklyReportConfig{
+						SessionService: sessionSvc,
+						Store:          storeSched,
+						NotifService:   notifSvc,
+						DashboardURL:   dashboardURL,
+						Logger:         logger,
+					}),
+				})
+				logger.Printf("scheduled task: weekly_report (%s)", appCfg.GetNotificationWeeklyReportCron())
+			}
+		}
+
+		// Personal daily digest task — sends per-user DMs with individual stats.
+		// Runs daily at 8:30 AM (after global digest at 8:00). Requires bot mode + SlackIDs.
+		if appCfg.IsNotificationDigestPersonalEnabled() && notifSvc != nil {
+			storeSched, storeErr := f.Store()
+			if storeErr == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: "30 8 * * *", // daily at 8:30 AM
+					Task: scheduler.NewPersonalDigestTask(scheduler.PersonalDigestConfig{
+						Store:        storeSched,
+						NotifService: notifSvc,
+						DashboardURL: dashboardURL,
+						Logger:       logger,
+					}),
+				})
+				logger.Println("scheduled task: personal_digest (30 8 * * *)")
+			}
+		}
+
+		// Recommendation task — generates project recommendations, persists to store, and notifies.
+		// Runs daily at 7 AM (after analyze and saturation tasks have updated metrics).
+		// Also runs without notification service (store-only persistence).
+		// When an LLM client is available, enriches deterministic recs with contextual advice.
+		{
+			storeSched, storeErr := f.Store()
+			if storeErr == nil {
+				recCfg := scheduler.RecommendationConfig{
+					SessionService: sessionSvc,
+					Store:          storeSched,
+					NotifService:   notifSvc,
+					DashboardURL:   dashboardURL,
+					Logger:         logger,
+				}
+
+				entries = append(entries, scheduler.Entry{
+					Schedule: "0 7 * * *", // daily at 7 AM
+					Task:     scheduler.NewRecommendationTask(recCfg),
+				})
+				logger.Println("scheduled task: recommendations (0 7 * * *)")
+			}
+		}
+
+		// PR sync task — fetches recent PRs from GitHub and links sessions by branch.
+		// Prefer multi-repo mode (iterates all projects with pr_enabled) over single-platform.
+		if appCfg.IsGitHubSyncEnabled() {
+			schedule := appCfg.GetGitHubSyncCron()
+			if schedule == "" {
+				schedule = "0 */4 * * *" // default: every 4 hours
+			}
+
+			// Check if any project has pr_enabled → multi-repo mode
+			hasMultiRepo := false
+			for _, pc := range appCfg.GetAllProjectClassifiers() {
+				if pc.PREnabled {
+					hasMultiRepo = true
+					break
+				}
+			}
+
+			storeSched3, storeErr3 := f.Store()
+			if storeErr3 == nil {
+				var task scheduler.Task
+				if hasMultiRepo {
+					task = scheduler.NewMultiRepoPRSyncTask(appCfg, storeSched3, logger)
+					logger.Printf("scheduled task: pr_sync multi-repo (%s)", schedule)
+				} else {
+					platSched, platErr := f.Platform()
+					if platErr == nil {
+						task = scheduler.NewPRSyncTask(platSched, storeSched3, logger)
+						logger.Printf("scheduled task: pr_sync single-platform (%s)", schedule)
+					}
+				}
+				if task != nil {
+					entries = append(entries, scheduler.Entry{
+						Schedule: schedule,
+						Task:     task,
+					})
+				}
+			}
+		}
 
 		// Error reclassification task — reclassifies unknown errors via LLM.
 		if schedule := appCfg.GetErrorsLLMSchedule(); schedule != "" {
@@ -641,6 +923,23 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			}
 		}
 
+		// Slack user resolve task — auto-resolves slack_id for users via users.lookupByEmail API.
+		// Requires a Slack bot token with users:read.email scope. Runs daily at 6 AM.
+		if slackClient != nil && slackClient.HasBotToken() {
+			storeSched, storeErr := f.Store()
+			if storeErr == nil {
+				entries = append(entries, scheduler.Entry{
+					Schedule: "0 6 * * *", // daily at 6 AM
+					Task: scheduler.NewSlackResolveTask(scheduler.SlackResolveConfig{
+						Store:    storeSched,
+						Resolver: &slackResolverAdapter{client: slackClient},
+						Logger:   logger,
+					}),
+				})
+				logger.Println("scheduled task: slack_resolve (0 6 * * *)")
+			}
+		}
+
 		// Create and start scheduler if any entries are configured.
 		if len(entries) > 0 {
 			var schedErr error
@@ -653,6 +952,16 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			} else {
 				sched.Start()
 				logger.Printf("scheduler started with %d task(s)", len(entries))
+
+				// Pre-warm expensive caches on startup so the first page load is fast.
+				// dashboard_warm covers stats + forecast + trends.
+				// saturation + cacheeff are separate heavy tasks.
+				sched.WarmUp(
+					"dashboard_warm",
+					"saturation_precompute",
+					"cacheeff_precompute",
+					"cost_backfill",
+				)
 			}
 		}
 	}
@@ -784,4 +1093,25 @@ type statusWriter struct {
 func (sw *statusWriter) WriteHeader(code int) {
 	sw.status = code
 	sw.ResponseWriter.WriteHeader(code)
+}
+
+// slackResolverAdapter bridges the Slack notification client to the scheduler's
+// SlackUserResolver interface, converting between the two SlackUser types.
+type slackResolverAdapter struct {
+	client *notifslack.Client
+}
+
+func (a *slackResolverAdapter) LookupByEmail(email string) (*scheduler.SlackUserInfo, error) {
+	user, err := a.client.LookupByEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, nil
+	}
+	return &scheduler.SlackUserInfo{
+		ID:       user.ID,
+		Name:     user.Name,
+		RealName: user.RealName,
+	}, nil
 }

@@ -1,6 +1,18 @@
 package session
 
-import "strings"
+import (
+	"sort"
+	"strings"
+	"sync"
+)
+
+// MCPPrefix maps a tool name prefix to an MCP server name.
+// Used by ClassifyTool to identify OpenCode-style MCP tool names
+// (e.g. prefix "notionApi_" → server "notion").
+type MCPPrefix struct {
+	Prefix string `json:"prefix"`
+	Server string `json:"server"`
+}
 
 // ClassifyTool determines the category of a tool based on its name.
 //
@@ -25,10 +37,21 @@ func ClassifyTool(name string) (category string) {
 		return "mcp:unknown"
 	}
 
-	// Check known MCP tool prefixes (OpenCode naming conventions).
-	for _, prefix := range knownMCPPrefixes {
-		if strings.HasPrefix(name, prefix.prefix) {
-			return "mcp:" + prefix.server
+	// Check extra (user-configured / auto-discovered) prefixes first —
+	// they take priority over built-in defaults so users can override.
+	extraMu.RLock()
+	extras := extraMCPPrefixes
+	extraMu.RUnlock()
+	for _, prefix := range extras {
+		if strings.HasPrefix(name, prefix.Prefix) {
+			return "mcp:" + normalizeServerName(prefix.Server)
+		}
+	}
+
+	// Check built-in MCP tool prefixes (OpenCode naming conventions).
+	for _, prefix := range builtinMCPPrefixes {
+		if strings.HasPrefix(name, prefix.Prefix) {
+			return "mcp:" + prefix.Server
 		}
 	}
 
@@ -49,14 +72,97 @@ func IsMCPTool(name string) bool {
 	return ClassifyTool(name) != "builtin"
 }
 
-type mcpPrefix struct {
-	prefix string
-	server string
+// SetExtraMCPPrefixes replaces the set of user-configured MCP prefixes.
+// These are checked before the built-in defaults, allowing overrides.
+// Thread-safe; typically called once at startup from config.
+func SetExtraMCPPrefixes(prefixes []MCPPrefix) {
+	// Sort by longest prefix first for accurate matching.
+	sorted := make([]MCPPrefix, len(prefixes))
+	copy(sorted, prefixes)
+	sort.Slice(sorted, func(i, j int) bool {
+		return len(sorted[i].Prefix) > len(sorted[j].Prefix)
+	})
+	extraMu.Lock()
+	extraMCPPrefixes = sorted
+	extraMu.Unlock()
 }
 
-// knownMCPPrefixes maps tool name prefixes to their MCP server.
+// RegisterMCPServerPrefixes auto-generates prefix entries from MCP server names.
+// For each server name (e.g. "my-mcp-server"), it registers the prefix
+// "my-mcp-server_" → server "my-mcp-server". This handles the common OpenCode
+// naming convention where tools are named "<server>_<tool>".
+//
+// Only servers not already covered by built-in or extra prefixes are added.
+// Typically called at startup after registry scan.
+func RegisterMCPServerPrefixes(serverNames []string) {
+	extraMu.RLock()
+	current := extraMCPPrefixes
+	extraMu.RUnlock()
+
+	// Build a set of already-known prefixes for dedup.
+	known := make(map[string]bool, len(builtinMCPPrefixes)+len(current))
+	for _, p := range builtinMCPPrefixes {
+		known[p.Prefix] = true
+	}
+	for _, p := range current {
+		known[p.Prefix] = true
+	}
+
+	var added []MCPPrefix
+	for _, name := range serverNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		prefix := name + "_"
+		if known[prefix] {
+			continue
+		}
+		known[prefix] = true
+		added = append(added, MCPPrefix{Prefix: prefix, Server: normalizeServerName(name)})
+	}
+
+	if len(added) == 0 {
+		return
+	}
+
+	// Merge with existing extras and re-sort.
+	merged := make([]MCPPrefix, 0, len(current)+len(added))
+	merged = append(merged, current...)
+	merged = append(merged, added...)
+	sort.Slice(merged, func(i, j int) bool {
+		return len(merged[i].Prefix) > len(merged[j].Prefix)
+	})
+	extraMu.Lock()
+	extraMCPPrefixes = merged
+	extraMu.Unlock()
+}
+
+// ExtraMCPPrefixes returns a copy of the currently registered extra prefixes.
+// Useful for testing and diagnostics.
+func ExtraMCPPrefixes() []MCPPrefix {
+	extraMu.RLock()
+	defer extraMu.RUnlock()
+	out := make([]MCPPrefix, len(extraMCPPrefixes))
+	copy(out, extraMCPPrefixes)
+	return out
+}
+
+// ResetExtraMCPPrefixes clears all extra prefixes. Used in tests.
+func ResetExtraMCPPrefixes() {
+	extraMu.Lock()
+	extraMCPPrefixes = nil
+	extraMu.Unlock()
+}
+
+var (
+	extraMu          sync.RWMutex
+	extraMCPPrefixes []MCPPrefix
+)
+
+// builtinMCPPrefixes maps tool name prefixes to their MCP server.
 // Sorted by longest prefix first for accurate matching.
-var knownMCPPrefixes = []mcpPrefix{
+var builtinMCPPrefixes = []MCPPrefix{
 	// Notion API tools
 	{"notionApi_", "notion"},
 

@@ -1,0 +1,139 @@
+{{define "team.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}aisync -- Team{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item">&#x1F3E0; Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item">&#x1F4CB; Sessions</a></li>
+      <li><a href="/analytics" class="sidebar-nav-item">&#x1F4CA; Analytics</a></li>
+      <li><a href="/costs" class="sidebar-nav-item">&#x1F4B0; Costs</a></li>
+      <li><a href="/team" class="sidebar-nav-item active">&#x1F465; Team</a></li>
+    </ul>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-title">Period</div>
+    <ul class="sidebar-nav">
+      <li><a href="/team?period=today" class="sidebar-nav-item {{if eq .PeriodKey "today"}}active{{end}}">Today</a></li>
+      <li><a href="/team?period=yesterday" class="sidebar-nav-item {{if eq .PeriodKey "yesterday"}}active{{end}}">Yesterday</a></li>
+      <li><a href="/team?period=week" class="sidebar-nav-item {{if eq .PeriodKey "week"}}active{{end}}">This Week</a></li>
+      <li><a href="/team?period=month" class="sidebar-nav-item {{if eq .PeriodKey "month"}}active{{end}}">This Month</a></li>
+    </ul>
+  </div>
+
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/projects{{.Path}}" class="sidebar-item">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
+{{define "content"}}
+<div class="section-title">Team Dashboard &mdash; {{.Period}}</div>
+
+<!-- KPI Strip -->
+<div class="kpi-strip">
+  <div class="kpi-strip-item">
+    <span class="kpi-strip-value">{{.TeamSize}}</span>
+    <span class="kpi-strip-label">team members</span>
+  </div>
+  <div class="kpi-strip-item">
+    <span class="kpi-strip-value">{{.TotalSessions}}</span>
+    <span class="kpi-strip-label">sessions</span>
+  </div>
+  <div class="kpi-strip-item">
+    <span class="kpi-strip-value">{{formatTokens .TotalTokens}}</span>
+    <span class="kpi-strip-label">tokens</span>
+  </div>
+  <div class="kpi-strip-item">
+    <span class="kpi-strip-value">{{.TotalErrors}}</span>
+    <span class="kpi-strip-label">errors</span>
+  </div>
+</div>
+
+{{if .Members}}
+<!-- Leaderboard -->
+<div class="home-grid">
+  <div class="home-feed" style="grid-column: 1 / -1;">
+
+    <div class="home-panel">
+      <div class="home-panel-header">
+        <span class="home-panel-title">Leaderboard</span>
+        <span class="text-muted">{{.Period}} &middot; {{.TeamSize}} members</span>
+      </div>
+
+      <table class="sessions-table" style="width:100%;">
+        <thead>
+          <tr>
+            <th style="width:3em;">#</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th style="text-align:right;">Sessions</th>
+            <th style="width:30%;">Share</th>
+            <th style="text-align:right;">Tokens</th>
+            <th style="text-align:right;">Errors</th>
+            <th style="text-align:right;">Err/Session</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range $i, $m := .Members}}
+          <tr>
+            <td class="text-muted">{{add $i 1}}</td>
+            <td>
+              <span class="font-mono" style="font-weight:600;">{{if $m.Name}}{{$m.Name}}{{else}}(unknown){{end}}</span>
+              {{if $m.Email}}<br><span class="text-muted" style="font-size:0.8em;">{{$m.Email}}</span>{{end}}
+            </td>
+            <td>
+              {{if eq $m.Kind "human"}}<span class="badge badge-type" title="Human">&#x1F9D1; human</span>
+              {{else if eq $m.Kind "machine"}}<span class="badge badge-provider" title="Machine">&#x1F916; machine</span>
+              {{else}}<span class="badge" title="Unknown">&#x2753; unknown</span>
+              {{end}}
+            </td>
+            <td style="text-align:right; font-weight:600;">{{$m.SessionCount}}</td>
+            <td>
+              <div style="display:flex; align-items:center; gap:0.5em;">
+                <div style="flex:1; background:var(--border-color, #333); border-radius:4px; height:8px; overflow:hidden;">
+                  <div style="width:{{$m.Percent}}%; height:100%; background:var(--accent-color, #3b82f6); border-radius:4px;"></div>
+                </div>
+                <span class="text-muted" style="font-size:0.8em; min-width:2.5em;">{{$m.Percent}}%</span>
+              </div>
+            </td>
+            <td style="text-align:right;" class="font-mono">{{formatTokens $m.TotalTokens}}</td>
+            <td style="text-align:right;">
+              {{if gt $m.ErrorCount 0}}<span style="color:var(--error-color, #ef4444);">{{$m.ErrorCount}}</span>{{else}}0{{end}}
+            </td>
+            <td style="text-align:right;" class="font-mono">
+              {{if gt $m.SessionCount 0}}{{printf "%.1f" $m.ErrorRate}}{{else}}&mdash;{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+{{else}}
+<div class="home-panel" style="text-align:center; padding:3em;">
+  <p class="text-muted">No activity found for {{.Period}}.</p>
+  <p class="text-muted">Try a different time period from the sidebar.</p>
+</div>
+{{end}}
+
+{{end}}

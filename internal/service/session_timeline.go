@@ -78,6 +78,9 @@ func (s *SessionService) BranchTimeline(ctx context.Context, req TimelineRequest
 	}
 	var windows []sessionWindow
 
+	// Batch-load fork relations for all sessions (single query instead of N+1).
+	forkRelMap, _ := s.store.GetForkRelationsForSessions(sessionIDs)
+
 	for i := range summaries {
 		sm := &summaries[i]
 		entry := TimelineEntry{
@@ -89,10 +92,9 @@ func (s *SessionService) BranchTimeline(ctx context.Context, req TimelineRequest
 			entry.Objective = objectives[sm.ID]
 		}
 
-		// Fork count.
-		forkRels, fErr := s.store.GetForkRelations(sm.ID)
-		if fErr == nil {
-			for _, rel := range forkRels {
+		// Fork count from batch-loaded relations.
+		if rels, ok := forkRelMap[sm.ID]; ok {
+			for _, rel := range rels {
 				if rel.OriginalID == sm.ID {
 					entry.ForkCount++
 				}

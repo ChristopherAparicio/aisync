@@ -156,6 +156,155 @@ func (s *SessionService) GenerateRecommendations(ctx context.Context, projectPat
 				Message:  "Compaction summarizes the conversation to free context, but loses detail. These sessions were too long for their model's context window.",
 			})
 		}
+
+		// ── Token waste recommendations (from satResult.TokenWaste) ──
+		if tw := satResult.TokenWaste; tw != nil && tw.TotalTokens > 0 {
+			// High retry waste: >15% of tokens are retries.
+			if tw.Retry.Percent > 15 {
+				recs = append(recs, session.Recommendation{
+					Type:     "token_waste_retry",
+					Priority: "high",
+					Icon:     "🔄",
+					Title:    fmt.Sprintf("%.0f%% of tokens are retry waste", tw.Retry.Percent),
+					Message:  fmt.Sprintf("%dK tokens spent retrying failed tool calls. This indicates agents are hitting errors and re-attempting the same operations. Review error patterns and fix underlying tool issues.", tw.Retry.Tokens/1000),
+					Impact:   fmt.Sprintf("%dK tokens wasted on retries", tw.Retry.Tokens/1000),
+				})
+			}
+			// High compaction waste: >20% of tokens lost to compaction.
+			if tw.Compaction.Percent > 20 {
+				recs = append(recs, session.Recommendation{
+					Type:     "token_waste_compaction",
+					Priority: "medium",
+					Icon:     "⚡",
+					Title:    fmt.Sprintf("%.0f%% of tokens lost to compaction", tw.Compaction.Percent),
+					Message:  fmt.Sprintf("%dK tokens discarded during context compaction. Sessions are too long — split tasks to avoid hitting the context window limit.", tw.Compaction.Tokens/1000),
+					Impact:   fmt.Sprintf("%dK tokens lost", tw.Compaction.Tokens/1000),
+				})
+			}
+			// High cache miss waste: >10% of tokens are cache misses.
+			if tw.CacheMiss.Percent > 10 {
+				recs = append(recs, session.Recommendation{
+					Type:     "token_waste_cache",
+					Priority: "medium",
+					Icon:     "💨",
+					Title:    fmt.Sprintf("%.0f%% of tokens are cache miss overhead", tw.CacheMiss.Percent),
+					Message:  "Long pauses between messages cause the prompt cache to expire (5 min TTL). Respond quickly or start a fresh session instead of resuming after a break.",
+					Impact:   fmt.Sprintf("%dK tokens wasted", tw.CacheMiss.Tokens/1000),
+				})
+			}
+			// Low overall productivity: <60% productive tokens.
+			if tw.ProductivePct < 60 && tw.TotalTokens > 100000 {
+				recs = append(recs, session.Recommendation{
+					Type:     "token_waste_low_productivity",
+					Priority: "high",
+					Icon:     "📉",
+					Title:    fmt.Sprintf("Only %.0f%% of tokens are productive", tw.ProductivePct),
+					Message:  fmt.Sprintf("%.0f%% of token spend goes to waste (retries, compaction, cache misses, idle context). Review the waste breakdown to identify the largest contributor.", tw.WastePct),
+					Impact:   fmt.Sprintf("%.0f%% waste = %dK tokens", tw.WastePct, (tw.TotalTokens-tw.Productive.Tokens)/1000),
+				})
+			}
+		}
+
+		// ── Model fitness recommendations (from satResult.Fitness) ──
+		if fit := satResult.Fitness; fit != nil {
+			for _, rec := range fit.Recommendations {
+				recs = append(recs, session.Recommendation{
+					Type:     "model_fitness",
+					Priority: "medium",
+					Icon:     "🔬",
+					Title:    "Model fitness insight",
+					Message:  rec,
+				})
+			}
+		}
+
+		// ── Freshness / diminishing returns (from satResult.Freshness) ──
+		if fr := satResult.Freshness; fr != nil && fr.SessionsWithCompaction > 0 {
+			// High error rate growth after compaction.
+			if fr.AvgErrorRateGrowth > 50 {
+				recs = append(recs, session.Recommendation{
+					Type:     "freshness_error_growth",
+					Priority: "high",
+					Icon:     "📈",
+					Title:    fmt.Sprintf("Error rate grows %.0f%% after compaction", fr.AvgErrorRateGrowth),
+					Message:  "Sessions that reach compaction see a significant spike in errors afterward. The model loses important context during compaction. Keep sessions under the optimal length.",
+					Impact:   fmt.Sprintf("Optimal session length: ~%d messages", fr.AvgOptimalMessageIdx),
+				})
+			}
+			// Significant output quality decay.
+			if fr.AvgOutputRatioDecay > 30 {
+				recs = append(recs, session.Recommendation{
+					Type:     "freshness_output_decay",
+					Priority: "medium",
+					Icon:     "📉",
+					Title:    fmt.Sprintf("Output quality drops %.0f%% after compaction", fr.AvgOutputRatioDecay),
+					Message:  "The output-to-input ratio declines significantly after compaction — the model produces less useful content per token spent. Start fresh sessions before quality degrades.",
+				})
+			}
+			// Optimal session length recommendation.
+			if fr.AvgOptimalMessageIdx > 0 && fr.AvgOptimalMessageIdx < 50 {
+				recs = append(recs, session.Recommendation{
+					Type:     "freshness_optimal_length",
+					Priority: "low",
+					Icon:     "📏",
+					Title:    fmt.Sprintf("Optimal session length: ~%d messages", fr.AvgOptimalMessageIdx),
+					Message:  fmt.Sprintf("Analysis shows session quality peaks around message %d before diminishing returns set in. Consider splitting longer tasks.", fr.AvgOptimalMessageIdx),
+				})
+			}
+		}
+
+		// ── System prompt impact (from satResult.PromptImpact) ──
+		if pi := satResult.PromptImpact; pi != nil && pi.TotalSessions > 0 {
+			// Very large system prompts.
+			if pi.AvgEstimate > 8000 {
+				recs = append(recs, session.Recommendation{
+					Type:     "prompt_large",
+					Priority: "medium",
+					Icon:     "📜",
+					Title:    fmt.Sprintf("System prompts average %dK tokens", pi.AvgEstimate/1000),
+					Message:  fmt.Sprintf("Large system prompts (CLAUDE.md, MCP configs, skills) consume %.0f%% of input tokens before the first user message. Consider trimming unused instructions or splitting into conditional sections.", pi.AvgPromptCostPct),
+					Impact:   fmt.Sprintf("%.0f%% of input cost is system prompt", pi.AvgPromptCostPct),
+				})
+			}
+			// Growing prompt size trend.
+			if pi.Trend == "growing" {
+				recs = append(recs, session.Recommendation{
+					Type:     "prompt_growing",
+					Priority: "low",
+					Icon:     "📈",
+					Title:    "System prompt size is growing",
+					Message:  "Your system prompts have been getting larger over time. Each addition (new skill, new instructions) adds cumulative context cost. Periodically audit and trim.",
+				})
+			}
+		}
+
+		// ── Model efficiency verdicts (from satResult.Models) ──
+		for _, m := range satResult.Models {
+			if m.SessionCount < 5 {
+				continue
+			}
+			// Oversized model: using a large context model but barely filling it.
+			if m.EfficiencyVerdict == "oversized" && m.AvgPeakPct < 20 {
+				recs = append(recs, session.Recommendation{
+					Type:     "model_oversized",
+					Priority: "medium",
+					Icon:     "🐘",
+					Title:    fmt.Sprintf("Model '%s' is oversized for your usage", m.Model),
+					Message:  fmt.Sprintf("Average peak saturation is only %.0f%% — you're paying for a large context window you don't use. Consider a smaller, cheaper model for this workload.", m.AvgPeakPct),
+					Impact:   fmt.Sprintf("%d sessions using <20%% of context", m.SessionCount),
+				})
+			}
+			// Saturated model: consistently hitting context limits.
+			if m.EfficiencyVerdict == "saturated" {
+				recs = append(recs, session.Recommendation{
+					Type:     "model_saturated",
+					Priority: "high",
+					Icon:     "🔴",
+					Title:    fmt.Sprintf("Model '%s' consistently saturates its context", m.Model),
+					Message:  fmt.Sprintf("Average peak saturation is %.0f%%. Sessions are hitting the context limit, causing quality degradation and compaction. Split tasks or use a model with a larger context window.", m.AvgPeakPct),
+				})
+			}
+		}
 	}
 
 	// ── Budget recommendations ──

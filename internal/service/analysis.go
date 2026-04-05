@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
@@ -14,31 +15,37 @@ import (
 
 // ── AnalysisService ──
 
-// AnalysisService orchestrates session analysis using configurable analyzers.
-// It computes whether analysis is needed, delegates to an Analyzer adapter,
-// and persists results via the Store.
+// AnalysisService orchestrates session analysis using configurable analyzers
+// and pluggable analysis modules. Modules run in parallel when selected.
 type AnalysisService struct {
 	store    storage.Store
-	analyzer analysis.Analyzer // active analyzer adapter (llm or opencode)
+	analyzer analysis.Analyzer                               // active analyzer adapter (llm or opencode)
+	modules  map[analysis.ModuleName]analysis.AnalysisModule // registered modules
 }
 
 // AnalysisServiceConfig holds all dependencies for creating an AnalysisService.
 type AnalysisServiceConfig struct {
 	Store    storage.Store
-	Analyzer analysis.Analyzer // the analyzer adapter to use
+	Analyzer analysis.Analyzer                               // the analyzer adapter to use
+	Modules  map[analysis.ModuleName]analysis.AnalysisModule // optional pluggable modules
 }
 
 // NewAnalysisService creates an AnalysisService with all dependencies.
 func NewAnalysisService(cfg AnalysisServiceConfig) *AnalysisService {
+	modules := cfg.Modules
+	if modules == nil {
+		modules = make(map[analysis.ModuleName]analysis.AnalysisModule)
+	}
 	return &AnalysisService{
 		store:    cfg.Store,
 		analyzer: cfg.Analyzer,
+		modules:  modules,
 	}
 }
 
 // ── Public API ──
 
-// AnalyzeRequest contains inputs for running a session analysis.
+// AnalysisRequest contains inputs for running a session analysis.
 type AnalysisRequest struct {
 	// SessionID is the session to analyze.
 	SessionID session.ID
@@ -57,6 +64,10 @@ type AnalysisRequest struct {
 
 	// MinToolCalls is the configured minimum tool calls threshold.
 	MinToolCalls int
+
+	// Modules lists which analysis modules to run. If empty, only the core
+	// analyzer is invoked (backward compatible). Each module runs in parallel.
+	Modules []analysis.ModuleName
 }
 
 // AnalysisResult contains the outcome of an analysis run.
@@ -65,9 +76,9 @@ type AnalysisResult struct {
 }
 
 // Analyze runs a full session analysis: loads the session, delegates to the
-// analyzer adapter, and persists the result.
+// analyzer adapter, runs selected modules in parallel, and persists the result.
 func (s *AnalysisService) Analyze(ctx context.Context, req AnalysisRequest) (*AnalysisResult, error) {
-	if s.analyzer == nil {
+	if s.analyzer == nil && len(req.Modules) == 0 {
 		return nil, fmt.Errorf("no analyzer configured")
 	}
 
@@ -82,36 +93,90 @@ func (s *AnalysisService) Analyze(ctx context.Context, req AnalysisRequest) (*An
 
 	start := time.Now()
 
-	report, err := s.analyzer.Analyze(ctx, analysis.AnalyzeRequest{
-		Session:        *sess,
-		Capabilities:   req.Capabilities,
-		MCPServers:     req.MCPServers,
-		ErrorThreshold: req.ErrorThreshold,
-		MinToolCalls:   req.MinToolCalls,
-	})
-
-	durationMs := int(time.Since(start).Milliseconds())
-
 	// Build the persisted entity.
 	sa := &analysis.SessionAnalysis{
-		ID:         generateAnalysisID(),
-		SessionID:  string(req.SessionID),
-		CreatedAt:  time.Now(),
-		Trigger:    req.Trigger,
-		Adapter:    s.analyzer.Name(),
-		DurationMs: durationMs,
+		ID:        generateAnalysisID(),
+		SessionID: string(req.SessionID),
+		CreatedAt: time.Now(),
+		Trigger:   req.Trigger,
 	}
 
-	if err != nil {
-		// Persist the error so the user can see what went wrong.
-		sa.Error = err.Error()
-	} else {
-		sa.Report = *report
+	// Determine what to run: core analyzer + selected modules.
+	runCore := s.analyzer != nil && (len(req.Modules) == 0 || containsModule(req.Modules, analysis.ModuleSessionQuality))
+	modulesToRun := filterModules(req.Modules, s.modules)
 
-		// Enrich with skill observation (best-effort — never fails the analysis).
-		if obs := skillobs.Observe(sess.Messages, req.Capabilities); obs != nil {
-			sa.Report.SkillObservation = obs
+	// Run core analyzer and modules in parallel.
+	var wg sync.WaitGroup
+	var coreReport *analysis.AnalysisReport
+	var coreErr error
+	var moduleResults []analysis.ModuleResult
+	var mu sync.Mutex
+
+	if runCore {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			report, analyzeErr := s.analyzer.Analyze(ctx, analysis.AnalyzeRequest{
+				Session:        *sess,
+				Capabilities:   req.Capabilities,
+				MCPServers:     req.MCPServers,
+				ErrorThreshold: req.ErrorThreshold,
+				MinToolCalls:   req.MinToolCalls,
+			})
+			mu.Lock()
+			coreReport = report
+			coreErr = analyzeErr
+			mu.Unlock()
+		}()
+	}
+
+	for _, mod := range modulesToRun {
+		mod := mod // capture
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, modErr := mod.Analyze(ctx, analysis.ModuleRequest{
+				Session: *sess,
+			})
+			mu.Lock()
+			if modErr != nil {
+				moduleResults = append(moduleResults, analysis.ModuleResult{
+					Module: mod.Name(),
+					Error:  modErr.Error(),
+				})
+			} else if result != nil {
+				moduleResults = append(moduleResults, *result)
+			}
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	durationMs := int(time.Since(start).Milliseconds())
+	sa.DurationMs = durationMs
+
+	// Assemble report.
+	if runCore {
+		if s.analyzer != nil {
+			sa.Adapter = s.analyzer.Name()
 		}
+		if coreErr != nil {
+			sa.Error = coreErr.Error()
+		} else if coreReport != nil {
+			sa.Report = *coreReport
+			// Enrich with skill observation (best-effort).
+			if obs := skillobs.Observe(sess.Messages, req.Capabilities); obs != nil {
+				sa.Report.SkillObservation = obs
+			}
+		}
+	} else if len(modulesToRun) > 0 {
+		// No core analyzer — set adapter to "modules".
+		sa.Adapter = "modules"
+	}
+
+	// Attach module results.
+	if len(moduleResults) > 0 {
+		sa.Report.ModuleResults = moduleResults
 	}
 
 	// Persist the analysis (success or failure).
@@ -120,6 +185,37 @@ func (s *AnalysisService) Analyze(ctx context.Context, req AnalysisRequest) (*An
 	}
 
 	return &AnalysisResult{Analysis: sa}, nil
+}
+
+// AvailableModules returns info about all registered modules.
+func (s *AnalysisService) AvailableModules() []analysis.ModuleInfo {
+	var infos []analysis.ModuleInfo
+	for _, info := range analysis.ModuleRegistry() {
+		if _, ok := s.modules[info.Name]; ok {
+			infos = append(infos, info)
+		}
+	}
+	// Always include session_quality if the core analyzer is configured.
+	if s.analyzer != nil {
+		hasCore := false
+		for _, info := range infos {
+			if info.Name == analysis.ModuleSessionQuality {
+				hasCore = true
+				break
+			}
+		}
+		if !hasCore {
+			// Prepend core module info.
+			coreInfo := analysis.ModuleInfo{
+				Name:        analysis.ModuleSessionQuality,
+				Label:       "Session Quality",
+				Description: "Overall efficiency score, problems, and recommendations",
+				RequiresLLM: true,
+			}
+			infos = append([]analysis.ModuleInfo{coreInfo}, infos...)
+		}
+	}
+	return infos
 }
 
 // GetAnalysis retrieves a specific analysis by ID.
@@ -169,4 +265,33 @@ func ShouldAutoAnalyze(sess *session.Session, errorThreshold float64, minToolCal
 // generateAnalysisID creates a unique ID for a new analysis.
 func generateAnalysisID() string {
 	return fmt.Sprintf("analysis-%d", time.Now().UnixNano())
+}
+
+// containsModule checks if a module name is in the list.
+func containsModule(modules []analysis.ModuleName, name analysis.ModuleName) bool {
+	for _, m := range modules {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
+// filterModules returns the registered AnalysisModule instances that match
+// the requested module names, excluding the core session_quality module
+// (which is handled separately by the core analyzer).
+func filterModules(requested []analysis.ModuleName, registered map[analysis.ModuleName]analysis.AnalysisModule) []analysis.AnalysisModule {
+	if len(requested) == 0 {
+		return nil
+	}
+	var result []analysis.AnalysisModule
+	for _, name := range requested {
+		if name == analysis.ModuleSessionQuality {
+			continue // handled by core analyzer
+		}
+		if mod, ok := registered[name]; ok {
+			result = append(result, mod)
+		}
+	}
+	return result
 }

@@ -92,6 +92,118 @@ func (s *Store) ListSnapshots(projectPath string, limit int) ([]registry.Project
 	return snapshots, rows.Err()
 }
 
+// UpsertCapabilities inserts or updates flat capability records for a project.
+// Capabilities present in caps are marked active with updated last_seen.
+// Capabilities NOT in caps but previously active for this project are deactivated.
+func (s *Store) UpsertCapabilities(projectPath string, caps []registry.PersistedCapability) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Step 1: Mark all existing capabilities for this project as inactive.
+	if _, err := tx.Exec(
+		`UPDATE project_capabilities SET is_active = 0 WHERE project_path = ?`,
+		projectPath,
+	); err != nil {
+		return fmt.Errorf("deactivate capabilities: %w", err)
+	}
+
+	// Step 2: Upsert each current capability — INSERT if new, UPDATE if exists.
+	stmt, err := tx.Prepare(`INSERT INTO project_capabilities
+		(id, project_path, name, kind, scope, is_active, first_seen, last_seen)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+		ON CONFLICT(project_path, name, kind) DO UPDATE SET
+			scope = excluded.scope,
+			is_active = 1,
+			last_seen = excluded.last_seen`)
+	if err != nil {
+		return fmt.Errorf("prepare upsert: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, cap := range caps {
+		id := uuid.New().String()
+		if _, err := stmt.Exec(id, projectPath, cap.Name, string(cap.Kind), string(cap.Scope), now, now); err != nil {
+			return fmt.Errorf("upsert capability %s/%s: %w", cap.Kind, cap.Name, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// ListCapabilities returns persisted capabilities matching the filter.
+func (s *Store) ListCapabilities(filter registry.CapabilityFilter) ([]registry.PersistedCapability, error) {
+	query := `SELECT id, project_path, name, kind, scope, is_active, first_seen, last_seen
+		FROM project_capabilities WHERE 1=1`
+	var args []any
+
+	if filter.ProjectPath != "" {
+		query += " AND project_path = ?"
+		args = append(args, filter.ProjectPath)
+	}
+	if filter.Kind != "" {
+		query += " AND kind = ?"
+		args = append(args, string(filter.Kind))
+	}
+	if filter.ActiveOnly {
+		query += " AND is_active = 1"
+	}
+
+	query += " ORDER BY project_path, kind, name"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []registry.PersistedCapability
+	for rows.Next() {
+		var pc registry.PersistedCapability
+		var kindStr, scopeStr, firstSeenStr, lastSeenStr string
+		var isActive int
+
+		if err := rows.Scan(&pc.ID, &pc.ProjectPath, &pc.Name,
+			&kindStr, &scopeStr, &isActive, &firstSeenStr, &lastSeenStr); err != nil {
+			return nil, err
+		}
+
+		pc.Kind = registry.CapabilityKind(kindStr)
+		pc.Scope = registry.Scope(scopeStr)
+		pc.IsActive = isActive == 1
+		pc.FirstSeen, _ = time.Parse(time.RFC3339, firstSeenStr)
+		pc.LastSeen, _ = time.Parse(time.RFC3339, lastSeenStr)
+
+		result = append(result, pc)
+	}
+	return result, rows.Err()
+}
+
+// ListCapabilityProjects returns distinct project paths that have at least
+// one persisted capability.
+func (s *Store) ListCapabilityProjects() ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT DISTINCT project_path FROM project_capabilities ORDER BY project_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
+}
+
 // scanner interface for both sql.Row and sql.Rows.
 type rowScanner interface {
 	Scan(dest ...any) error

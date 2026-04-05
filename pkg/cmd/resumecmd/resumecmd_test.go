@@ -12,6 +12,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/testutil"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
@@ -110,7 +111,11 @@ func TestNewCmdResume_flags(t *testing.T) {
 	f := &cmdutil.Factory{IOStreams: ios}
 	cmd := NewCmdResume(f)
 
-	flags := []string{"session", "provider", "as-context"}
+	flags := []string{
+		"session", "provider", "as-context",
+		// Smart Restore filter flags
+		"clean-errors", "strip-empty", "fix-orphans", "redact-secrets", "exclude",
+	}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected --%s flag", name)
@@ -457,5 +462,485 @@ func TestResume_successWithSessionID(t *testing.T) {
 	}
 	if !strings.Contains(output, string(sess.ID)) {
 		t.Errorf("expected session ID %s in output, got:\n%s", sess.ID, output)
+	}
+}
+
+// ── buildFilters tests ──
+
+func TestBuildFilters_noFlags(t *testing.T) {
+	opts := &Options{}
+	filters, err := buildFilters(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(filters) != 0 {
+		t.Errorf("expected 0 filters, got %d", len(filters))
+	}
+}
+
+func TestBuildFilters_allFlags(t *testing.T) {
+	opts := &Options{
+		CleanErrors:   true,
+		StripEmpty:    true,
+		FixOrphans:    true,
+		RedactSecrets: true,
+		ExcludeFlag:   "0,system",
+	}
+	filters, err := buildFilters(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(filters) != 5 {
+		t.Fatalf("expected 5 filters, got %d", len(filters))
+	}
+
+	// Verify filter order: exclude → fix-orphans → strip-empty → clean-errors → redact-secrets
+	names := make([]string, len(filters))
+	for i, f := range filters {
+		names[i] = f.Name()
+	}
+	expected := []string{"message-excluder", "orphan-tool-fixer", "empty-message", "error-cleaner", "secret-redactor"}
+	for i, want := range expected {
+		if names[i] != want {
+			t.Errorf("filter[%d]: got %q, want %q", i, names[i], want)
+		}
+	}
+}
+
+func TestBuildFilters_singleFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     Options
+		wantName string
+	}{
+		{"clean-errors", Options{CleanErrors: true}, "error-cleaner"},
+		{"strip-empty", Options{StripEmpty: true}, "empty-message"},
+		{"fix-orphans", Options{FixOrphans: true}, "orphan-tool-fixer"},
+		{"redact-secrets", Options{RedactSecrets: true}, "secret-redactor"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filters, err := buildFilters(&tt.opts)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(filters) != 1 {
+				t.Fatalf("expected 1 filter, got %d", len(filters))
+			}
+			if filters[0].Name() != tt.wantName {
+				t.Errorf("got %q, want %q", filters[0].Name(), tt.wantName)
+			}
+		})
+	}
+}
+
+func TestBuildFilters_invalidExclude(t *testing.T) {
+	opts := &Options{ExcludeFlag: "/[invalid/"}
+	_, err := buildFilters(opts)
+	if err == nil {
+		t.Fatal("expected error for invalid regex")
+	}
+	if !strings.Contains(err.Error(), "--exclude") {
+		t.Errorf("expected '--exclude' in error, got: %v", err)
+	}
+}
+
+// ── parseExcludeFlag tests ──
+
+func TestParseExcludeFlag_indices(t *testing.T) {
+	f, err := parseExcludeFlag("0,3,5")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Name() != "message-excluder" {
+		t.Errorf("expected 'message-excluder', got %q", f.Name())
+	}
+}
+
+func TestParseExcludeFlag_roles(t *testing.T) {
+	f, err := parseExcludeFlag("system")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Name() != "message-excluder" {
+		t.Errorf("expected 'message-excluder', got %q", f.Name())
+	}
+}
+
+func TestParseExcludeFlag_pattern(t *testing.T) {
+	f, err := parseExcludeFlag("/error/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Name() != "message-excluder" {
+		t.Errorf("expected 'message-excluder', got %q", f.Name())
+	}
+}
+
+func TestParseExcludeFlag_mixed(t *testing.T) {
+	f, err := parseExcludeFlag("0, system, /error/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Name() != "message-excluder" {
+		t.Errorf("expected 'message-excluder', got %q", f.Name())
+	}
+}
+
+func TestParseExcludeFlag_negativeIndex(t *testing.T) {
+	_, err := parseExcludeFlag("-1")
+	if err == nil {
+		t.Fatal("expected error for negative index")
+	}
+	if !strings.Contains(err.Error(), "negative index") {
+		t.Errorf("expected 'negative index' in error, got: %v", err)
+	}
+}
+
+func TestParseExcludeFlag_multiplePatterns(t *testing.T) {
+	_, err := parseExcludeFlag("/foo/,/bar/")
+	if err == nil {
+		t.Fatal("expected error for multiple patterns")
+	}
+	if !strings.Contains(err.Error(), "only one content pattern") {
+		t.Errorf("expected 'only one content pattern' in error, got: %v", err)
+	}
+}
+
+func TestParseExcludeFlag_invalidRegex(t *testing.T) {
+	_, err := parseExcludeFlag("/[invalid/")
+	if err != nil {
+		// NewMessageExcluder should return error for invalid regex
+		return
+	}
+	t.Fatal("expected error for invalid regex pattern")
+}
+
+// ── Success with filter flags ──
+
+func TestResume_successWithStripEmpty(t *testing.T) {
+	store := testutil.NewMockStore()
+	ios := iostreams.Test()
+	repoDir, gitClient := makeResumeRepo(t, "filter-branch")
+
+	// Create a session with an empty message (no content, no tool calls)
+	sess := testutil.NewSession("filter-test-sess")
+	sess.Branch = "filter-branch"
+	sess.ProjectPath = repoDir
+	sess.Messages = append(sess.Messages, session.Message{
+		ID:   "empty-msg",
+		Role: session.RoleAssistant,
+		// Content is empty, no tool calls
+	})
+	store.Sessions[sess.ID] = sess
+	store.ByBranch[repoDir+":filter-branch"] = sess
+
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
+		SessionServiceFunc: func() (service.SessionServicer, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Git:      gitClient,
+				Registry: provider.NewRegistry(),
+			}), nil
+		},
+	}
+
+	opts := &Options{
+		IO:         ios,
+		Factory:    f,
+		Branch:     "filter-branch",
+		StripEmpty: true,
+	}
+
+	err := runResume(opts)
+	if err != nil {
+		t.Fatalf("runResume() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Restored session") {
+		t.Errorf("expected 'Restored session' in output, got:\n%s", output)
+	}
+
+	// The filter should have been applied (the empty message was removed)
+	if !strings.Contains(output, "Smart Restore filters applied") {
+		t.Errorf("expected 'Smart Restore filters applied' in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "empty-message") {
+		t.Errorf("expected 'empty-message' filter name in output, got:\n%s", output)
+	}
+}
+
+func TestResume_successWithCleanErrors(t *testing.T) {
+	store := testutil.NewMockStore()
+	ios := iostreams.Test()
+	repoDir, gitClient := makeResumeRepo(t, "errors-branch")
+
+	// Create a session with tool error messages
+	sess := testutil.NewSession("error-filter-sess")
+	sess.Branch = "errors-branch"
+	sess.ProjectPath = repoDir
+	sess.Messages = []session.Message{
+		{
+			ID:      "msg-1",
+			Role:    session.RoleUser,
+			Content: "fix the bug",
+		},
+		{
+			ID:   "msg-2",
+			Role: session.RoleAssistant,
+			ToolCalls: []session.ToolCall{
+				{
+					ID:     "tc-1",
+					Name:   "bash",
+					Input:  `{"command": "go build"}`,
+					Output: "Error: compilation failed\nundefined: foo\n/path/to/file.go:42:5\nsome very long error output",
+					State:  session.ToolStateError,
+				},
+			},
+		},
+		{
+			ID:      "msg-3",
+			Role:    session.RoleAssistant,
+			Content: "I see the compilation error. Let me fix that.",
+		},
+	}
+	store.Sessions[sess.ID] = sess
+	store.ByBranch[repoDir+":errors-branch"] = sess
+
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
+		SessionServiceFunc: func() (service.SessionServicer, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Git:      gitClient,
+				Registry: provider.NewRegistry(),
+			}), nil
+		},
+	}
+
+	opts := &Options{
+		IO:          ios,
+		Factory:     f,
+		Branch:      "errors-branch",
+		CleanErrors: true,
+	}
+
+	err := runResume(opts)
+	if err != nil {
+		t.Fatalf("runResume() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Restored session") {
+		t.Errorf("expected 'Restored session' in output, got:\n%s", output)
+	}
+}
+
+func TestResume_successWithMultipleFilters(t *testing.T) {
+	store := testutil.NewMockStore()
+	ios := iostreams.Test()
+	repoDir, gitClient := makeResumeRepo(t, "multi-filter")
+
+	// Create a session with an empty message
+	sess := testutil.NewSession("multi-filter-sess")
+	sess.Branch = "multi-filter"
+	sess.ProjectPath = repoDir
+	sess.Messages = append(sess.Messages, session.Message{
+		ID:   "empty",
+		Role: session.RoleAssistant,
+		// empty
+	})
+	store.Sessions[sess.ID] = sess
+	store.ByBranch[repoDir+":multi-filter"] = sess
+
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
+		SessionServiceFunc: func() (service.SessionServicer, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Git:      gitClient,
+				Registry: provider.NewRegistry(),
+			}), nil
+		},
+	}
+
+	opts := &Options{
+		IO:          ios,
+		Factory:     f,
+		Branch:      "multi-filter",
+		StripEmpty:  true,
+		CleanErrors: true,
+		FixOrphans:  true,
+	}
+
+	err := runResume(opts)
+	if err != nil {
+		t.Fatalf("runResume() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Restored session") {
+		t.Errorf("expected 'Restored session' in output, got:\n%s", output)
+	}
+}
+
+// ── Dry-run mode ──
+
+func TestResume_dryRun(t *testing.T) {
+	store := testutil.NewMockStore()
+	ios := iostreams.Test()
+	repoDir, gitClient := makeResumeRepo(t, "dry-branch")
+
+	sess := testutil.NewSession("dry-run-sess")
+	sess.Branch = "dry-branch"
+	sess.ProjectPath = repoDir
+	store.Sessions[sess.ID] = sess
+	store.ByBranch[repoDir+":dry-branch"] = sess
+
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
+		SessionServiceFunc: func() (service.SessionServicer, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Git:      gitClient,
+				Registry: provider.NewRegistry(),
+			}), nil
+		},
+	}
+
+	opts := &Options{
+		IO:      ios,
+		Factory: f,
+		Branch:  "dry-branch",
+		DryRun:  true,
+	}
+
+	err := runResume(opts)
+	if err != nil {
+		t.Fatalf("runResume(DryRun) error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+
+	// Dry-run should print preview, not "Restored session"
+	if !strings.Contains(output, "Dry-run preview") {
+		t.Errorf("expected 'Dry-run preview' in output, got:\n%s", output)
+	}
+	if strings.Contains(output, "Restored session") {
+		t.Errorf("dry-run should NOT print 'Restored session', got:\n%s", output)
+	}
+	if !strings.Contains(output, "Run without --dry-run to apply") {
+		t.Errorf("expected 'Run without --dry-run' hint in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, string(sess.ID)) {
+		t.Errorf("expected session ID in output, got:\n%s", output)
+	}
+}
+
+func TestResume_dryRunWithFilters(t *testing.T) {
+	store := testutil.NewMockStore()
+	ios := iostreams.Test()
+	repoDir, gitClient := makeResumeRepo(t, "dry-filter")
+
+	sess := testutil.NewSession("dry-filter-sess")
+	sess.Branch = "dry-filter"
+	sess.ProjectPath = repoDir
+	sess.Messages = append(sess.Messages, session.Message{
+		ID:   "empty-msg",
+		Role: session.RoleAssistant,
+		// empty content, no tool calls
+	})
+	store.Sessions[sess.ID] = sess
+	store.ByBranch[repoDir+":dry-filter"] = sess
+
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
+		SessionServiceFunc: func() (service.SessionServicer, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Git:      gitClient,
+				Registry: provider.NewRegistry(),
+			}), nil
+		},
+	}
+
+	opts := &Options{
+		IO:         ios,
+		Factory:    f,
+		Branch:     "dry-filter",
+		DryRun:     true,
+		StripEmpty: true,
+	}
+
+	err := runResume(opts)
+	if err != nil {
+		t.Fatalf("runResume(DryRun+Filter) error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Dry-run preview") {
+		t.Errorf("expected 'Dry-run preview' in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Filters") {
+		t.Errorf("expected filter info in output, got:\n%s", output)
+	}
+}
+
+func TestNewCmdResume_dryRunFlag(t *testing.T) {
+	ios := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios}
+	cmd := NewCmdResume(f)
+
+	if cmd.Flags().Lookup("dry-run") == nil {
+		t.Error("expected --dry-run flag")
+	}
+}
+
+// ── Error: invalid --exclude flag ──
+
+func TestResume_invalidExcludeFlag(t *testing.T) {
+	ios := iostreams.Test()
+	repoDir, gitClient := makeResumeRepo(t, "excl-branch")
+	store := testutil.NewMockStore()
+
+	sess := testutil.NewSession("excl-test")
+	sess.Branch = "excl-branch"
+	sess.ProjectPath = repoDir
+	store.Sessions[sess.ID] = sess
+	store.ByBranch[repoDir+":excl-branch"] = sess
+
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
+		SessionServiceFunc: func() (service.SessionServicer, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Git:      gitClient,
+				Registry: provider.NewRegistry(),
+			}), nil
+		},
+	}
+
+	opts := &Options{
+		IO:          ios,
+		Factory:     f,
+		Branch:      "excl-branch",
+		ExcludeFlag: "/[invalid/",
+	}
+
+	err := runResume(opts)
+	if err == nil {
+		t.Fatal("expected error for invalid exclude pattern")
+	}
+	if !strings.Contains(err.Error(), "--exclude") {
+		t.Errorf("expected '--exclude' in error, got: %v", err)
 	}
 }

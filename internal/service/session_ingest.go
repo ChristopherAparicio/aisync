@@ -162,6 +162,9 @@ func (s *SessionService) Ingest(_ context.Context, req IngestRequest) (*IngestRe
 		_ = s.scanner.ScanSession(sess)
 	}
 
+	// Stamp denormalized costs before persisting.
+	s.stampCosts(sess)
+
 	// Persist.
 	if err := s.store.Save(sess); err != nil {
 		return nil, fmt.Errorf("storing ingested session: %w", err)

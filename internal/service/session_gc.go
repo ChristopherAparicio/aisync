@@ -46,17 +46,13 @@ func (s *SessionService) GarbageCollect(ctx context.Context, req GCRequest) (*GC
 		cutoff := time.Now().UTC().Add(-dur)
 
 		if req.DryRun {
-			// Count sessions that would be deleted
+			// Count sessions that would be deleted (using Summary.CreatedAt to avoid N+1 Get calls).
 			summaries, listErr := s.store.List(session.ListOptions{All: true})
 			if listErr != nil {
 				return nil, fmt.Errorf("listing sessions: %w", listErr)
 			}
 			for _, sm := range summaries {
-				full, getErr := s.store.Get(sm.ID)
-				if getErr != nil {
-					continue
-				}
-				if full.CreatedAt.Before(cutoff) {
+				if sm.CreatedAt.Before(cutoff) {
 					result.Would++
 				}
 			}

@@ -414,6 +414,68 @@ func TestBuildCrossProjectSummary_Empty(t *testing.T) {
 	}
 }
 
+// ── ProjectCapabilityKeys tests ──
+
+func TestProjectCapabilityKeys_Basic(t *testing.T) {
+	p := &Project{
+		Capabilities: []Capability{
+			{Name: "cmd-1", Kind: KindCommand, Scope: ScopeProject},
+			{Name: "skill-1", Kind: KindSkill, Scope: ScopeGlobal},
+		},
+		MCPServers: []MCPServer{
+			{Name: "notion", Scope: ScopeGlobal},
+			{Name: "sentry", Scope: ScopeProject},
+		},
+	}
+
+	keys := ProjectCapabilityKeys(p)
+
+	if len(keys) != 4 {
+		t.Fatalf("got %d keys, want 4", len(keys))
+	}
+
+	// Verify that capabilities come first, then MCP servers.
+	if keys[0].Name != "cmd-1" || keys[0].Kind != KindCommand {
+		t.Errorf("keys[0] = %s/%s, want cmd-1/command", keys[0].Name, keys[0].Kind)
+	}
+	if keys[1].Name != "skill-1" || keys[1].Kind != KindSkill {
+		t.Errorf("keys[1] = %s/%s, want skill-1/skill", keys[1].Name, keys[1].Kind)
+	}
+	if keys[2].Name != "notion" || keys[2].Kind != KindMCPServer {
+		t.Errorf("keys[2] = %s/%s, want notion/mcp_server", keys[2].Name, keys[2].Kind)
+	}
+	if keys[3].Name != "sentry" || keys[3].Kind != KindMCPServer {
+		t.Errorf("keys[3] = %s/%s, want sentry/mcp_server", keys[3].Name, keys[3].Kind)
+	}
+}
+
+func TestProjectCapabilityKeys_Dedup(t *testing.T) {
+	p := &Project{
+		Capabilities: []Capability{
+			{Name: "skill-a", Kind: KindSkill},
+			{Name: "skill-a", Kind: KindSkill}, // duplicate
+		},
+		MCPServers: []MCPServer{
+			{Name: "notion"},
+			{Name: "notion"}, // duplicate
+		},
+	}
+
+	keys := ProjectCapabilityKeys(p)
+
+	if len(keys) != 2 {
+		t.Fatalf("got %d keys, want 2 (deduped)", len(keys))
+	}
+}
+
+func TestProjectCapabilityKeys_Empty(t *testing.T) {
+	p := &Project{}
+	keys := ProjectCapabilityKeys(p)
+	if len(keys) != 0 {
+		t.Errorf("got %d keys for empty project, want 0", len(keys))
+	}
+}
+
 func TestBuildCrossProjectSummary_SingleProject(t *testing.T) {
 	projects := []Project{
 		{
@@ -435,5 +497,226 @@ func TestBuildCrossProjectSummary_SingleProject(t *testing.T) {
 	}
 	if result.SharedMCPServers[0].ProjectCount != 1 {
 		t.Errorf("sentry.ProjectCount = %d, want 1", result.SharedMCPServers[0].ProjectCount)
+	}
+}
+
+// ── BuildSkillReuseMap tests ──
+
+func TestBuildSkillReuseMap_Empty(t *testing.T) {
+	result := BuildSkillReuseMap(nil)
+	if result.TotalSkills != 0 {
+		t.Errorf("TotalSkills = %d, want 0", result.TotalSkills)
+	}
+}
+
+func TestBuildSkillReuseMap_SharedSkills(t *testing.T) {
+	inputs := []SkillUsageInput{
+		{
+			ProjectPath: "/proj-a",
+			DisplayName: "proj-a",
+			Configured:  []string{"replay-tester", "opencode-sessions"},
+			Usage:       map[string]int{"replay-tester": 10, "opencode-sessions": 5},
+			Tokens:      map[string]int{"replay-tester": 20000, "opencode-sessions": 10000},
+		},
+		{
+			ProjectPath: "/proj-b",
+			DisplayName: "proj-b",
+			Configured:  []string{"replay-tester"},
+			Usage:       map[string]int{"replay-tester": 8},
+			Tokens:      map[string]int{"replay-tester": 16000},
+		},
+	}
+
+	result := BuildSkillReuseMap(inputs)
+
+	if result.SharedCount != 1 {
+		t.Errorf("SharedCount = %d, want 1", result.SharedCount)
+	}
+	if result.MonoCount != 1 {
+		t.Errorf("MonoCount = %d, want 1", result.MonoCount)
+	}
+	if result.TotalLoads != 23 {
+		t.Errorf("TotalLoads = %d, want 23", result.TotalLoads)
+	}
+	if len(result.SharedSkills) != 1 || result.SharedSkills[0].Name != "replay-tester" {
+		t.Errorf("SharedSkills = %v, want [replay-tester]", result.SharedSkills)
+	}
+	if result.SharedSkills[0].ProjectCount != 2 {
+		t.Errorf("replay-tester ProjectCount = %d, want 2", result.SharedSkills[0].ProjectCount)
+	}
+	if result.SharedSkills[0].TotalLoads != 18 {
+		t.Errorf("replay-tester TotalLoads = %d, want 18", result.SharedSkills[0].TotalLoads)
+	}
+	if result.SharedSkills[0].TotalTokens != 36000 {
+		t.Errorf("replay-tester TotalTokens = %d, want 36000", result.SharedSkills[0].TotalTokens)
+	}
+}
+
+func TestBuildSkillReuseMap_IdleSkills(t *testing.T) {
+	inputs := []SkillUsageInput{
+		{
+			ProjectPath: "/proj-a",
+			DisplayName: "proj-a",
+			Configured:  []string{"replay-tester", "never-used"},
+			Usage:       map[string]int{"replay-tester": 5},
+		},
+	}
+
+	result := BuildSkillReuseMap(inputs)
+
+	if result.IdleCount != 1 {
+		t.Errorf("IdleCount = %d, want 1", result.IdleCount)
+	}
+	if len(result.IdleSkills) != 1 || result.IdleSkills[0].Name != "never-used" {
+		t.Errorf("IdleSkills = %v, want [never-used]", result.IdleSkills)
+	}
+}
+
+func TestBuildSkillReuseMap_SortByLoads(t *testing.T) {
+	inputs := []SkillUsageInput{
+		{
+			ProjectPath: "/proj",
+			DisplayName: "proj",
+			Usage:       map[string]int{"low": 1, "high": 100, "mid": 50},
+		},
+	}
+
+	result := BuildSkillReuseMap(inputs)
+
+	if len(result.MonoSkills) != 3 {
+		t.Fatalf("MonoSkills count = %d, want 3", len(result.MonoSkills))
+	}
+	if result.MonoSkills[0].Name != "high" || result.MonoSkills[1].Name != "mid" || result.MonoSkills[2].Name != "low" {
+		t.Errorf("MonoSkills order = [%s, %s, %s], want [high, mid, low]",
+			result.MonoSkills[0].Name, result.MonoSkills[1].Name, result.MonoSkills[2].Name)
+	}
+}
+
+// ── BuildMCPGovernanceMatrix tests ──
+
+func TestBuildMCPGovernanceMatrix_Empty(t *testing.T) {
+	result := BuildMCPGovernanceMatrix(nil)
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if len(result.Projects) != 0 {
+		t.Errorf("expected 0 projects, got %d", len(result.Projects))
+	}
+	if result.TotalServers != 0 {
+		t.Errorf("expected 0 servers, got %d", result.TotalServers)
+	}
+}
+
+func TestBuildMCPGovernanceMatrix_SingleProject(t *testing.T) {
+	inputs := []MCPGovernanceInput{
+		{
+			ProjectPath: "/proj-a",
+			DisplayName: "proj-a",
+			Configured: []MCPServer{
+				{Name: "sentry", Scope: ScopeGlobal, Enabled: true},
+				{Name: "notion", Scope: ScopeProject, Enabled: true},
+			},
+			Usage: []MCPUsageData{
+				{Server: "sentry", CallCount: 100, ToolCount: 5, TotalCost: 12.50},
+				// notion is configured but has no usage → ghost
+			},
+		},
+	}
+
+	result := BuildMCPGovernanceMatrix(inputs)
+
+	if len(result.Projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(result.Projects))
+	}
+	if result.TotalActive != 1 {
+		t.Errorf("TotalActive = %d, want 1", result.TotalActive)
+	}
+	if result.TotalGhost != 1 {
+		t.Errorf("TotalGhost = %d, want 1", result.TotalGhost)
+	}
+	if result.TotalServers != 2 {
+		t.Errorf("TotalServers = %d, want 2", result.TotalServers)
+	}
+
+	row := result.Projects[0]
+	sentryCell := row.Cells["sentry"]
+	if sentryCell.Status != MCPStatusActive {
+		t.Errorf("sentry status = %q, want %q", sentryCell.Status, MCPStatusActive)
+	}
+	if sentryCell.CallCount != 100 {
+		t.Errorf("sentry calls = %d, want 100", sentryCell.CallCount)
+	}
+
+	notionCell := row.Cells["notion"]
+	if notionCell.Status != MCPStatusGhost {
+		t.Errorf("notion status = %q, want %q", notionCell.Status, MCPStatusGhost)
+	}
+}
+
+func TestBuildMCPGovernanceMatrix_MultiProject(t *testing.T) {
+	inputs := []MCPGovernanceInput{
+		{
+			ProjectPath: "/proj-a",
+			DisplayName: "proj-a",
+			Configured:  []MCPServer{{Name: "sentry", Enabled: true}},
+			Usage:       []MCPUsageData{{Server: "sentry", CallCount: 50, TotalCost: 5.0}},
+		},
+		{
+			ProjectPath: "/proj-b",
+			DisplayName: "proj-b",
+			Configured:  []MCPServer{{Name: "notion", Enabled: true}},
+			Usage: []MCPUsageData{
+				{Server: "notion", CallCount: 30, TotalCost: 3.0},
+				{Server: "langfuse", CallCount: 10, TotalCost: 1.0}, // orphan — not configured
+			},
+		},
+	}
+
+	result := BuildMCPGovernanceMatrix(inputs)
+
+	if len(result.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(result.Projects))
+	}
+	if result.TotalActive != 2 {
+		t.Errorf("TotalActive = %d, want 2", result.TotalActive)
+	}
+	if result.TotalOrphan != 1 {
+		t.Errorf("TotalOrphan = %d, want 1", result.TotalOrphan)
+	}
+	if result.TotalServers != 3 {
+		t.Errorf("TotalServers = %d, want 3", result.TotalServers)
+	}
+
+	// Servers should be sorted alphabetically.
+	if result.Servers[0] != "langfuse" || result.Servers[1] != "notion" || result.Servers[2] != "sentry" {
+		t.Errorf("Servers = %v, want [langfuse notion sentry]", result.Servers)
+	}
+
+	// proj-b should have langfuse as orphan.
+	projB := result.Projects[1]
+	langfuseCell := projB.Cells["langfuse"]
+	if langfuseCell.Status != MCPStatusOrphan {
+		t.Errorf("langfuse status = %q, want %q", langfuseCell.Status, MCPStatusOrphan)
+	}
+}
+
+func TestBuildMCPGovernanceMatrix_Costs(t *testing.T) {
+	inputs := []MCPGovernanceInput{
+		{
+			ProjectPath: "/proj",
+			DisplayName: "proj",
+			Configured:  []MCPServer{{Name: "sentry", Enabled: true}, {Name: "notion", Enabled: true}},
+			Usage: []MCPUsageData{
+				{Server: "sentry", CallCount: 100, TotalCost: 10.0},
+				{Server: "notion", CallCount: 50, TotalCost: 5.0},
+			},
+		},
+	}
+
+	result := BuildMCPGovernanceMatrix(inputs)
+
+	row := result.Projects[0]
+	if row.TotalCost != 15.0 {
+		t.Errorf("TotalCost = %f, want 15.0", row.TotalCost)
 	}
 }

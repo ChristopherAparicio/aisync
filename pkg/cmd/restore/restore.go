@@ -4,6 +4,7 @@ package restore
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,11 @@ type Options struct {
 	AsContext    bool
 	PRFlag       int
 	Pick         bool
+	FileFlag     string // --file: restore session that touched this file
+	Worktree     bool   // --worktree: create git worktree at session's commit
+
+	// DryRun previews the restore without writing anything to disk.
+	DryRun bool
 
 	// Filter flags
 	CleanErrors   bool
@@ -48,6 +54,18 @@ func NewCmdRestore(f *cmdutil.Factory) *cobra.Command {
 		Short: "Restore a captured AI session",
 		Long: `Restores a previously captured session into an AI tool.
 
+Session lookup (first match wins):
+  --session ID     Restore a specific session by ID
+  --pr N           Restore the most recent session linked to PR #N
+  --file PATH      Restore the most recent session that touched this file
+  (default)        Restore the most recent session on the current branch
+
+Interactive picker:
+  --pick           Choose from available sessions (works with --pr or --file)
+
+Worktree isolation:
+  --worktree       Create a git worktree at the session's commit SHA
+
 Smart Restore filters can clean up the session before restoring:
   --fix-orphans      Fix orphan tool_use blocks by injecting synthetic error results
   --clean-errors     Replace tool error outputs with compact summaries
@@ -60,7 +78,16 @@ The --exclude flag accepts a comma-separated list of:
   - Roles:    "system" (remove all system messages)
   - Patterns: "/regex/" (remove messages matching the regex)
 
-Example: aisync restore --session ses-abc --clean-errors --redact-secrets`,
+Preview:
+  --dry-run          Show what would be restored without writing anything
+
+Examples:
+  aisync restore --pr 42                    # restore latest session for PR #42
+  aisync restore --pr 42 --pick             # pick from all sessions for PR #42
+  aisync restore --file src/auth.go         # restore session that touched auth.go
+  aisync restore --pr 42 --worktree         # restore in a new git worktree
+  aisync restore --dry-run --clean-errors   # preview restore with error cleaning
+  aisync restore --session ses-abc --clean-errors --redact-secrets`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRestore(opts)
 		},
@@ -72,7 +99,12 @@ Example: aisync restore --session ses-abc --clean-errors --redact-secrets`,
 	cmd.Flags().BoolVar(&opts.AsContext, "as-context", false, "Generate CONTEXT.md instead of native import")
 	_ = cmd.Flags().MarkHidden("as-context") // hidden: use native import instead; kept for backward compat
 	cmd.Flags().IntVar(&opts.PRFlag, "pr", 0, "Restore session linked to this PR number")
-	cmd.Flags().BoolVar(&opts.Pick, "pick", false, "Choose from available sessions on the current branch")
+	cmd.Flags().BoolVar(&opts.Pick, "pick", false, "Choose from available sessions (works with --pr and --file)")
+	cmd.Flags().StringVar(&opts.FileFlag, "file", "", "Restore the most recent session that touched this file")
+	cmd.Flags().BoolVar(&opts.Worktree, "worktree", false, "Create a git worktree at the session's commit SHA")
+
+	// Dry-run preview
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Preview what the restore would do without writing anything")
 
 	// Smart Restore filter flags
 	cmd.Flags().BoolVar(&opts.CleanErrors, "clean-errors", false, "Replace tool error outputs with compact summaries")
@@ -184,6 +216,71 @@ func pickSession(opts *Options, svc service.SessionServicer, projectPath, branch
 	}
 
 	fmt.Fprintf(out, "Sessions on branch %q:\n\n", branch)
+	return promptPickFromSummaries(opts, summaries)
+}
+
+// pickSessionForPR lists sessions linked to a PR and prompts the user to pick one.
+func pickSessionForPR(opts *Options, store pickStore, prNumber int, owner, repo string) (session.ID, error) {
+	out := opts.IO.Out
+
+	summaries, err := store.GetSessionsForPR(owner, repo, prNumber)
+	if err != nil {
+		return "", fmt.Errorf("listing sessions for PR #%d: %w", prNumber, err)
+	}
+
+	if len(summaries) == 0 {
+		return "", fmt.Errorf("no sessions linked to PR #%d", prNumber)
+	}
+
+	if len(summaries) == 1 {
+		fmt.Fprintf(out, "Only one session for PR #%d, using %s\n", prNumber, summaries[0].ID)
+		return summaries[0].ID, nil
+	}
+
+	fmt.Fprintf(out, "Sessions linked to PR #%d:\n\n", prNumber)
+	return promptPickFromSummaries(opts, summaries)
+}
+
+// pickSessionForFile lists sessions that touched a file and prompts the user to pick one.
+func pickSessionForFile(opts *Options, store pickStore, filePath string) (session.ID, error) {
+	out := opts.IO.Out
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePath: filePath,
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing sessions for file %q: %w", filePath, err)
+	}
+
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no sessions found that touched file %q", filePath)
+	}
+
+	if len(entries) == 1 {
+		fmt.Fprintf(out, "Only one session for %q, using %s\n", filePath, entries[0].SessionID)
+		return entries[0].SessionID, nil
+	}
+
+	// Convert BlameEntry → Summary for display.
+	summaries := make([]session.Summary, len(entries))
+	for i, e := range entries {
+		summaries[i] = session.Summary{
+			ID:        e.SessionID,
+			Provider:  e.Provider,
+			Branch:    e.Branch,
+			Summary:   e.Summary,
+			CreatedAt: e.CreatedAt,
+		}
+	}
+
+	fmt.Fprintf(out, "Sessions that touched %q:\n\n", filePath)
+	return promptPickFromSummaries(opts, summaries)
+}
+
+// promptPickFromSummaries displays a table and prompts the user to pick one.
+func promptPickFromSummaries(opts *Options, summaries []session.Summary) (session.ID, error) {
+	out := opts.IO.Out
+
 	fmt.Fprintf(out, "  %-4s %-20s %-14s %6s  %s\n", "#", "ID", "PROVIDER", "TOKENS", "SUMMARY")
 	for i, s := range summaries {
 		summary := s.Summary
@@ -210,6 +307,14 @@ func pickSession(opts *Options, svc service.SessionServicer, projectPath, branch
 	}
 
 	return summaries[choice-1].ID, nil
+}
+
+// pickStore is the minimal interface needed by the contextual pickers.
+// In local mode, the factory's Store satisfies this. In remote mode,
+// the pickers are not available (they need direct store access).
+type pickStore interface {
+	GetSessionsForPR(repoOwner, repoName string, prNumber int) ([]session.Summary, error)
+	GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntry, error)
 }
 
 // truncateID truncates a string to maxLen, adding "..." if needed.
@@ -271,13 +376,23 @@ func runRestore(opts *Options) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	// Interactive pick: list sessions on the current branch and let the user choose.
+	// ── Interactive pick: contextual pickers ──
 	if opts.Pick && sessionID == "" {
-		picked, pickErr := pickSession(opts, svc, topLevel, branch)
-		if pickErr != nil {
-			return pickErr
+		store, storeErr := opts.Factory.Store()
+		if storeErr != nil {
+			// Fallback to branch picker if store is not available (remote mode).
+			picked, pickErr := pickSession(opts, svc, topLevel, branch)
+			if pickErr != nil {
+				return pickErr
+			}
+			sessionID = picked
+		} else {
+			picked, pickErr := runContextualPick(opts, svc, store, topLevel, branch)
+			if pickErr != nil {
+				return pickErr
+			}
+			sessionID = picked
 		}
-		sessionID = picked
 	}
 
 	// Restore
@@ -289,10 +404,18 @@ func runRestore(opts *Options) error {
 		Agent:        opts.AgentFlag,
 		AsContext:    opts.AsContext,
 		PRNumber:     opts.PRFlag,
+		FilePath:     opts.FileFlag,
+		Worktree:     opts.Worktree,
+		DryRun:       opts.DryRun,
 		Filters:      filters,
 	})
 	if err != nil {
 		return err
+	}
+
+	// ── Dry-run preview ──
+	if result.DryRun != nil {
+		return renderDryRunPreview(out, result.DryRun)
 	}
 
 	// Print filter results (if any filters were applied)
@@ -323,5 +446,79 @@ func runRestore(opts *Options) error {
 		fmt.Fprintln(out, "  Open CONTEXT.md or paste it into your AI agent to resume.")
 	}
 
+	// Print worktree info (if created)
+	if result.WorktreePath != "" {
+		fmt.Fprintf(out, "  Worktree: %s\n", result.WorktreePath)
+		fmt.Fprintln(out, "  cd into the worktree to work in isolation at the session's commit.")
+	}
+
 	return nil
+}
+
+// renderDryRunPreview prints a human-readable preview of what a restore would do.
+func renderDryRunPreview(w io.Writer, preview *service.DryRunPreview) error {
+	fmt.Fprintln(w, "Dry-run preview (no changes written):")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  Session:    %s\n", preview.SessionID)
+	fmt.Fprintf(w, "  Provider:   %s\n", preview.Provider)
+	if preview.Branch != "" {
+		fmt.Fprintf(w, "  Branch:     %s\n", preview.Branch)
+	}
+	if preview.Summary != "" {
+		fmt.Fprintf(w, "  Summary:    %s\n", preview.Summary)
+	}
+	fmt.Fprintf(w, "  Method:     %s\n", preview.Method)
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  Messages:   %d\n", preview.MessageCount)
+	fmt.Fprintf(w, "  Tool calls: %d\n", preview.ToolCallCount)
+	if preview.ErrorCount > 0 {
+		fmt.Fprintf(w, "  Errors:     %d\n", preview.ErrorCount)
+	}
+	fmt.Fprintf(w, "  Tokens:     %d (in: %d, out: %d)\n", preview.TotalTokens, preview.InputTokens, preview.OutputTokens)
+	if preview.FileChanges > 0 {
+		fmt.Fprintf(w, "  Files:      %d\n", preview.FileChanges)
+	}
+
+	// Print filter effects (if any)
+	if len(preview.FilterResults) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "  Filters that would be applied:")
+		for _, fr := range preview.FilterResults {
+			if fr.Applied {
+				fmt.Fprintf(w, "    [%s] %s\n", fr.FilterName, fr.Summary)
+			} else {
+				fmt.Fprintf(w, "    [%s] (no changes)\n", fr.FilterName)
+			}
+		}
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Run without --dry-run to apply.")
+	return nil
+}
+
+// runContextualPick dispatches to the right picker based on CLI flags:
+//   - --pick --pr N → pick from sessions linked to the PR
+//   - --pick --file PATH → pick from sessions that touched the file
+//   - --pick (alone) → pick from sessions on the current branch
+func runContextualPick(opts *Options, svc service.SessionServicer, store pickStore, topLevel, branch string) (session.ID, error) {
+	if opts.PRFlag > 0 {
+		// Resolve repo owner/name from config.
+		cfg, cfgErr := opts.Factory.Config()
+		if cfgErr != nil {
+			return "", fmt.Errorf("config unavailable for PR picker: %w", cfgErr)
+		}
+		owner := cfg.GetGitHubDefaultOwner()
+		repo := cfg.GetGitHubDefaultRepo()
+		if owner == "" || repo == "" {
+			return "", fmt.Errorf("github.default_owner/default_repo not configured — needed for --pick --pr")
+		}
+		return pickSessionForPR(opts, store, opts.PRFlag, owner, repo)
+	}
+
+	if opts.FileFlag != "" {
+		return pickSessionForFile(opts, store, opts.FileFlag)
+	}
+
+	return pickSession(opts, svc, topLevel, branch)
 }

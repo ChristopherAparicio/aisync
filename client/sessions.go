@@ -229,6 +229,9 @@ type RestoreRequest struct {
 	Provider    string `json:"provider,omitempty"`
 	AsContext   bool   `json:"as_context,omitempty"`
 	PRNumber    int    `json:"pr_number,omitempty"`
+	FilePath    string `json:"file_path,omitempty"`
+	Worktree    bool   `json:"worktree,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 }
 
 // RestoreResult contains the output of a restore operation.
@@ -666,6 +669,7 @@ type BranchStats struct {
 	TotalTokens  int     `json:"TotalTokens"`
 	TotalCost    float64 `json:"TotalCost"`
 	SessionCount int     `json:"SessionCount"`
+	LastActivity string  `json:"LastActivity,omitempty"`
 }
 
 // FileEntry is a file path with its touch count.
@@ -692,6 +696,15 @@ type StatsResult struct {
 	PerProvider   map[string]int       `json:"PerProvider"`
 	TopFiles      []FileEntry          `json:"TopFiles"`
 	ToolStats     *AggregatedToolStats `json:"tool_stats,omitempty"`
+
+	// Error / activity aggregates (populated by the server's Stats() loop).
+	// Tag naming matches service.StatsResult for remote round-trip compatibility.
+	TotalErrors        int `json:"total_errors,omitempty"`
+	TotalToolCalls     int `json:"total_tool_calls,omitempty"`
+	SessionsWithErrors int `json:"sessions_with_errors,omitempty"`
+
+	// Recent sessions (top 10 by last activity, sorted desc).
+	RecentSessions []Summary `json:"recent_sessions,omitempty"`
 }
 
 // Stats computes aggregated statistics across sessions.

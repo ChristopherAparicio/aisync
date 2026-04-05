@@ -641,6 +641,123 @@ func TestHookExists_notARepo(t *testing.T) {
 	}
 }
 
+// ── SwitchBranch ──
+
+func TestSwitchBranch_success(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	// Create a branch to switch to.
+	runGit(t, dir, "branch", "feature/test")
+
+	if err := client.SwitchBranch("feature/test"); err != nil {
+		t.Fatalf("SwitchBranch() error: %v", err)
+	}
+
+	branch, err := client.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch() error: %v", err)
+	}
+	if branch != "feature/test" {
+		t.Errorf("CurrentBranch() = %q, want %q", branch, "feature/test")
+	}
+}
+
+func TestSwitchBranch_nonexistent(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	err := client.SwitchBranch("nonexistent-branch")
+	if err == nil {
+		t.Fatal("expected error when switching to nonexistent branch")
+	}
+}
+
+// ── WorktreeAdd / WorktreeRemove ──
+
+func TestWorktreeAdd_and_Remove(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	sha, err := client.HeadCommitSHA()
+	if err != nil {
+		t.Fatalf("HeadCommitSHA() error: %v", err)
+	}
+
+	wtPath := filepath.Join(dir, ".worktrees", "test-wt")
+
+	// Add worktree at HEAD commit.
+	if err := client.WorktreeAdd(wtPath, sha); err != nil {
+		t.Fatalf("WorktreeAdd() error: %v", err)
+	}
+
+	// Verify the worktree directory was created.
+	if _, statErr := os.Stat(wtPath); os.IsNotExist(statErr) {
+		t.Fatal("worktree directory does not exist after WorktreeAdd")
+	}
+
+	// Verify it's a git working tree (has a .git file, not directory).
+	gitFile := filepath.Join(wtPath, ".git")
+	info, statErr := os.Stat(gitFile)
+	if statErr != nil {
+		t.Fatalf("worktree .git file stat error: %v", statErr)
+	}
+	if info.IsDir() {
+		t.Error("worktree .git should be a file, not a directory")
+	}
+
+	// Remove the worktree.
+	if err := client.WorktreeRemove(wtPath); err != nil {
+		t.Fatalf("WorktreeRemove() error: %v", err)
+	}
+
+	// Verify the directory is removed.
+	if _, statErr := os.Stat(wtPath); !os.IsNotExist(statErr) {
+		t.Error("worktree directory still exists after WorktreeRemove")
+	}
+}
+
+func TestWorktreeAdd_defaultRef(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	wtPath := filepath.Join(dir, ".worktrees", "head-wt")
+
+	// Empty ref should default to HEAD.
+	if err := client.WorktreeAdd(wtPath, ""); err != nil {
+		t.Fatalf("WorktreeAdd(ref='') error: %v", err)
+	}
+
+	if _, statErr := os.Stat(wtPath); os.IsNotExist(statErr) {
+		t.Fatal("worktree directory does not exist after WorktreeAdd with empty ref")
+	}
+
+	// Cleanup.
+	_ = client.WorktreeRemove(wtPath)
+}
+
+func TestWorktreeAdd_invalidRef(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	wtPath := filepath.Join(dir, ".worktrees", "bad-ref-wt")
+
+	err := client.WorktreeAdd(wtPath, "invalid-ref-that-does-not-exist")
+	if err == nil {
+		t.Fatal("expected error when adding worktree with invalid ref")
+	}
+}
+
+func TestWorktreeRemove_nonexistent(t *testing.T) {
+	dir := initTestRepo(t)
+	client := NewClient(dir)
+
+	err := client.WorktreeRemove(filepath.Join(dir, "nonexistent-worktree"))
+	if err == nil {
+		t.Fatal("expected error when removing nonexistent worktree")
+	}
+}
+
 // ── helper ──
 
 // runGit is a test helper that runs a git command in a directory.

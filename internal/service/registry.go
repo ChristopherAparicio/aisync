@@ -12,6 +12,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
@@ -249,44 +250,14 @@ func (s *RegistryService) ConfiguredVsUsed(projectPath string, since time.Time) 
 		return nil, fmt.Errorf("scanning project: %w", err)
 	}
 
-	// Query tool usage buckets for MCP server calls.
-	var usage []registry.MCPUsageData
-	if s.store != nil {
-		buckets, bErr := s.store.QueryToolBuckets("1d", since, time.Time{}, projectPath)
-		if bErr == nil {
-			// Aggregate by MCP server name.
-			serverAgg := make(map[string]*registry.MCPUsageData)
-			toolsSeen := make(map[string]map[string]bool) // server → tool names
-
-			for _, b := range buckets {
-				server := session.MCPServerName(b.ToolCategory)
-				if server == "" {
-					continue // skip builtin tools
-				}
-
-				agg, ok := serverAgg[server]
-				if !ok {
-					agg = &registry.MCPUsageData{Server: server}
-					serverAgg[server] = agg
-					toolsSeen[server] = make(map[string]bool)
-				}
-				agg.CallCount += b.CallCount
-				agg.TotalCost += b.EstimatedCost
-				toolsSeen[server][b.ToolName] = true
-			}
-
-			for server, agg := range serverAgg {
-				agg.ToolCount = len(toolsSeen[server])
-				usage = append(usage, *agg)
-			}
-		}
-	}
-
+	usage := s.aggregateMCPUsage(projectPath, since)
 	return registry.AnalyzeConfiguredVsUsed(project.MCPServers, usage), nil
 }
 
 // persistSnapshot saves a project snapshot if capabilities changed since
 // the last snapshot. This is called automatically after ScanProject().
+// It also upserts the flat project_capabilities table on every call
+// to keep last_seen timestamps fresh.
 func (s *RegistryService) persistSnapshot(project *registry.Project) {
 	prev, err := s.store.GetLatestSnapshot(project.RootPath)
 	if err != nil {
@@ -308,23 +279,88 @@ func (s *RegistryService) persistSnapshot(project *registry.Project) {
 		changeType = "changed"
 	}
 
-	// Only persist if it's the initial snapshot or something changed.
-	if changeType == "unchanged" {
-		return
+	// Only persist snapshot blob if it's the initial snapshot or something changed.
+	if changeType != "unchanged" {
+		snapshot := &registry.ProjectSnapshot{
+			ProjectPath:         project.RootPath,
+			Project:             *project,
+			ScannedAt:           time.Now().UTC().Format(time.RFC3339),
+			ChangeType:          changeType,
+			CapabilitiesAdded:   capsAdded,
+			CapabilitiesRemoved: capsRemoved,
+			MCPServersAdded:     mcpAdded,
+			MCPServersRemoved:   mcpRemoved,
+		}
+		_ = s.store.SaveProjectSnapshot(snapshot) // best-effort
 	}
 
-	snapshot := &registry.ProjectSnapshot{
-		ProjectPath:         project.RootPath,
-		Project:             *project,
-		ScannedAt:           time.Now().UTC().Format(time.RFC3339),
-		ChangeType:          changeType,
-		CapabilitiesAdded:   capsAdded,
-		CapabilitiesRemoved: capsRemoved,
-		MCPServersAdded:     mcpAdded,
-		MCPServersRemoved:   mcpRemoved,
+	// Always upsert flat capabilities to keep last_seen fresh.
+	caps := registry.ProjectCapabilityKeys(project)
+	_ = s.store.UpsertCapabilities(project.RootPath, caps) // best-effort
+}
+
+// CrossProjectMCPGovernance builds a matrix of projects × MCP servers with
+// governance status (active/ghost/orphan) per cell. This is the cross-project
+// version of ConfiguredVsUsed.
+func (s *RegistryService) CrossProjectMCPGovernance(since time.Time) (*registry.MCPGovernanceMatrix, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return nil, fmt.Errorf("listing projects: %w", err)
 	}
 
-	_ = s.store.SaveProjectSnapshot(snapshot) // best-effort
+	var inputs []registry.MCPGovernanceInput
+	for _, proj := range projects {
+		usage := s.aggregateMCPUsage(proj.RootPath, since)
+		displayName := proj.Name
+		if displayName == "" {
+			displayName = filepath.Base(proj.RootPath)
+		}
+		inputs = append(inputs, registry.MCPGovernanceInput{
+			ProjectPath: proj.RootPath,
+			DisplayName: displayName,
+			Configured:  proj.MCPServers,
+			Usage:       usage,
+		})
+	}
+
+	return registry.BuildMCPGovernanceMatrix(inputs), nil
+}
+
+// aggregateMCPUsage queries tool buckets for a project and aggregates by MCP server.
+func (s *RegistryService) aggregateMCPUsage(projectPath string, since time.Time) []registry.MCPUsageData {
+	if s.store == nil {
+		return nil
+	}
+	buckets, err := s.store.QueryToolBuckets("1d", since, time.Time{}, projectPath)
+	if err != nil {
+		return nil
+	}
+
+	serverAgg := make(map[string]*registry.MCPUsageData)
+	toolsSeen := make(map[string]map[string]bool)
+
+	for _, b := range buckets {
+		server := session.MCPServerName(b.ToolCategory)
+		if server == "" {
+			continue
+		}
+		agg, ok := serverAgg[server]
+		if !ok {
+			agg = &registry.MCPUsageData{Server: server}
+			serverAgg[server] = agg
+			toolsSeen[server] = make(map[string]bool)
+		}
+		agg.CallCount += b.CallCount
+		agg.TotalCost += b.EstimatedCost
+		toolsSeen[server][b.ToolName] = true
+	}
+
+	var result []registry.MCPUsageData
+	for server, agg := range serverAgg {
+		agg.ToolCount = len(toolsSeen[server])
+		result = append(result, *agg)
+	}
+	return result
 }
 
 // CrossProjectCapabilities aggregates capabilities across all known projects.
@@ -335,4 +371,72 @@ func (s *RegistryService) CrossProjectCapabilities() (*registry.CrossProjectSumm
 		return nil, fmt.Errorf("listing projects: %w", err)
 	}
 	return registry.BuildCrossProjectSummary(projects), nil
+}
+
+// SkillReuseAnalysis builds a cross-project skill reuse map combining
+// configured skills from the registry with actual usage from event buckets.
+func (s *RegistryService) SkillReuseAnalysis(since time.Time) (*registry.SkillReuseMap, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return nil, fmt.Errorf("listing projects: %w", err)
+	}
+
+	var inputs []registry.SkillUsageInput
+	for _, proj := range projects {
+		displayName := proj.Name
+		if displayName == "" {
+			displayName = filepath.Base(proj.RootPath)
+		}
+
+		// Configured skills from the registry scan.
+		var configured []string
+		for _, cap := range proj.Capabilities {
+			if cap.Kind == registry.KindSkill {
+				configured = append(configured, cap.Name)
+			}
+		}
+
+		// Actual skill usage from event buckets.
+		usage := make(map[string]int)
+		tokens := make(map[string]int)
+		if s.store != nil {
+			buckets, bErr := s.store.QueryEventBuckets(sessionevent.BucketQuery{
+				ProjectPath: proj.RootPath,
+				Granularity: "1d",
+				Since:       since,
+			})
+			if bErr == nil {
+				for _, b := range buckets {
+					for name, count := range b.TopSkills {
+						usage[name] += count
+					}
+					for name, tok := range b.SkillTokens {
+						tokens[name] += tok
+					}
+				}
+			}
+		}
+
+		inputs = append(inputs, registry.SkillUsageInput{
+			ProjectPath: proj.RootPath,
+			DisplayName: displayName,
+			Configured:  configured,
+			Usage:       usage,
+			Tokens:      tokens,
+		})
+	}
+
+	return registry.BuildSkillReuseMap(inputs), nil
+}
+
+// ScanAllProjects discovers and scans all known projects, persisting snapshots
+// and flat capabilities for each. Returns the number of projects successfully scanned.
+// This method satisfies the scheduler.RegistryScanner interface.
+func (s *RegistryService) ScanAllProjects() (int, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return 0, fmt.Errorf("listing projects: %w", err)
+	}
+	// ListProjects already calls ScanProject() for each, which triggers persistSnapshot().
+	return len(projects), nil
 }

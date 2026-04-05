@@ -65,7 +65,7 @@ func (s *SessionService) ClassifySession(sess *session.Session) int {
 	if pc != nil && len(pc.StatusRules) > 0 {
 		statusRules = pc.StatusRules
 	}
-	if newStatus := matchSummaryPrefix(statusRules, sess.Summary); newStatus != "" {
+	if newStatus := MatchSummaryPrefix(statusRules, sess.Summary); newStatus != "" {
 		if string(sess.Status) != newStatus {
 			sess.Status = session.SessionStatus(newStatus)
 			changes++
@@ -89,7 +89,7 @@ func (s *SessionService) classifyType(sess *session.Session, pc *config.ProjectC
 	if pc != nil && len(pc.CommitRules) > 0 {
 		commitRules = pc.CommitRules
 	}
-	if t := matchConventionalCommit(commitRules, sess.Summary); t != "" {
+	if t := MatchConventionalCommit(commitRules, sess.Summary); t != "" {
 		return t
 	}
 
@@ -99,7 +99,7 @@ func (s *SessionService) classifyType(sess *session.Session, pc *config.ProjectC
 		branchRules = pc.BranchRules
 	}
 	if len(branchRules) > 0 && sess.Branch != "" {
-		if t := matchBranchRule(branchRules, sess.Branch); t != "" {
+		if t := MatchBranchRule(branchRules, sess.Branch); t != "" {
 			return t
 		}
 	}
@@ -173,8 +173,9 @@ func extractTickets(re *regexp.Regexp, texts ...string) []string {
 	return result
 }
 
-// matchBranchRule checks if a branch name matches any configured rule.
-func matchBranchRule(rules map[string]string, branch string) string {
+// MatchBranchRule checks if a branch name matches any configured rule.
+// Exported for use by the web preview handler.
+func MatchBranchRule(rules map[string]string, branch string) string {
 	for pattern, sessionType := range rules {
 		matched, err := filepath.Match(pattern, branch)
 		if err != nil {
@@ -194,14 +195,16 @@ func matchBranchRule(rules map[string]string, branch string) string {
 	return ""
 }
 
-// matchConventionalCommit extracts a Conventional Commit prefix from a summary.
+// MatchConventionalCommit extracts a Conventional Commit prefix from a summary.
 // Handles formats like:
 //   - "fix: description"
 //   - "feat(scope): description"
 //   - "[COMMIT] fix: ..."
 //   - "[COMMIT] 🔀 Fix ..."
 //   - "[PR] feat: ..."
-func matchConventionalCommit(rules map[string]string, summary string) string {
+//
+// Exported for use by the web preview handler.
+func MatchConventionalCommit(rules map[string]string, summary string) string {
 	// Strip common prefixes: [COMMIT], [PR], [WIP], [DONE], emoji.
 	text := summary
 	for _, prefix := range []string{"[COMMIT]", "[PR]", "[WIP]", "[DONE]"} {
@@ -255,8 +258,9 @@ func matchConventionalCommit(rules map[string]string, summary string) string {
 	return ""
 }
 
-// matchSummaryPrefix checks if a session summary starts with a known prefix.
-func matchSummaryPrefix(rules map[string]string, summary string) string {
+// MatchSummaryPrefix checks if a session summary starts with a known prefix.
+// Exported for use by the web preview handler.
+func MatchSummaryPrefix(rules map[string]string, summary string) string {
 	for prefix, status := range rules {
 		if strings.HasPrefix(summary, prefix) {
 			return status

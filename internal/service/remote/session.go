@@ -76,6 +76,9 @@ func (r *SessionService) Restore(req service.RestoreRequest) (*service.RestoreRe
 		Provider:    string(req.ProviderName),
 		AsContext:   req.AsContext,
 		PRNumber:    req.PRNumber,
+		FilePath:    req.FilePath,
+		Worktree:    req.Worktree,
+		DryRun:      req.DryRun,
 	})
 	if err != nil {
 		return nil, err
@@ -473,6 +476,10 @@ func (r *SessionService) ComputeObjective(_ context.Context, _ service.ComputeOb
 
 func (r *SessionService) GetObjective(_ context.Context, _ string) (*session.SessionObjective, error) {
 	return nil, fmt.Errorf("GetObjective not supported in remote mode yet")
+}
+
+func (r *SessionService) Diagnose(_ context.Context, _ service.DiagnoseRequest) (*session.DiagnosisReport, error) {
+	return nil, fmt.Errorf("Diagnose not supported in remote mode yet")
 }
 
 func (r *SessionService) AnalyzeEfficiency(_ context.Context, req service.EfficiencyRequest) (*service.EfficiencyResult, error) {

@@ -1901,3 +1901,108 @@ func TestSetProjectClassifier_persistRoundtrip(t *testing.T) {
 		t.Errorf("CostMode = %q, want estimated", got.Budget.CostMode)
 	}
 }
+
+// ── GitHub config ──
+
+func TestGitHub_SetAndGet(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mustNewConfig(t, filepath.Join(dir, "global"), filepath.Join(dir, "repo"))
+
+	tests := []struct {
+		key   string
+		value string
+	}{
+		{"github.token", "****c123"}, // Get() masks tokens for display
+		{"github.default_owner", "myorg"},
+		{"github.default_repo", "myrepo"},
+		{"github.sync_enabled", "true"},
+		{"github.sync_cron", "0 */4 * * *"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			mustSet(t, cfg, tt.key, tt.value)
+			got, err := cfg.Get(tt.key)
+			if err != nil {
+				t.Fatalf("Get(%q) error = %v", tt.key, err)
+			}
+			if got != tt.value {
+				t.Errorf("Get(%q) = %q, want %q", tt.key, got, tt.value)
+			}
+		})
+	}
+}
+
+func TestGitHub_GetterMethods(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mustNewConfig(t, filepath.Join(dir, "global"), filepath.Join(dir, "repo"))
+
+	mustSet(t, cfg, "github.token", "ghp_test")
+	mustSet(t, cfg, "github.default_owner", "acme")
+	mustSet(t, cfg, "github.default_repo", "app")
+	mustSet(t, cfg, "github.sync_enabled", "true")
+	mustSet(t, cfg, "github.sync_cron", "30 3 * * *")
+
+	if got := cfg.GetGitHubToken(); got != "ghp_test" {
+		t.Errorf("GetGitHubToken() = %q, want %q", got, "ghp_test")
+	}
+	if got := cfg.GetGitHubDefaultOwner(); got != "acme" {
+		t.Errorf("GetGitHubDefaultOwner() = %q, want %q", got, "acme")
+	}
+	if got := cfg.GetGitHubDefaultRepo(); got != "app" {
+		t.Errorf("GetGitHubDefaultRepo() = %q, want %q", got, "app")
+	}
+	if !cfg.IsGitHubSyncEnabled() {
+		t.Error("IsGitHubSyncEnabled() = false, want true")
+	}
+	if got := cfg.GetGitHubSyncCron(); got != "30 3 * * *" {
+		t.Errorf("GetGitHubSyncCron() = %q, want %q", got, "30 3 * * *")
+	}
+}
+
+func TestGitHub_Defaults(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mustNewConfig(t, filepath.Join(dir, "global"), filepath.Join(dir, "repo"))
+
+	if cfg.GetGitHubToken() != "" {
+		t.Error("GetGitHubToken() should be empty by default")
+	}
+	if cfg.IsGitHubSyncEnabled() {
+		t.Error("IsGitHubSyncEnabled() should be false by default")
+	}
+	if got := cfg.GetGitHubSyncCron(); got != "*/30 * * * *" {
+		t.Errorf("GetGitHubSyncCron() = %q, want default %q", got, "*/30 * * * *")
+	}
+}
+
+func TestGitHub_InvalidSyncCron(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mustNewConfig(t, filepath.Join(dir, "global"), filepath.Join(dir, "repo"))
+
+	if err := cfg.Set("github.sync_cron", "not-a-cron"); err == nil {
+		t.Error("expected error for invalid cron expression")
+	}
+}
+
+func TestGitHub_SaveAndReload(t *testing.T) {
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "global")
+
+	cfg := mustNewConfig(t, globalDir, "")
+	mustSet(t, cfg, "github.token", "ghp_reload")
+	mustSet(t, cfg, "github.default_owner", "reloaded")
+	mustSet(t, cfg, "github.sync_enabled", "true")
+	mustSave(t, cfg)
+
+	// Reload
+	cfg2 := mustNewConfig(t, globalDir, "")
+	if got := cfg2.GetGitHubToken(); got != "ghp_reload" {
+		t.Errorf("After reload: GetGitHubToken() = %q, want %q", got, "ghp_reload")
+	}
+	if got := cfg2.GetGitHubDefaultOwner(); got != "reloaded" {
+		t.Errorf("After reload: GetGitHubDefaultOwner() = %q, want %q", got, "reloaded")
+	}
+	if !cfg2.IsGitHubSyncEnabled() {
+		t.Error("After reload: IsGitHubSyncEnabled() = false, want true")
+	}
+}

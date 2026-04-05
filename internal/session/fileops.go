@@ -469,7 +469,8 @@ type ProjectFileEntry struct {
 	LastChangeType  ChangeType   `json:"last_change_type"` // most recent change type
 	LastSessionID   ID           `json:"last_session_id"`  // most recent session that touched this file
 	LastSessionTime time.Time    `json:"last_session_time"`
-	LastSummary     string       `json:"last_summary"`  // summary of the last session
-	LastBranch      string       `json:"last_branch"`   // branch of the last session
-	LastProvider    ProviderName `json:"last_provider"` // provider of the last session
+	LastSummary     string       `json:"last_summary"`    // summary of the last session
+	LastBranch      string       `json:"last_branch"`     // branch of the last session
+	LastProvider    ProviderName `json:"last_provider"`   // provider of the last session
+	LastCommitSHA   string       `json:"last_commit_sha"` // commit SHA of the last session
 }

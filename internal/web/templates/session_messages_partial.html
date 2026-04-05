@@ -1,0 +1,63 @@
+{{define "session-messages-batch"}}
+{{range $i, $msg := .Messages}}
+{{$absIdx := add $.Offset $i}}
+{{$skills := index $.SkillMap $absIdx}}
+<div class="chat-msg chat-{{$msg.Role}} {{if $msg.ToolCalls}}has-tools{{end}} {{if $skills}}has-skills{{end}}" data-role="{{$msg.Role}}" data-idx="{{$absIdx}}" data-has-error="{{range $msg.ToolCalls}}{{if eq .State "error"}}true{{end}}{{end}}" {{if $skills}}data-skills="{{range $si, $sn := $skills}}{{if $si}},{{end}}{{$sn}}{{end}}"{{end}}>
+  <div class="chat-header">
+    <span class="chat-idx text-muted">#{{$absIdx}}</span>
+    <span class="chat-role">{{$msg.Role}}</span>
+    {{if $msg.Model}}<span class="chat-model font-mono">{{$msg.Model}}</span>{{end}}
+    {{if $skills}}{{range $skills}}<span class="badge badge-skill" onclick="filterMessages('skill:{{.}}', null)">{{.}}</span>{{end}}{{end}}
+    <span class="chat-time text-muted">{{timeAgo $msg.Timestamp}}</span>
+    {{if or $msg.InputTokens $msg.OutputTokens}}
+    <span class="chat-tokens text-muted font-mono">{{formatTokens $msg.InputTokens}}→{{formatTokens $msg.OutputTokens}}</span>
+    {{end}}
+  </div>
+
+  {{if $msg.Content}}
+  <div class="chat-content">{{truncate $msg.Content 500}}</div>
+  {{end}}
+
+  {{if $msg.Thinking}}
+  <details class="chat-thinking">
+    <summary>Thinking</summary>
+    <div class="chat-thinking-content">{{truncate $msg.Thinking 1000}}</div>
+  </details>
+  {{end}}
+
+  {{if $msg.ToolCalls}}
+  <div class="chat-tools">
+    {{range $msg.ToolCalls}}
+    <details class="tool-call tool-{{.State}}" {{if eq .State "error"}}open{{end}}>
+      <summary class="tool-summary">
+        <span class="tool-name font-mono">{{.Name}}</span>
+        <span class="tool-state badge">{{.State}}</span>
+        {{if .DurationMs}}<span class="text-muted">{{formatDuration .DurationMs}}</span>{{end}}
+        {{if or .InputTokens .OutputTokens}}<span class="tool-tokens font-mono">{{formatTokens .InputTokens}} in → {{formatTokens .OutputTokens}} out</span>{{end}}
+      </summary>
+      <div class="tool-body">
+        {{if .Input}}
+        <div class="tool-section">
+          <div class="tool-section-label">Input{{if .InputTokens}} <span class="text-muted font-mono">({{formatTokens .InputTokens}} tokens)</span>{{end}}</div>
+          <pre class="tool-pre">{{truncate .Input 1000}}</pre>
+        </div>
+        {{end}}
+        {{if .Output}}
+        <div class="tool-section">
+          <div class="tool-section-label">Output{{if .OutputTokens}} <span class="text-muted font-mono">({{formatTokens .OutputTokens}} tokens)</span>{{end}}</div>
+          <pre class="tool-pre">{{truncate .Output 1000}}</pre>
+        </div>
+        {{end}}
+      </div>
+    </details>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{if .HasMore}}
+<div id="load-more-msgs" hx-get="{{.NextURL}}" hx-trigger="click" hx-swap="outerHTML" class="load-more-btn">
+  Load more messages...
+</div>
+{{end}}
+{{end}}

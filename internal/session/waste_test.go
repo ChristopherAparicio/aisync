@@ -205,3 +205,76 @@ func TestIdentifyCacheMissMessages(t *testing.T) {
 		t.Error("Message 3 should be cache miss (8 min since last assistant response)")
 	}
 }
+
+func TestDetectCacheMisses_NoMessages(t *testing.T) {
+	timeline := DetectCacheMisses(nil)
+	if timeline.TotalMisses != 0 {
+		t.Errorf("expected 0 misses, got %d", timeline.TotalMisses)
+	}
+}
+
+func TestDetectCacheMisses_NoMisses(t *testing.T) {
+	now := time.Now()
+	msgs := []Message{
+		{Role: RoleAssistant, Timestamp: now, InputTokens: 1000},
+		{Role: RoleAssistant, Timestamp: now.Add(2 * time.Minute), InputTokens: 2000},
+		{Role: RoleAssistant, Timestamp: now.Add(4 * time.Minute), InputTokens: 3000},
+	}
+
+	timeline := DetectCacheMisses(msgs)
+	if timeline.TotalMisses != 0 {
+		t.Errorf("expected 0 misses (all within TTL), got %d", timeline.TotalMisses)
+	}
+}
+
+func TestDetectCacheMisses_SingleMiss(t *testing.T) {
+	now := time.Now()
+	msgs := []Message{
+		{Role: RoleAssistant, Timestamp: now, InputTokens: 5000},
+		{Role: RoleUser, Timestamp: now.Add(10 * time.Minute)},
+		{Role: RoleAssistant, Timestamp: now.Add(11 * time.Minute), InputTokens: 20000},
+	}
+
+	timeline := DetectCacheMisses(msgs)
+	if timeline.TotalMisses != 1 {
+		t.Fatalf("expected 1 miss, got %d", timeline.TotalMisses)
+	}
+	event := timeline.Events[0]
+	if event.MessageIndex != 2 {
+		t.Errorf("expected message index 2, got %d", event.MessageIndex)
+	}
+	if event.GapMinutes != 11 {
+		t.Errorf("expected gap ~11 min, got %d", event.GapMinutes)
+	}
+	if event.InputTokens != 20000 {
+		t.Errorf("expected 20000 input tokens, got %d", event.InputTokens)
+	}
+	if timeline.TotalWastedTokens != 20000 {
+		t.Errorf("expected 20000 wasted tokens, got %d", timeline.TotalWastedTokens)
+	}
+	if timeline.LongestGapMins != 11 {
+		t.Errorf("expected longest gap 11 min, got %d", timeline.LongestGapMins)
+	}
+}
+
+func TestDetectCacheMisses_MultipleMisses(t *testing.T) {
+	now := time.Now()
+	msgs := []Message{
+		{Role: RoleAssistant, Timestamp: now, InputTokens: 1000},
+		{Role: RoleAssistant, Timestamp: now.Add(3 * time.Minute), InputTokens: 2000},   // within TTL
+		{Role: RoleAssistant, Timestamp: now.Add(15 * time.Minute), InputTokens: 3000},  // miss (12 min gap)
+		{Role: RoleAssistant, Timestamp: now.Add(18 * time.Minute), InputTokens: 4000},  // within TTL
+		{Role: RoleAssistant, Timestamp: now.Add(60 * time.Minute), InputTokens: 10000}, // miss (42 min gap)
+	}
+
+	timeline := DetectCacheMisses(msgs)
+	if timeline.TotalMisses != 2 {
+		t.Fatalf("expected 2 misses, got %d", timeline.TotalMisses)
+	}
+	if timeline.TotalWastedTokens != 13000 { // 3000 + 10000
+		t.Errorf("expected 13000 wasted tokens, got %d", timeline.TotalWastedTokens)
+	}
+	if timeline.LongestGapMins != 42 {
+		t.Errorf("expected longest gap 42 min, got %d", timeline.LongestGapMins)
+	}
+}

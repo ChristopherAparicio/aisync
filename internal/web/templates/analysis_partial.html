@@ -77,7 +77,7 @@
   </div>
   {{end}}
 
-  <!-- Skill Observation (available vs loaded vs missed) -->
+  <!-- Skill Observation -->
   {{if .Analysis.HasSkillObservation}}
   <div class="analysis-subsection">
     <h3 class="analysis-subtitle">Skill Observation</h3>
@@ -117,18 +117,104 @@
     </div>
   </div>
   {{end}}
+
+  <!-- Module Results -->
+  {{if .Analysis.HasModuleResults}}
+  {{range .Analysis.ModuleResults}}
+  <div class="analysis-subsection analysis-module">
+    <h3 class="analysis-subtitle">
+      {{.Label}}
+      {{if gt .DurationMs 0}}<span class="text-muted font-mono">{{formatDuration .DurationMs}}</span>{{end}}
+      {{if gt .TokensUsed 0}}<span class="text-muted font-mono">{{formatTokens .TokensUsed}} tok</span>{{end}}
+    </h3>
+
+    {{if .Error}}
+    <div class="analysis-error">
+      <div class="analysis-error-msg">{{.Error}}</div>
+    </div>
+    {{end}}
+
+    {{if .HasToolEfficiency}}
+    <div class="te-report">
+      <!-- Score + Summary -->
+      <div class="te-header">
+        <div class="analysis-score analysis-score-{{.ToolEfficiency.ScoreClass}}">
+          <span class="analysis-score-value">{{.ToolEfficiency.OverallScore}}</span>
+          <span class="analysis-score-label">/ 100</span>
+        </div>
+        <div class="te-stats">
+          <span class="te-stat te-stat-useful">{{.ToolEfficiency.UsefulCalls}} useful</span>
+          <span class="te-stat te-stat-redundant">{{.ToolEfficiency.RedundantCalls}} redundant</span>
+        </div>
+      </div>
+      <div class="te-summary">{{.ToolEfficiency.Summary}}</div>
+
+      <!-- Patterns -->
+      {{if .ToolEfficiency.HasPatterns}}
+      <div class="te-patterns">
+        <div class="te-patterns-label">Detected Patterns</div>
+        {{range .ToolEfficiency.Patterns}}
+        <div class="te-pattern">{{.}}</div>
+        {{end}}
+      </div>
+      {{end}}
+
+      <!-- Per-Tool Evaluations -->
+      {{if .ToolEfficiency.HasEvaluations}}
+      <details class="te-evaluations">
+        <summary class="te-evaluations-summary">Tool Evaluations ({{len .ToolEfficiency.Evaluations}})</summary>
+        <div class="te-eval-list">
+          {{range .ToolEfficiency.Evaluations}}
+          <div class="te-eval te-eval-{{.UsefulClass}}">
+            <span class="te-eval-tool font-mono">{{.ToolName}}</span>
+            <span class="badge te-badge-{{.UsefulClass}}">{{.Usefulness}}</span>
+            {{if or .InputTokens .OutputTokens}}<span class="te-eval-tokens font-mono text-muted">{{.InputTokens}}in/{{.OutputTokens}}out</span>{{end}}
+            <span class="te-eval-reason">{{.Reason}}</span>
+          </div>
+          {{end}}
+        </div>
+      </details>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+  {{end}}
   {{end}}
 
+  <!-- Re-analyze with module selection -->
   {{if .CanAnalyze}}
   <div class="analysis-actions">
+    {{if .AvailableModules}}
+    <form class="analysis-module-form"
+      hx-post="/partials/analyze/{{.SessionID}}"
+      hx-target="#analysis-container"
+      hx-swap="innerHTML">
+      <div class="analysis-module-checks">
+        {{range .AvailableModules}}
+        <label class="analysis-module-check">
+          <input type="checkbox" name="modules" value="{{.Name}}" checked>
+          <span class="analysis-module-check-label">{{.Label}}</span>
+          <span class="analysis-module-check-desc text-muted">{{.Description}}</span>
+        </label>
+        {{end}}
+      </div>
+      <button type="submit" class="btn-analyze"
+        hx-disabled-elt="this"
+        onclick="this.textContent='Analyzing...'; this.disabled=true;">
+        {{if .HasAnalysis}}Re-analyze{{else}}Analyze Session{{end}}
+      </button>
+    </form>
+    {{else}}
     <button class="btn-analyze"
       hx-post="/partials/analyze/{{.SessionID}}"
       hx-target="#analysis-container"
       hx-swap="innerHTML"
       hx-disabled-elt="this"
       onclick="this.textContent='Analyzing...'; this.disabled=true;">
-      Re-analyze
+      {{if .HasAnalysis}}Re-analyze{{else}}Analyze Session{{end}}
     </button>
+    {{end}}
   </div>
   {{end}}
 </div>
@@ -136,6 +222,28 @@
 {{if .CanAnalyze}}
 <div class="analysis-empty" id="analysis-empty-block">
   <p class="text-muted analysis-empty-text">No analysis available for this session.</p>
+
+  {{if .AvailableModules}}
+  <form class="analysis-module-form"
+    hx-post="/partials/analyze/{{.SessionID}}"
+    hx-target="#analysis-container"
+    hx-swap="innerHTML">
+    <div class="analysis-module-checks">
+      {{range .AvailableModules}}
+      <label class="analysis-module-check">
+        <input type="checkbox" name="modules" value="{{.Name}}" checked>
+        <span class="analysis-module-check-label">{{.Label}}</span>
+        <span class="analysis-module-check-desc text-muted">{{.Description}}</span>
+      </label>
+      {{end}}
+    </div>
+    <button type="submit" class="btn-analyze analysis-trigger-btn"
+      hx-disabled-elt="this"
+      onclick="this.textContent='Analyzing...'; this.disabled=true;">
+      Analyze Session
+    </button>
+  </form>
+  {{else}}
   <button class="btn-analyze analysis-trigger-btn"
     hx-post="/partials/analyze/{{.SessionID}}"
     hx-target="#analysis-container"
@@ -145,8 +253,9 @@
     Analyze Session
   </button>
   <span id="analyze-spinner" class="analysis-spinner" style="display:none;">
-    <span class="spinner-dot"></span> Analyzing with Ollama...
+    <span class="spinner-dot"></span> Analyzing...
   </span>
+  {{end}}
 </div>
 {{end}}
 {{end}}

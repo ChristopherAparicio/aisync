@@ -1,0 +1,56 @@
+{{define "classification-preview"}}
+<div class="cp-header">
+  <span class="cp-stat">{{.Total}} sessions</span>
+  {{if gt .TypeChanges 0}}<span class="cp-stat cp-stat--change">{{.TypeChanges}} type change{{if ne .TypeChanges 1}}s{{end}}</span>{{end}}
+  {{if gt .StatusChanges 0}}<span class="cp-stat cp-stat--change">{{.StatusChanges}} status change{{if ne .StatusChanges 1}}s{{end}}</span>{{end}}
+  {{if and (eq .TypeChanges 0) (eq .StatusChanges 0)}}<span class="cp-stat cp-stat--none">no changes detected</span>{{end}}
+</div>
+
+{{if .Rows}}
+<table class="cp-table">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Summary</th>
+      <th>Branch</th>
+      <th>Agent</th>
+      <th>Type</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr class="{{if or .TypeChanged .StatusChanged}}cp-row--changed{{end}}">
+      <td class="font-mono cp-cell--id">{{.ID}}</td>
+      <td class="cp-cell--summary" title="{{.Summary}}">{{.Summary}}</td>
+      <td class="font-mono">{{.Branch}}</td>
+      <td>{{.Agent}}</td>
+      <td>
+        {{if .TypeChanged}}
+          <span class="cp-old">{{if .CurrentType}}{{.CurrentType}}{{else}}<em>none</em>{{end}}</span>
+          <span class="cp-arrow">&rarr;</span>
+          <span class="cp-new">{{.NewType}}</span>
+        {{else}}
+          <span class="cp-unchanged">{{if .NewType}}{{.NewType}}{{else if .CurrentType}}{{.CurrentType}}{{else}}<em>none</em>{{end}}</span>
+        {{end}}
+      </td>
+      <td>
+        {{if .StatusChanged}}
+          <span class="cp-old">{{if .CurrentStatus}}{{.CurrentStatus}}{{else}}<em>none</em>{{end}}</span>
+          <span class="cp-arrow">&rarr;</span>
+          <span class="cp-new">{{.NewStatus}}</span>
+        {{else}}
+          <span class="cp-unchanged">{{if .NewStatus}}{{.NewStatus}}{{else if .CurrentStatus}}{{.CurrentStatus}}{{else}}—{{end}}</span>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{if gt .Total 50}}
+<p class="cp-truncated">Showing first 50 of {{.Total}} sessions.</p>
+{{end}}
+{{else}}
+<p class="cp-empty">No sessions found for this project. Make sure the project name matches a remote URL display name or project path.</p>
+{{end}}
+{{end}}

@@ -21,27 +21,46 @@ const configFileName = "config.json"
 
 // configData is the JSON-serializable configuration structure.
 type configData struct {
-	StorageMode string                           `json:"storage_mode"`
-	Providers   []string                         `json:"providers"`
-	Secrets     secrets                          `json:"secrets"`
-	Summarize   summarize                        `json:"summarize"`
-	Pricing     pricing                          `json:"pricing"`
-	LLM         llmConf                          `json:"llm"`
-	Analysis    analysisConf                     `json:"analysis"`
-	Tagging     taggingConf                      `json:"tagging"`
-	Project     projectConf                      `json:"project"`
-	Projects    map[string]ProjectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
-	Search      searchConf                       `json:"search"`
-	Webhooks    webhooksConf                     `json:"webhooks"`
-	Dashboard   dashboardConf                    `json:"dashboard"`
-	Server      serverConf                       `json:"server"`
-	Database    databaseConf                     `json:"database"`
-	Scheduler   schedulerConf                    `json:"scheduler"`
-	Errors      errorsConf                       `json:"errors"`
-	Features    featuresConf                     `json:"features"`
-	Telemetry   telemetryConf                    `json:"telemetry"`
-	Version     int                              `json:"version"`
-	AutoCapture bool                             `json:"auto_capture"`
+	StorageMode  string                           `json:"storage_mode"`
+	Providers    []string                         `json:"providers"`
+	Secrets      secrets                          `json:"secrets"`
+	Summarize    summarize                        `json:"summarize"`
+	Pricing      pricing                          `json:"pricing"`
+	LLM          llmConf                          `json:"llm"`
+	Analysis     analysisConf                     `json:"analysis"`
+	Tagging      taggingConf                      `json:"tagging"`
+	Project      projectConf                      `json:"project"`
+	Projects     map[string]ProjectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
+	Search       searchConf                       `json:"search"`
+	Webhooks     webhooksConf                     `json:"webhooks"`
+	Dashboard    dashboardConf                    `json:"dashboard"`
+	Server       serverConf                       `json:"server"`
+	Database     databaseConf                     `json:"database"`
+	Scheduler    schedulerConf                    `json:"scheduler"`
+	Errors       errorsConf                       `json:"errors"`
+	Features     featuresConf                     `json:"features"`
+	GitHub       githubConf                       `json:"github,omitempty"`
+	Owners       ownersConf                       `json:"owners,omitempty"`
+	Notification notificationConf                 `json:"notification,omitempty"`
+	Tools        toolsConf                        `json:"tools,omitempty"`
+	Telemetry    telemetryConf                    `json:"telemetry"`
+	Version      int                              `json:"version"`
+	AutoCapture  bool                             `json:"auto_capture"`
+}
+
+// githubConf holds configuration for GitHub integration.
+type githubConf struct {
+	// Token is a GitHub Personal Access Token for API access.
+	// If empty, the integration falls back to `gh` CLI authentication.
+	Token string `json:"token,omitempty"`
+	// DefaultOwner is the default repository owner (org or user) for PR lookups.
+	DefaultOwner string `json:"default_owner,omitempty"`
+	// DefaultRepo is the default repository name for PR lookups.
+	DefaultRepo string `json:"default_repo,omitempty"`
+	// SyncEnabled enables periodic PR synchronization.
+	SyncEnabled bool `json:"sync_enabled,omitempty"`
+	// SyncCron is the cron schedule for PR sync (default: every 30 min).
+	SyncCron string `json:"sync_cron,omitempty"`
 }
 
 // errorsConf holds configuration for error classification and LLM reclassification.
@@ -202,6 +221,13 @@ type ProjectClassifierConf struct {
 
 	// Budget defines spending limits for this project.
 	Budget *ProjectBudgetConf `json:"budget,omitempty"`
+
+	// Git & Platform settings
+	DefaultBranch string `json:"default_branch,omitempty"` // reference branch (main, dev, master)
+	PREnabled     bool   `json:"pr_enabled,omitempty"`     // enable PR sync for this project
+	GitRemote     string `json:"git_remote,omitempty"`     // normalized remote URL (github.com/org/repo)
+	Platform      string `json:"platform,omitempty"`       // "github", "gitlab", "" (auto from remote)
+	ProjectPath   string `json:"project_path,omitempty"`   // local filesystem path to the repo
 }
 
 // DefaultCommitRules maps Conventional Commit prefixes to session types.
@@ -290,9 +316,10 @@ type databaseConf struct {
 
 // schedulerConf holds configuration for all scheduled tasks.
 type schedulerConf struct {
-	GC          schedulerTaskConf `json:"gc"`
-	CaptureAll  schedulerTaskConf `json:"capture_all"`
-	StatsReport schedulerTaskConf `json:"stats_report"`
+	GC           schedulerTaskConf `json:"gc"`
+	CaptureAll   schedulerTaskConf `json:"capture_all"`
+	StatsReport  schedulerTaskConf `json:"stats_report"`
+	RegistryScan schedulerTaskConf `json:"registry_scan"`
 }
 
 // searchConf configures the search engine.
@@ -336,6 +363,82 @@ type schedulerTaskConf struct {
 // telemetryConf holds opt-in anonymous usage statistics configuration.
 type telemetryConf struct {
 	Enabled bool `json:"enabled"`
+}
+
+// ownersConf configures owner identity and machine account detection.
+type ownersConf struct {
+	// MachinePatterns is a list of email glob patterns that identify machine/bot accounts.
+	// Patterns support * as a wildcard. Examples: "*[bot]@*", "ci@*", "dependabot*"
+	MachinePatterns []string `json:"machine_patterns,omitempty"`
+}
+
+// toolsConf configures tool classification and MCP server detection.
+type toolsConf struct {
+	// MCPPrefixes is a list of extra tool-name prefix → MCP server mappings.
+	// These are used by ClassifyTool to identify OpenCode-style MCP tool names
+	// beyond the built-in defaults (e.g. {"prefix": "myserver_", "server": "myserver"}).
+	MCPPrefixes []mcpPrefixConf `json:"mcp_prefixes,omitempty"`
+}
+
+// mcpPrefixConf maps a tool name prefix to an MCP server name in config.
+type mcpPrefixConf struct {
+	Prefix string `json:"prefix"`
+	Server string `json:"server"`
+}
+
+// notificationConf configures the notification system (Slack, webhooks, email).
+// The notification system is channel-agnostic; Slack is just one adapter.
+type notificationConf struct {
+	// Slack adapter configuration.
+	Slack slackNotifConf `json:"slack,omitempty"`
+
+	// Webhook adapter configuration (generic HTTP POST, separate from legacy webhooks).
+	Webhook webhookNotifConf `json:"webhook,omitempty"`
+
+	// Routing: default channel, project overrides, alert/digest toggles.
+	DefaultChannel  string            `json:"default_channel,omitempty"`  // e.g. "#ai-sessions"
+	ProjectChannels map[string]string `json:"project_channels,omitempty"` // project → channel
+
+	// Alert toggles (real-time)
+	AlertBudget  bool `json:"alert_budget,omitempty"`  // budget threshold alerts
+	AlertErrors  bool `json:"alert_errors,omitempty"`  // error spike alerts
+	AlertCapture bool `json:"alert_capture,omitempty"` // session captured (usually noisy)
+
+	// Error spike thresholds
+	ErrorThreshold  int `json:"error_threshold,omitempty"`   // errors to trigger spike alert (default: 10)
+	ErrorWindowMins int `json:"error_window_mins,omitempty"` // time window in minutes (default: 60)
+
+	// Digest toggles (scheduled)
+	DigestDaily    bool `json:"digest_daily,omitempty"`    // daily digest to channel
+	DigestWeekly   bool `json:"digest_weekly,omitempty"`   // weekly report to channel
+	DigestPersonal bool `json:"digest_personal,omitempty"` // personal DM (requires bot mode)
+
+	// Digest schedules (cron expressions)
+	DailyDigestCron  string `json:"daily_digest_cron,omitempty"`  // default: "0 9 * * 1-5" (9 AM weekdays)
+	WeeklyReportCron string `json:"weekly_report_cron,omitempty"` // default: "0 9 * * 1" (9 AM Monday)
+
+	// DashboardURL is the base URL for "View in dashboard" links in notifications.
+	// If empty, links are omitted.
+	DashboardURL string `json:"dashboard_url,omitempty"` // e.g. "http://localhost:8371"
+}
+
+// slackNotifConf configures the Slack notification adapter.
+type slackNotifConf struct {
+	// WebhookURL is an Incoming Webhook URL for simple channel posting.
+	WebhookURL string `json:"webhook_url,omitempty"`
+
+	// BotToken is a Slack Bot User OAuth Token (xoxb-...) for bot mode.
+	// Bot mode enables DMs and multi-channel posting.
+	BotToken string `json:"bot_token,omitempty"`
+}
+
+// webhookNotifConf configures the generic webhook notification adapter.
+type webhookNotifConf struct {
+	// URL is the target webhook URL for HTTP POST.
+	URL string `json:"url,omitempty"`
+
+	// Secret is an optional shared secret for HMAC signatures (future).
+	Secret string `json:"secret,omitempty"`
 }
 
 type dashboardConf struct {
@@ -383,6 +486,17 @@ func defaultConfig() configData {
 		},
 		Errors: errorsConf{
 			Classifier: "deterministic",
+		},
+		Owners: ownersConf{
+			MachinePatterns: []string{
+				"*[bot]@*",
+				"ci@*",
+				"bot@*",
+				"automation@*",
+				"dependabot*",
+				"renovate*",
+				"github-actions*",
+			},
 		},
 	}
 }
@@ -585,6 +699,73 @@ func (c *Config) loadFrom(dir string) error {
 	// Features — bools always take the loaded value
 	c.data.Features.FileBlame = loaded.Features.FileBlame
 
+	// GitHub
+	if loaded.GitHub.Token != "" {
+		c.data.GitHub.Token = loaded.GitHub.Token
+	}
+	if loaded.GitHub.DefaultOwner != "" {
+		c.data.GitHub.DefaultOwner = loaded.GitHub.DefaultOwner
+	}
+	if loaded.GitHub.DefaultRepo != "" {
+		c.data.GitHub.DefaultRepo = loaded.GitHub.DefaultRepo
+	}
+	c.data.GitHub.SyncEnabled = loaded.GitHub.SyncEnabled
+	if loaded.GitHub.SyncCron != "" {
+		c.data.GitHub.SyncCron = loaded.GitHub.SyncCron
+	}
+
+	// Owners — merge machine patterns
+	if len(loaded.Owners.MachinePatterns) > 0 {
+		c.data.Owners.MachinePatterns = loaded.Owners.MachinePatterns
+	}
+
+	// Notification — merge all notification config fields
+	if loaded.Notification.Slack.WebhookURL != "" {
+		c.data.Notification.Slack.WebhookURL = loaded.Notification.Slack.WebhookURL
+	}
+	if loaded.Notification.Slack.BotToken != "" {
+		c.data.Notification.Slack.BotToken = loaded.Notification.Slack.BotToken
+	}
+	if loaded.Notification.Webhook.URL != "" {
+		c.data.Notification.Webhook.URL = loaded.Notification.Webhook.URL
+	}
+	if loaded.Notification.Webhook.Secret != "" {
+		c.data.Notification.Webhook.Secret = loaded.Notification.Webhook.Secret
+	}
+	if loaded.Notification.DefaultChannel != "" {
+		c.data.Notification.DefaultChannel = loaded.Notification.DefaultChannel
+	}
+	if len(loaded.Notification.ProjectChannels) > 0 {
+		if c.data.Notification.ProjectChannels == nil {
+			c.data.Notification.ProjectChannels = make(map[string]string)
+		}
+		for k, v := range loaded.Notification.ProjectChannels {
+			c.data.Notification.ProjectChannels[k] = v
+		}
+	}
+	// Bools — always take loaded value
+	c.data.Notification.AlertBudget = loaded.Notification.AlertBudget
+	c.data.Notification.AlertErrors = loaded.Notification.AlertErrors
+	c.data.Notification.AlertCapture = loaded.Notification.AlertCapture
+	c.data.Notification.DigestDaily = loaded.Notification.DigestDaily
+	c.data.Notification.DigestWeekly = loaded.Notification.DigestWeekly
+	c.data.Notification.DigestPersonal = loaded.Notification.DigestPersonal
+	if loaded.Notification.ErrorThreshold > 0 {
+		c.data.Notification.ErrorThreshold = loaded.Notification.ErrorThreshold
+	}
+	if loaded.Notification.ErrorWindowMins > 0 {
+		c.data.Notification.ErrorWindowMins = loaded.Notification.ErrorWindowMins
+	}
+	if loaded.Notification.DailyDigestCron != "" {
+		c.data.Notification.DailyDigestCron = loaded.Notification.DailyDigestCron
+	}
+	if loaded.Notification.WeeklyReportCron != "" {
+		c.data.Notification.WeeklyReportCron = loaded.Notification.WeeklyReportCron
+	}
+	if loaded.Notification.DashboardURL != "" {
+		c.data.Notification.DashboardURL = loaded.Notification.DashboardURL
+	}
+
 	return nil
 }
 
@@ -704,6 +885,10 @@ func (c *Config) Get(key string) (string, error) {
 		return fmt.Sprintf("%v", c.data.Scheduler.StatsReport.Enabled), nil
 	case "scheduler.stats_report.cron":
 		return c.data.Scheduler.StatsReport.Cron, nil
+	case "scheduler.registry_scan.enabled":
+		return fmt.Sprintf("%v", c.data.Scheduler.RegistryScan.Enabled), nil
+	case "scheduler.registry_scan.cron":
+		return c.data.Scheduler.RegistryScan.Cron, nil
 
 	// Telemetry
 	case "telemetry.enabled":
@@ -711,6 +896,67 @@ func (c *Config) Get(key string) (string, error) {
 			return "true", nil
 		}
 		return "false", nil
+
+	// GitHub
+	case "github.token":
+		if t := c.data.GitHub.Token; t != "" {
+			return "****" + t[max(0, len(t)-4):], nil // mask for display
+		}
+		return "", nil
+	case "github.default_owner":
+		return c.data.GitHub.DefaultOwner, nil
+	case "github.default_repo":
+		return c.data.GitHub.DefaultRepo, nil
+	case "github.sync_enabled":
+		return fmt.Sprintf("%v", c.data.GitHub.SyncEnabled), nil
+	case "github.sync_cron":
+		return c.data.GitHub.SyncCron, nil
+
+	// ── Notification ──
+	case "notification.slack.webhook_url":
+		u := c.data.Notification.Slack.WebhookURL
+		if u != "" {
+			return "****" + u[max(0, len(u)-8):], nil
+		}
+		return "", nil
+	case "notification.slack.bot_token":
+		t := c.data.Notification.Slack.BotToken
+		if t != "" {
+			return "****" + t[max(0, len(t)-4):], nil
+		}
+		return "", nil
+	case "notification.webhook.url":
+		return c.data.Notification.Webhook.URL, nil
+	case "notification.webhook.secret":
+		s := c.data.Notification.Webhook.Secret
+		if s != "" {
+			return "****" + s[max(0, len(s)-4):], nil
+		}
+		return "", nil
+	case "notification.default_channel":
+		return c.data.Notification.DefaultChannel, nil
+	case "notification.alert_budget":
+		return fmt.Sprintf("%v", c.data.Notification.AlertBudget), nil
+	case "notification.alert_errors":
+		return fmt.Sprintf("%v", c.data.Notification.AlertErrors), nil
+	case "notification.alert_capture":
+		return fmt.Sprintf("%v", c.data.Notification.AlertCapture), nil
+	case "notification.error_threshold":
+		return fmt.Sprintf("%d", c.GetNotificationErrorThreshold()), nil
+	case "notification.error_window_mins":
+		return fmt.Sprintf("%d", c.GetNotificationErrorWindowMins()), nil
+	case "notification.digest_daily":
+		return fmt.Sprintf("%v", c.data.Notification.DigestDaily), nil
+	case "notification.digest_weekly":
+		return fmt.Sprintf("%v", c.data.Notification.DigestWeekly), nil
+	case "notification.digest_personal":
+		return fmt.Sprintf("%v", c.data.Notification.DigestPersonal), nil
+	case "notification.daily_digest_cron":
+		return c.GetNotificationDailyDigestCron(), nil
+	case "notification.weekly_report_cron":
+		return c.GetNotificationWeeklyReportCron(), nil
+	case "notification.dashboard_url":
+		return c.data.Notification.DashboardURL, nil
 
 	default:
 		// Dynamic keys: llm.providers.<name>.<field>, llm.profiles.<name>.<field>
@@ -966,10 +1212,86 @@ func (c *Config) Set(key string, value string) error {
 			return fmt.Errorf("invalid scheduler.stats_report.cron %q: %w", value, err)
 		}
 		c.data.Scheduler.StatsReport.Cron = value
+	case "scheduler.registry_scan.enabled":
+		c.data.Scheduler.RegistryScan.Enabled = value == "true"
+	case "scheduler.registry_scan.cron":
+		if err := validateCronExpr(value); err != nil {
+			return fmt.Errorf("invalid scheduler.registry_scan.cron %q: %w", value, err)
+		}
+		c.data.Scheduler.RegistryScan.Cron = value
 
 	// Telemetry
 	case "telemetry.enabled":
 		c.data.Telemetry.Enabled = value == "true"
+
+	// GitHub
+	case "github.token":
+		c.data.GitHub.Token = value
+	case "github.default_owner":
+		c.data.GitHub.DefaultOwner = value
+	case "github.default_repo":
+		c.data.GitHub.DefaultRepo = value
+	case "github.sync_enabled":
+		c.data.GitHub.SyncEnabled = value == "true"
+	case "github.sync_cron":
+		if value != "" {
+			if err := validateCronExpr(value); err != nil {
+				return fmt.Errorf("invalid github.sync_cron %q: %w", value, err)
+			}
+		}
+		c.data.GitHub.SyncCron = value
+
+	// ── Notification settings ──
+	case "notification.slack.webhook_url":
+		c.data.Notification.Slack.WebhookURL = value
+	case "notification.slack.bot_token":
+		c.data.Notification.Slack.BotToken = value
+	case "notification.webhook.url":
+		c.data.Notification.Webhook.URL = value
+	case "notification.webhook.secret":
+		c.data.Notification.Webhook.Secret = value
+	case "notification.default_channel":
+		c.data.Notification.DefaultChannel = value
+	case "notification.alert_budget":
+		c.data.Notification.AlertBudget = value == "true"
+	case "notification.alert_errors":
+		c.data.Notification.AlertErrors = value == "true"
+	case "notification.alert_capture":
+		c.data.Notification.AlertCapture = value == "true"
+	case "notification.error_threshold":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 1 {
+			return fmt.Errorf("notification.error_threshold must be a positive integer, got %q", value)
+		}
+		c.data.Notification.ErrorThreshold = v
+	case "notification.error_window_mins":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 1 {
+			return fmt.Errorf("notification.error_window_mins must be a positive integer, got %q", value)
+		}
+		c.data.Notification.ErrorWindowMins = v
+	case "notification.digest_daily":
+		c.data.Notification.DigestDaily = value == "true"
+	case "notification.digest_weekly":
+		c.data.Notification.DigestWeekly = value == "true"
+	case "notification.digest_personal":
+		c.data.Notification.DigestPersonal = value == "true"
+	case "notification.daily_digest_cron":
+		if value != "" {
+			if err := validateCronExpr(value); err != nil {
+				return fmt.Errorf("invalid notification.daily_digest_cron %q: %w", value, err)
+			}
+		}
+		c.data.Notification.DailyDigestCron = value
+	case "notification.weekly_report_cron":
+		if value != "" {
+			if err := validateCronExpr(value); err != nil {
+				return fmt.Errorf("invalid notification.weekly_report_cron %q: %w", value, err)
+			}
+		}
+		c.data.Notification.WeeklyReportCron = value
+	case "notification.dashboard_url":
+		c.data.Notification.DashboardURL = value
 
 	default:
 		// Dynamic keys: llm.providers.<name>.<field>, llm.profiles.<name>.<field>
@@ -1412,6 +1734,22 @@ func (c *Config) GetSearchMaxContentLength() int {
 	return 50000
 }
 
+// GetElasticsearchURL returns the Elasticsearch URL. Default: "http://localhost:9200".
+func (c *Config) GetElasticsearchURL() string {
+	if c.data.Search.Elasticsearch.URL != "" {
+		return c.data.Search.Elasticsearch.URL
+	}
+	return "http://localhost:9200"
+}
+
+// GetElasticsearchIndex returns the Elasticsearch index name. Default: "aisync-sessions".
+func (c *Config) GetElasticsearchIndex() string {
+	if c.data.Search.Elasticsearch.Index != "" {
+		return c.data.Search.Elasticsearch.Index
+	}
+	return "aisync-sessions"
+}
+
 // IsFileBlameEnabled returns whether file-level blame extraction is enabled.
 // This is opt-in: set features.file_blame: true in config.json.
 func (c *Config) IsFileBlameEnabled() bool {
@@ -1462,6 +1800,20 @@ func (c *Config) GetSchedulerStatsReportCron() string {
 		return "0 * * * *"
 	}
 	return c.data.Scheduler.StatsReport.Cron
+}
+
+// GetSchedulerRegistryScanEnabled returns whether the registry scan task is enabled.
+func (c *Config) GetSchedulerRegistryScanEnabled() bool {
+	return c.data.Scheduler.RegistryScan.Enabled
+}
+
+// GetSchedulerRegistryScanCron returns the cron expression for the registry scan task.
+// Returns the default "30 3 * * *" (daily at 3:30 AM) if not configured.
+func (c *Config) GetSchedulerRegistryScanCron() string {
+	if c.data.Scheduler.RegistryScan.Cron == "" {
+		return "30 3 * * *"
+	}
+	return c.data.Scheduler.RegistryScan.Cron
 }
 
 // validateCronExpr validates a 5-field cron expression using robfig/cron/v3 parser.
@@ -1535,7 +1887,7 @@ func (c *Config) GetProjectClassifier(remoteURL, projectPath string) *ProjectCla
 	}
 
 	// Extract display name from remote URL (e.g. "git@github.com:Omogen-ai/backend.git" → "Omogen-ai/backend")
-	displayName := remoteDisplayName(remoteURL)
+	displayName := RemoteDisplayName(remoteURL)
 
 	// Try exact match on display name, remote URL, project path, or basename.
 	candidates := []string{displayName, remoteURL, projectPath}
@@ -1554,8 +1906,9 @@ func (c *Config) GetProjectClassifier(remoteURL, projectPath string) *ProjectCla
 	return nil
 }
 
-// remoteDisplayName extracts "org/repo" from a git remote URL.
-func remoteDisplayName(raw string) string {
+// RemoteDisplayName extracts "org/repo" from a git remote URL.
+// Exported for use by the web preview handler to match sessions to projects.
+func RemoteDisplayName(raw string) string {
 	// git@github.com:Org/Repo.git → Org/Repo
 	if idx := strings.Index(raw, ":"); idx >= 0 && strings.Contains(raw[:idx], "@") {
 		name := raw[idx+1:]
@@ -1668,6 +2021,181 @@ func (c *Config) DeleteProjectClassifier(name string) error {
 	}
 	delete(c.data.Projects, name)
 	return nil
+}
+
+// GetGitHubToken returns the GitHub PAT for API access.
+func (c *Config) GetGitHubToken() string {
+	return c.data.GitHub.Token
+}
+
+// GetGitHubDefaultOwner returns the default GitHub repo owner.
+func (c *Config) GetGitHubDefaultOwner() string {
+	return c.data.GitHub.DefaultOwner
+}
+
+// GetGitHubDefaultRepo returns the default GitHub repo name.
+func (c *Config) GetGitHubDefaultRepo() string {
+	return c.data.GitHub.DefaultRepo
+}
+
+// IsGitHubSyncEnabled returns whether periodic PR sync is enabled.
+func (c *Config) IsGitHubSyncEnabled() bool {
+	return c.data.GitHub.SyncEnabled
+}
+
+// GetGitHubSyncCron returns the cron schedule for PR sync.
+func (c *Config) GetGitHubSyncCron() string {
+	if c.data.GitHub.SyncCron != "" {
+		return c.data.GitHub.SyncCron
+	}
+	return "*/30 * * * *" // default: every 30 minutes
+}
+
+// ── Owners ──
+
+// GetMachinePatterns returns the list of email glob patterns that identify machine accounts.
+// Returns the built-in defaults if none are configured.
+func (c *Config) GetMachinePatterns() []string {
+	return c.data.Owners.MachinePatterns
+}
+
+// ── Tools ──
+
+// GetMCPPrefixes returns the user-configured MCP tool name prefix mappings.
+// These are loaded from config.json "tools.mcp_prefixes" and merged with
+// auto-discovered prefixes at startup.
+func (c *Config) GetMCPPrefixes() []session.MCPPrefix {
+	prefixes := make([]session.MCPPrefix, 0, len(c.data.Tools.MCPPrefixes))
+	for _, p := range c.data.Tools.MCPPrefixes {
+		if p.Prefix != "" && p.Server != "" {
+			prefixes = append(prefixes, session.MCPPrefix{Prefix: p.Prefix, Server: p.Server})
+		}
+	}
+	return prefixes
+}
+
+// ── Notification Getters ──
+
+// GetNotificationSlackWebhookURL returns the Slack webhook URL for notifications.
+func (c *Config) GetNotificationSlackWebhookURL() string {
+	return c.data.Notification.Slack.WebhookURL
+}
+
+// GetNotificationSlackBotToken returns the Slack bot token for notifications.
+func (c *Config) GetNotificationSlackBotToken() string {
+	return c.data.Notification.Slack.BotToken
+}
+
+// GetNotificationWebhookURL returns the generic webhook URL for notifications.
+func (c *Config) GetNotificationWebhookURL() string {
+	return c.data.Notification.Webhook.URL
+}
+
+// GetNotificationWebhookSecret returns the generic webhook shared secret.
+func (c *Config) GetNotificationWebhookSecret() string {
+	return c.data.Notification.Webhook.Secret
+}
+
+// GetNotificationDefaultChannel returns the default notification channel (e.g. "#ai-sessions").
+func (c *Config) GetNotificationDefaultChannel() string {
+	return c.data.Notification.DefaultChannel
+}
+
+// GetNotificationProjectChannels returns per-project channel overrides.
+func (c *Config) GetNotificationProjectChannels() map[string]string {
+	return c.data.Notification.ProjectChannels
+}
+
+// SetNotificationProjectChannel sets (or removes) the notification channel override for a project.
+// Pass an empty channel to remove the override.
+func (c *Config) SetNotificationProjectChannel(project, channel string) {
+	if channel == "" {
+		// Remove override if it exists.
+		delete(c.data.Notification.ProjectChannels, project)
+		return
+	}
+	if c.data.Notification.ProjectChannels == nil {
+		c.data.Notification.ProjectChannels = make(map[string]string)
+	}
+	c.data.Notification.ProjectChannels[project] = channel
+}
+
+// IsNotificationAlertBudgetEnabled returns whether budget alerts are enabled.
+func (c *Config) IsNotificationAlertBudgetEnabled() bool {
+	return c.data.Notification.AlertBudget
+}
+
+// IsNotificationAlertErrorsEnabled returns whether error spike alerts are enabled.
+func (c *Config) IsNotificationAlertErrorsEnabled() bool {
+	return c.data.Notification.AlertErrors
+}
+
+// IsNotificationAlertCaptureEnabled returns whether session-captured alerts are enabled.
+func (c *Config) IsNotificationAlertCaptureEnabled() bool {
+	return c.data.Notification.AlertCapture
+}
+
+// GetNotificationErrorThreshold returns the error count threshold for spike alerts.
+// Default: 10.
+func (c *Config) GetNotificationErrorThreshold() int {
+	if c.data.Notification.ErrorThreshold <= 0 {
+		return 10
+	}
+	return c.data.Notification.ErrorThreshold
+}
+
+// GetNotificationErrorWindowMins returns the time window for error spike detection.
+// Default: 60.
+func (c *Config) GetNotificationErrorWindowMins() int {
+	if c.data.Notification.ErrorWindowMins <= 0 {
+		return 60
+	}
+	return c.data.Notification.ErrorWindowMins
+}
+
+// IsNotificationDigestDailyEnabled returns whether daily digests are enabled.
+func (c *Config) IsNotificationDigestDailyEnabled() bool {
+	return c.data.Notification.DigestDaily
+}
+
+// IsNotificationDigestWeeklyEnabled returns whether weekly reports are enabled.
+func (c *Config) IsNotificationDigestWeeklyEnabled() bool {
+	return c.data.Notification.DigestWeekly
+}
+
+// IsNotificationDigestPersonalEnabled returns whether personal DMs are enabled.
+func (c *Config) IsNotificationDigestPersonalEnabled() bool {
+	return c.data.Notification.DigestPersonal
+}
+
+// GetNotificationDailyDigestCron returns the cron schedule for daily digests.
+// Default: "0 9 * * 1-5" (9 AM weekdays).
+func (c *Config) GetNotificationDailyDigestCron() string {
+	if c.data.Notification.DailyDigestCron == "" {
+		return "0 9 * * 1-5"
+	}
+	return c.data.Notification.DailyDigestCron
+}
+
+// GetNotificationWeeklyReportCron returns the cron schedule for weekly reports.
+// Default: "0 9 * * 1" (9 AM Monday).
+func (c *Config) GetNotificationWeeklyReportCron() string {
+	if c.data.Notification.WeeklyReportCron == "" {
+		return "0 9 * * 1"
+	}
+	return c.data.Notification.WeeklyReportCron
+}
+
+// GetNotificationDashboardURL returns the base URL for "View in Dashboard" links.
+func (c *Config) GetNotificationDashboardURL() string {
+	return c.data.Notification.DashboardURL
+}
+
+// IsNotificationEnabled returns true if at least one notification channel is configured.
+func (c *Config) IsNotificationEnabled() bool {
+	return c.data.Notification.Slack.WebhookURL != "" ||
+		c.data.Notification.Slack.BotToken != "" ||
+		c.data.Notification.Webhook.URL != ""
 }
 
 // AddCustomPattern adds a custom secret pattern in "NAME REGEX" format.

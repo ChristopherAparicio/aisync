@@ -142,5 +142,98 @@ func TestJsonEscape(t *testing.T) {
 	}
 }
 
+func TestExtractRepoFromURL(t *testing.T) {
+	tests := []struct {
+		url       string
+		wantOwner string
+		wantRepo  string
+	}{
+		{
+			url:       "https://github.com/org/repo/pull/42",
+			wantOwner: "org",
+			wantRepo:  "repo",
+		},
+		{
+			url:       "https://github.com/ChristopherAparicio/aisync/pull/1",
+			wantOwner: "ChristopherAparicio",
+			wantRepo:  "aisync",
+		},
+		{
+			url:       "https://github.com/owner/repo",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+		},
+		{
+			url:       "not-a-url",
+			wantOwner: "",
+			wantRepo:  "",
+		},
+		{
+			url:       "",
+			wantOwner: "",
+			wantRepo:  "",
+		},
+		{
+			url:       "https://gitlab.com/org/repo/merge_requests/1",
+			wantOwner: "",
+			wantRepo:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			owner, repo := extractRepoFromURL(tt.url)
+			if owner != tt.wantOwner {
+				t.Errorf("owner = %q, want %q", owner, tt.wantOwner)
+			}
+			if repo != tt.wantRepo {
+				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
+			}
+		})
+	}
+}
+
+func TestGhPR_toDomain_EnrichedFields(t *testing.T) {
+	now := time.Date(2026, 2, 17, 10, 0, 0, 0, time.UTC)
+	merged := now.Add(2 * time.Hour)
+
+	pr := ghPR{
+		Number:      99,
+		Title:       "Big refactor",
+		HeadRefName: "refactor/core",
+		BaseRefName: "main",
+		State:       "MERGED",
+		URL:         "https://github.com/acme/app/pull/99",
+		Author:      ghAuthor{Login: "dev"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		MergedAt:    merged,
+		Additions:   150,
+		Deletions:   42,
+		Comments:    make([]json.RawMessage, 7), // 7 comment objects
+	}
+
+	result := pr.toDomain()
+
+	if result.State != "merged" {
+		t.Errorf("State = %q, want %q", result.State, "merged")
+	}
+	// RepoOwner/RepoName are set by the public methods (GetPR, ListRecentPRs)
+	// after calling toDomain() + extractRepoFromURL. toDomain() itself doesn't set them.
+	// We test extractRepoFromURL separately above.
+	if result.Additions != 150 {
+		t.Errorf("Additions = %d, want 150", result.Additions)
+	}
+	if result.Deletions != 42 {
+		t.Errorf("Deletions = %d, want 42", result.Deletions)
+	}
+	if result.Comments != 7 {
+		t.Errorf("Comments = %d, want 7", result.Comments)
+	}
+	if result.MergedAt.IsZero() {
+		t.Error("MergedAt is zero, expected non-zero")
+	}
+}
+
 // Client is a concrete type that implements the Platform operations for GitHub.
 // No compile-time interface check — there is no central Platform interface.

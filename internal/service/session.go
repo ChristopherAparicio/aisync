@@ -55,6 +55,21 @@ func (s *SessionService) RunPostCapture(sess *session.Session) {
 	}
 }
 
+// stampCosts computes and sets the denormalized cost fields on a session
+// so they are persisted as columns in the sessions table by Store.Save().
+// EstimatedCost = API-equivalent cost from token rates (requires pricing calculator).
+// ActualCost = sum of provider-reported per-message costs (always computable).
+func (s *SessionService) stampCosts(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	if s.pricing != nil {
+		est := s.pricing.SessionCost(sess)
+		sess.EstimatedCost = est.TotalCost.TotalCost
+		sess.ActualCost = est.Breakdown.ActualCost.TotalCost
+	}
+}
+
 // SessionServiceConfig holds all dependencies for creating a SessionService.
 type SessionServiceConfig struct {
 	Store        storage.Store
@@ -97,6 +112,8 @@ func NewSessionService(cfg SessionServiceConfig) *SessionService {
 
 // resolveOwner detects the current user from git config and ensures they exist
 // in the store. Returns the user ID, or empty if the identity cannot be determined.
+// When creating a new user, classifies them as human/machine/unknown based on
+// configured email patterns.
 func (s *SessionService) resolveOwner() session.ID {
 	if s.git == nil {
 		return ""
@@ -113,17 +130,26 @@ func (s *SessionService) resolveOwner() session.ID {
 		return existing.ID
 	}
 
-	// Create a new user
+	// Create a new user with kind classification
 	name := s.git.UserName()
 	if name == "" {
 		name = email // fallback to email as name
 	}
+
+	// Classify the user kind from email patterns
+	var patterns []string
+	if s.cfg != nil {
+		patterns = s.cfg.GetMachinePatterns()
+	}
+	kind := ClassifyUserKind(email, patterns)
 
 	user := &session.User{
 		ID:     session.NewID(),
 		Name:   name,
 		Email:  email,
 		Source: "git",
+		Kind:   kind,
+		Role:   session.UserRoleMember,
 	}
 
 	if saveErr := s.store.SaveUser(user); saveErr != nil {

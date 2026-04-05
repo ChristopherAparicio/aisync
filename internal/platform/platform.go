@@ -19,6 +19,10 @@ type Platform interface {
 	// ListPRsForBranch returns all PRs (open, closed, merged) for a branch.
 	ListPRsForBranch(branch string) ([]session.PullRequest, error)
 
+	// ListRecentPRs returns recent PRs for the repository.
+	// State can be "open", "closed", "merged", or "all" (empty = "all").
+	ListRecentPRs(state string, limit int) ([]session.PullRequest, error)
+
 	// AddComment posts a comment on a PR.
 	AddComment(prNumber int, body string) error
 

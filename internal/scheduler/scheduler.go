@@ -40,6 +40,9 @@ type Scheduler struct {
 	running bool
 	cancel  context.CancelFunc
 
+	// tasks maps task names to their implementations (for WarmUp lookups).
+	tasks map[string]Task
+
 	// results tracks the last execution of each task (for status reporting).
 	results map[string]*TaskResult
 }
@@ -71,6 +74,7 @@ func New(cfg Config) (*Scheduler, error) {
 			cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
 		))),
 		logger:  logger,
+		tasks:   make(map[string]Task),
 		results: make(map[string]*TaskResult),
 	}
 
@@ -88,10 +92,34 @@ func New(cfg Config) (*Scheduler, error) {
 			return nil, fmt.Errorf("invalid schedule %q for task %q: %w", schedule, task.Name(), err)
 		}
 
+		s.tasks[task.Name()] = task
 		logger.Printf("[scheduler] registered task %q with schedule %q", task.Name(), schedule)
 	}
 
 	return s, nil
+}
+
+// WarmUp runs the named tasks immediately in a background goroutine.
+// This is used to pre-warm caches on daemon startup so the first page load
+// does not pay the cold-cache penalty.
+// Tasks that are not found are silently skipped.
+func (s *Scheduler) WarmUp(taskNames ...string) {
+	var toRun []Task
+	for _, name := range taskNames {
+		if t, ok := s.tasks[name]; ok {
+			toRun = append(toRun, t)
+		}
+	}
+	if len(toRun) == 0 {
+		return
+	}
+
+	s.logger.Printf("[scheduler] warming up %d task(s) on startup", len(toRun))
+	go func() {
+		for _, task := range toRun {
+			s.runTask(task)
+		}
+	}()
 }
 
 // Start begins the scheduler. Non-blocking — tasks run in background goroutines.

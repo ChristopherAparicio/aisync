@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -368,6 +369,153 @@ func TestFormatMatches(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScanner_Mask_overlappingMatches(t *testing.T) {
+	// This was causing panic: slice bounds out of range [370:340]
+	// when multiple patterns matched overlapping regions of the same content.
+
+	t.Run("anthropic key matched by both openai and anthropic patterns", func(t *testing.T) {
+		scanner := NewScanner(session.SecretModeMask, nil)
+		// sk-ant-xxx matches both OPENAI_API_KEY (sk-...) and ANTHROPIC_API_KEY (sk-ant-...)
+		input := "my key is sk-ant-abcdefghijklmnopqrstuvwx"
+		result := scanner.Mask(input)
+
+		if strings.Contains(result, "sk-ant") {
+			t.Errorf("secret should be masked, got: %s", result)
+		}
+		if !strings.Contains(result, "***REDACTED:") {
+			t.Errorf("should contain REDACTED placeholder, got: %s", result)
+		}
+	})
+
+	t.Run("generic secret overlapping with specific pattern", func(t *testing.T) {
+		scanner := NewScanner(session.SecretModeMask, nil)
+		// "token= sk-proj123..." can match GENERIC_SECRET and OPENAI_API_KEY
+		input := `token= sk-proj1234567890abcdefghijklmnop`
+		result := scanner.Mask(input)
+
+		if strings.Contains(result, "sk-proj") {
+			t.Errorf("secret should be masked, got: %s", result)
+		}
+		if !strings.Contains(result, "***REDACTED:") {
+			t.Errorf("should contain REDACTED placeholder, got: %s", result)
+		}
+	})
+
+	t.Run("no panic on heavily overlapping patterns", func(t *testing.T) {
+		// Create patterns that will definitely overlap
+		patterns := []Pattern{
+			{Name: "BROAD", Regex: mustCompile(`[a-z]{10,}`)},
+			{Name: "NARROW", Regex: mustCompile(`secret[a-z]{5,}`)},
+		}
+		scanner := NewScanner(session.SecretModeMask, patterns)
+
+		// Should not panic
+		result := scanner.Mask("here is a secretabcdefghijk in text")
+		if strings.Contains(result, "secretabc") {
+			t.Errorf("overlapping secret should be masked, got: %s", result)
+		}
+	})
+}
+
+func TestMergeOverlappingMatches(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   []session.SecretMatch
+		want    int
+		wantEnd int // EndPos of first merged match
+	}{
+		{
+			name:  "empty",
+			input: nil,
+			want:  0,
+		},
+		{
+			name: "single",
+			input: []session.SecretMatch{
+				{Type: "A", StartPos: 0, EndPos: 10},
+			},
+			want: 1,
+		},
+		{
+			name: "no overlap",
+			input: []session.SecretMatch{
+				{Type: "A", StartPos: 0, EndPos: 10},
+				{Type: "B", StartPos: 20, EndPos: 30},
+			},
+			want: 2,
+		},
+		{
+			name: "full overlap same start",
+			input: []session.SecretMatch{
+				{Type: "SHORT", StartPos: 0, EndPos: 20},
+				{Type: "LONGER_TYPE", StartPos: 0, EndPos: 25},
+			},
+			want:    1,
+			wantEnd: 25,
+		},
+		{
+			name: "partial overlap",
+			input: []session.SecretMatch{
+				{Type: "A", StartPos: 0, EndPos: 15},
+				{Type: "BB", StartPos: 10, EndPos: 25},
+			},
+			want:    1,
+			wantEnd: 25,
+		},
+		{
+			name: "three overlapping merged to one",
+			input: []session.SecretMatch{
+				{Type: "A", StartPos: 0, EndPos: 10},
+				{Type: "BB", StartPos: 5, EndPos: 20},
+				{Type: "CCC", StartPos: 15, EndPos: 30},
+			},
+			want:    1,
+			wantEnd: 30,
+		},
+		{
+			name: "adjacent not merged",
+			input: []session.SecretMatch{
+				{Type: "A", StartPos: 0, EndPos: 10},
+				{Type: "B", StartPos: 11, EndPos: 20},
+			},
+			want: 2,
+		},
+		{
+			name: "touching boundary merged",
+			input: []session.SecretMatch{
+				{Type: "A", StartPos: 0, EndPos: 10},
+				{Type: "B", StartPos: 10, EndPos: 20},
+			},
+			want:    1,
+			wantEnd: 20,
+		},
+		{
+			name: "prefers longer type name on overlap",
+			input: []session.SecretMatch{
+				{Type: "SHORT", StartPos: 0, EndPos: 20},
+				{Type: "ANTHROPIC_API_KEY", StartPos: 3, EndPos: 18},
+			},
+			want: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeOverlappingMatches(tt.input)
+			if len(got) != tt.want {
+				t.Errorf("got %d merged matches, want %d", len(got), tt.want)
+			}
+			if tt.wantEnd > 0 && len(got) > 0 && got[0].EndPos != tt.wantEnd {
+				t.Errorf("merged EndPos = %d, want %d", got[0].EndPos, tt.wantEnd)
+			}
+		})
+	}
+}
+
+func mustCompile(pattern string) *regexp.Regexp {
+	return regexp.MustCompile(pattern)
 }
 
 func TestScanner_withCustomPatterns(t *testing.T) {

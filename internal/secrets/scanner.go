@@ -61,16 +61,53 @@ func (s *Scanner) Mask(content string) string {
 		return content
 	}
 
+	// Merge overlapping matches so byte-offset replacements stay valid.
+	// matches are already sorted by StartPos from Scan().
+	merged := mergeOverlappingMatches(matches)
+
 	// Build result by replacing matches from end to start
 	// (so byte offsets stay valid).
 	result := content
-	for i := len(matches) - 1; i >= 0; i-- {
-		m := matches[i]
+	for i := len(merged) - 1; i >= 0; i-- {
+		m := merged[i]
 		replacement := fmt.Sprintf("***REDACTED:%s***", m.Type)
 		result = result[:m.StartPos] + replacement + result[m.EndPos:]
 	}
 
 	return result
+}
+
+// mergeOverlappingMatches collapses overlapping or adjacent matches into
+// single spans. When two matches overlap, the one with the more specific
+// (longer) type name is preferred for the label; ties go to the first match.
+// Input must be sorted by StartPos (Scan guarantees this).
+func mergeOverlappingMatches(matches []session.SecretMatch) []session.SecretMatch {
+	if len(matches) <= 1 {
+		return matches
+	}
+
+	merged := make([]session.SecretMatch, 0, len(matches))
+	cur := matches[0]
+
+	for i := 1; i < len(matches); i++ {
+		next := matches[i]
+		if next.StartPos <= cur.EndPos {
+			// Overlapping or adjacent — extend the span and keep the
+			// more specific type name (longer name = more specific).
+			if next.EndPos > cur.EndPos {
+				cur.EndPos = next.EndPos
+			}
+			if len(next.Type) > len(cur.Type) {
+				cur.Type = next.Type
+			}
+		} else {
+			merged = append(merged, cur)
+			cur = next
+		}
+	}
+	merged = append(merged, cur)
+
+	return merged
 }
 
 // Mode returns the current secret handling mode.

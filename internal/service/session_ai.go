@@ -424,6 +424,7 @@ func (s *SessionService) Rewind(ctx context.Context, req RewindRequest) (*Rewind
 		TotalTokens:  inputTokens + outputTokens,
 	}
 
+	s.stampCosts(rewound)
 	if err := s.store.Save(rewound); err != nil {
 		return nil, fmt.Errorf("saving rewound session: %w", err)
 	}

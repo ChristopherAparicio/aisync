@@ -91,6 +91,11 @@ func New(cfg Config) (*Server, error) {
 		{"templates/analytics_events.html"},
 		{"templates/settings.html"},
 		{"templates/file_explorer.html"},
+		{"templates/blame.html"},
+		{"templates/pulls.html"},
+		{"templates/file_tree.html"},
+		{"templates/team.html"},
+		{"templates/session_graph.html"},
 	}
 
 	pages := make(map[string]*template.Template, len(pageSpecs))
@@ -119,6 +124,10 @@ func New(cfg Config) (*Server, error) {
 		"templates/cost_optimization_partial.html",
 		"templates/cost_treemap_partial.html",
 		"templates/project_classifiers_partial.html",
+		"templates/classification_preview_partial.html",
+		"templates/file_tree_sessions_partial.html",
+		"templates/file_tree_children_partial.html",
+		"templates/session_messages_partial.html",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("parse partials: %w", err)
@@ -170,13 +179,21 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects", s.handleProjects)
 	mux.HandleFunc("GET /projects/{path...}", s.handleProjectDetail)
 	mux.HandleFunc("GET /files/{path...}", s.handleFileExplorer)
+	mux.HandleFunc("GET /tree/{path...}", s.handleFileTree)
+	mux.HandleFunc("GET /blame", s.handleBlame)
+	mux.HandleFunc("GET /pulls", s.handlePulls)
 	mux.HandleFunc("GET /costs", s.handleCosts)
 	mux.HandleFunc("GET /usage", s.handleUsage)
 	mux.HandleFunc("GET /analytics", s.handleAnalytics)
+	mux.HandleFunc("GET /team", s.handleTeam)
+	mux.HandleFunc("GET /graph", s.handleSessionGraph)
 	mux.HandleFunc("GET /settings", s.handleSettings)
 	mux.HandleFunc("POST /api/settings", s.handleSettingsUpdate)
 	mux.HandleFunc("POST /api/settings/project", s.handleProjectClassifierSave)
 	mux.HandleFunc("DELETE /api/settings/project", s.handleProjectClassifierDelete)
+	mux.HandleFunc("POST /api/settings/project/preview", s.handleClassificationPreview)
+	mux.HandleFunc("POST /api/recommendations/dismiss", s.handleRecommendationDismiss)
+	mux.HandleFunc("POST /api/recommendations/snooze", s.handleRecommendationSnooze)
 
 	// HTMX partials
 	mux.HandleFunc("GET /partials/sessions-table", s.handleSessionsTable)
@@ -193,6 +210,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /partials/cost-tools", s.handleCostToolsPartial)
 	mux.HandleFunc("GET /partials/cost-optimization", s.handleCostOptimizationPartial)
 	mux.HandleFunc("GET /partials/cost-treemap", s.handleCostTreemapPartial)
+	mux.HandleFunc("GET /partials/file-sessions", s.handleFileTreeSessions)
+	mux.HandleFunc("GET /partials/file-tree-children", s.handleFileTreeChildren)
+	mux.HandleFunc("GET /partials/session-messages/{id}", s.handleSessionMessagesMore)
 
 	// API endpoints (JSON)
 	mux.HandleFunc("GET /api/projects", s.handleAPIProjects)

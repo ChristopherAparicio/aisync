@@ -237,6 +237,25 @@ function addRuleRow(btn, prefix, phPattern, phType) {
     '<button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button>';
   list.appendChild(row);
 }
+function pcPreview(btn) {
+  var form = btn.closest('form');
+  var target = btn.closest('.pc-preview-section').querySelector('.pc-preview-results');
+  var formData = new FormData(form);
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+  fetch('/api/settings/project/preview', { method: 'POST', body: new URLSearchParams(formData) })
+    .then(function(r) { return r.text(); })
+    .then(function(html) {
+      target.innerHTML = html;
+      btn.disabled = false;
+      btn.textContent = 'Preview Rules';
+    })
+    .catch(function(err) {
+      target.innerHTML = '<span class="text-error">Preview failed: ' + err.message + '</span>';
+      btn.disabled = false;
+      btn.textContent = 'Preview Rules';
+    });
+}
 </script>
 {{end}}
 
@@ -275,6 +294,10 @@ function addRuleRow(btn, prefix, phPattern, phType) {
     <input type="text" name="tags" class="pc-form-input" placeholder="feature, bug, refactor, ..." value="{{.Tags}}">
   </div>
   {{template "pc-rule-fieldsets" .}}
+  <div class="pc-preview-section">
+    <button type="button" class="pc-btn pc-btn--preview" onclick="pcPreview(this)">Preview Rules</button>
+    <div class="pc-preview-results"></div>
+  </div>
   {{template "pc-budget-fieldset" .}}
   <div class="pc-form-actions">
     <button type="submit" class="pc-btn pc-btn--save">Save</button>
@@ -317,6 +340,10 @@ function addRuleRow(btn, prefix, phPattern, phType) {
     <input type="text" name="tags" class="pc-form-input" placeholder="feature, bug, refactor, ...">
   </div>
   {{template "pc-rule-fieldsets-empty" .}}
+  <div class="pc-preview-section">
+    <button type="button" class="pc-btn pc-btn--preview" onclick="pcPreview(this)">Preview Rules</button>
+    <div class="pc-preview-results"></div>
+  </div>
   {{template "pc-budget-fieldset-empty" .}}
   <div class="pc-form-actions">
     <button type="submit" class="pc-btn pc-btn--save">Save</button>

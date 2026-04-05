@@ -112,7 +112,7 @@
     </div>
     <div class="kpi-strip-item">
       <span class="kpi-strip-value">{{.Summary.SkillLoadCount}}</span>
-      <span class="kpi-strip-label">skills loaded</span>
+      <span class="kpi-strip-label">skills loaded{{if gt .Summary.TotalSkillTokens 0}} ({{formatTokens .Summary.TotalSkillTokens}}){{end}}</span>
     </div>
     <div class="kpi-strip-item">
       <span class="kpi-strip-value">{{.Summary.CommandCount}}</span>
@@ -143,10 +143,13 @@
     <!-- Skills loaded -->
     {{if .Summary.SkillsLoaded}}
     <div>
-      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Skills Loaded</h4>
+      <h4 style="margin:0 0 0.5rem 0;font-size:0.85rem;color:var(--text-muted)">Skills Loaded{{if gt .Summary.TotalSkillTokens 0}} <span class="font-mono" style="font-weight:400;font-size:0.75rem">({{formatTokens .Summary.TotalSkillTokens}} context)</span>{{end}}</h4>
       {{range .Summary.SkillsLoaded}}
-      <div style="padding:2px 0">
+      <div style="display:flex;justify-content:space-between;padding:2px 0">
         <span class="font-mono" style="font-size:0.85rem">{{.}}</span>
+        {{with index $.Summary.SkillTokenBreakdown .}}
+        <span class="text-muted font-mono" style="font-size:0.8rem" title="Estimated context tokens consumed by this skill">{{formatTokens .}}</span>
+        {{end}}
       </div>
       {{end}}
     </div>

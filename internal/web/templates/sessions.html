@@ -16,6 +16,66 @@
       <li><a href="/costs" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4B0;</span> Costs</a></li>
     </ul>
   </div>
+
+  {{if .Facets}}
+  {{if .Facets.Providers}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Provider</div>
+    <ul class="sidebar-list">
+      {{range .Facets.Providers}}
+      <a href="/sessions?provider={{.Value}}" class="sidebar-item{{if eq $.FilterProvider .Value}} active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Value}}</span>
+        <span class="sidebar-item-count">{{.Count}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+  {{if .Facets.Types}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Session Type</div>
+    <ul class="sidebar-list">
+      {{range .Facets.Types}}
+      <a href="/sessions?session_type={{.Value}}" class="sidebar-item{{if eq $.FilterSessionType .Value}} active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Value}}</span>
+        <span class="sidebar-item-count">{{.Count}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+  {{if .Facets.Agents}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Agent</div>
+    <ul class="sidebar-list">
+      {{range .Facets.Agents}}
+      <a href="/sessions?branch=&amp;provider=&amp;keyword=&amp;owner={{.Value}}" class="sidebar-item">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Value}}</span>
+        <span class="sidebar-item-count">{{.Count}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+  {{if .Facets.Branches}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Top Branches</div>
+    <ul class="sidebar-list">
+      {{range .Facets.Branches}}
+      <a href="/sessions?branch={{.Value}}" class="sidebar-item{{if eq $.FilterBranch .Value}} active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{truncate .Value 25}}</span>
+        <span class="sidebar-item-count">{{.Count}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+  {{end}}
+
   {{if .SidebarProjects}}
   <div class="sidebar-section">
     <div class="sidebar-title">Your Projects</div>

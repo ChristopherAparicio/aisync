@@ -76,6 +76,10 @@ func (m *mockPlatform) UpdateComment(commentID int64, body string) error {
 	return nil
 }
 
+func (m *mockPlatform) ListRecentPRs(_ string, _ int) ([]session.PullRequest, error) {
+	return nil, nil
+}
+
 func (m *mockPlatform) ListComments(prNumber int) ([]session.PRComment, error) {
 	return m.comments[prNumber], nil
 }

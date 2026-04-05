@@ -84,6 +84,86 @@ func (s *Store) GetSessionEvents(sessionID session.ID) ([]sessionevent.Event, er
 	return scanEvents(rows)
 }
 
+// ── GetSessionEventsBatch ──
+
+// GetSessionEventsBatch returns events for multiple sessions in a single SQL query.
+//
+// Eliminates the N+1 pattern where analytics code loops over Summary slices calling
+// GetSessionEvents per session (see Fix #8: SkillROIAnalysis used to issue 1764 queries
+// on a full-DB project-wide scan).
+//
+// Query shape:
+//
+//	SELECT ... FROM session_events
+//	WHERE session_id IN (?, ?, ...)
+//	  [AND event_type IN (?, ?, ...)]
+//	ORDER BY session_id, occurred_at ASC, message_index ASC
+//
+// IDs are de-duplicated before the IN-clause is built. Empty ids returns an empty map.
+// Missing IDs are silently omitted (no empty-slice entries). Per-row scan/unmarshal
+// errors are skipped via scanEvents so a single corrupt payload does not poison the batch.
+//
+// The variadic types parameter filters at SQL level; pass zero types to load all events.
+func (s *Store) GetSessionEventsBatch(ids []session.ID, types ...sessionevent.EventType) (map[session.ID][]sessionevent.Event, error) {
+	if len(ids) == 0 {
+		return map[session.ID][]sessionevent.Event{}, nil
+	}
+
+	// De-duplicate IDs to keep the IN-clause compact.
+	seen := make(map[session.ID]struct{}, len(ids))
+	uniqueIDs := make([]session.ID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+
+	// Build session_id IN (...) clause.
+	idPlaceholders := make([]string, len(uniqueIDs))
+	args := make([]interface{}, 0, len(uniqueIDs)+len(types))
+	for i, id := range uniqueIDs {
+		idPlaceholders[i] = "?"
+		args = append(args, string(id))
+	}
+
+	sql := `SELECT id, session_id, event_type, message_index, message_id,
+	               occurred_at, project_path, remote_url, provider, agent, payload
+	        FROM session_events
+	        WHERE session_id IN (` + strings.Join(idPlaceholders, ",") + `)`
+
+	// Optional event_type IN (...) filter.
+	if len(types) > 0 {
+		typePlaceholders := make([]string, len(types))
+		for i, t := range types {
+			typePlaceholders[i] = "?"
+			args = append(args, string(t))
+		}
+		sql += ` AND event_type IN (` + strings.Join(typePlaceholders, ",") + `)`
+	}
+
+	sql += ` ORDER BY session_id, occurred_at ASC, message_index ASC`
+
+	rows, err := s.db.Query(sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch querying session events: %w", err)
+	}
+	defer rows.Close()
+
+	// Reuse scanEvents, then bucket by session ID.
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[session.ID][]sessionevent.Event, len(uniqueIDs))
+	for _, e := range events {
+		result[e.SessionID] = append(result[e.SessionID], e)
+	}
+	return result, nil
+}
+
 // ── QueryEvents ──
 
 // QueryEvents returns events matching the given filters.
@@ -468,6 +548,8 @@ func marshalEventPayload(e *sessionevent.Event) ([]byte, error) {
 		return json.Marshal(e.Command)
 	case sessionevent.EventImageUsage:
 		return json.Marshal(e.Image)
+	case sessionevent.EventCompaction:
+		return json.Marshal(e.Compaction)
 	default:
 		return []byte("{}"), nil
 	}
@@ -509,6 +591,11 @@ func unmarshalEventPayload(e *sessionevent.Event, data []byte) {
 		var d sessionevent.ImageDetail
 		if err := json.Unmarshal(data, &d); err == nil {
 			e.Image = &d
+		}
+	case sessionevent.EventCompaction:
+		var d sessionevent.CompactionDetail
+		if err := json.Unmarshal(data, &d); err == nil {
+			e.Compaction = &d
 		}
 	}
 }

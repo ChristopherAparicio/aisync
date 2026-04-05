@@ -1,0 +1,68 @@
+{{define "ft-children-partial"}}
+{{range .Nodes}}
+{{template "ft-lazy-node" .}}
+{{end}}
+{{if not .Nodes}}
+<div class="ft-session-empty text-muted">Empty directory.</div>
+{{end}}
+{{end}}
+
+{{/* ── Lazy tree node (used in HTMX children partial) ── */}}
+{{define "ft-lazy-node"}}
+{{if .IsDir}}
+<div class="ft-node ft-node--dir ft-collapsed" style="padding-left:{{.IndentPx}}px">
+  <div class="ft-node-header" onclick="ftToggleDirLazy(this)">
+    <svg class="ft-chevron" viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.752.752 0 0 1-1.042-.018.752.752 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>
+    <svg class="ft-icon ft-icon-dir" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg>
+    <span class="ft-name font-mono">{{.Name}}</span>
+    {{if gt .FileCount 0}}<span class="ft-dir-count text-muted">{{.FileCount}}</span>{{end}}
+  </div>
+  {{if .Lazy}}
+  <div class="ft-children"
+       hx-get="/partials/file-tree-children?dir={{.DirPath}}&amp;project={{.ProjectPath}}&amp;max={{.MaxSessions}}"
+       hx-trigger="load-children"
+       hx-swap="innerHTML">
+    <div class="ft-loading">
+      <span class="ft-spinner"></span> Loading…
+    </div>
+  </div>
+  {{else}}
+  <div class="ft-children">
+    {{range .Children}}
+    {{template "ft-lazy-node" .}}
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{else}}
+<div class="ft-node ft-node--file{{if .HasAI}} ft-node--ai{{end}}" style="padding-left:{{.IndentPx}}px">
+  <div class="ft-node-header{{if .HasAI}} ft-clickable{{end}}"{{if .HasAI}} onclick="ftToggleFile(this)"{{end}}>
+    {{if .HasAI}}<svg class="ft-chevron" viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.752.752 0 0 1-1.042-.018.752.752 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>{{else}}<span class="ft-chevron-placeholder"></span>{{end}}
+    <svg class="ft-icon ft-icon-file" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/></svg>
+    <span class="ft-name font-mono">{{.Name}}</span>
+    {{if .HasAI}}
+    <span class="ft-file-meta">
+      <a href="/sessions/{{.LastSessionID}}" class="ft-session-link" title="Last session" onclick="event.stopPropagation()">
+        <span class="fe-ai-badge">AI</span>
+      </a>
+      {{if gt .SessionCount 1}}
+      <span class="ft-session-count {{.HeatClass}}" title="{{.SessionCount}} sessions modified this file">+{{sub .SessionCount 1}}</span>
+      {{end}}
+      <span class="ft-time text-muted">{{.LastTimeAgo}}</span>
+    </span>
+    {{end}}
+  </div>
+  {{if .HasAI}}
+  <div class="ft-sessions hidden"
+       hx-get="/partials/file-sessions?file={{.FilePath}}&amp;project={{.ProjectPath}}"
+       hx-trigger="load-sessions"
+       hx-swap="innerHTML"
+       hx-indicator=".ft-loading">
+    <div class="ft-loading">
+      <span class="ft-spinner"></span> Loading sessions…
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}

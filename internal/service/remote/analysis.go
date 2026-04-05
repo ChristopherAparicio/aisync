@@ -55,6 +55,11 @@ func (r *AnalysisService) GetLatestAnalysis(sessionID string) (*analysis.Session
 	return toAnalysisDomain(sa)
 }
 
+// AvailableModules returns an empty list in remote mode (modules are server-side only).
+func (r *AnalysisService) AvailableModules() []analysis.ModuleInfo {
+	return nil
+}
+
 // ListAnalyses returns all analyses for a session from the remote server.
 func (r *AnalysisService) ListAnalyses(sessionID string) ([]*analysis.SessionAnalysis, error) {
 	clientList, err := r.c.ListAnalyses(sessionID)

@@ -533,6 +533,53 @@ func TestNewSessionEventSummary_Empty(t *testing.T) {
 	}
 }
 
+func TestNewSessionEventSummary_SkillTokenTracking(t *testing.T) {
+	events := []Event{
+		{
+			Type: EventSkillLoad,
+			SkillLoad: &SkillLoadDetail{
+				SkillName:       "replay-tester",
+				EstimatedTokens: 2000,
+				ContentBytes:    8000,
+			},
+		},
+		{
+			Type: EventSkillLoad,
+			SkillLoad: &SkillLoadDetail{
+				SkillName:       "opencode-sessions",
+				EstimatedTokens: 500,
+				ContentBytes:    2000,
+			},
+		},
+		{
+			Type: EventSkillLoad,
+			SkillLoad: &SkillLoadDetail{
+				SkillName:       "replay-tester", // loaded again
+				EstimatedTokens: 2000,
+				ContentBytes:    8000,
+			},
+		},
+	}
+
+	summary := NewSessionEventSummary("test-skill-tokens", events)
+
+	if summary.SkillLoadCount != 3 {
+		t.Errorf("expected skill_load_count=3, got %d", summary.SkillLoadCount)
+	}
+	if summary.TotalSkillTokens != 4500 {
+		t.Errorf("expected total_skill_tokens=4500, got %d", summary.TotalSkillTokens)
+	}
+	if got := summary.SkillTokenBreakdown["replay-tester"]; got != 4000 {
+		t.Errorf("expected replay-tester tokens=4000, got %d", got)
+	}
+	if got := summary.SkillTokenBreakdown["opencode-sessions"]; got != 500 {
+		t.Errorf("expected opencode-sessions tokens=500, got %d", got)
+	}
+	if len(summary.SkillsLoaded) != 2 {
+		t.Errorf("expected 2 unique skills loaded, got %d", len(summary.SkillsLoaded))
+	}
+}
+
 // ── Helper tests ──
 
 func TestExtractSkillName(t *testing.T) {

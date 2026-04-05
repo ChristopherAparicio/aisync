@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/config"
@@ -26,13 +28,17 @@ import (
 
 // Cache TTLs for dashboard statistics.
 const (
-	statsCacheTTL       = 30 * time.Second
+	statsCacheTTL       = 2 * time.Minute
 	forecastCacheTTL    = 5 * time.Minute
 	saturationCacheTTL  = 2 * time.Hour
 	cacheEfficiencyCTTL = 2 * time.Hour
 	costPageCacheTTL    = 60 * time.Second
 	trendsCacheTTL      = 5 * time.Minute
 	sidebarCacheTTL     = 2 * time.Minute
+	agentROICacheTTL    = 2 * time.Hour
+	skillROICacheTTL    = 2 * time.Hour
+	securityCacheTTL    = 2 * time.Hour
+	fileCacheTTL        = 60 * time.Second
 )
 
 // cachedStats returns Stats from cache if fresh, otherwise computes and caches.
@@ -249,6 +255,89 @@ func (s *Server) cachedCostsPage(r *http.Request) costDashboardPage {
 	}
 
 	return data
+}
+
+// cachedFilesForProject returns FilesForProject from cache if fresh, otherwise queries and caches.
+// The file explorer page calls this instead of store.FilesForProject directly.
+func (s *Server) cachedFilesForProject(projectPath, dirPrefix string, limit int) ([]session.ProjectFileEntry, error) {
+	cacheKey := "files:" + projectPath + ":" + dirPrefix
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, fileCacheTTL); data != nil {
+			var result []session.ProjectFileEntry
+			if err := json.Unmarshal(data, &result); err == nil {
+				return result, nil
+			}
+		}
+	}
+
+	entries, err := s.store.FilesForProject(projectPath, dirPrefix, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.store != nil {
+		if payload, marshalErr := json.Marshal(entries); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, payload)
+		}
+	}
+	return entries, nil
+}
+
+// cachedAgentROI returns AgentROI from cache if fresh, otherwise computes and caches.
+// AgentROI is very expensive: it loads all session payloads to compute context saturation.
+// The scheduler should pre-warm this cache periodically.
+func (s *Server) cachedAgentROI(ctx context.Context, projectPath string, since time.Time) (*session.AgentROI, error) {
+	cacheKey := "agent_roi:" + projectPath
+
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, agentROICacheTTL); data != nil {
+			var result session.AgentROI
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
+	result, err := s.sessionSvc.AgentROIAnalysis(ctx, projectPath, since)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return result, nil
+}
+
+// cachedSkillROI returns SkillROI from cache if fresh, otherwise computes and caches.
+// SkillROI queries session events for every session in the project — expensive for large projects.
+func (s *Server) cachedSkillROI(ctx context.Context, projectPath string, since time.Time) (*session.SkillROI, error) {
+	cacheKey := "skill_roi:" + projectPath
+
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, skillROICacheTTL); data != nil {
+			var result session.SkillROI
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
+	result, err := s.sessionSvc.SkillROIAnalysis(ctx, projectPath, since)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(result); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return result, nil
 }
 
 // ── Shared ──
@@ -643,12 +732,13 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
+	ctx := r.Context()
 	project := r.URL.Query().Get("project")
 	data := dashboardPage{
 		Nav:             "dashboard",
 		Projects:        s.buildProjectList(project),
 		SelectedProject: project,
-		SidebarProjects: s.buildSidebarProjects(r.Context(), project),
+		SidebarProjects: s.buildSidebarProjects(ctx, project),
 	}
 
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
@@ -668,6 +758,15 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 	data.HasForkDedup = stats.ForkSavings > 0
 	data.BillingType = stats.BillingType
 
+	// Error / activity KPIs + recent sessions come straight from the same
+	// stats call — no second List() needed (Fix #10). The Stats() loop
+	// already iterates all matching summaries and populates these fields,
+	// so reading them here costs zero extra queries.
+	data.TotalErrors = stats.TotalErrors
+	data.TotalToolCalls = stats.TotalToolCalls
+	data.SessionsWithErrors = stats.SessionsWithErrors
+	data.RecentSessions = stats.RecentSessions
+
 	limit := 8
 	if len(stats.PerBranch) < limit {
 		limit = len(stats.PerBranch)
@@ -683,83 +782,73 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 		})
 	}
 
-	listReq := service.ListRequest{All: project == "", ProjectPath: project}
-	summaries, err := s.sessionSvc.List(listReq)
-	if err != nil {
-		s.logger.Printf("dashboard list error: %v", err)
-	} else {
-		// Aggregate error KPIs from all sessions.
-		for _, sm := range summaries {
-			data.TotalErrors += sm.ErrorCount
-			data.TotalToolCalls += sm.ToolCallCount
-			if sm.ErrorCount > 0 {
-				data.SessionsWithErrors++
-			}
-		}
+	// ── Concurrent data fetches ──
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-		// Sort by last update time (most recently active first).
-		sort.Slice(summaries, func(i, j int) bool {
-			ti := summaries[i].UpdatedAt
-			if ti.IsZero() {
-				ti = summaries[i].CreatedAt
-			}
-			tj := summaries[j].UpdatedAt
-			if tj.IsZero() {
-				tj = summaries[j].CreatedAt
-			}
-			return ti.After(tj)
+	// 1. Forecast.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		forecast, fErr := s.cachedForecast(ctx, service.ForecastRequest{
+			Period: "weekly",
+			Days:   90,
 		})
-
-		limit := 10
-		if len(summaries) < limit {
-			limit = len(summaries)
+		if fErr != nil || forecast.SessionCount == 0 {
+			return
 		}
-		data.RecentSessions = summaries[:limit]
-	}
 
-	forecast, err := s.cachedForecast(r.Context(), service.ForecastRequest{
-		Period: "weekly",
-		Days:   90,
-	})
-	if err == nil && forecast.SessionCount > 0 {
+		mu.Lock()
 		data.HasForecast = true
 		data.Projected30d = forecast.Projected30d
 		data.Projected90d = forecast.Projected90d
 		data.TrendPerDay = forecast.TrendPerDay
 		data.TrendDir = forecast.TrendDir
-
-		// Real cost (subscriptions + API) if available.
 		if forecast.TotalReal30d > 0 || forecast.SubscriptionMonthly > 0 {
 			data.HasRealForecast = true
 			data.TotalReal30d = forecast.TotalReal30d
 			data.SubscriptionMonthly = forecast.SubscriptionMonthly
 			data.APIProjected30d = forecast.APIProjected30d
 		}
-	}
+		mu.Unlock()
+	}()
 
-	if data.TrendDir == "" {
-		data.TrendDir = "stable"
-	}
+	// 2. Cache efficiency (7-day window).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		since7d := time.Now().AddDate(0, 0, -7)
+		cacheEff, cacheErr := s.cachedCacheEfficiency(ctx, project, since7d, "7d")
+		if cacheErr != nil || cacheEff == nil || cacheEff.TotalInputTokens == 0 {
+			return
+		}
 
-	// Cache efficiency (quick stats).
-	since7d := time.Now().AddDate(0, 0, -7)
-	cacheEff, cacheErr := s.cachedCacheEfficiency(r.Context(), project, since7d, "7d")
-	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
+		mu.Lock()
 		data.HasCacheStats = true
 		data.DashCacheHitRate = cacheEff.CacheHitRate
 		data.DashCacheMissSessions = cacheEff.SessionsWithMiss
 		data.DashCacheTotalMisses = cacheEff.TotalCacheMisses
 		data.DashCacheWaste = cacheEff.EstimatedWaste
-	}
+		mu.Unlock()
+	}()
 
-	// Weekly trends (current vs previous 7 days)
-	trends, trendsErr := s.cachedTrends(r.Context(), service.TrendRequest{
-		Period: 7 * 24 * time.Hour,
-	})
-	if trendsErr == nil && (trends.Current.SessionCount > 0 || trends.Previous.SessionCount > 0) {
+	// 3. Weekly trends.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		trends, trendsErr := s.cachedTrends(ctx, service.TrendRequest{
+			Period: 7 * 24 * time.Hour,
+		})
+		if trendsErr != nil {
+			return
+		}
+		if trends.Current.SessionCount == 0 && trends.Previous.SessionCount == 0 {
+			return
+		}
+
+		mu.Lock()
 		data.HasTrends = true
 		data.TrendVerdict = trends.Delta.Verdict
-
 		data.TrendSessions = buildTrendMetric(
 			trends.Current.SessionCount, trends.Previous.SessionCount,
 			trends.Delta.SessionCountChange, 0, false,
@@ -772,82 +861,105 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 			trends.Current.TotalErrors, trends.Previous.TotalErrors,
 			trends.Delta.ErrorsChange, trends.Delta.ErrorsChangePercent, true,
 		)
-	}
+		mu.Unlock()
+	}()
 
-	// Capability metrics for selected project
-	if project != "" && s.registrySvc != nil {
-		proj, scanErr := s.registrySvc.ScanProject(project)
-		if scanErr == nil {
-			data.HasCapabilities = true
-			data.ProjectName = proj.Name
-			data.MCPServerCount = len(proj.MCPServers)
-			for _, cs := range proj.CapabilityStats() {
-				data.CapabilityStats = append(data.CapabilityStats, capabilityStat{
-					Kind:  string(cs.Kind),
-					Count: cs.Count,
-				})
-			}
+	// 4. Capabilities (filesystem only, fast).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if project == "" || s.registrySvc == nil {
+			return
 		}
-	}
+		proj, scanErr := s.registrySvc.ScanProject(project)
+		if scanErr != nil {
+			return
+		}
 
-	// Activity sparklines (14-day mini bar charts).
-	// Use store directly to avoid remote-mode "not supported" issue.
-	if s.store != nil {
+		var capStats []capabilityStat
+		for _, cs := range proj.CapabilityStats() {
+			capStats = append(capStats, capabilityStat{
+				Kind:  string(cs.Kind),
+				Count: cs.Count,
+			})
+		}
+
+		mu.Lock()
+		data.HasCapabilities = true
+		data.ProjectName = proj.Name
+		data.MCPServerCount = len(proj.MCPServers)
+		data.CapabilityStats = capStats
+		mu.Unlock()
+	}()
+
+	// 5. Activity sparklines (14-day mini bar charts).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.store == nil {
+			return
+		}
 		sparkSince := time.Now().AddDate(0, 0, -14)
 		sparkUntil := time.Now()
 		buckets, sparkErr := s.store.QueryTokenBuckets("1d", sparkSince, sparkUntil, project)
-		if sparkErr == nil && len(buckets) > 0 {
-			// Aggregate buckets per day (multiple providers/backends may produce
-			// multiple rows for the same day).
-			type dayAgg struct {
-				sessions int
-				tokens   int
-				cost     float64
-				errors   int
-				label    string
-			}
-			byDay := make(map[string]*dayAgg)
-			dayOrder := make([]string, 0, 14)
-			for _, b := range buckets {
-				key := b.BucketStart.Format("2006-01-02")
-				agg, ok := byDay[key]
-				if !ok {
-					agg = &dayAgg{label: b.BucketStart.Format("Jan 2")}
-					byDay[key] = agg
-					dayOrder = append(dayOrder, key)
-				}
-				agg.sessions += b.SessionCount
-				agg.tokens += b.InputTokens + b.OutputTokens
-				agg.cost += b.EstimatedCost
-				if b.ActualCost > 0 {
-					agg.cost = b.ActualCost + agg.cost - b.EstimatedCost // prefer actual
-				}
-				agg.errors += b.ToolErrorCount
-			}
-
-			// Sort days chronologically.
-			sort.Strings(dayOrder)
-
-			sessions := make([]int, len(dayOrder))
-			tokens := make([]int, len(dayOrder))
-			costs := make([]float64, len(dayOrder))
-			errors := make([]int, len(dayOrder))
-			labels := make([]string, len(dayOrder))
-			for i, key := range dayOrder {
-				a := byDay[key]
-				sessions[i] = a.sessions
-				tokens[i] = a.tokens
-				costs[i] = a.cost
-				errors[i] = a.errors
-				labels[i] = a.label
-			}
-
-			data.HasSparklines = true
-			data.SparklineSessions = buildSparklineBars(sessions, labels)
-			data.SparklineTokens = buildSparklineBars(tokens, labels)
-			data.SparklineCost = buildSparklineBarsFloat(costs, labels)
-			data.SparklineErrors = buildSparklineBars(errors, labels)
+		if sparkErr != nil || len(buckets) == 0 {
+			return
 		}
+
+		type dayAgg struct {
+			sessions int
+			tokens   int
+			cost     float64
+			errors   int
+			label    string
+		}
+		byDay := make(map[string]*dayAgg)
+		dayOrder := make([]string, 0, 14)
+		for _, b := range buckets {
+			key := b.BucketStart.Format("2006-01-02")
+			agg, ok := byDay[key]
+			if !ok {
+				agg = &dayAgg{label: b.BucketStart.Format("Jan 2")}
+				byDay[key] = agg
+				dayOrder = append(dayOrder, key)
+			}
+			agg.sessions += b.SessionCount
+			agg.tokens += b.InputTokens + b.OutputTokens
+			agg.cost += b.EstimatedCost
+			if b.ActualCost > 0 {
+				agg.cost = b.ActualCost + agg.cost - b.EstimatedCost
+			}
+			agg.errors += b.ToolErrorCount
+		}
+		sort.Strings(dayOrder)
+
+		sessions := make([]int, len(dayOrder))
+		tokens := make([]int, len(dayOrder))
+		costs := make([]float64, len(dayOrder))
+		errors := make([]int, len(dayOrder))
+		labels := make([]string, len(dayOrder))
+		for i, key := range dayOrder {
+			a := byDay[key]
+			sessions[i] = a.sessions
+			tokens[i] = a.tokens
+			costs[i] = a.cost
+			errors[i] = a.errors
+			labels[i] = a.label
+		}
+
+		mu.Lock()
+		data.HasSparklines = true
+		data.SparklineSessions = buildSparklineBars(sessions, labels)
+		data.SparklineTokens = buildSparklineBars(tokens, labels)
+		data.SparklineCost = buildSparklineBarsFloat(costs, labels)
+		data.SparklineErrors = buildSparklineBars(errors, labels)
+		mu.Unlock()
+	}()
+
+	wg.Wait()
+
+	if data.TrendDir == "" {
+		data.TrendDir = "stable"
 	}
 
 	return data
@@ -917,6 +1029,9 @@ type sessionsPage struct {
 	TotalPages int
 	HasPrev    bool
 	HasNext    bool
+
+	// Facets for sidebar navigation.
+	Facets *session.SearchFacets
 }
 
 // handleSessions renders the full sessions list page.
@@ -1006,6 +1121,37 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 	cols := s.buildColumnDefs()
 	rows := s.buildSessionRows(result.Sessions, cols)
 
+	// Build facets for sidebar navigation.
+	// Facets use the same filters EXCEPT keyword (so counts show all sessions in the filter context).
+	var facets *session.SearchFacets
+	if s.store != nil {
+		var sinceT, untilT time.Time
+		if since != "" {
+			sinceT, _ = time.Parse("2006-01-02", since)
+		}
+		if until != "" {
+			untilT, _ = time.Parse("2006-01-02", until)
+			// Include the full day.
+			if !untilT.IsZero() {
+				untilT = untilT.Add(24*time.Hour - time.Second)
+			}
+		}
+		facetQuery := session.SearchQuery{
+			ProjectPath:     project,
+			Branch:          branch,
+			Provider:        providerName,
+			OwnerID:         session.ID(owner),
+			SessionType:     sessionType,
+			ProjectCategory: projectCategory,
+			Since:           sinceT,
+			Until:           untilT,
+		}
+		if status != "" {
+			facetQuery.Status = session.SessionStatus(status)
+		}
+		facets, _ = s.store.SearchFacets(facetQuery)
+	}
+
 	return sessionsPage{
 		Nav:                   "sessions",
 		SidebarProjects:       s.buildSidebarProjects(r.Context(), project),
@@ -1031,6 +1177,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 		TotalPages:            totalPages,
 		HasPrev:               page > 1,
 		HasNext:               page < totalPages,
+		Facets:                facets,
 	}
 }
 
@@ -1275,6 +1422,8 @@ type toolUsageEntry struct {
 type sessionDetailPage struct {
 	Nav               string
 	Session           *session.Session
+	BackURL           string // contextual back link (default /sessions)
+	BackLabel         string // label for the back link (e.g. "Sessions", "File Tree", "PRs")
 	OwnerName         string // resolved from users table (empty if not found)
 	ForkParentSummary string // summary of the parent session (for fork context)
 	TotalCost         float64
@@ -1321,6 +1470,65 @@ type sessionDetailPage struct {
 	CanAnalyze   bool // true when analysisSvc is wired
 	Analysis     *analysisView
 	AnalysisData analysisPartialData // pre-built data for the analysis_partial template
+
+	// Skill map: message index → list of skill names used in that message.
+	// Built by scanning tool calls (name == "skill") and content tags (<skill_content>).
+	SkillMap     map[int][]string // key = 0-based message index
+	SkillCount   int              // total skill loads across all messages
+	UniqueSkills []string         // sorted unique skill names (for filter chips)
+
+	// Pull requests linked to this session
+	HasPRs bool
+	PRs    []sessionPRBadge
+
+	// Compaction detection: context window summarization events.
+	HasCompactions        bool
+	CompactionCount       int
+	CompactionTokensLost  string // formatted "45K"
+	CompactionRebuildCost string // formatted "$0.68"
+	CompactionAvgDrop     string // "92%"
+	CompactionEvents      []compactionEventView
+
+	// Cache miss timeline: breaks exceeding the 5-minute cache TTL.
+	HasCacheMisses        bool
+	CacheMissCount        int
+	CacheMissWastedTokens string // formatted "20K"
+	CacheMissLongestGap   int    // minutes
+	CacheMissEvents       []cacheMissEventView
+
+	// Message pagination: only first PageSize messages are rendered initially.
+	// The rest are loaded via HTMX "Load More".
+	TotalMessages int  // total count of messages in the session
+	HasMoreMsgs   bool // true when messages are truncated
+}
+
+// sessionPRBadge is a template-friendly view of a PR linked to a session.
+type sessionPRBadge struct {
+	Number     int
+	Title      string
+	State      string
+	StateClass string // "open", "merged", "closed"
+	URL        string
+	Branch     string
+	RepoOwner  string
+	RepoName   string
+}
+
+// cacheMissEventView is a template-friendly view of a single cache miss event.
+type cacheMissEventView struct {
+	MessageIdx   int    // 1-based message index for display
+	GapMinutes   int    // gap duration in minutes
+	WastedTokens string // formatted "20K"
+	TimeStr      string // time of the miss "14:30"
+}
+
+// compactionEventView is a template-friendly view of a single compaction event.
+type compactionEventView struct {
+	BeforeMsg   int    // message index before compaction
+	AfterMsg    int    // message index after compaction
+	TokensLost  string // formatted "45K"
+	DropPercent string // "92%"
+	CacheReset  bool   // true if cache was invalidated
 }
 
 // fileChangeView is a template-friendly view of a file operation.
@@ -1397,6 +1605,10 @@ type analysisView struct {
 	SkillsDiscovered     []string
 	SkillMissedCount     int
 	SkillDiscoveredCount int
+
+	// Module results
+	HasModuleResults bool
+	ModuleResults    []moduleResultView
 }
 
 type problemView struct {
@@ -1438,6 +1650,35 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	data := sessionDetailPage{
 		Nav:     "sessions",
 		Session: sess,
+	}
+
+	// Contextual back link: use Referer to determine where the user came from.
+	data.BackURL = "/sessions"
+	data.BackLabel = "Sessions"
+	if ref := r.Header.Get("Referer"); ref != "" {
+		if u, err := url.Parse(ref); err == nil {
+			p := u.Path
+			switch {
+			case strings.HasPrefix(p, "/tree/") || p == "/tree":
+				data.BackURL = ref
+				data.BackLabel = "File Tree"
+			case strings.HasPrefix(p, "/pulls"):
+				data.BackURL = ref
+				data.BackLabel = "PRs"
+			case strings.HasPrefix(p, "/branches/"):
+				data.BackURL = ref
+				data.BackLabel = "Branch"
+			case strings.HasPrefix(p, "/projects/"):
+				data.BackURL = ref
+				data.BackLabel = "Project"
+			case strings.HasPrefix(p, "/files/"):
+				data.BackURL = ref
+				data.BackLabel = "Git"
+			case strings.HasPrefix(p, "/blame"):
+				data.BackURL = ref
+				data.BackLabel = "File Blame"
+			}
+		}
 	}
 
 	// Resolve owner name from users table.
@@ -1485,6 +1726,23 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		data.ErrorRate = float64(data.ErrorCount) / float64(data.ToolCallCount) * 100
 	}
 
+	// Build skill map: detect skill loads per message.
+	data.SkillMap = detectSkillsPerMessage(sess.Messages)
+	uniqueSet := make(map[string]bool)
+	for _, names := range data.SkillMap {
+		data.SkillCount += len(names)
+		for _, n := range names {
+			uniqueSet[n] = true
+		}
+	}
+	if len(uniqueSet) > 0 {
+		data.UniqueSkills = make([]string, 0, len(uniqueSet))
+		for n := range uniqueSet {
+			data.UniqueSkills = append(data.UniqueSkills, n)
+		}
+		sort.Strings(data.UniqueSkills)
+	}
+
 	// Compute cost breakdown via the session service (respects user pricing overrides).
 	estimate, _ := s.sessionSvc.EstimateCost(r.Context(), string(sess.ID))
 	if estimate != nil {
@@ -1493,6 +1751,47 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data.RestoreCmd = buildRestoreCmd(string(sess.ID), "", false)
+
+	// Compaction detection: find context window compaction events.
+	// Derive inputRate from the session's total input cost / total input tokens.
+	var inputRate float64
+	if estimate != nil && sess.TokenUsage.InputTokens > 0 {
+		inputRate = estimate.TotalCost.InputCost / float64(sess.TokenUsage.InputTokens)
+	}
+	compSummary := session.DetectCompactions(sess.Messages, inputRate)
+	if compSummary.TotalCompactions > 0 {
+		data.HasCompactions = true
+		data.CompactionCount = compSummary.TotalCompactions
+		data.CompactionTokensLost = formatTokens(compSummary.TotalTokensLost)
+		data.CompactionRebuildCost = fmt.Sprintf("$%.2f", compSummary.TotalRebuildCost)
+		data.CompactionAvgDrop = fmt.Sprintf("%.0f%%", compSummary.AvgDropPercent)
+		for _, e := range compSummary.Events {
+			data.CompactionEvents = append(data.CompactionEvents, compactionEventView{
+				BeforeMsg:   e.BeforeMessageIdx + 1, // 1-based for display
+				AfterMsg:    e.AfterMessageIdx + 1,
+				TokensLost:  formatTokens(e.TokensLost),
+				DropPercent: fmt.Sprintf("%.0f%%", e.DropPercent),
+				CacheReset:  e.CacheInvalidated,
+			})
+		}
+	}
+
+	// Cache miss timeline: detect breaks exceeding the 5-minute cache TTL.
+	cacheMissTimeline := session.DetectCacheMisses(sess.Messages)
+	if cacheMissTimeline.TotalMisses > 0 {
+		data.HasCacheMisses = true
+		data.CacheMissCount = cacheMissTimeline.TotalMisses
+		data.CacheMissWastedTokens = formatTokens(cacheMissTimeline.TotalWastedTokens)
+		data.CacheMissLongestGap = cacheMissTimeline.LongestGapMins
+		for _, e := range cacheMissTimeline.Events {
+			data.CacheMissEvents = append(data.CacheMissEvents, cacheMissEventView{
+				MessageIdx:   e.MessageIndex + 1, // 1-based
+				GapMinutes:   e.GapMinutes,
+				WastedTokens: formatTokens(e.InputTokens),
+				TimeStr:      e.Timestamp.Format("15:04"),
+			})
+		}
+	}
 
 	// Session objective (work description).
 	if s.store != nil {
@@ -1643,6 +1942,33 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Pull requests linked to this session
+	if s.store != nil {
+		linkedPRs, prErr := s.store.GetPRsForSession(sess.ID)
+		if prErr == nil && len(linkedPRs) > 0 {
+			data.HasPRs = true
+			for _, pr := range linkedPRs {
+				stateClass := "open"
+				switch pr.State {
+				case "merged":
+					stateClass = "merged"
+				case "closed":
+					stateClass = "closed"
+				}
+				data.PRs = append(data.PRs, sessionPRBadge{
+					Number:     pr.Number,
+					Title:      pr.Title,
+					State:      pr.State,
+					StateClass: stateClass,
+					URL:        pr.URL,
+					Branch:     pr.Branch,
+					RepoOwner:  pr.RepoOwner,
+					RepoName:   pr.RepoName,
+				})
+			}
+		}
+	}
+
 	// Analysis
 	if s.analysisSvc != nil {
 		data.CanAnalyze = true
@@ -1659,7 +1985,83 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Message pagination: for sessions with many messages, only render the first
+	// batch to keep the page small. The rest can be loaded via HTMX "Load More".
+	const msgPageSize = 50
+	data.TotalMessages = len(sess.Messages)
+	if len(sess.Messages) > msgPageSize {
+		data.HasMoreMsgs = true
+		sess.Messages = sess.Messages[:msgPageSize]
+		// Truncate activity segments too (they mirror messages 1:1).
+		if len(data.ActivitySegments) > msgPageSize {
+			data.ActivitySegments = data.ActivitySegments[:msgPageSize]
+		}
+	}
+
 	s.render(w, "session_detail.html", data)
+}
+
+// handleSessionMessagesMore returns the next batch of messages for a session (HTMX partial).
+func (s *Server) handleSessionMessagesMore(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	offset := 50 // default start offset
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			offset = n
+		}
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	const batchSize = 50
+	total := len(sess.Messages)
+	if offset >= total {
+		// Nothing more to render.
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	end := offset + batchSize
+	if end > total {
+		end = total
+	}
+	batch := sess.Messages[offset:end]
+	hasMore := end < total
+
+	// Build skill map for this batch.
+	allSkills := detectSkillsPerMessage(sess.Messages)
+
+	type msgBatchData struct {
+		Messages []session.Message
+		Offset   int
+		HasMore  bool
+		NextURL  string
+		SkillMap map[int][]string
+	}
+
+	nextURL := ""
+	if hasMore {
+		nextURL = "/partials/session-messages/" + id + "?offset=" + strconv.Itoa(end)
+	}
+
+	data := msgBatchData{
+		Messages: batch,
+		Offset:   offset,
+		HasMore:  hasMore,
+		NextURL:  nextURL,
+		SkillMap: allSkills,
+	}
+
+	s.renderPartial(w, "session-messages-batch", data)
 }
 
 // handleRestoreCommand renders the restore command partial (HTMX).
@@ -1693,14 +2095,14 @@ func buildRestoreCmd(sessionID, provider string, asContext bool) string {
 
 // ── Branch Explorer ──
 
-// branchData holds a branch's stats plus its session tree.
+// branchData holds a branch's stats (lightweight — no inline sessions).
 type branchData struct {
 	Name         string
 	Slug         string // URL-safe anchor
 	SessionCount int
 	TotalTokens  int
 	TotalCost    float64
-	Sessions     []session.SessionTreeNode
+	LastActivity string // human-readable time ago
 }
 
 type branchExplorerPage struct {
@@ -1708,7 +2110,6 @@ type branchExplorerPage struct {
 	SidebarProjects []sidebarProject
 	Branches        []branchData
 	Projects        []projectItem
-	Objectives      map[string]*objectiveView // session ID → objective (for inline display)
 }
 
 // handleBranches renders the branch explorer page.
@@ -1721,7 +2122,7 @@ func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
 	project := r.URL.Query().Get("project")
 	data := branchExplorerPage{Nav: "branches", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project)}
 
-	// Get per-branch stats (cached).
+	// Get per-branch stats (cached). No ListTree calls — just aggregate stats.
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
 	stats, err := s.cachedStats(statsReq)
 	if err != nil {
@@ -1733,53 +2134,21 @@ func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
 		return data
 	}
 
-	// Build tree per branch. We sort branches by session count descending.
+	// Sort branches by session count descending.
 	sort.Slice(stats.PerBranch, func(i, j int) bool {
 		return stats.PerBranch[i].SessionCount > stats.PerBranch[j].SessionCount
 	})
 
-	// Collect all session IDs for objective lookup.
-	var allSessionIDs []session.ID
-
+	data.Branches = make([]branchData, 0, len(stats.PerBranch))
 	for _, bs := range stats.PerBranch {
-		tree, treeErr := s.sessionSvc.ListTree(r.Context(), service.ListRequest{
-			Branch:      bs.Branch,
-			All:         project == "",
-			ProjectPath: project,
-		})
-		if treeErr != nil {
-			s.logger.Printf("branches tree %q: %v", bs.Branch, treeErr)
-			continue
-		}
-
-		// Collect session IDs from tree nodes.
-		for _, node := range tree {
-			allSessionIDs = append(allSessionIDs, node.Summary.ID)
-		}
-
 		data.Branches = append(data.Branches, branchData{
 			Name:         bs.Branch,
 			Slug:         slugify(bs.Branch),
 			SessionCount: bs.SessionCount,
 			TotalTokens:  bs.TotalTokens,
 			TotalCost:    bs.TotalCost,
-			Sessions:     tree,
+			LastActivity: timeAgoString(bs.LastActivity),
 		})
-	}
-
-	// Bulk-load objectives for all sessions in the branch explorer.
-	if s.store != nil && len(allSessionIDs) > 0 {
-		objs, objErr := s.store.ListObjectives(allSessionIDs)
-		if objErr == nil && len(objs) > 0 {
-			data.Objectives = make(map[string]*objectiveView, len(objs))
-			for id, obj := range objs {
-				data.Objectives[string(id)] = &objectiveView{
-					Intent:       obj.Summary.Intent,
-					Outcome:      obj.Summary.Outcome,
-					ExplainShort: obj.ExplainShort,
-				}
-			}
-		}
 	}
 
 	return data
@@ -1936,19 +2305,16 @@ func (s *Server) handleBranchTimeline(w http.ResponseWriter, r *http.Request) {
 			MaxDepth:      maxDepth,
 		}
 
-		// ── Fork relations ──
+		// ── Fork relations (batch-loaded in single query) ──
 		if s.store != nil {
 			// Collect all session IDs in the tree.
 			var sessionIDs []session.ID
 			collectTreeIDs(tree, &sessionIDs)
 
-			// Bulk load fork relations for all sessions.
+			// Batch-load fork relations for all sessions (1 query instead of N).
+			forkRelMap, _ := s.store.GetForkRelationsForSessions(sessionIDs)
 			seen := make(map[string]bool)
-			for _, sid := range sessionIDs {
-				rels, relErr := s.store.GetForkRelations(sid)
-				if relErr != nil {
-					continue
-				}
+			for _, rels := range forkRelMap {
 				for _, rel := range rels {
 					key := string(rel.OriginalID) + "→" + string(rel.ForkID)
 					if seen[key] {
@@ -2032,6 +2398,80 @@ func countTreeNodes(nodes []session.SessionTreeNode) int {
 	return count
 }
 
+// detectSkillsPerMessage scans messages for skill loads and returns a map
+// of message index → skill names. Detects two patterns:
+//  1. Tool calls named "skill" (skill name extracted from input JSON "name" field)
+//  2. Content tags: <skill_content name="xxx"> in assistant messages
+func detectSkillsPerMessage(msgs []session.Message) map[int][]string {
+	result := make(map[int][]string)
+
+	for i := range msgs {
+		msg := &msgs[i]
+		var skills []string
+
+		// Check tool calls for skill loads.
+		for _, tc := range msg.ToolCalls {
+			if tc.Name == "skill" {
+				name := extractSkillNameFromInput(tc.Input)
+				if name != "" {
+					skills = append(skills, name)
+				}
+			}
+		}
+
+		// Check assistant content for <skill_content name="xxx"> tags.
+		if msg.Role == session.RoleAssistant && strings.Contains(msg.Content, "<skill_content") {
+			names := extractSkillContentNames(msg.Content)
+			skills = append(skills, names...)
+		}
+
+		if len(skills) > 0 {
+			result[i] = skills
+		}
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// extractSkillNameFromInput extracts the skill name from a tool call input.
+// Input is typically JSON like {"name": "replay-tester"}.
+func extractSkillNameFromInput(input string) string {
+	// Quick JSON parse for the "name" field.
+	var obj struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(input), &obj); err == nil && obj.Name != "" {
+		return obj.Name
+	}
+	return ""
+}
+
+// extractSkillContentNames extracts skill names from <skill_content name="xxx"> tags.
+func extractSkillContentNames(text string) []string {
+	const prefix = `<skill_content name="`
+	var names []string
+	for {
+		idx := strings.Index(text, prefix)
+		if idx == -1 {
+			break
+		}
+		text = text[idx+len(prefix):]
+		end := strings.Index(text, `"`)
+		if end == -1 {
+			break
+		}
+		name := text[:end]
+		if name != "" {
+			names = append(names, name)
+		}
+		text = text[end+1:]
+	}
+	return names
+}
+
 // collectTreeIDs collects all session IDs from a tree.
 func collectTreeIDs(nodes []session.SessionTreeNode, ids *[]session.ID) {
 	for _, n := range nodes {
@@ -2054,6 +2494,13 @@ func timeAgoString(t time.Time) string {
 		return "—"
 	}
 	d := time.Since(t)
+	if d < 0 {
+		// Clock skew: treat timestamps up to 1 hour in the future as "just now".
+		if d > -time.Hour {
+			return "just now"
+		}
+		return t.Format("2 Jan")
+	}
 	switch {
 	case d < time.Minute:
 		return "just now"
@@ -2061,8 +2508,17 @@ func timeAgoString(t time.Time) string {
 		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
+	case d < 30*24*time.Hour:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		months := int(d.Hours()/24/30.44 + 0.5) // round instead of truncate
+		if months < 1 {
+			months = 1
+		}
+		if months <= 12 {
+			return fmt.Sprintf("%dmo ago", months)
+		}
+		return t.Format("Jan 2006")
 	}
 }
 
@@ -2409,6 +2865,20 @@ type costDashboardPage struct {
 	// Cross-project MCP matrix
 	HasMCPMatrix bool
 	MCPMatrix    *mcpMatrixView
+
+	// Cross-project MCP governance matrix (5.2)
+	HasGovMatrix bool
+	GovMatrix    *mcpGovMatrixView
+
+	// Skill reuse map (1.5)
+	HasSkillReuse    bool
+	SkillShared      []skillReuseView
+	SkillMono        []skillReuseView
+	SkillIdle        []skillReuseView
+	SkillTotalLoads  int
+	SkillSharedCount int
+	SkillMonoCount   int
+	SkillIdleCount   int
 
 	// Model alternatives (benchmark-based recommendations)
 	HasAlternatives   bool
@@ -2855,6 +3325,45 @@ type mcpStatusView struct {
 	TotalCost   float64
 }
 
+// mcpGovMatrixView is the template-friendly cross-project MCP governance matrix.
+type mcpGovMatrixView struct {
+	Servers      []string
+	Projects     []mcpGovMatrixRowView
+	TotalActive  int
+	TotalGhost   int
+	TotalOrphan  int
+	TotalServers int
+}
+
+type mcpGovMatrixRowView struct {
+	ProjectPath string
+	DisplayName string
+	Cells       map[string]mcpGovCellView
+	ActiveCount int
+	GhostCount  int
+	OrphanCount int
+	TotalCost   float64
+}
+
+type mcpGovCellView struct {
+	Status      string // "active", "ghost", "orphan", "" (absent)
+	StatusClass string // CSS badge class
+	CallCount   int
+	TotalCost   float64
+	HasData     bool // true if server is present for this project
+}
+
+// skillReuseView is a template-friendly skill reuse entry.
+type skillReuseView struct {
+	Name         string
+	Scope        string
+	ProjectCount int
+	Projects     string // comma-separated
+	TotalLoads   int
+	TotalTokens  int
+	TotalTokensK string // formatted "36K"
+}
+
 // handleCosts renders the cost dashboard.
 func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 	data := s.buildCostsData(r)
@@ -3129,6 +3638,90 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 				mv.Projects = append(mv.Projects, rv)
 			}
 			data.MCPMatrix = mv
+		}
+
+		// Cross-project MCP governance matrix (5.2).
+		if s.registrySvc != nil {
+			govMatrix, govErr := s.registrySvc.CrossProjectMCPGovernance(since90d)
+			if govErr == nil && govMatrix != nil && len(govMatrix.Projects) > 0 {
+				data.HasGovMatrix = true
+				gv := &mcpGovMatrixView{
+					Servers:      govMatrix.Servers,
+					TotalActive:  govMatrix.TotalActive,
+					TotalGhost:   govMatrix.TotalGhost,
+					TotalOrphan:  govMatrix.TotalOrphan,
+					TotalServers: govMatrix.TotalServers,
+				}
+				for _, row := range govMatrix.Projects {
+					rv := mcpGovMatrixRowView{
+						ProjectPath: row.ProjectPath,
+						DisplayName: row.DisplayName,
+						Cells:       make(map[string]mcpGovCellView),
+						ActiveCount: row.ActiveCount,
+						GhostCount:  row.GhostCount,
+						OrphanCount: row.OrphanCount,
+						TotalCost:   row.TotalCost,
+					}
+					for srv, cell := range row.Cells {
+						statusClass := "good"
+						switch cell.Status {
+						case registry.MCPStatusGhost:
+							statusClass = "warning"
+						case registry.MCPStatusOrphan:
+							statusClass = "poor"
+						}
+						rv.Cells[srv] = mcpGovCellView{
+							Status:      string(cell.Status),
+							StatusClass: statusClass,
+							CallCount:   cell.CallCount,
+							TotalCost:   cell.TotalCost,
+							HasData:     true,
+						}
+					}
+					gv.Projects = append(gv.Projects, rv)
+				}
+				data.GovMatrix = gv
+			}
+		}
+
+		// Skill reuse map (1.5).
+		if s.registrySvc != nil {
+			skillReuse, srErr := s.registrySvc.SkillReuseAnalysis(since90d)
+			if srErr == nil && skillReuse != nil && skillReuse.TotalSkills > 0 {
+				data.HasSkillReuse = true
+				data.SkillTotalLoads = skillReuse.TotalLoads
+				data.SkillSharedCount = skillReuse.SharedCount
+				data.SkillMonoCount = skillReuse.MonoCount
+				data.SkillIdleCount = skillReuse.IdleCount
+
+				toView := func(entries []registry.SkillReuseEntry) []skillReuseView {
+					var views []skillReuseView
+					for _, e := range entries {
+						v := skillReuseView{
+							Name:         e.Name,
+							Scope:        string(e.Scope),
+							ProjectCount: e.ProjectCount,
+							TotalLoads:   e.TotalLoads,
+							TotalTokens:  e.TotalTokens,
+						}
+						if len(e.Projects) > 0 {
+							v.Projects = joinStrings(e.Projects)
+						}
+						if e.TotalTokens >= 1000000 {
+							v.TotalTokensK = fmt.Sprintf("%.1fM", float64(e.TotalTokens)/1000000)
+						} else if e.TotalTokens >= 1000 {
+							v.TotalTokensK = fmt.Sprintf("%.1fK", float64(e.TotalTokens)/1000)
+						} else {
+							v.TotalTokensK = strconv.Itoa(e.TotalTokens)
+						}
+						views = append(views, v)
+					}
+					return views
+				}
+				data.SkillShared = toView(skillReuse.SharedSkills)
+				data.SkillMono = toView(skillReuse.MonoSkills)
+				data.SkillIdle = toView(skillReuse.IdleSkills)
+			}
 		}
 	}
 
@@ -3847,6 +4440,7 @@ type fileRow struct {
 	LastSummary    string // AI session summary
 	LastBranch     string
 	LastTimeAgo    string // time since last AI modification
+	LastCommitSHA  string // commit SHA from the AI session (short, 7 chars)
 	// Git commit info (from TreeProvider).
 	LastCommitMsg string // last git commit message for this file
 	LastCommitAgo string // time since last git commit
@@ -3912,7 +4506,7 @@ func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
 		absPrefix = strings.TrimSuffix(projectPath, "/") + "/" + dirPrefix
 	}
 
-	entries, err := s.store.FilesForProject(projectPath, absPrefix, 500)
+	entries, err := s.cachedFilesForProject(projectPath, absPrefix, 500)
 	if err != nil {
 		s.logger.Printf("file explorer: %v", err)
 		s.render(w, "file_explorer.html", data)
@@ -3982,6 +4576,7 @@ func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
 		LastSummary    string
 		LastBranch     string
 		LastTimeAgo    string
+		LastCommitSHA  string
 	}
 	aiMap := make(map[string]aiInfo) // basename → AI data
 	for _, re := range relEntries {
@@ -4000,6 +4595,7 @@ func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
 			LastSummary:    truncStr(re.entry.LastSummary, 80),
 			LastBranch:     re.entry.LastBranch,
 			LastTimeAgo:    timeAgoString(re.entry.LastSessionTime),
+			LastCommitSHA:  truncateID(re.entry.LastCommitSHA, 7),
 		}
 	}
 
@@ -4064,6 +4660,7 @@ func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
 					row.LastSummary = ai.LastSummary
 					row.LastBranch = ai.LastBranch
 					row.LastTimeAgo = ai.LastTimeAgo
+					row.LastCommitSHA = ai.LastCommitSHA
 
 					switch ai.LastChangeType {
 					case "created":
@@ -4156,14 +4753,554 @@ func splitPath(p string) []string {
 	return parts
 }
 
+// ── File Blame ──
+
+type blamePage struct {
+	Nav           string
+	ProjectPath   string
+	DirPrefix     string
+	FileName      string // basename
+	RelPath       string // relative path for display
+	TotalSessions int
+	Entries       []blameEntryView
+}
+
+type blameEntryView struct {
+	SessionID   string
+	Summary     string
+	Branch      string
+	Provider    string
+	ChangeType  string
+	ChangeClass string // CSS class: created, modified, deleted, read
+	TimeAgo     string
+}
+
+// handleBlame renders the blame page for a specific file,
+// showing all AI sessions that modified it.
+// Query params: ?file=relative/path&project=/abs/project/path
+func (s *Server) handleBlame(w http.ResponseWriter, r *http.Request) {
+	relFile := r.URL.Query().Get("file")
+	projectPath := r.URL.Query().Get("project")
+	if relFile == "" {
+		http.Error(w, "missing ?file= parameter", http.StatusBadRequest)
+		return
+	}
+
+	data := blamePage{
+		Nav:         "files",
+		ProjectPath: projectPath,
+		FileName:    filepath.Base(relFile),
+		RelPath:     relFile,
+	}
+
+	// Build dir prefix for back navigation
+	dir := filepath.Dir(relFile)
+	if dir != "." && dir != "/" && dir != "" {
+		data.DirPrefix = dir
+	}
+
+	if s.store != nil {
+		// DB stores absolute paths — construct from project path + relative file.
+		absFile := relFile
+		if projectPath != "" && !filepath.IsAbs(relFile) {
+			absFile = strings.TrimSuffix(projectPath, "/") + "/" + relFile
+		}
+
+		entries, err := s.store.GetSessionsByFile(session.BlameQuery{
+			FilePath: absFile,
+		})
+		if err != nil {
+			s.logger.Printf("blame: %v", err)
+		}
+
+		data.TotalSessions = len(entries)
+		for _, e := range entries {
+			changeClass := "modified"
+			switch string(e.ChangeType) {
+			case "created":
+				changeClass = "created"
+			case "deleted":
+				changeClass = "deleted"
+			case "read":
+				changeClass = "read"
+			}
+			data.Entries = append(data.Entries, blameEntryView{
+				SessionID:   string(e.SessionID),
+				Summary:     truncStr(e.Summary, 120),
+				Branch:      e.Branch,
+				Provider:    string(e.Provider),
+				ChangeType:  string(e.ChangeType),
+				ChangeClass: changeClass,
+				TimeAgo:     timeAgoString(e.CreatedAt),
+			})
+		}
+	}
+
+	s.render(w, "blame.html", data)
+}
+
+// ── File Tree ──
+
+// fileTreePage is the view model for the interactive file tree page.
+type fileTreePage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+	Projects        []projectItem
+	ProjectPath     string
+	ProjectName     string
+	HasTree         bool
+	Tree            []fileTreeNode
+	Stats           *fileTreeStats
+	MaxSessions     int // maximum session count across all files (for heatmap)
+}
+
+type fileTreeStats struct {
+	TotalFiles    int
+	TotalDirs     int
+	TotalSessions int
+}
+
+// fileTreeNode represents a directory or file in the recursive tree.
+type fileTreeNode struct {
+	IsDir         bool
+	Name          string
+	DirPath       string // dirs: relative dir path (for HTMX children loading)
+	FilePath      string // relative path (for HTMX session loading)
+	ProjectPath   string // absolute project path (for HTMX query param)
+	IndentPx      int
+	Children      []fileTreeNode
+	FileCount     int    // dirs: number of AI-touched files inside
+	HasAI         bool   // files: has at least one AI session
+	SessionCount  int    // files: number of AI sessions
+	LastSessionID string // files: most recent session ID
+	LastCommitSHA string // files: commit SHA from the AI session (short)
+	LastTimeAgo   string // files: time since last AI modification
+	HeatClass     string // heatmap CSS class: ft-heat-cold, ft-heat-warm, ft-heat-hot, ft-heat-fire
+	Lazy          bool   // dirs: true if children should be loaded via HTMX (not pre-rendered)
+	MaxSessions   int    // global max sessions (for heatmap consistency across lazy loads)
+}
+
+// handleFileTree renders the interactive file tree page with a full
+// recursive tree of files that have AI session activity.
+func (s *Server) handleFileTree(w http.ResponseWriter, r *http.Request) {
+	projectPath := "/" + r.PathValue("path")
+	if projectPath == "/" {
+		projects := s.buildProjectList("")
+		if len(projects) > 0 {
+			http.Redirect(w, r, "/tree"+projects[0].Path, http.StatusFound)
+			return
+		}
+		s.render(w, "file_tree.html", fileTreePage{Nav: "filetree"})
+		return
+	}
+
+	data := fileTreePage{
+		Nav:             "filetree",
+		SidebarProjects: s.buildSidebarProjects(r.Context(), projectPath),
+		Projects:        s.buildProjectList(projectPath),
+		ProjectPath:     projectPath,
+		ProjectName:     projectBaseName(projectPath),
+	}
+
+	if s.store == nil {
+		s.render(w, "file_tree.html", data)
+		return
+	}
+
+	// Fetch all files with AI activity for this project (no dirPrefix = full tree).
+	entries, err := s.store.FilesForProject(projectPath, "", 5000)
+	if err != nil {
+		s.logger.Printf("file tree: %v", err)
+		s.render(w, "file_tree.html", data)
+		return
+	}
+
+	if len(entries) == 0 {
+		s.render(w, "file_tree.html", data)
+		return
+	}
+
+	// Build the recursive tree from flat file entries.
+	projPrefix := strings.TrimSuffix(projectPath, "/") + "/"
+	data.Tree, data.Stats, data.MaxSessions = buildFileTree(entries, projPrefix, projectPath, true)
+	data.HasTree = len(data.Tree) > 0
+
+	s.render(w, "file_tree.html", data)
+}
+
+// buildFileTree converts a flat list of ProjectFileEntry into a recursive
+// tree of fileTreeNode, grouping files by directory.
+// projPrefix is stripped from file paths to compute relative paths.
+// relBase is prepended to dir paths for HTMX URLs (e.g. "internal/web" when
+// building a subtree for that directory, so child dirs get "internal/web/templates").
+// If lazyDirs is true, only root-level nodes are returned; subdirectories
+// are marked Lazy=true so the template can use HTMX to load children on expand.
+func buildFileTree(entries []session.ProjectFileEntry, projPrefix, projectPath string, lazyDirs bool, relBase ...string) ([]fileTreeNode, *fileTreeStats, int) {
+	base := ""
+	if len(relBase) > 0 {
+		base = relBase[0]
+	}
+
+	// dir → children map for building the tree.
+	type dirInfo struct {
+		children map[string]*dirInfo // subdirs
+		files    []fileTreeNode
+		dirPath  string // relative dir path from project root
+	}
+
+	root := &dirInfo{children: make(map[string]*dirInfo), dirPath: base}
+
+	stats := &fileTreeStats{}
+	totalSessions := 0
+	maxSessions := 0
+
+	for _, e := range entries {
+		rel := e.FilePath
+		if strings.HasPrefix(rel, projPrefix) {
+			rel = rel[len(projPrefix):]
+		} else {
+			continue
+		}
+
+		parts := splitPath(rel)
+		if len(parts) == 0 {
+			continue
+		}
+
+		stats.TotalFiles++
+		totalSessions += e.SessionCount
+		if e.SessionCount > maxSessions {
+			maxSessions = e.SessionCount
+		}
+
+		// Navigate/create directory nodes.
+		current := root
+		pathSoFar := base
+		for _, dir := range parts[:len(parts)-1] {
+			if pathSoFar == "" {
+				pathSoFar = dir
+			} else {
+				pathSoFar = pathSoFar + "/" + dir
+			}
+			if current.children[dir] == nil {
+				current.children[dir] = &dirInfo{children: make(map[string]*dirInfo), dirPath: pathSoFar}
+			}
+			current = current.children[dir]
+		}
+
+		// Build relative file path from project root (for HTMX session loading).
+		var filePath string
+		if base == "" {
+			filePath = rel
+		} else {
+			filePath = base + "/" + rel
+		}
+
+		// Add file leaf.
+		fileName := parts[len(parts)-1]
+		current.files = append(current.files, fileTreeNode{
+			IsDir:         false,
+			Name:          fileName,
+			FilePath:      filePath,
+			ProjectPath:   projectPath,
+			HasAI:         true,
+			SessionCount:  e.SessionCount,
+			LastSessionID: string(e.LastSessionID),
+			LastCommitSHA: truncateID(e.LastCommitSHA, 7),
+			LastTimeAgo:   timeAgoString(e.LastSessionTime),
+			HeatClass:     sessionHeatClass(e.SessionCount, maxSessions),
+		})
+	}
+
+	stats.TotalSessions = totalSessions
+
+	// Second pass: recompute heatmap classes now that maxSessions is known.
+	// (files added before maxSessions was finalized need re-classification.)
+	var fixHeat func(d *dirInfo)
+	fixHeat = func(d *dirInfo) {
+		for i := range d.files {
+			d.files[i].HeatClass = sessionHeatClass(d.files[i].SessionCount, maxSessions)
+		}
+		for _, child := range d.children {
+			fixHeat(child)
+		}
+	}
+	fixHeat(root)
+
+	// countDirFiles recursively counts files in a dirInfo tree.
+	var countDirFiles func(d *dirInfo) int
+	countDirFiles = func(d *dirInfo) int {
+		n := len(d.files)
+		for _, child := range d.children {
+			n += countDirFiles(child)
+		}
+		return n
+	}
+
+	// Recursively convert dirInfo into []fileTreeNode.
+	var buildNodes func(d *dirInfo, depth int, lazy bool) []fileTreeNode
+	buildNodes = func(d *dirInfo, depth int, lazy bool) []fileTreeNode {
+		var nodes []fileTreeNode
+		indent := depth * 16
+
+		// Directories first (sorted).
+		dirNames := make([]string, 0, len(d.children))
+		for name := range d.children {
+			dirNames = append(dirNames, name)
+		}
+		sort.Strings(dirNames)
+
+		for _, name := range dirNames {
+			child := d.children[name]
+			stats.TotalDirs++
+
+			if lazy && depth > 0 {
+				// Don't recurse — mark as lazy-loadable.
+				fileCount := countDirFiles(child)
+				nodes = append(nodes, fileTreeNode{
+					IsDir:       true,
+					Name:        name,
+					DirPath:     child.dirPath,
+					ProjectPath: projectPath,
+					IndentPx:    indent,
+					FileCount:   fileCount,
+					Lazy:        true,
+					MaxSessions: maxSessions,
+				})
+			} else {
+				childNodes := buildNodes(child, depth+1, lazy)
+				fileCount := countFilesInTree(childNodes)
+				nodes = append(nodes, fileTreeNode{
+					IsDir:       true,
+					Name:        name,
+					DirPath:     child.dirPath,
+					ProjectPath: projectPath,
+					IndentPx:    indent,
+					Children:    childNodes,
+					FileCount:   fileCount,
+					Lazy:        false,
+				})
+			}
+		}
+
+		// Files (sorted).
+		sort.Slice(d.files, func(i, j int) bool { return d.files[i].Name < d.files[j].Name })
+		for _, f := range d.files {
+			f.IndentPx = indent
+			nodes = append(nodes, f)
+		}
+
+		return nodes
+	}
+
+	return buildNodes(root, 0, lazyDirs), stats, maxSessions
+}
+
+// sessionHeatClass returns a CSS class for the heatmap based on the session count
+// relative to the maximum session count across all files.
+func sessionHeatClass(count, maxCount int) string {
+	if maxCount <= 0 || count <= 0 {
+		return "ft-heat-cold"
+	}
+	ratio := float64(count) / float64(maxCount)
+	switch {
+	case ratio >= 0.75:
+		return "ft-heat-fire"
+	case ratio >= 0.5:
+		return "ft-heat-hot"
+	case ratio >= 0.25:
+		return "ft-heat-warm"
+	default:
+		return "ft-heat-cold"
+	}
+}
+
+// countFilesInTree recursively counts file nodes in a tree.
+func countFilesInTree(nodes []fileTreeNode) int {
+	count := 0
+	for _, n := range nodes {
+		if n.IsDir {
+			count += countFilesInTree(n.Children)
+		} else {
+			count++
+		}
+	}
+	return count
+}
+
+// fileTreeSessionsData is the view model for the HTMX sessions partial.
+type fileTreeSessionsData struct {
+	Entries []blameEntryView
+}
+
+// handleFileTreeSessions is an HTMX partial that returns the session list
+// for a specific file in the file tree (lazy-loaded on click).
+func (s *Server) handleFileTreeSessions(w http.ResponseWriter, r *http.Request) {
+	relFile := r.URL.Query().Get("file")
+	projectPath := r.URL.Query().Get("project")
+	if relFile == "" || projectPath == "" {
+		http.Error(w, "missing file or project parameter", http.StatusBadRequest)
+		return
+	}
+
+	data := fileTreeSessionsData{}
+
+	if s.store != nil {
+		absFile := strings.TrimSuffix(projectPath, "/") + "/" + relFile
+		entries, err := s.store.GetSessionsByFile(session.BlameQuery{
+			FilePath:     absFile,
+			ExcludeReads: true, // match badge counts which exclude reads
+		})
+		if err != nil {
+			s.logger.Printf("file tree sessions: %v", err)
+		}
+
+		for _, e := range entries {
+			changeClass := "modified"
+			switch string(e.ChangeType) {
+			case "created":
+				changeClass = "created"
+			case "deleted":
+				changeClass = "deleted"
+			case "read":
+				changeClass = "read"
+			}
+			data.Entries = append(data.Entries, blameEntryView{
+				SessionID:   string(e.SessionID),
+				Summary:     truncStr(e.Summary, 120),
+				Branch:      e.Branch,
+				Provider:    string(e.Provider),
+				ChangeType:  string(e.ChangeType),
+				ChangeClass: changeClass,
+				TimeAgo:     timeAgoString(e.CreatedAt),
+			})
+		}
+	}
+
+	s.renderPartial(w, "ft-sessions-partial", data)
+}
+
+// fileTreeChildrenData is the view model for the HTMX directory children partial.
+type fileTreeChildrenData struct {
+	Nodes []fileTreeNode
+}
+
+// handleFileTreeChildren is an HTMX partial that returns the children nodes
+// of a directory in the file tree (lazy-loaded on dir expand).
+func (s *Server) handleFileTreeChildren(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("dir")
+	projectPath := r.URL.Query().Get("project")
+	maxStr := r.URL.Query().Get("max")
+	if dirPath == "" || projectPath == "" {
+		http.Error(w, "missing dir or project parameter", http.StatusBadRequest)
+		return
+	}
+
+	maxSessions := 1
+	if v, err := strconv.Atoi(maxStr); err == nil && v > 0 {
+		maxSessions = v
+	}
+
+	data := fileTreeChildrenData{}
+
+	if s.store == nil {
+		s.renderPartial(w, "ft-children-partial", data)
+		return
+	}
+
+	// Query files under this specific directory prefix.
+	absDir := strings.TrimSuffix(projectPath, "/") + "/" + dirPath
+	entries, err := s.store.FilesForProject(projectPath, absDir, 5000)
+	if err != nil {
+		s.logger.Printf("file tree children: %v", err)
+		s.renderPartial(w, "ft-children-partial", data)
+		return
+	}
+
+	if len(entries) == 0 {
+		s.renderPartial(w, "ft-children-partial", data)
+		return
+	}
+
+	// Build a subtree using dirPath as the new root prefix.
+	// This makes the returned nodes start at depth 0 relative to the target directory,
+	// while keeping dirPath references relative to the project root for HTMX URLs.
+	dirPrefix := strings.TrimSuffix(projectPath, "/") + "/" + dirPath + "/"
+	nodes, _, subMax := buildFileTree(entries, dirPrefix, projectPath, true, dirPath)
+	if subMax > maxSessions {
+		maxSessions = subMax
+	}
+
+	// Re-apply heatmap classes and propagate maxSessions for lazy child dirs.
+	var fixNodeHeat func(nodes []fileTreeNode)
+	fixNodeHeat = func(nodes []fileTreeNode) {
+		for i := range nodes {
+			if nodes[i].IsDir && nodes[i].Lazy {
+				nodes[i].MaxSessions = maxSessions
+			} else if !nodes[i].IsDir {
+				nodes[i].HeatClass = sessionHeatClass(nodes[i].SessionCount, maxSessions)
+			}
+			fixNodeHeat(nodes[i].Children)
+		}
+	}
+	fixNodeHeat(nodes)
+
+	data.Nodes = nodes
+	s.renderPartial(w, "ft-children-partial", data)
+}
+
 // ── Analysis ──
 
 // analysisPartialData is the data structure for the analysis HTMX partial.
 type analysisPartialData struct {
-	SessionID   string
-	HasAnalysis bool
-	CanAnalyze  bool
-	Analysis    *analysisView
+	SessionID        string
+	HasAnalysis      bool
+	CanAnalyze       bool
+	Analysis         *analysisView
+	AvailableModules []moduleInfoView // for checkbox selection
+}
+
+// moduleInfoView is a template-friendly module descriptor.
+type moduleInfoView struct {
+	Name        string
+	Label       string
+	Description string
+}
+
+// moduleResultView is a template-friendly per-module result.
+type moduleResultView struct {
+	Module     string
+	Label      string
+	DurationMs int
+	TokensUsed int
+	Error      string
+	// Tool efficiency specific fields (populated only for tool_efficiency module)
+	HasToolEfficiency bool
+	ToolEfficiency    *toolEfficiencyView
+}
+
+// toolEfficiencyView is a template-friendly tool efficiency report.
+type toolEfficiencyView struct {
+	Summary        string
+	OverallScore   int
+	ScoreClass     string
+	UsefulCalls    int
+	RedundantCalls int
+	Patterns       []string
+	HasPatterns    bool
+	Evaluations    []toolEvalView
+	HasEvaluations bool
+}
+
+// toolEvalView is a single tool call evaluation for the template.
+type toolEvalView struct {
+	Index        int
+	ToolName     string
+	Usefulness   string
+	UsefulClass  string // CSS class: "useful", "partial", "redundant", "wasteful"
+	Reason       string
+	InputTokens  int
+	OutputTokens int
 }
 
 // handleAnalysisPartial renders the analysis section partial (HTMX GET).
@@ -4178,6 +5315,7 @@ func (s *Server) handleAnalysisPartial(w http.ResponseWriter, r *http.Request) {
 
 	if s.analysisSvc != nil {
 		data.CanAnalyze = true
+		data.AvailableModules = s.buildModuleInfoViews()
 		sa, err := s.analysisSvc.GetLatestAnalysis(id)
 		if err == nil && sa != nil {
 			data.HasAnalysis = true
@@ -4201,10 +5339,19 @@ func (s *Server) handleRunAnalysis(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse selected modules from form checkboxes.
+	r.ParseForm()
+	var modules []analysis.ModuleName
+	for _, name := range r.Form["modules"] {
+		modules = append(modules, analysis.ModuleName(name))
+	}
+	// If no modules selected, default to session_quality only (backward compat).
+
 	// Run analysis synchronously — the UI shows a spinner via htmx-indicator.
 	_, err := s.analysisSvc.Analyze(r.Context(), service.AnalysisRequest{
 		SessionID: session.ID(id),
 		Trigger:   analysis.TriggerManual,
+		Modules:   modules,
 	})
 	if err != nil {
 		s.logger.Printf("analysis for %s: %v", id, err)
@@ -4214,8 +5361,9 @@ func (s *Server) handleRunAnalysis(w http.ResponseWriter, r *http.Request) {
 
 	// Return the updated partial.
 	data := analysisPartialData{
-		SessionID:  id,
-		CanAnalyze: true,
+		SessionID:        id,
+		CanAnalyze:       true,
+		AvailableModules: s.buildModuleInfoViews(),
 	}
 	sa, aErr := s.analysisSvc.GetLatestAnalysis(id)
 	if aErr == nil && sa != nil {
@@ -4224,6 +5372,23 @@ func (s *Server) handleRunAnalysis(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderPartial(w, "analysis_partial", data)
+}
+
+// buildModuleInfoViews returns module info views for the analysis checkbox UI.
+func (s *Server) buildModuleInfoViews() []moduleInfoView {
+	if s.analysisSvc == nil {
+		return nil
+	}
+	available := s.analysisSvc.AvailableModules()
+	views := make([]moduleInfoView, len(available))
+	for i, info := range available {
+		views[i] = moduleInfoView{
+			Name:        string(info.Name),
+			Label:       info.Label,
+			Description: info.Description,
+		}
+	}
+	return views
 }
 
 // buildAnalysisView converts a domain SessionAnalysis to a template-friendly view.
@@ -4286,6 +5451,61 @@ func buildAnalysisView(sa *analysis.SessionAnalysis) *analysisView {
 			v.SkillsDiscovered = obs.Discovered
 			v.SkillMissedCount = len(obs.Missed)
 			v.SkillDiscoveredCount = len(obs.Discovered)
+		}
+	}
+
+	// Module results.
+	if len(sa.Report.ModuleResults) > 0 {
+		v.HasModuleResults = true
+		for _, mr := range sa.Report.ModuleResults {
+			mrv := moduleResultView{
+				Module:     string(mr.Module),
+				DurationMs: mr.DurationMs,
+				TokensUsed: mr.TokensUsed,
+				Error:      mr.Error,
+			}
+			// Set human-readable label.
+			for _, info := range analysis.ModuleRegistry() {
+				if info.Name == mr.Module {
+					mrv.Label = info.Label
+					break
+				}
+			}
+			if mrv.Label == "" {
+				mrv.Label = string(mr.Module)
+			}
+			// Parse module-specific payloads.
+			if mr.Module == analysis.ModuleToolEfficiency && mr.Error == "" && len(mr.Payload) > 0 {
+				var report analysis.ToolEfficiencyReport
+				if err := json.Unmarshal(mr.Payload, &report); err == nil {
+					mrv.HasToolEfficiency = true
+					tev := &toolEfficiencyView{
+						Summary:        report.Summary,
+						OverallScore:   report.OverallScore,
+						ScoreClass:     scoreClass(report.OverallScore),
+						UsefulCalls:    report.UsefulCalls,
+						RedundantCalls: report.RedundantCalls,
+						Patterns:       report.Patterns,
+						HasPatterns:    len(report.Patterns) > 0,
+					}
+					if len(report.ToolEvaluations) > 0 {
+						tev.HasEvaluations = true
+						for _, eval := range report.ToolEvaluations {
+							tev.Evaluations = append(tev.Evaluations, toolEvalView{
+								Index:        eval.Index,
+								ToolName:     eval.ToolName,
+								Usefulness:   eval.Usefulness,
+								UsefulClass:  eval.Usefulness, // maps to CSS class directly
+								Reason:       eval.Reason,
+								InputTokens:  eval.InputTokens,
+								OutputTokens: eval.OutputTokens,
+							})
+						}
+					}
+					mrv.ToolEfficiency = tev
+				}
+			}
+			v.ModuleResults = append(v.ModuleResults, mrv)
 		}
 	}
 
@@ -4428,6 +5648,7 @@ type securityCatView struct {
 
 // insightView is a template-friendly auto-generated recommendation.
 type insightView struct {
+	ID        string // recommendation record ID (empty for non-persisted)
 	Icon      string
 	Title     string
 	Message   string
@@ -4552,8 +5773,8 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		SidebarProjects: s.buildSidebarProjects(ctx, projectPath),
 	}
 
-	// Find project metadata from ListProjects.
-	groups, _ := s.sessionSvc.ListProjects(ctx)
+	// Find project metadata from cached sidebar groups (avoids redundant ListProjects).
+	groups := s.cachedSidebarGroups(ctx)
 	for _, g := range groups {
 		if g.ProjectPath == projectPath {
 			data.DisplayName = g.DisplayName
@@ -4564,7 +5785,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		}
 	}
 
-	// KPIs (filtered by project).
+	// KPIs (filtered by project) — must complete before rendering.
 	statsReq := service.StatsRequest{ProjectPath: projectPath}
 	stats, err := s.cachedStats(statsReq)
 	if err != nil {
@@ -4592,15 +5813,29 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		})
 	}
 
-	// Recent sessions for this project.
-	listReq := service.ListRequest{ProjectPath: projectPath}
-	summaries, listErr := s.sessionSvc.List(listReq)
-	if listErr == nil {
+	// ── Concurrent data fetches ──
+	// All sections below are independent — run them in parallel to cut latency.
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	since7d := time.Now().AddDate(0, 0, -7)
+	since90d := time.Now().AddDate(0, 0, -90)
+
+	// 1. Recent sessions + agent distribution + error/tool counts.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		listReq := service.ListRequest{ProjectPath: projectPath}
+		summaries, listErr := s.sessionSvc.List(listReq)
+		if listErr != nil {
+			return
+		}
+
+		var totalErrors, totalToolCalls, sessionsWithErrors int
 		for _, sm := range summaries {
-			data.TotalErrors += sm.ErrorCount
-			data.TotalToolCalls += sm.ToolCallCount
+			totalErrors += sm.ErrorCount
+			totalToolCalls += sm.ToolCallCount
 			if sm.ErrorCount > 0 {
-				data.SessionsWithErrors++
+				sessionsWithErrors++
 			}
 		}
 
@@ -4620,29 +5855,46 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		if len(summaries) < recentLimit {
 			recentLimit = len(summaries)
 		}
-		data.RecentSessions = summaries[:recentLimit]
 
-		// Build agent distribution from all sessions (not just recent).
 		agentCounts := make(map[string]int)
 		for _, sm := range summaries {
 			if sm.Agent != "" {
 				agentCounts[sm.Agent]++
 			}
 		}
+		var agents []agentChip
 		for name, count := range agentCounts {
-			data.Agents = append(data.Agents, agentChip{Name: name, Count: count})
+			agents = append(agents, agentChip{Name: name, Count: count})
 		}
-		sort.Slice(data.Agents, func(i, j int) bool {
-			return data.Agents[i].Count > data.Agents[j].Count
+		sort.Slice(agents, func(i, j int) bool {
+			return agents[i].Count > agents[j].Count
 		})
-	}
 
-	// Weekly trends (project-scoped).
-	trends, trendsErr := s.cachedTrends(ctx, service.TrendRequest{
-		Period:      7 * 24 * time.Hour,
-		ProjectPath: projectPath,
-	})
-	if trendsErr == nil && (trends.Current.SessionCount > 0 || trends.Previous.SessionCount > 0) {
+		mu.Lock()
+		data.TotalErrors = totalErrors
+		data.TotalToolCalls = totalToolCalls
+		data.SessionsWithErrors = sessionsWithErrors
+		data.RecentSessions = summaries[:recentLimit]
+		data.Agents = agents
+		mu.Unlock()
+	}()
+
+	// 2. Weekly trends.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		trends, trendsErr := s.cachedTrends(ctx, service.TrendRequest{
+			Period:      7 * 24 * time.Hour,
+			ProjectPath: projectPath,
+		})
+		if trendsErr != nil {
+			return
+		}
+		if trends.Current.SessionCount == 0 && trends.Previous.SessionCount == 0 {
+			return
+		}
+
+		mu.Lock()
 		data.HasTrends = true
 		data.TrendVerdict = trends.Delta.Verdict
 		data.TrendSessions = buildTrendMetric(
@@ -4657,46 +5909,62 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			trends.Current.TotalErrors, trends.Previous.TotalErrors,
 			trends.Delta.ErrorsChange, trends.Delta.ErrorsChangePercent, true,
 		)
-	}
+		mu.Unlock()
+	}()
 
-	// Forecast.
-	forecast, fErr := s.cachedForecast(ctx, service.ForecastRequest{
-		Period:      "weekly",
-		Days:        90,
-		ProjectPath: projectPath,
-	})
-	if fErr == nil && forecast.SessionCount > 0 {
+	// 3. Forecast.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		forecast, fErr := s.cachedForecast(ctx, service.ForecastRequest{
+			Period:      "weekly",
+			Days:        90,
+			ProjectPath: projectPath,
+		})
+		if fErr != nil || forecast.SessionCount == 0 {
+			return
+		}
+
+		mu.Lock()
 		data.HasForecast = true
 		data.Projected30d = forecast.Projected30d
 		data.Projected90d = forecast.Projected90d
 		data.TrendPerDay = forecast.TrendPerDay
 		data.TrendDir = forecast.TrendDir
-
-		// Real cost if available.
 		if forecast.TotalReal30d > 0 || forecast.SubscriptionMonthly > 0 {
 			data.HasRealForecast = true
 			data.TotalReal30d = forecast.TotalReal30d
 			data.SubscriptionMonthly = forecast.SubscriptionMonthly
 			data.APIProjected30d = forecast.APIProjected30d
 		}
-	}
-	if data.TrendDir == "" {
-		data.TrendDir = "stable"
-	}
+		mu.Unlock()
+	}()
 
-	// Cache efficiency (7-day window, project-scoped).
-	since7d := time.Now().AddDate(0, 0, -7)
-	cacheEff, cacheErr := s.cachedCacheEfficiency(ctx, projectPath, since7d, "7d")
-	if cacheErr == nil && cacheEff != nil && cacheEff.TotalInputTokens > 0 {
+	// 4. Cache efficiency (7-day window).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cacheEff, cacheErr := s.cachedCacheEfficiency(ctx, projectPath, since7d, "7d")
+		if cacheErr != nil || cacheEff == nil || cacheEff.TotalInputTokens == 0 {
+			return
+		}
+
+		mu.Lock()
 		data.HasCacheStats = true
 		data.DashCacheHitRate = cacheEff.CacheHitRate
 		data.DashCacheMissSessions = cacheEff.SessionsWithMiss
 		data.DashCacheTotalMisses = cacheEff.TotalCacheMisses
 		data.DashCacheWaste = cacheEff.EstimatedWaste
-	}
+		mu.Unlock()
+	}()
 
-	// Analytics (event buckets).
-	if s.sessionEventSvc != nil {
+	// 5. Analytics (event buckets — single indexed query, fast).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.sessionEventSvc == nil {
+			return
+		}
 		now := time.Now().UTC()
 		since := now.AddDate(0, 0, -30)
 		buckets, bErr := s.sessionEventSvc.QueryBuckets(sessionevent.BucketQuery{
@@ -4705,47 +5973,80 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			Since:       since,
 			Until:       now,
 		})
-		if bErr == nil && len(buckets) > 0 {
-			data.HasAnalytics = true
-			allTools := make(map[string]int)
-			for _, b := range buckets {
-				data.AnalyticsTools += b.ToolCallCount
-				data.AnalyticsSkills += b.SkillLoadCount
-				for k, v := range b.TopTools {
-					allTools[k] += v
-				}
-				data.DailyBuckets = append(data.DailyBuckets, dailyActivity{
-					Date:      b.BucketStart.Format("Jan 2"),
-					ToolCalls: b.ToolCallCount,
-					Errors:    b.ErrorCount,
-					Sessions:  b.SessionCount,
-				})
-			}
-			data.TopTools = topN(allTools, data.AnalyticsTools, 8)
+		if bErr != nil || len(buckets) == 0 {
+			return
 		}
-	}
 
-	// Capabilities.
-	if s.registrySvc != nil {
+		var analyticsTools, analyticsSkills int
+		allTools := make(map[string]int)
+		var dailyBuckets []dailyActivity
+		for _, b := range buckets {
+			analyticsTools += b.ToolCallCount
+			analyticsSkills += b.SkillLoadCount
+			for k, v := range b.TopTools {
+				allTools[k] += v
+			}
+			dailyBuckets = append(dailyBuckets, dailyActivity{
+				Date:      b.BucketStart.Format("Jan 2"),
+				ToolCalls: b.ToolCallCount,
+				Errors:    b.ErrorCount,
+				Sessions:  b.SessionCount,
+			})
+		}
+
+		mu.Lock()
+		data.HasAnalytics = true
+		data.AnalyticsTools = analyticsTools
+		data.AnalyticsSkills = analyticsSkills
+		data.DailyBuckets = dailyBuckets
+		data.TopTools = topN(allTools, analyticsTools, 8)
+		mu.Unlock()
+	}()
+
+	// 6. Capabilities (filesystem only, fast).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.registrySvc == nil {
+			return
+		}
 		proj, scanErr := s.registrySvc.ScanProject(projectPath)
-		if scanErr == nil {
-			data.HasCapabilities = true
-			data.ProjectName = proj.Name
-			data.MCPServerCount = len(proj.MCPServers)
-			for _, cs := range proj.CapabilityStats() {
-				data.CapabilityStats = append(data.CapabilityStats, capabilityStat{
-					Kind:  string(cs.Kind),
-					Count: cs.Count,
-				})
-			}
+		if scanErr != nil {
+			return
 		}
-	}
 
-	// Budget status.
-	budgets, budgetErr := s.sessionSvc.BudgetStatus(ctx)
-	if budgetErr == nil {
+		var capStats []capabilityStat
+		for _, cs := range proj.CapabilityStats() {
+			capStats = append(capStats, capabilityStat{
+				Kind:  string(cs.Kind),
+				Count: cs.Count,
+			})
+		}
+
+		mu.Lock()
+		data.HasCapabilities = true
+		data.ProjectName = proj.Name
+		data.MCPServerCount = len(proj.MCPServers)
+		data.CapabilityStats = capStats
+		mu.Unlock()
+	}()
+
+	// 7. Budget status.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		budgets, budgetErr := s.sessionSvc.BudgetStatus(ctx)
+		if budgetErr != nil {
+			return
+		}
+
+		mu.Lock()
+		remoteURL := data.RemoteURL
+		mu.Unlock()
+
 		for _, bs := range budgets {
-			if bs.ProjectPath == projectPath || bs.RemoteURL == data.RemoteURL {
+			if bs.ProjectPath == projectPath || bs.RemoteURL == remoteURL {
+				mu.Lock()
 				data.HasBudget = true
 				data.BudgetMonthly = budgetView{
 					Limit:   bs.MonthlyLimit,
@@ -4761,26 +6062,40 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 				}
 				data.BudgetProjected = bs.ProjectedMonth
 				data.BudgetDaysLeft = bs.DaysRemaining
+				mu.Unlock()
 				break
 			}
 		}
-	}
+	}()
 
-	// Context saturation.
-	since90d := time.Now().AddDate(0, 0, -90)
-	satResult, satErr := s.cachedSaturation(ctx, projectPath, since90d)
-	if satErr == nil && satResult != nil && satResult.TotalSessions > 0 {
+	// 8. Context saturation (cached — pre-warmed by scheduler every 2h).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		satResult, satErr := s.cachedSaturation(ctx, projectPath, since90d)
+		if satErr != nil || satResult == nil || satResult.TotalSessions == 0 {
+			return
+		}
+
+		mu.Lock()
 		data.HasSaturation = true
 		data.SatAvgPeak = satResult.AvgPeakSaturation
 		data.SatAbove80 = satResult.SessionsAbove80
 		data.SatCompacted = satResult.SessionsCompacted
 		data.SatTotalSessions = satResult.TotalSessions
-	}
+		mu.Unlock()
+	}()
 
-	// Agent ROI.
-	agentROI, roiErr := s.sessionSvc.AgentROIAnalysis(ctx, projectPath, since90d)
-	if roiErr == nil && agentROI != nil && len(agentROI.Agents) > 0 {
-		data.HasAgentROI = true
+	// 9. Agent ROI (cached — expensive, loads all session payloads on cold cache).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		agentROI, roiErr := s.cachedAgentROI(ctx, projectPath, since90d)
+		if roiErr != nil || agentROI == nil || len(agentROI.Agents) == 0 {
+			return
+		}
+
+		var views []agentROIView
 		for _, a := range agentROI.Agents {
 			gradeClass := "badge-good"
 			switch a.ROIGrade {
@@ -4789,7 +6104,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			case "D", "F":
 				gradeClass = "badge-poor"
 			}
-			data.AgentROI = append(data.AgentROI, agentROIView{
+			views = append(views, agentROIView{
 				Agent:          a.Agent,
 				SessionCount:   a.SessionCount,
 				AvgCost:        a.AvgCostPerSession,
@@ -4802,12 +6117,23 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 				GradeClass:     gradeClass,
 			})
 		}
-	}
 
-	// Skill ROI.
-	skillROI, skillErr := s.sessionSvc.SkillROIAnalysis(ctx, projectPath, since90d)
-	if skillErr == nil && skillROI != nil && len(skillROI.Skills) > 0 {
-		data.HasSkillROI = true
+		mu.Lock()
+		data.HasAgentROI = true
+		data.AgentROI = views
+		mu.Unlock()
+	}()
+
+	// 10. Skill ROI (cached — expensive, queries events for every session on cold cache).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		skillROI, skillErr := s.cachedSkillROI(ctx, projectPath, since90d)
+		if skillErr != nil || skillROI == nil || len(skillROI.Skills) == 0 {
+			return
+		}
+
+		var views []skillROIView
 		for _, sk := range skillROI.Skills {
 			verdictClass := "badge-good"
 			switch sk.Verdict {
@@ -4818,7 +6144,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			case "neutral":
 				verdictClass = "badge-provider"
 			}
-			data.SkillROI = append(data.SkillROI, skillROIView{
+			views = append(views, skillROIView{
 				Name:          sk.Name,
 				LoadCount:     sk.LoadCount,
 				UsagePercent:  sk.UsagePercent,
@@ -4829,31 +6155,71 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 				IsGhost:       sk.IsGhost,
 			})
 		}
-	}
 
-	// Security scan.
-	if s.securityDetector != nil {
-		secSummary, secErr := s.securityDetector.ScanProject(projectPath)
-		if secErr == nil && secSummary != nil && secSummary.TotalAlerts > 0 {
-			data.HasSecurity = true
-			data.SecurityAlertCount = secSummary.TotalAlerts
-			data.SecurityCritical = secSummary.CriticalAlerts
-			data.SecurityHigh = secSummary.HighAlerts
-			data.SecurityAvgRisk = secSummary.AvgRiskScore
-			for _, cat := range secSummary.TopCategories {
-				data.SecurityTopCats = append(data.SecurityTopCats, securityCatView{
-					Category: string(cat.Category),
-					Count:    cat.Count,
-				})
-			}
+		mu.Lock()
+		data.HasSkillROI = true
+		data.SkillROI = views
+		mu.Unlock()
+	}()
+
+	// 11. Security — read from cache only (ScanProject loads all session payloads).
+	// The SecurityScanTask should pre-warm this via the scheduler.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.store == nil {
+			return
 		}
-	}
+		cacheKey := "security:" + projectPath
+		cacheData, _ := s.store.GetCache(cacheKey, securityCacheTTL)
+		if cacheData == nil {
+			// Cold cache: skip rather than blocking the page for 30+ seconds.
+			// The scheduler will compute and cache this in the background.
+			return
+		}
+		type cachedSecuritySummary struct {
+			TotalAlerts    int               `json:"total_alerts"`
+			CriticalAlerts int               `json:"critical_alerts"`
+			HighAlerts     int               `json:"high_alerts"`
+			AvgRiskScore   float64           `json:"avg_risk_score"`
+			TopCategories  []securityCatView `json:"top_categories"`
+		}
+		var summary cachedSecuritySummary
+		if err := json.Unmarshal(cacheData, &summary); err != nil || summary.TotalAlerts == 0 {
+			return
+		}
 
-	// Recommendations.
-	recommendations, recErr := s.sessionSvc.GenerateRecommendations(ctx, projectPath)
-	if recErr == nil && len(recommendations) > 0 {
-		data.HasRecommendations = true
-		for _, rec := range recommendations {
+		mu.Lock()
+		data.HasSecurity = true
+		data.SecurityAlertCount = summary.TotalAlerts
+		data.SecurityCritical = summary.CriticalAlerts
+		data.SecurityHigh = summary.HighAlerts
+		data.SecurityAvgRisk = summary.AvgRiskScore
+		data.SecurityTopCats = summary.TopCategories
+		mu.Unlock()
+	}()
+
+	// 12. Recommendations — read from store only (pre-computed by scheduler).
+	// Removed the on-the-fly GenerateRecommendations fallback which was catastrophically
+	// expensive: it calls AgentROI + SkillROI + CacheEfficiency + ContextSaturation
+	// all inline, causing 30s+ timeouts for large projects.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.store == nil {
+			return
+		}
+		storedRecs, storeRecErr := s.store.ListRecommendations(session.RecommendationFilter{
+			ProjectPath: projectPath,
+			Status:      session.RecStatusActive,
+			Limit:       50,
+		})
+		if storeRecErr != nil || len(storedRecs) == 0 {
+			return
+		}
+
+		var recViews []insightView
+		for _, rec := range storedRecs {
 			prioClass := "rec-low"
 			switch rec.Priority {
 			case "high":
@@ -4861,7 +6227,8 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			case "medium":
 				prioClass = "rec-medium"
 			}
-			data.Recommendations = append(data.Recommendations, insightView{
+			recViews = append(recViews, insightView{
+				ID:        rec.ID,
 				Icon:      rec.Icon,
 				Title:     rec.Title,
 				Message:   rec.Message,
@@ -4870,76 +6237,109 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 				PrioClass: prioClass,
 			})
 		}
-	}
 
-	// Top files (from file_changes table).
-	if s.store != nil {
-		topFiles, tfErr := s.store.TopFilesForProject(projectPath, 10)
-		if tfErr == nil && len(topFiles) > 0 {
-			data.HasTopFiles = true
-			for _, tf := range topFiles {
-				data.TopFileEntries = append(data.TopFileEntries, topFileView{
-					FilePath:     tf.FilePath,
-					SessionCount: tf.SessionCount,
-					WriteCount:   tf.WriteCount,
-				})
-			}
+		mu.Lock()
+		data.HasRecommendations = true
+		data.Recommendations = recViews
+		mu.Unlock()
+	}()
+
+	// 13. Top files (single indexed query, fast).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.store == nil {
+			return
 		}
-	}
+		topFiles, tfErr := s.store.TopFilesForProject(projectPath, 10)
+		if tfErr != nil || len(topFiles) == 0 {
+			return
+		}
 
-	// Activity sparklines (14-day mini bar charts) from token usage buckets.
-	if s.store != nil {
+		var views []topFileView
+		for _, tf := range topFiles {
+			views = append(views, topFileView{
+				FilePath:     tf.FilePath,
+				SessionCount: tf.SessionCount,
+				WriteCount:   tf.WriteCount,
+			})
+		}
+
+		mu.Lock()
+		data.HasTopFiles = true
+		data.TopFileEntries = views
+		mu.Unlock()
+	}()
+
+	// 14. Activity sparklines (single indexed query, fast).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.store == nil {
+			return
+		}
 		sparkSince := time.Now().AddDate(0, 0, -14)
 		sparkUntil := time.Now()
 		buckets, sparkErr := s.store.QueryTokenBuckets("1d", sparkSince, sparkUntil, projectPath)
-		if sparkErr == nil && len(buckets) > 0 {
-			type dayAgg struct {
-				sessions int
-				tokens   int
-				cost     float64
-				errors   int
-				label    string
-			}
-			byDay := make(map[string]*dayAgg)
-			dayOrder := make([]string, 0, 14)
-			for _, b := range buckets {
-				key := b.BucketStart.Format("2006-01-02")
-				agg, ok := byDay[key]
-				if !ok {
-					agg = &dayAgg{label: b.BucketStart.Format("Jan 2")}
-					byDay[key] = agg
-					dayOrder = append(dayOrder, key)
-				}
-				agg.sessions += b.SessionCount
-				agg.tokens += b.InputTokens + b.OutputTokens
-				agg.cost += b.EstimatedCost
-				if b.ActualCost > 0 {
-					agg.cost = b.ActualCost + agg.cost - b.EstimatedCost
-				}
-				agg.errors += b.ToolErrorCount
-			}
-			sort.Strings(dayOrder)
-
-			sessions := make([]int, len(dayOrder))
-			tokens := make([]int, len(dayOrder))
-			costs := make([]float64, len(dayOrder))
-			errors := make([]int, len(dayOrder))
-			labels := make([]string, len(dayOrder))
-			for i, key := range dayOrder {
-				a := byDay[key]
-				sessions[i] = a.sessions
-				tokens[i] = a.tokens
-				costs[i] = a.cost
-				errors[i] = a.errors
-				labels[i] = a.label
-			}
-
-			data.HasSparklines = true
-			data.SparklineSessions = buildSparklineBars(sessions, labels)
-			data.SparklineTokens = buildSparklineBars(tokens, labels)
-			data.SparklineCost = buildSparklineBarsFloat(costs, labels)
-			data.SparklineErrors = buildSparklineBars(errors, labels)
+		if sparkErr != nil || len(buckets) == 0 {
+			return
 		}
+
+		type dayAgg struct {
+			sessions int
+			tokens   int
+			cost     float64
+			errors   int
+			label    string
+		}
+		byDay := make(map[string]*dayAgg)
+		dayOrder := make([]string, 0, 14)
+		for _, b := range buckets {
+			key := b.BucketStart.Format("2006-01-02")
+			agg, ok := byDay[key]
+			if !ok {
+				agg = &dayAgg{label: b.BucketStart.Format("Jan 2")}
+				byDay[key] = agg
+				dayOrder = append(dayOrder, key)
+			}
+			agg.sessions += b.SessionCount
+			agg.tokens += b.InputTokens + b.OutputTokens
+			agg.cost += b.EstimatedCost
+			if b.ActualCost > 0 {
+				agg.cost = b.ActualCost + agg.cost - b.EstimatedCost
+			}
+			agg.errors += b.ToolErrorCount
+		}
+		sort.Strings(dayOrder)
+
+		sessions := make([]int, len(dayOrder))
+		tokens := make([]int, len(dayOrder))
+		costs := make([]float64, len(dayOrder))
+		errors := make([]int, len(dayOrder))
+		labels := make([]string, len(dayOrder))
+		for i, key := range dayOrder {
+			a := byDay[key]
+			sessions[i] = a.sessions
+			tokens[i] = a.tokens
+			costs[i] = a.cost
+			errors[i] = a.errors
+			labels[i] = a.label
+		}
+
+		mu.Lock()
+		data.HasSparklines = true
+		data.SparklineSessions = buildSparklineBars(sessions, labels)
+		data.SparklineTokens = buildSparklineBars(tokens, labels)
+		data.SparklineCost = buildSparklineBarsFloat(costs, labels)
+		data.SparklineErrors = buildSparklineBars(errors, labels)
+		mu.Unlock()
+	}()
+
+	wg.Wait()
+
+	// Default trend direction after all goroutines complete.
+	if data.TrendDir == "" {
+		data.TrendDir = "stable"
 	}
 
 	return data
@@ -5230,6 +6630,139 @@ type settingsPage struct {
 	ConfigPath         string // path to config file for reference
 }
 
+// ── Team Dashboard ──
+
+type teamPage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+	Period          string           // display label: "Today", "Yesterday", "This Week", "This Month"
+	PeriodKey       string           // query param value: "today", "yesterday", "week", "month"
+	Members         []teamMemberView // sorted by sessions DESC
+	TotalSessions   int
+	TotalTokens     int
+	TotalErrors     int
+	TeamSize        int
+}
+
+type teamMemberView struct {
+	Name         string
+	Email        string
+	Kind         string // "human", "machine", "unknown"
+	SessionCount int
+	TotalTokens  int
+	ErrorCount   int
+	ErrorRate    float64 // errors per session
+	Percent      int     // % of total team sessions (for progress bar)
+}
+
+func (s *Server) handleTeam(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Parse period from query: ?period=today|yesterday|week|month
+	periodKey := r.URL.Query().Get("period")
+	if periodKey == "" {
+		periodKey = "today"
+	}
+
+	now := time.Now()
+	var since, until time.Time
+	var periodLabel string
+
+	switch periodKey {
+	case "yesterday":
+		yesterday := now.AddDate(0, 0, -1)
+		since = time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, now.Location())
+		until = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		periodLabel = "Yesterday"
+	case "week":
+		// Go back to most recent Monday
+		weekday := int(now.Weekday())
+		if weekday == 0 {
+			weekday = 7 // Sunday
+		}
+		monday := now.AddDate(0, 0, -(weekday - 1))
+		since = time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, now.Location())
+		until = now
+		periodLabel = "This Week"
+	case "month":
+		since = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		until = now
+		periodLabel = "This Month"
+	default: // "today"
+		periodKey = "today"
+		since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		until = now
+		periodLabel = "Today"
+	}
+
+	data := teamPage{
+		Nav:       "team",
+		PeriodKey: periodKey,
+		Period:    periodLabel,
+	}
+
+	data.SidebarProjects = s.buildSidebarProjects(ctx, "")
+
+	// Get owner stats for the period.
+	if s.store != nil {
+		ownerStats, err := s.store.OwnerStats("", since, until)
+		if err != nil {
+			s.logger.Printf("[team] OwnerStats error: %v", err)
+		}
+
+		// Also get full user list for enrichment.
+		users, _ := s.store.ListUsers()
+		userMap := make(map[string]*session.User, len(users))
+		for _, u := range users {
+			userMap[string(u.ID)] = u
+		}
+
+		// Compute totals and build member views.
+		for _, os := range ownerStats {
+			data.TotalSessions += os.SessionCount
+			data.TotalTokens += os.TotalTokens
+			data.TotalErrors += os.ErrorCount
+		}
+
+		members := make([]teamMemberView, 0, len(ownerStats))
+		for _, os := range ownerStats {
+			mv := teamMemberView{
+				Name:         os.OwnerName,
+				Email:        os.OwnerEmail,
+				Kind:         os.OwnerKind,
+				SessionCount: os.SessionCount,
+				TotalTokens:  os.TotalTokens,
+				ErrorCount:   os.ErrorCount,
+			}
+			if os.SessionCount > 0 {
+				mv.ErrorRate = float64(os.ErrorCount) / float64(os.SessionCount)
+			}
+			if data.TotalSessions > 0 {
+				mv.Percent = os.SessionCount * 100 / data.TotalSessions
+			}
+
+			// Enrich with user data if available.
+			if u, ok := userMap[string(os.OwnerID)]; ok {
+				if mv.Name == "" {
+					mv.Name = u.Name
+				}
+				if mv.Email == "" {
+					mv.Email = u.Email
+				}
+				if mv.Kind == "" {
+					mv.Kind = string(u.Kind)
+				}
+			}
+
+			members = append(members, mv)
+		}
+		data.Members = members
+		data.TeamSize = len(members)
+	}
+
+	s.render(w, "team.html", data)
+}
+
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	data := settingsPage{
 		Nav:             "settings",
@@ -5239,7 +6772,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if s.cfg == nil {
 		data.Sections = []settingSection{{
 			Title:   "Configuration",
-			Icon:    "&#x2699;",
+			Icon:    "⚙",
 			IsEmpty: true,
 			Items:   []settingItem{{Key: "Status", Value: "No configuration loaded (using defaults)"}},
 		}}
@@ -5252,7 +6785,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── General ──
 	general := settingSection{
 		Title: "General",
-		Icon:  "&#x2699;",
+		Icon:  "⚙",
 		Items: []settingItem{
 			{Key: "Storage Mode", Value: string(s.cfg.GetStorageMode()), Description: "How sessions are stored (compact, full)", ConfigKey: "storage_mode", InputType: "select", Options: "compact,full"},
 			{Key: "Auto Capture", Value: boolStr(s.cfg.IsAutoCapture()), Description: "Automatically capture new sessions", ConfigKey: "auto_capture", InputType: "toggle"},
@@ -5263,7 +6796,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Features ──
 	features := settingSection{
 		Title: "Features",
-		Icon:  "&#x1F6A9;",
+		Icon:  "🚩",
 		Items: []settingItem{
 			{Key: "File Blame", Value: boolStr(s.cfg.IsFileBlameEnabled()), Description: "Extract file-level blame from tool calls (opt-in)", ConfigKey: "features.file_blame", InputType: "toggle"},
 			{Key: "Telemetry", Value: boolStr(s.cfg.IsTelemetryEnabled()), Description: "Anonymous usage statistics", ConfigKey: "telemetry.enabled", InputType: "toggle"},
@@ -5273,7 +6806,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Search ──
 	searchSec := settingSection{
 		Title: "Search",
-		Icon:  "&#x1F50D;",
+		Icon:  "🔍",
 		Items: []settingItem{
 			{Key: "Engine", Value: s.cfg.GetSearchEngine(), Description: "Primary search engine (like, fts5, elasticsearch, postgres)", ConfigKey: "search.engine", InputType: "select", Options: "like,fts5"},
 			{Key: "Fallback", Value: s.cfg.GetSearchFallback(), Description: "Fallback engine when primary fails", ConfigKey: "search.fallback", InputType: "select", Options: "like,fts5,none"},
@@ -5285,7 +6818,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Analysis ──
 	analysisSec := settingSection{
 		Title: "Analysis (LLM)",
-		Icon:  "&#x1F9E0;",
+		Icon:  "🧠",
 		Items: []settingItem{
 			{Key: "Auto Analyze", Value: boolStr(s.cfg.IsAnalysisAutoEnabled()), Description: "Run analysis automatically after capture", ConfigKey: "analysis.auto", InputType: "toggle"},
 			{Key: "Adapter", Value: s.cfg.GetAnalysisAdapter(), Description: "LLM adapter for analysis", ConfigKey: "analysis.adapter", InputType: "select", Options: "llm,opencode,ollama,anthropic"},
@@ -5299,7 +6832,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Tagging ──
 	taggingSec := settingSection{
 		Title: "Tagging",
-		Icon:  "&#x1F3F7;",
+		Icon:  "🏷",
 		Items: []settingItem{
 			{Key: "Auto Tag", Value: boolStr(s.cfg.IsTaggingAutoEnabled()), Description: "Auto-classify session types after capture", ConfigKey: "tagging.auto", InputType: "toggle"},
 			{Key: "Profile", Value: valueOrDefault(s.cfg.GetTaggingProfile(), "(default)"), Description: "LLM profile for classification", ConfigKey: "tagging.profile", InputType: "text"},
@@ -5310,7 +6843,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Secrets ──
 	secretsSec := settingSection{
 		Title: "Secrets Detection",
-		Icon:  "&#x1F512;",
+		Icon:  "🔒",
 		Items: []settingItem{
 			{Key: "Mode", Value: string(s.cfg.GetSecretsMode()), Description: "How secrets are handled (mask, redact, none)", ConfigKey: "secrets.mode", InputType: "select", Options: "mask,redact,none"},
 			{Key: "Custom Patterns", Value: fmt.Sprintf("%d patterns", len(s.cfg.GetCustomPatterns())), Description: "Additional regex patterns for secret detection"},
@@ -5321,7 +6854,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Errors ──
 	errorsSec := settingSection{
 		Title: "Error Classification",
-		Icon:  "&#x26A0;",
+		Icon:  "⚠",
 		Items: []settingItem{
 			{Key: "Classifier", Value: s.cfg.GetErrorsClassifier(), Description: "Error classifier (deterministic, composite)", ConfigKey: "errors.classifier", InputType: "select", Options: "deterministic,composite"},
 			{Key: "LLM Fallback", Value: boolStr(s.cfg.IsErrorsLLMFallbackEnabled()), Description: "Use LLM for unclassified errors", ConfigKey: "errors.llm_fallback", InputType: "toggle"},
@@ -5332,7 +6865,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Dashboard ──
 	dashSec := settingSection{
 		Title: "Dashboard",
-		Icon:  "&#x1F4CA;",
+		Icon:  "📊",
 		Items: []settingItem{
 			{Key: "Page Size", Value: fmt.Sprintf("%d", s.cfg.GetDashboardPageSize()), Description: "Sessions per page", ConfigKey: "dashboard.page_size", InputType: "number"},
 			{Key: "Columns", Value: joinStrings(s.cfg.GetDashboardColumns()), Description: "Visible columns in sessions table", ConfigKey: "dashboard.columns", InputType: "text"},
@@ -5344,7 +6877,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Server ──
 	serverSec := settingSection{
 		Title: "Server",
-		Icon:  "&#x1F5A5;",
+		Icon:  "🖥",
 		Items: []settingItem{
 			{Key: "URL", Value: valueOrDefault(s.cfg.GetServerURL(), "(standalone)"), Description: "Server URL for daemon mode"},
 			{Key: "Auth Enabled", Value: boolStr(s.cfg.IsAuthEnabled()), Description: "Require authentication"},
@@ -5356,7 +6889,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// ── Scheduler ──
 	schedulerSec := settingSection{
 		Title: "Scheduler",
-		Icon:  "&#x23F0;",
+		Icon:  "⏰",
 		Items: []settingItem{
 			{Key: "GC Enabled", Value: boolStr(s.cfg.GetSchedulerGCEnabled()), Description: "Garbage collection for old sessions", ConfigKey: "scheduler.gc.enabled", InputType: "toggle"},
 			{Key: "GC Schedule", Value: valueOrDefault(s.cfg.GetSchedulerGCCron(), "(disabled)"), Description: "GC cron expression", ConfigKey: "scheduler.gc.cron", InputType: "text"},
@@ -5368,8 +6901,36 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// ── Notifications ──
+	notifSec := settingSection{
+		Title: "Notifications",
+		Icon:  "🔔",
+		Items: []settingItem{
+			// Integrations
+			{Key: "Slack Webhook URL", Value: maskSecret(s.cfg.GetNotificationSlackWebhookURL(), 8), Description: "Incoming Webhook URL for channel posts", ConfigKey: "notification.slack.webhook_url", InputType: "text", IsSecret: true},
+			{Key: "Slack Bot Token", Value: maskSecret(s.cfg.GetNotificationSlackBotToken(), 4), Description: "Bot token (xoxb-...) for DMs and multi-channel", ConfigKey: "notification.slack.bot_token", InputType: "text", IsSecret: true},
+			{Key: "Webhook URL", Value: s.cfg.GetNotificationWebhookURL(), Description: "Generic webhook endpoint (HTTP POST)", ConfigKey: "notification.webhook.url", InputType: "text"},
+			{Key: "Webhook Secret", Value: maskSecret(s.cfg.GetNotificationWebhookSecret(), 4), Description: "HMAC secret for webhook signatures", ConfigKey: "notification.webhook.secret", InputType: "text", IsSecret: true},
+			// Routing
+			{Key: "Default Channel", Value: valueOrDefault(s.cfg.GetNotificationDefaultChannel(), "(none)"), Description: "Default Slack channel for notifications", ConfigKey: "notification.default_channel", InputType: "text"},
+			{Key: "Dashboard URL", Value: valueOrDefault(s.cfg.GetNotificationDashboardURL(), "(none)"), Description: "Base URL for 'View in Dashboard' links", ConfigKey: "notification.dashboard_url", InputType: "text"},
+			// Alerts
+			{Key: "Budget Alerts", Value: boolStr(s.cfg.IsNotificationAlertBudgetEnabled()), Description: "Alert when budget thresholds are reached", ConfigKey: "notification.alert_budget", InputType: "toggle"},
+			{Key: "Error Spike Alerts", Value: boolStr(s.cfg.IsNotificationAlertErrorsEnabled()), Description: "Alert on error count spikes", ConfigKey: "notification.alert_errors", InputType: "toggle"},
+			{Key: "Error Threshold", Value: fmt.Sprintf("%d", s.cfg.GetNotificationErrorThreshold()), Description: "Errors needed to trigger spike alert", ConfigKey: "notification.error_threshold", InputType: "number"},
+			{Key: "Error Window", Value: fmt.Sprintf("%d min", s.cfg.GetNotificationErrorWindowMins()), Description: "Time window for spike detection", ConfigKey: "notification.error_window_mins", InputType: "number"},
+			{Key: "Capture Alerts", Value: boolStr(s.cfg.IsNotificationAlertCaptureEnabled()), Description: "Notify on each session capture (noisy)", ConfigKey: "notification.alert_capture", InputType: "toggle"},
+			// Digests
+			{Key: "Daily Digest", Value: boolStr(s.cfg.IsNotificationDigestDailyEnabled()), Description: "Daily summary to channel", ConfigKey: "notification.digest_daily", InputType: "toggle"},
+			{Key: "Daily Schedule", Value: s.cfg.GetNotificationDailyDigestCron(), Description: "Cron for daily digest", ConfigKey: "notification.daily_digest_cron", InputType: "text"},
+			{Key: "Weekly Report", Value: boolStr(s.cfg.IsNotificationDigestWeeklyEnabled()), Description: "Weekly report to channel", ConfigKey: "notification.digest_weekly", InputType: "toggle"},
+			{Key: "Weekly Schedule", Value: s.cfg.GetNotificationWeeklyReportCron(), Description: "Cron for weekly report", ConfigKey: "notification.weekly_report_cron", InputType: "text"},
+			{Key: "Personal DMs", Value: boolStr(s.cfg.IsNotificationDigestPersonalEnabled()), Description: "Daily DM to each user (requires bot token)", ConfigKey: "notification.digest_personal", InputType: "toggle"},
+		},
+	}
+
 	// ── Projects (per-project classifiers) — rendered via dedicated partial ──
-	data.ProjectClassifiers = buildProjectClassifierViews(s.cfg.GetAllProjectClassifiers())
+	data.ProjectClassifiers = buildProjectClassifierViews(s.cfg.GetAllProjectClassifiers(), s.cfg.GetNotificationProjectChannels())
 
 	data.Sections = []settingSection{
 		general,
@@ -5382,6 +6943,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		dashSec,
 		serverSec,
 		schedulerSec,
+		notifSec,
 	}
 
 	s.render(w, "settings.html", data)
@@ -5401,6 +6963,18 @@ func valueOrDefault(val, def string) string {
 		return def
 	}
 	return val
+}
+
+// maskSecret masks a secret value, showing only the last N characters.
+// Returns "(not set)" if the value is empty.
+func maskSecret(val string, showLast int) string {
+	if val == "" {
+		return "(not set)"
+	}
+	if len(val) <= showLast {
+		return "****"
+	}
+	return "****" + val[len(val)-showLast:]
 }
 
 // joinProviders converts a slice of ProviderName to a comma-separated string.
@@ -5489,6 +7063,7 @@ type projectClassifierView struct {
 	AlertPercent  string
 	CostMode      string
 	AlertWebhook  string
+	NotifChannel  string // per-project Slack channel override (e.g. "#backend-ai")
 }
 
 type ruleView struct {
@@ -5497,7 +7072,7 @@ type ruleView struct {
 }
 
 // buildProjectClassifierViews builds sorted view models from config.
-func buildProjectClassifierViews(projects map[string]config.ProjectClassifierConf) []projectClassifierView {
+func buildProjectClassifierViews(projects map[string]config.ProjectClassifierConf, projectChannels map[string]string) []projectClassifierView {
 	if len(projects) == 0 {
 		return nil
 	}
@@ -5531,6 +7106,9 @@ func buildProjectClassifierViews(projects map[string]config.ProjectClassifierCon
 				v.CostMode = "actual"
 			}
 			v.AlertWebhook = pc.Budget.AlertWebhook
+		}
+		if projectChannels != nil {
+			v.NotifChannel = projectChannels[name]
 		}
 		views = append(views, v)
 	}
@@ -5657,6 +7235,11 @@ func (s *Server) handleProjectClassifierSave(w http.ResponseWriter, r *http.Requ
 		fmt.Fprintf(w, `<span class="text-error">%s</span>`, template.HTMLEscapeString(err.Error()))
 		return
 	}
+
+	// Save notification channel override for this project.
+	notifChannel := strings.TrimSpace(r.FormValue("notif_channel"))
+	s.cfg.SetNotificationProjectChannel(name, notifChannel)
+
 	if err := s.cfg.Save(); err != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -5716,12 +7299,184 @@ func (s *Server) handleProjectClassifierDelete(w http.ResponseWriter, r *http.Re
 // and writes it to the response. Used by both save and delete handlers.
 func (s *Server) renderProjectClassifiersPartial(w http.ResponseWriter) {
 	projects := s.cfg.GetAllProjectClassifiers()
-	views := buildProjectClassifierViews(projects)
+	views := buildProjectClassifierViews(projects, s.cfg.GetNotificationProjectChannels())
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.partials.ExecuteTemplate(w, "project-classifiers", views); err != nil {
 		s.logger.Printf("render project-classifiers partial: %v", err)
 	}
+}
+
+// ── Classification Rules Live Preview ─────────────────────────────────────
+
+// classificationPreviewRow is a single session row in the preview results.
+type classificationPreviewRow struct {
+	ID            string
+	Summary       string
+	Branch        string
+	Agent         string
+	CurrentType   string
+	NewType       string
+	TypeChanged   bool
+	CurrentStatus string
+	NewStatus     string
+	StatusChanged bool
+}
+
+// classificationPreviewData is passed to the classification_preview_partial template.
+type classificationPreviewData struct {
+	Rows          []classificationPreviewRow
+	Total         int
+	Matched       int
+	TypeChanges   int
+	StatusChanges int
+}
+
+// handleClassificationPreview handles POST /api/settings/project/preview — dry-run classification.
+// It parses proposed rules from the form, queries sessions for the project, and returns
+// an HTMX partial showing how sessions would be reclassified.
+func (s *Server) handleClassificationPreview(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "no store", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form data", http.StatusBadRequest)
+		return
+	}
+
+	projectName := strings.TrimSpace(r.FormValue("name"))
+	if projectName == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `<span class="text-error">project name is required for preview</span>`)
+		return
+	}
+
+	// Parse proposed rules from form (same parsing as the save handler).
+	branchRules := parseRulesFromForm(r, "branch_rule")
+	agentRules := parseRulesFromForm(r, "agent_rule")
+	commitRules := parseRulesFromForm(r, "commit_rule")
+	statusRules := parseRulesFromForm(r, "status_rule")
+
+	// Fall back to defaults when the form has no rules for a category.
+	if len(commitRules) == 0 {
+		commitRules = config.DefaultCommitRules
+	}
+	if len(agentRules) == 0 {
+		agentRules = config.DefaultAgentRules
+	}
+	if len(statusRules) == 0 {
+		statusRules = config.DefaultStatusRules
+	}
+
+	// Fetch all sessions and filter to those matching the project name.
+	allSessions, err := s.store.List(session.ListOptions{All: true})
+	if err != nil {
+		s.logger.Printf("[preview] error listing sessions: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	var matching []session.Summary
+	for _, sm := range allSessions {
+		if sessionMatchesProject(sm, projectName) {
+			matching = append(matching, sm)
+		}
+	}
+
+	// Apply proposed rules to each matching session (dry-run, no persistence).
+	const maxPreviewRows = 50
+	data := classificationPreviewData{
+		Total: len(matching),
+	}
+	for i, sm := range matching {
+		if i >= maxPreviewRows {
+			break
+		}
+		row := classifySessionPreview(sm, branchRules, agentRules, commitRules, statusRules)
+		if row.TypeChanged || row.StatusChanged {
+			data.Matched++
+		}
+		if row.TypeChanged {
+			data.TypeChanges++
+		}
+		if row.StatusChanged {
+			data.StatusChanges++
+		}
+		data.Rows = append(data.Rows, row)
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.partials.ExecuteTemplate(w, "classification-preview", data); err != nil {
+		s.logger.Printf("render classification-preview partial: %v", err)
+	}
+}
+
+// sessionMatchesProject checks if a session summary belongs to a project name.
+// The project name can match: the remote URL display name, the raw remote URL,
+// the project path, or the basename of the project path.
+func sessionMatchesProject(sm session.Summary, projectName string) bool {
+	if projectName == "" {
+		return false
+	}
+	displayName := config.RemoteDisplayName(sm.RemoteURL)
+	candidates := []string{displayName, sm.RemoteURL, sm.ProjectPath}
+	if sm.ProjectPath != "" {
+		candidates = append(candidates, filepath.Base(sm.ProjectPath))
+	}
+	for _, c := range candidates {
+		if c != "" && c == projectName {
+			return true
+		}
+	}
+	return false
+}
+
+// classifySessionPreview applies proposed rules to a session summary in dry-run mode
+// using the same priority cascade as the real classifier:
+//  1. Conventional Commit prefix in summary (highest priority)
+//  2. Branch name rules
+//  3. Agent name rules (lowest priority)
+func classifySessionPreview(sm session.Summary, branchRules, agentRules, commitRules, statusRules map[string]string) classificationPreviewRow {
+	row := classificationPreviewRow{
+		ID:            string(sm.ID),
+		Summary:       sm.Summary,
+		Branch:        sm.Branch,
+		Agent:         sm.Agent,
+		CurrentType:   sm.SessionType,
+		CurrentStatus: string(sm.Status),
+	}
+	if len(row.ID) > 12 {
+		row.ID = row.ID[:12]
+	}
+	if len(row.Summary) > 60 {
+		row.Summary = row.Summary[:57] + "..."
+	}
+
+	// Priority 1: Conventional Commit prefix.
+	newType := service.MatchConventionalCommit(commitRules, sm.Summary)
+	// Priority 2: Branch rules.
+	if newType == "" && len(branchRules) > 0 && sm.Branch != "" {
+		newType = service.MatchBranchRule(branchRules, sm.Branch)
+	}
+	// Priority 3: Agent rules.
+	if newType == "" && sm.Agent != "" {
+		if t, ok := agentRules[sm.Agent]; ok {
+			newType = t
+		}
+	}
+
+	row.NewType = newType
+	row.TypeChanged = newType != "" && newType != sm.SessionType
+
+	// Status from summary prefix.
+	newStatus := service.MatchSummaryPrefix(statusRules, sm.Summary)
+	row.NewStatus = newStatus
+	row.StatusChanged = newStatus != "" && newStatus != string(sm.Status)
+
+	return row
 }
 
 // parseRulesFromForm reads repeated form fields like "prefix_pattern[]" and "prefix_type[]"
@@ -6090,4 +7845,671 @@ func (s *Server) buildTimelineGraph(sess *session.Session) []timelineGraphEntry 
 	}
 
 	return entries
+}
+
+// ── Pull Requests page ──
+
+type pullsPage struct {
+	Nav                 string
+	SidebarProjects     []sidebarProject
+	PRs                 []prView
+	HasPRs              bool
+	NoPlatform          bool
+	StateFilter         string
+	TotalPRs            int
+	TotalLinkedSessions int
+	TotalTokensStr      string
+}
+
+type prView struct {
+	Number          int
+	Title           string
+	Branch          string
+	BaseBranch      string
+	State           string
+	StateIcon       string
+	Author          string
+	URL             string
+	Additions       int
+	Deletions       int
+	Comments        int
+	TimeAgo         string
+	SessionCount    int
+	TokensStr       string
+	HasSessions     bool
+	Sessions        []prSessionView
+	LatestSessionID string // ID of the most recent session (for restore shortcut)
+}
+
+type prSessionView struct {
+	ID           string
+	IDShort      string
+	Summary      string
+	Agent        string
+	SessionType  string
+	MessageCount int
+	TokensStr    string
+	TimeAgo      string
+	IsLatest     bool // true for the most recent session (first in list)
+}
+
+// handlePulls renders the /pulls page with PR ↔ session associations.
+func (s *Server) handlePulls(w http.ResponseWriter, r *http.Request) {
+	stateFilter := r.URL.Query().Get("state")
+
+	data := pullsPage{
+		Nav:             "pulls",
+		SidebarProjects: s.buildSidebarProjects(r.Context(), ""),
+		StateFilter:     stateFilter,
+	}
+
+	if s.store == nil {
+		data.NoPlatform = true
+		s.render(w, "pulls.html", data)
+		return
+	}
+
+	// Check if any PRs exist in the store.
+	prs, err := s.store.ListPRsWithSessions("", "", stateFilter, 100)
+	if err != nil {
+		s.logger.Printf("[pulls] error listing PRs: %v", err)
+	}
+
+	if len(prs) == 0 {
+		// If no PRs found, check if sync has ever run by checking if table has any PRs at all.
+		allPRs, _ := s.store.ListPullRequests("", "", "", 1)
+		if len(allPRs) == 0 {
+			data.NoPlatform = true
+		}
+		s.render(w, "pulls.html", data)
+		return
+	}
+
+	var totalLinked, totalTokens int
+	for _, prws := range prs {
+		var sessions []prSessionView
+		for i, sm := range prws.Sessions {
+			sessions = append(sessions, prSessionView{
+				ID:           string(sm.ID),
+				IDShort:      truncateID(string(sm.ID), 12),
+				Summary:      sm.Summary,
+				Agent:        string(sm.Agent),
+				SessionType:  sm.SessionType,
+				MessageCount: sm.MessageCount,
+				TokensStr:    formatTokens(sm.TotalTokens),
+				TimeAgo:      timeAgoString(sm.CreatedAt),
+				IsLatest:     i == 0, // sessions are sorted by created_at DESC
+			})
+		}
+
+		totalLinked += prws.SessionCount
+		totalTokens += prws.TotalTokens
+
+		stateIcon := "&#x1F7E2;" // green circle
+		switch prws.PR.State {
+		case "merged":
+			stateIcon = "&#x1F7E3;" // purple circle
+		case "closed":
+			stateIcon = "&#x1F534;" // red circle
+		}
+
+		data.PRs = append(data.PRs, prView{
+			Number:       prws.PR.Number,
+			Title:        prws.PR.Title,
+			Branch:       prws.PR.Branch,
+			BaseBranch:   prws.PR.BaseBranch,
+			State:        prws.PR.State,
+			StateIcon:    stateIcon,
+			Author:       prws.PR.Author,
+			URL:          prws.PR.URL,
+			Additions:    prws.PR.Additions,
+			Deletions:    prws.PR.Deletions,
+			Comments:     prws.PR.Comments,
+			TimeAgo:      timeAgoString(prws.PR.UpdatedAt),
+			SessionCount: prws.SessionCount,
+			TokensStr:    formatTokens(prws.TotalTokens),
+			HasSessions:  prws.SessionCount > 0,
+			Sessions:     sessions,
+			LatestSessionID: func() string {
+				if len(prws.Sessions) > 0 {
+					return string(prws.Sessions[0].ID)
+				}
+				return ""
+			}(),
+		})
+	}
+
+	data.HasPRs = len(data.PRs) > 0
+	data.TotalPRs = len(data.PRs)
+	data.TotalLinkedSessions = totalLinked
+	data.TotalTokensStr = formatTokens(totalTokens)
+
+	s.render(w, "pulls.html", data)
+}
+
+// ── Recommendation API Handlers ──
+
+// handleRecommendationDismiss handles POST /api/recommendations/dismiss.
+// Expects form field "id" with the recommendation record ID.
+func (s *Server) handleRecommendationDismiss(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	id := r.FormValue("id")
+	if id == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.DismissRecommendation(id); err != nil {
+		http.Error(w, "dismiss failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Return empty 200 — HTMX will remove the element.
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleRecommendationSnooze handles POST /api/recommendations/snooze.
+// Expects form fields "id" and optional "days" (default: 7).
+func (s *Server) handleRecommendationSnooze(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	id := r.FormValue("id")
+	if id == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	days := 7
+	if d := r.FormValue("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 90 {
+			days = v
+		}
+	}
+
+	until := time.Now().AddDate(0, 0, days)
+	if err := s.store.SnoozeRecommendation(id, until); err != nil {
+		http.Error(w, "snooze failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Return empty 200 — HTMX will remove the element.
+	w.WriteHeader(http.StatusOK)
+}
+
+// ── Session Graph ──
+
+// sessionGraphPage is the view model for the interactive session graph page.
+type sessionGraphPage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+	Mode            string // "pr", "project", "branch"
+	HasGroups       bool
+	Groups          []sgGroup
+	Stats           sgStats
+}
+
+// sgStats holds aggregate stats for the graph.
+type sgStats struct {
+	TotalGroups   int
+	TotalSessions int
+	TotalForks    int
+	TotalLinks    int
+}
+
+// sgGroup is a top-level grouping node (PR, project, or branch).
+type sgGroup struct {
+	Title        string
+	Subtitle     string
+	Icon         string
+	State        string // PR state: "open", "merged", "closed" (empty for non-PR)
+	SearchName   string // lowercase searchable text
+	SessionCount int
+	TokensStr    string
+	Nodes        []sgNode
+}
+
+// sgNode is a session node in the tree.
+type sgNode struct {
+	ID            string
+	IDShort       string
+	Summary       string
+	Agent         string
+	Provider      string
+	SessionType   string
+	Status        string
+	Messages      int
+	TokensStr     string
+	Errors        int
+	TimeAgo       string
+	IsFork        bool
+	Depth         int
+	IndentPx      int // Depth * 24
+	SummaryIndent int // indent for summary line
+	HasChildren   bool
+	IsCollapsed   bool
+	Children      []sgNode
+	SearchText    string    // for JS filtering
+	LinkBadges    []sgBadge // delegation/continuation badges
+}
+
+// sgBadge represents a link type badge on a node.
+type sgBadge struct {
+	Type  string // CSS modifier: "delegation", "continuation", "related"
+	Label string // display text
+}
+
+// handleSessionGraph renders the interactive session graph page.
+func (s *Server) handleSessionGraph(w http.ResponseWriter, r *http.Request) {
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "project"
+	}
+
+	projectFilter := r.URL.Query().Get("project")
+
+	data := sessionGraphPage{
+		Nav:             "graph",
+		SidebarProjects: s.buildSidebarProjects(r.Context(), projectFilter),
+		Mode:            mode,
+	}
+
+	if s.store == nil {
+		s.render(w, "session_graph.html", data)
+		return
+	}
+
+	switch mode {
+	case "pr":
+		s.buildGraphByPR(&data, projectFilter)
+	case "project":
+		s.buildGraphByProject(&data, projectFilter)
+	case "branch":
+		s.buildGraphByBranch(&data, projectFilter)
+	default:
+		s.buildGraphByPR(&data, projectFilter)
+	}
+
+	data.HasGroups = len(data.Groups) > 0
+	s.render(w, "session_graph.html", data)
+}
+
+// buildGraphByPR groups sessions by pull request.
+func (s *Server) buildGraphByPR(data *sessionGraphPage, projectFilter string) {
+	prs, err := s.store.ListPRsWithSessions("", "", "", 50)
+	if err != nil {
+		s.logger.Printf("[graph] error listing PRs: %v", err)
+		return
+	}
+
+	var totalSessions, totalForks, totalLinks int
+
+	for _, prws := range prs {
+		if len(prws.Sessions) == 0 {
+			continue
+		}
+
+		// Optional project filter.
+		if projectFilter != "" {
+			match := false
+			for _, sm := range prws.Sessions {
+				if sm.ProjectPath == projectFilter {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		stateIcon := "\U0001F7E2" // green circle
+		switch prws.PR.State {
+		case "merged":
+			stateIcon = "\U0001F7E3" // purple circle
+		case "closed":
+			stateIcon = "\U0001F534" // red circle
+		}
+
+		// Build session tree for this PR's sessions.
+		tree := buildGraphTree(prws.Sessions)
+		nodes, forks := s.convertTreeToSGNodes(tree, 0)
+
+		// Collect session links for this group.
+		links := s.enrichWithLinks(prws.Sessions, nodes)
+
+		totalSessions += len(prws.Sessions)
+		totalForks += forks
+		totalLinks += links
+
+		subtitle := prws.PR.Branch
+		if prws.PR.BaseBranch != "" {
+			subtitle += " → " + prws.PR.BaseBranch
+		}
+
+		data.Groups = append(data.Groups, sgGroup{
+			Title:        fmt.Sprintf("#%d %s", prws.PR.Number, prws.PR.Title),
+			Subtitle:     subtitle,
+			Icon:         stateIcon,
+			State:        prws.PR.State,
+			SearchName:   strings.ToLower(fmt.Sprintf("#%d %s %s", prws.PR.Number, prws.PR.Title, prws.PR.Branch)),
+			SessionCount: len(prws.Sessions),
+			TokensStr:    formatTokens(prws.TotalTokens),
+			Nodes:        nodes,
+		})
+	}
+
+	data.Stats = sgStats{
+		TotalGroups:   len(data.Groups),
+		TotalSessions: totalSessions,
+		TotalForks:    totalForks,
+		TotalLinks:    totalLinks,
+	}
+}
+
+// buildGraphByProject groups sessions by project path.
+func (s *Server) buildGraphByProject(data *sessionGraphPage, projectFilter string) {
+	// Get recent sessions.
+	req := service.ListRequest{All: true}
+	if projectFilter != "" {
+		req.ProjectPath = projectFilter
+	}
+	summaries, err := s.sessionSvc.List(req)
+	if err != nil {
+		s.logger.Printf("[graph] error listing sessions: %v", err)
+		return
+	}
+
+	// Group by project path.
+	byProject := make(map[string][]session.Summary)
+	for _, sm := range summaries {
+		proj := sm.ProjectPath
+		if proj == "" {
+			proj = "(unknown)"
+		}
+		byProject[proj] = append(byProject[proj], sm)
+	}
+
+	var totalSessions, totalForks, totalLinks int
+
+	// Sort project names.
+	projNames := make([]string, 0, len(byProject))
+	for p := range byProject {
+		projNames = append(projNames, p)
+	}
+	sort.Strings(projNames)
+
+	for _, proj := range projNames {
+		sms := byProject[proj]
+		tree := buildGraphTree(sms)
+		nodes, forks := s.convertTreeToSGNodes(tree, 0)
+		links := s.enrichWithLinks(sms, nodes)
+
+		totalSessions += len(sms)
+		totalForks += forks
+		totalLinks += links
+
+		var totalTokens int
+		for _, sm := range sms {
+			totalTokens += sm.TotalTokens
+		}
+
+		data.Groups = append(data.Groups, sgGroup{
+			Title:        projectBaseName(proj),
+			Subtitle:     proj,
+			Icon:         "\U0001F4C2",
+			SearchName:   strings.ToLower(proj),
+			SessionCount: len(sms),
+			TokensStr:    formatTokens(totalTokens),
+			Nodes:        nodes,
+		})
+	}
+
+	data.Stats = sgStats{
+		TotalGroups:   len(data.Groups),
+		TotalSessions: totalSessions,
+		TotalForks:    totalForks,
+		TotalLinks:    totalLinks,
+	}
+}
+
+// buildGraphByBranch groups sessions by branch name.
+func (s *Server) buildGraphByBranch(data *sessionGraphPage, projectFilter string) {
+	req := service.ListRequest{All: true}
+	if projectFilter != "" {
+		req.ProjectPath = projectFilter
+	}
+	summaries, err := s.sessionSvc.List(req)
+	if err != nil {
+		s.logger.Printf("[graph] error listing sessions: %v", err)
+		return
+	}
+
+	// Group by branch.
+	byBranch := make(map[string][]session.Summary)
+	for _, sm := range summaries {
+		branch := sm.Branch
+		if branch == "" {
+			branch = "(no branch)"
+		}
+		byBranch[branch] = append(byBranch[branch], sm)
+	}
+
+	var totalSessions, totalForks, totalLinks int
+
+	branchNames := make([]string, 0, len(byBranch))
+	for b := range byBranch {
+		branchNames = append(branchNames, b)
+	}
+	sort.Strings(branchNames)
+
+	for _, branch := range branchNames {
+		sms := byBranch[branch]
+		tree := buildGraphTree(sms)
+		nodes, forks := s.convertTreeToSGNodes(tree, 0)
+		links := s.enrichWithLinks(sms, nodes)
+
+		totalSessions += len(sms)
+		totalForks += forks
+		totalLinks += links
+
+		var totalTokens int
+		for _, sm := range sms {
+			totalTokens += sm.TotalTokens
+		}
+
+		data.Groups = append(data.Groups, sgGroup{
+			Title:        branch,
+			Icon:         "\U0001F33F",
+			SearchName:   strings.ToLower(branch),
+			SessionCount: len(sms),
+			TokensStr:    formatTokens(totalTokens),
+			Nodes:        nodes,
+		})
+	}
+
+	data.Stats = sgStats{
+		TotalGroups:   len(data.Groups),
+		TotalSessions: totalSessions,
+		TotalForks:    totalForks,
+		TotalLinks:    totalLinks,
+	}
+}
+
+// buildGraphTree constructs a tree from a flat list of summaries (same algo as service.buildTree).
+func buildGraphTree(summaries []session.Summary) []session.SessionTreeNode {
+	if len(summaries) == 0 {
+		return nil
+	}
+
+	type treeNode struct {
+		summary  session.Summary
+		children []*treeNode
+		isFork   bool
+	}
+
+	byID := make(map[session.ID]*treeNode, len(summaries))
+	for _, sm := range summaries {
+		byID[sm.ID] = &treeNode{summary: sm}
+	}
+
+	var roots []*treeNode
+	for _, sm := range summaries {
+		node := byID[sm.ID]
+		if sm.ParentID != "" {
+			parent, ok := byID[sm.ParentID]
+			if ok {
+				node.isFork = true
+				parent.children = append(parent.children, node)
+				continue
+			}
+		}
+		roots = append(roots, node)
+	}
+
+	var convert func(n *treeNode) session.SessionTreeNode
+	convert = func(n *treeNode) session.SessionTreeNode {
+		out := session.SessionTreeNode{
+			Summary: n.summary,
+			IsFork:  n.isFork,
+		}
+		for _, child := range n.children {
+			out.Children = append(out.Children, convert(child))
+		}
+		return out
+	}
+
+	result := make([]session.SessionTreeNode, 0, len(roots))
+	for _, r := range roots {
+		result = append(result, convert(r))
+	}
+	return result
+}
+
+// convertTreeToSGNodes recursively converts SessionTreeNode to sgNode view models.
+// Returns (nodes, forkCount).
+func (s *Server) convertTreeToSGNodes(tree []session.SessionTreeNode, depth int) ([]sgNode, int) {
+	var nodes []sgNode
+	forks := 0
+
+	for _, t := range tree {
+		if t.IsFork {
+			forks++
+		}
+
+		node := sgNode{
+			ID:            string(t.Summary.ID),
+			IDShort:       truncateID(string(t.Summary.ID), 12),
+			Summary:       t.Summary.Summary,
+			Agent:         string(t.Summary.Agent),
+			Provider:      string(t.Summary.Provider),
+			SessionType:   t.Summary.SessionType,
+			Status:        string(t.Summary.Status),
+			Messages:      t.Summary.MessageCount,
+			TokensStr:     formatTokens(t.Summary.TotalTokens),
+			Errors:        t.Summary.ErrorCount,
+			TimeAgo:       timeAgoString(t.Summary.CreatedAt),
+			IsFork:        t.IsFork,
+			Depth:         depth,
+			IndentPx:      depth * 24,
+			SummaryIndent: depth*24 + 28,
+			HasChildren:   len(t.Children) > 0,
+			SearchText:    strings.ToLower(string(t.Summary.ID) + " " + t.Summary.Summary + " " + string(t.Summary.Provider) + " " + string(t.Summary.Agent)),
+		}
+
+		if len(t.Children) > 0 {
+			childNodes, childForks := s.convertTreeToSGNodes(t.Children, depth+1)
+			node.Children = childNodes
+			forks += childForks
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	return nodes, forks
+}
+
+// enrichWithLinks adds link badges (delegation, continuation) to matching nodes.
+// Returns the total number of links found.
+func (s *Server) enrichWithLinks(_ []session.Summary, nodes []sgNode) int {
+	if s.store == nil {
+		return 0
+	}
+
+	totalLinks := 0
+	for i := range nodes {
+		s.addLinkBadges(&nodes[i], &totalLinks)
+	}
+	return totalLinks
+}
+
+// addLinkBadges recursively adds link badges to a node and its children.
+func (s *Server) addLinkBadges(node *sgNode, totalLinks *int) {
+	links, err := s.store.GetLinkedSessions(session.ID(node.ID))
+	if err == nil && len(links) > 0 {
+		for _, link := range links {
+			badge := sgBadge{}
+			if string(link.SourceSessionID) == node.ID {
+				badge.Type = linkTypeCSS(string(link.LinkType))
+				badge.Label = "→ " + shortLinkType(string(link.LinkType))
+			} else {
+				badge.Type = linkTypeCSS(string(link.LinkType))
+				badge.Label = "← " + shortLinkType(string(link.LinkType))
+			}
+			node.LinkBadges = append(node.LinkBadges, badge)
+			*totalLinks++
+		}
+	}
+
+	for i := range node.Children {
+		s.addLinkBadges(&node.Children[i], totalLinks)
+	}
+}
+
+// linkTypeCSS returns a CSS-friendly class modifier for a link type.
+func linkTypeCSS(linkType string) string {
+	switch linkType {
+	case "delegated_to", "delegated_from":
+		return "delegation"
+	case "continuation", "follow_up":
+		return "continuation"
+	case "replay_of":
+		return "replay"
+	default:
+		return "related"
+	}
+}
+
+// shortLinkType returns a short display label for a link type.
+func shortLinkType(linkType string) string {
+	switch linkType {
+	case "delegated_to":
+		return "delegated"
+	case "delegated_from":
+		return "from"
+	case "continuation":
+		return "continued"
+	case "follow_up":
+		return "follow-up"
+	case "replay_of":
+		return "replay"
+	default:
+		return linkType
+	}
 }

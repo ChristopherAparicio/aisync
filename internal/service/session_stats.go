@@ -19,6 +19,8 @@ type StatsRequest struct {
 	OwnerID         string // filter by session owner (empty = no filter)
 	SessionType     string // filter by session type (feature, bug, etc.)
 	ProjectCategory string // filter by project category (backend, frontend, etc.)
+	Since           time.Time
+	Until           time.Time
 	All             bool
 	IncludeTools    bool // if true, aggregate tool usage across sessions
 }
@@ -30,6 +32,7 @@ type BranchStats struct {
 	TotalCost    float64 // API-equivalent cost in USD (estimated from token rates)
 	ActualCost   float64 // actual cost reported by providers (0 for subscriptions)
 	SessionCount int
+	LastActivity time.Time // most recent session creation time
 }
 
 // TypeStats holds aggregated stats per session type.
@@ -50,6 +53,20 @@ type StatsResult struct {
 	ActualCost    float64 // actual cost reported by providers (0 for subscriptions)
 	Savings       float64 // TotalCost - ActualCost
 	BillingType   string  // "subscription", "api", "mixed", or ""
+
+	// Error / activity aggregates (sum across all matched summaries, regardless
+	// of SessionType). Populated in the main Stats() summary loop — zero extra
+	// cost compared to recomputing them from a second List() call at the
+	// consumer site (Fix #10: dashboard redundancy).
+	TotalErrors        int `json:"total_errors,omitempty"`         // sum of sm.ErrorCount across all summaries
+	TotalToolCalls     int `json:"total_tool_calls,omitempty"`     // sum of sm.ToolCallCount across all summaries
+	SessionsWithErrors int `json:"sessions_with_errors,omitempty"` // count of summaries with ErrorCount > 0
+
+	// Recent sessions (top N by last activity, default 10). Sorted by
+	// UpdatedAt desc (falling back to CreatedAt when UpdatedAt is zero).
+	// Populated without a second List() call — sliced from the same summaries
+	// the aggregation loop already iterates.
+	RecentSessions []session.Summary `json:"recent_sessions,omitempty"`
 
 	// Fork deduplication
 	ForkCount        int     `json:"fork_count,omitempty"`        // number of detected forks
@@ -245,6 +262,8 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		ProjectPath: req.ProjectPath,
 		All:         true,
 		OwnerID:     session.ID(req.OwnerID),
+		Since:       req.Since,
+		Until:       req.Until,
 	}
 
 	if req.Branch != "" {
@@ -289,6 +308,15 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		result.TotalTokens += sm.TotalTokens
 		result.TotalMessages += sm.MessageCount
 
+		// Error / tool aggregates (top-level, independent of SessionType).
+		// These replace the redundant second List() loop that dashboard
+		// handlers used to run — the same summaries are already in hand here.
+		result.TotalErrors += sm.ErrorCount
+		result.TotalToolCalls += sm.ToolCallCount
+		if sm.ErrorCount > 0 {
+			result.SessionsWithErrors++
+		}
+
 		// Per-type
 		if sm.SessionType != "" {
 			ts, ok := perType[sm.SessionType]
@@ -309,36 +337,30 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		}
 		bs.SessionCount++
 		bs.TotalTokens += sm.TotalTokens
+		if sm.CreatedAt.After(bs.LastActivity) {
+			bs.LastActivity = sm.CreatedAt
+		}
 
 		// Per-provider
 		result.PerProvider[sm.Provider]++
 
-		// File changes + cost + tool usage (requires loading full session)
-		full, getErr := s.store.Get(sm.ID)
-		if getErr == nil {
-			// Prefer file_changes table (from blame extractor) over provider-supplied FileChanges.
-			if records, fcErr := s.store.GetSessionFileChanges(sm.ID); fcErr == nil && len(records) > 0 {
-				for _, r := range records {
-					fileCounts[r.FilePath]++
-				}
-			} else {
-				for _, fc := range full.FileChanges {
-					fileCounts[fc.FilePath]++
-				}
+		// Cost from denormalized columns (no full session load needed).
+		// Falls back to 0 for sessions not yet backfilled — acceptable for gradual migration.
+		result.TotalCost += sm.EstimatedCost
+		bs.TotalCost += sm.EstimatedCost
+		result.ActualCost += sm.ActualCost
+		bs.ActualCost += sm.ActualCost
+
+		// File changes: load from file_changes table (1 SQL query per session, no payload decompression).
+		if records, fcErr := s.store.GetSessionFileChanges(sm.ID); fcErr == nil && len(records) > 0 {
+			for _, r := range records {
+				fileCounts[r.FilePath]++
 			}
+		}
 
-			// Cost estimation (dual: API-equivalent + actual)
-			est := s.pricing.SessionCost(full)
-			sessionCost := est.TotalCost.TotalCost
-			result.TotalCost += sessionCost
-			bs.TotalCost += sessionCost
-
-			actualCost := est.Breakdown.ActualCost.TotalCost
-			result.ActualCost += actualCost
-			bs.ActualCost += actualCost
-
-			// Tool aggregation
-			if req.IncludeTools {
+		// Tool aggregation (requires loading full session — only when explicitly requested).
+		if req.IncludeTools {
+			if full, getErr := s.store.Get(sm.ID); getErr == nil {
 				if full.StorageMode == session.StorageModeCompact || full.StorageMode == session.StorageModeSummary {
 					hasCompactSessions = true
 				}
@@ -417,6 +439,31 @@ func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
 		files = files[:10]
 	}
 	result.TopFiles = files
+
+	// Recent sessions (top 10 by last activity). Sort a local copy of the
+	// summary slice by UpdatedAt desc (falling back to CreatedAt when zero)
+	// and slice the first 10. This avoids mutating the store-returned slice
+	// and replaces the second List() call the dashboard used to make.
+	if len(summaries) > 0 {
+		recentSorted := make([]session.Summary, len(summaries))
+		copy(recentSorted, summaries)
+		sort.Slice(recentSorted, func(i, j int) bool {
+			ti := recentSorted[i].UpdatedAt
+			if ti.IsZero() {
+				ti = recentSorted[i].CreatedAt
+			}
+			tj := recentSorted[j].UpdatedAt
+			if tj.IsZero() {
+				tj = recentSorted[j].CreatedAt
+			}
+			return ti.After(tj)
+		})
+		const recentLimit = 10
+		if len(recentSorted) > recentLimit {
+			recentSorted = recentSorted[:recentLimit]
+		}
+		result.RecentSessions = recentSorted
+	}
 
 	// Build aggregated tool stats.
 	if req.IncludeTools && len(perTool) > 0 {

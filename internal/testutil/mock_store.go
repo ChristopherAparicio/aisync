@@ -52,6 +52,9 @@ type MockStore struct {
 	// BlameEntries is the return value for GetSessionsByFile.
 	BlameEntries []session.BlameEntry
 
+	// PRSessions maps "owner/repo#number" → summaries for GetSessionsForPR.
+	PRSessions map[string][]session.Summary
+
 	// Analyses stores session analyses keyed by analysis ID.
 	Analyses map[string]*analysis.SessionAnalysis
 
@@ -78,15 +81,27 @@ type MockStore struct {
 
 	// SessionLinks stores session-to-session links added via LinkSessions.
 	SessionLinks []session.SessionLink
+
+	// ── Recommendation tracking fields ──
+
+	// Recommendations holds persisted recommendation records.
+	Recommendations []session.RecommendationRecord
+
+	// DismissedRecs tracks IDs of dismissed recommendations.
+	DismissedRecs []string
+
+	// SnoozedRecs tracks snoozed recommendation IDs → snooze-until time.
+	SnoozedRecs map[string]time.Time
 }
 
 // NewMockStore creates a MockStore, optionally pre-populated with sessions.
 func NewMockStore(sessions ...*session.Session) *MockStore {
 	m := &MockStore{
-		Sessions: make(map[session.ID]*session.Session),
-		ByBranch: make(map[string]*session.Session),
-		Links:    make(map[string][]session.Summary),
-		Analyses: make(map[string]*analysis.SessionAnalysis),
+		Sessions:   make(map[session.ID]*session.Session),
+		ByBranch:   make(map[string]*session.Session),
+		Links:      make(map[string][]session.Summary),
+		Analyses:   make(map[string]*analysis.SessionAnalysis),
+		PRSessions: make(map[string][]session.Summary),
 	}
 	for _, s := range sessions {
 		m.Sessions[s.ID] = s
@@ -115,6 +130,18 @@ func (m *MockStore) Get(id session.ID) (*session.Session, error) {
 		return nil, session.ErrSessionNotFound
 	}
 	return s, nil
+}
+
+// GetBatch returns a map of found sessions, mirroring the contract documented on
+// storage.SessionReader: missing IDs are silently absent (no error raised).
+func (m *MockStore) GetBatch(ids []session.ID) (map[session.ID]*session.Session, error) {
+	result := make(map[session.ID]*session.Session, len(ids))
+	for _, id := range ids {
+		if s, ok := m.Sessions[id]; ok {
+			result[id] = s
+		}
+	}
+	return result, nil
 }
 
 func (m *MockStore) GetLatestByBranch(projectPath, branch string) (*session.Session, error) {
@@ -310,6 +337,16 @@ func (m *MockStore) DeleteSessionLink(id session.ID) error {
 func (m *MockStore) SaveUser(_ *session.User) error                 { return nil }
 func (m *MockStore) GetUser(_ session.ID) (*session.User, error)    { return nil, nil }
 func (m *MockStore) GetUserByEmail(_ string) (*session.User, error) { return nil, nil }
+func (m *MockStore) ListUsers() ([]*session.User, error)            { return nil, nil }
+func (m *MockStore) ListUsersByKind(_ string) ([]*session.User, error) {
+	return nil, nil
+}
+func (m *MockStore) UpdateUserSlack(_ session.ID, _, _ string) error { return nil }
+func (m *MockStore) UpdateUserKind(_ session.ID, _ string) error     { return nil }
+func (m *MockStore) UpdateUserRole(_ session.ID, _ string) error     { return nil }
+func (m *MockStore) OwnerStats(_ string, _, _ time.Time) ([]session.OwnerStat, error) {
+	return nil, nil
+}
 
 // ── Search & Blame ──
 
@@ -337,10 +374,30 @@ func (m *MockStore) FilesForProject(_ string, _ string, _ int) ([]session.Projec
 func (m *MockStore) ReplaceSessionFiles(_ session.ID, _ []session.SessionFileRecord) error {
 	return nil
 }
-func (m *MockStore) GetSessionFileChanges(_ session.ID) ([]session.SessionFileRecord, error) {
-	return nil, nil
+func (m *MockStore) GetSessionFileChanges(id session.ID) ([]session.SessionFileRecord, error) {
+	// Synthesize records from the session's FileChanges field (mirrors real store behavior).
+	s, ok := m.Sessions[id]
+	if !ok {
+		return nil, nil
+	}
+	if len(s.FileChanges) == 0 {
+		return nil, nil
+	}
+	records := make([]session.SessionFileRecord, len(s.FileChanges))
+	for i, fc := range s.FileChanges {
+		records[i] = session.SessionFileRecord{
+			SessionID:  id,
+			FilePath:   fc.FilePath,
+			ChangeType: fc.ChangeType,
+			CreatedAt:  s.CreatedAt,
+		}
+	}
+	return records, nil
 }
 func (m *MockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
+func (m *MockStore) SearchFacets(_ session.SearchQuery) (*session.SearchFacets, error) {
+	return &session.SearchFacets{}, nil
+}
 
 func (m *MockStore) DeleteOlderThan(before time.Time) (int, error) {
 	count := 0
@@ -377,6 +434,18 @@ func (m *MockStore) GetLatestSnapshot(_ string) (*registry.ProjectSnapshot, erro
 }
 
 func (m *MockStore) ListSnapshots(_ string, _ int) ([]registry.ProjectSnapshot, error) {
+	return nil, nil
+}
+
+func (m *MockStore) UpsertCapabilities(_ string, _ []registry.PersistedCapability) error {
+	return nil
+}
+
+func (m *MockStore) ListCapabilities(_ registry.CapabilityFilter) ([]registry.PersistedCapability, error) {
+	return nil, nil
+}
+
+func (m *MockStore) ListCapabilityProjects() ([]string, error) {
 	return nil, nil
 }
 
@@ -463,6 +532,9 @@ func (m *MockStore) SaveEvents(_ []sessionevent.Event) error { return nil }
 func (m *MockStore) GetSessionEvents(_ session.ID) ([]sessionevent.Event, error) {
 	return nil, nil
 }
+func (m *MockStore) GetSessionEventsBatch(_ []session.ID, _ ...sessionevent.EventType) (map[session.ID][]sessionevent.Event, error) {
+	return map[session.ID][]sessionevent.Event{}, nil
+}
 func (m *MockStore) QueryEvents(_ sessionevent.EventQuery) ([]sessionevent.Event, error) {
 	return nil, nil
 }
@@ -481,6 +553,177 @@ func (m *MockStore) DeleteEventBuckets(_ sessionevent.BucketQuery) error {
 }
 func (m *MockStore) QueryEventBuckets(_ sessionevent.BucketQuery) ([]sessionevent.EventBucket, error) {
 	return nil, nil
+}
+
+// ── Pull Request Store (stubs) ──
+
+func (m *MockStore) SavePullRequest(_ *session.PullRequest) error { return nil }
+func (m *MockStore) GetPullRequest(_, _ string, _ int) (*session.PullRequest, error) {
+	return nil, session.ErrPRNotFound
+}
+func (m *MockStore) ListPullRequests(_, _, _ string, _ int) ([]session.PullRequest, error) {
+	return nil, nil
+}
+func (m *MockStore) LinkSessionPR(_ session.ID, _, _ string, _ int) error { return nil }
+func (m *MockStore) GetSessionsForPR(owner, repo string, number int) ([]session.Summary, error) {
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if sums, ok := m.PRSessions[key]; ok {
+		return sums, nil
+	}
+	return nil, nil
+}
+func (m *MockStore) GetPRsForSession(_ session.ID) ([]session.PullRequest, error) {
+	return nil, nil
+}
+func (m *MockStore) ListPRsWithSessions(_, _, _ string, _ int) ([]session.PRWithSessions, error) {
+	return nil, nil
+}
+func (m *MockStore) GetPRByBranch(_ string) (*session.PullRequest, error) {
+	return nil, session.ErrPRNotFound
+}
+
+// ── Recommendation Store ──
+
+func (m *MockStore) UpsertRecommendation(rec *session.RecommendationRecord) error {
+	for i, existing := range m.Recommendations {
+		if existing.Fingerprint == rec.Fingerprint {
+			// Only update if still active (preserve dismissed/snoozed).
+			if existing.Status == session.RecStatusActive {
+				m.Recommendations[i].Title = rec.Title
+				m.Recommendations[i].Message = rec.Message
+				m.Recommendations[i].Impact = rec.Impact
+				m.Recommendations[i].Priority = rec.Priority
+				m.Recommendations[i].Source = rec.Source
+				m.Recommendations[i].Icon = rec.Icon
+				m.Recommendations[i].UpdatedAt = rec.UpdatedAt
+			}
+			return nil
+		}
+	}
+	m.Recommendations = append(m.Recommendations, *rec)
+	return nil
+}
+
+func (m *MockStore) ListRecommendations(filter session.RecommendationFilter) ([]session.RecommendationRecord, error) {
+	var result []session.RecommendationRecord
+	for _, r := range m.Recommendations {
+		if filter.ProjectPath != "" && r.ProjectPath != filter.ProjectPath {
+			continue
+		}
+		if filter.Status != "" && r.Status != filter.Status {
+			continue
+		}
+		if filter.Priority != "" && r.Priority != filter.Priority {
+			continue
+		}
+		if filter.Source != "" && r.Source != filter.Source {
+			continue
+		}
+		result = append(result, r)
+	}
+	// Sort by priority (high > medium > low), then created_at DESC.
+	priorityOrder := map[string]int{"high": 0, "medium": 1, "low": 2}
+	sort.Slice(result, func(i, j int) bool {
+		pi, pj := priorityOrder[result[i].Priority], priorityOrder[result[j].Priority]
+		if pi != pj {
+			return pi < pj
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	if filter.Limit > 0 && len(result) > filter.Limit {
+		result = result[:filter.Limit]
+	}
+	return result, nil
+}
+
+func (m *MockStore) DismissRecommendation(id string) error {
+	for i, r := range m.Recommendations {
+		if r.ID == id {
+			m.Recommendations[i].Status = session.RecStatusDismissed
+			now := time.Now()
+			m.Recommendations[i].DismissedAt = &now
+			m.Recommendations[i].UpdatedAt = now
+			m.DismissedRecs = append(m.DismissedRecs, id)
+			return nil
+		}
+	}
+	return fmt.Errorf("recommendation %q not found", id)
+}
+
+func (m *MockStore) SnoozeRecommendation(id string, until time.Time) error {
+	for i, r := range m.Recommendations {
+		if r.ID == id {
+			m.Recommendations[i].Status = session.RecStatusSnoozed
+			m.Recommendations[i].SnoozedUntil = &until
+			m.Recommendations[i].UpdatedAt = time.Now()
+			if m.SnoozedRecs == nil {
+				m.SnoozedRecs = make(map[string]time.Time)
+			}
+			m.SnoozedRecs[id] = until
+			return nil
+		}
+	}
+	return fmt.Errorf("recommendation %q not found", id)
+}
+
+func (m *MockStore) ExpireRecommendations(maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge)
+	count := 0
+	for i, r := range m.Recommendations {
+		if r.Status == session.RecStatusActive && r.CreatedAt.Before(cutoff) {
+			m.Recommendations[i].Status = session.RecStatusExpired
+			m.Recommendations[i].UpdatedAt = time.Now()
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *MockStore) ReactivateSnoozed() (int, error) {
+	now := time.Now()
+	count := 0
+	for i, r := range m.Recommendations {
+		if r.Status == session.RecStatusSnoozed && r.SnoozedUntil != nil && r.SnoozedUntil.Before(now) {
+			m.Recommendations[i].Status = session.RecStatusActive
+			m.Recommendations[i].SnoozedUntil = nil
+			m.Recommendations[i].UpdatedAt = now
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *MockStore) RecommendationStats(projectPath string) (session.RecommendationStats, error) {
+	var stats session.RecommendationStats
+	for _, r := range m.Recommendations {
+		if projectPath != "" && r.ProjectPath != projectPath {
+			continue
+		}
+		stats.Total++
+		switch r.Status {
+		case session.RecStatusActive:
+			stats.Active++
+		case session.RecStatusDismissed:
+			stats.Dismissed++
+		case session.RecStatusSnoozed:
+			stats.Snoozed++
+		}
+	}
+	return stats, nil
+}
+
+func (m *MockStore) DeleteRecommendationsByProject(projectPath string) (int, error) {
+	var kept []session.RecommendationRecord
+	count := 0
+	for _, r := range m.Recommendations {
+		if r.ProjectPath == projectPath {
+			count++
+		} else {
+			kept = append(kept, r)
+		}
+	}
+	m.Recommendations = kept
+	return count, nil
 }
 
 // ── Search Helper ──
@@ -515,4 +758,34 @@ func DefaultSearchFunc(m *MockStore) func(session.SearchQuery) (*session.SearchR
 			TotalCount: total,
 		}, nil
 	}
+}
+
+// GetForkRelationsForSessions returns fork relations for multiple sessions (mock).
+func (m *MockStore) GetForkRelationsForSessions(ids []session.ID) (map[session.ID][]session.ForkRelation, error) {
+	return nil, nil
+}
+
+// UpdateCosts sets the denormalized cost columns for a session (mock).
+func (m *MockStore) UpdateCosts(id session.ID, estimatedCost, actualCost float64) error {
+	s, ok := m.Sessions[id]
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	s.EstimatedCost = estimatedCost
+	s.ActualCost = actualCost
+	return nil
+}
+
+// ListSessionsWithZeroCosts returns session IDs that have estimated_cost = 0 (mock).
+func (m *MockStore) ListSessionsWithZeroCosts(limit int) ([]session.ID, error) {
+	var ids []session.ID
+	for id, s := range m.Sessions {
+		if s.EstimatedCost == 0 && s.TokenUsage.TotalTokens > 0 {
+			ids = append(ids, id)
+			if limit > 0 && len(ids) >= limit {
+				break
+			}
+		}
+	}
+	return ids, nil
 }

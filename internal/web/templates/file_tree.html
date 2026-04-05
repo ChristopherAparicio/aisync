@@ -1,0 +1,308 @@
+{{define "file_tree.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}File Tree — {{.ProjectName}} — aisync{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <h1 class="page-title">
+    {{if .ProjectPath}}
+    <a href="/projects{{.ProjectPath}}" class="back-link">&larr;</a>
+    {{end}}
+    File Tree
+    {{if .ProjectName}}<span class="text-muted">· {{.ProjectName}}</span>{{end}}
+  </h1>
+
+  {{if .Projects}}
+  <div class="fe-project-filter">
+    <select class="project-select" onchange="if(this.value){location.href='/tree'+this.value}">
+      {{range .Projects}}
+      <option value="{{.Path}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+      {{end}}
+    </select>
+  </div>
+  {{end}}
+</div>
+
+{{if .Stats}}
+<div class="ft-stats-bar">
+  <span class="ft-stat">{{.Stats.TotalFiles}} file{{if ne .Stats.TotalFiles 1}}s{{end}} with AI activity</span>
+  <span class="ft-stat">{{.Stats.TotalDirs}} director{{if ne .Stats.TotalDirs 1}}ies{{end}}</span>
+  <span class="ft-stat">{{.Stats.TotalSessions}} session{{if ne .Stats.TotalSessions 1}}s{{end}}</span>
+  {{if gt .MaxSessions 0}}<span class="ft-stat ft-stat-heat">Hottest: {{.MaxSessions}} sessions</span>{{end}}
+</div>
+{{end}}
+
+{{if not .HasTree}}
+<div class="empty-state">
+  <p>No files with AI activity found for this project.</p>
+  <p class="hint">Enable file blame with <code>aisync config set features.file_blame true</code> then run <code>aisync backfill files</code>.</p>
+</div>
+{{else}}
+
+<div class="ft-container">
+  <div class="ft-toolbar">
+    <div class="ft-search-wrap">
+      <svg class="ft-search-icon" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
+      <input type="text" class="ft-search" id="ft-search" placeholder="Filter files…" oninput="ftFilter(this.value)" autocomplete="off" spellcheck="false">
+      <button class="ft-search-clear hidden" id="ft-search-clear" onclick="ftClearSearch()" title="Clear filter">&times;</button>
+    </div>
+    <span class="ft-filter-count hidden" id="ft-filter-count"></span>
+    <div class="ft-toolbar-spacer"></div>
+    <button class="ft-btn" onclick="ftExpandAll()" title="Expand all directories">
+      <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A.25.25 0 0 0 8.737 3.5H13.5A1.5 1.5 0 0 1 15 5v8.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-10Z"/></svg>
+      Expand all
+    </button>
+    <button class="ft-btn" onclick="ftCollapseAll()" title="Collapse all directories">
+      <svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg>
+      Collapse all
+    </button>
+  </div>
+
+  <div class="ft-tree" id="ft-tree" data-max-sessions="{{.MaxSessions}}">
+    {{range .Tree}}
+    {{template "ft-node-v2" .}}
+    {{end}}
+  </div>
+</div>
+
+<!-- ── File Tree JavaScript ── -->
+<script>
+// Toggle a directory node with pre-rendered children.
+function ftToggleDir(el) {
+  var node = el.closest('.ft-node');
+  if (!node) return;
+  node.classList.toggle('ft-collapsed');
+  var chevron = el.querySelector('.ft-chevron');
+  if (chevron) chevron.classList.toggle('ft-chevron-open');
+}
+
+// Toggle a directory node with lazy-loaded children (HTMX).
+function ftToggleDirLazy(el) {
+  var node = el.closest('.ft-node');
+  if (!node) return;
+  var children = node.querySelector(':scope > .ft-children');
+  if (!children) return;
+
+  var wasCollapsed = node.classList.contains('ft-collapsed');
+  node.classList.toggle('ft-collapsed');
+  var chevron = el.querySelector('.ft-chevron');
+  if (chevron) chevron.classList.toggle('ft-chevron-open');
+
+  // Trigger HTMX load on first expand.
+  if (wasCollapsed && children.dataset.loaded !== 'true' && children.getAttribute('hx-get')) {
+    children.dataset.loaded = 'true';
+    htmx.trigger(children, 'load-children');
+  }
+}
+
+// Toggle a file node to show/hide its session list (HTMX lazy-load).
+function ftToggleFile(el) {
+  var node = el.closest('.ft-node');
+  if (!node) return;
+  var sessions = node.querySelector('.ft-sessions');
+  if (!sessions) return;
+
+  if (sessions.dataset.loaded !== 'true') {
+    sessions.dataset.loaded = 'true';
+    sessions.classList.remove('hidden');
+    htmx.trigger(sessions, 'load-sessions');
+    return;
+  }
+  sessions.classList.toggle('hidden');
+  el.querySelector('.ft-chevron').classList.toggle('ft-chevron-open');
+}
+
+// Expand all directories (only pre-rendered; lazy dirs auto-load on expand).
+function ftExpandAll() {
+  document.querySelectorAll('.ft-node--dir.ft-collapsed').forEach(function(n) {
+    n.classList.remove('ft-collapsed');
+    var ch = n.querySelector(':scope > .ft-node-header .ft-chevron');
+    if (ch) ch.classList.add('ft-chevron-open');
+    // Trigger lazy load if needed.
+    var children = n.querySelector(':scope > .ft-children');
+    if (children && children.dataset.loaded !== 'true' && children.getAttribute('hx-get')) {
+      children.dataset.loaded = 'true';
+      htmx.trigger(children, 'load-children');
+    }
+  });
+}
+
+// Collapse all directories.
+function ftCollapseAll() {
+  document.querySelectorAll('.ft-node--dir:not(.ft-collapsed)').forEach(function(n) {
+    n.classList.add('ft-collapsed');
+    var ch = n.querySelector(':scope > .ft-node-header .ft-chevron');
+    if (ch) ch.classList.remove('ft-chevron-open');
+  });
+  document.querySelectorAll('.ft-sessions:not(.hidden)').forEach(function(s) {
+    s.classList.add('hidden');
+    s.dataset.loaded = 'false';
+  });
+}
+
+// ── Search / Filter ──
+var ftFilterTimeout;
+
+function ftFilter(query) {
+  clearTimeout(ftFilterTimeout);
+  ftFilterTimeout = setTimeout(function() { ftApplyFilter(query); }, 150);
+}
+
+function ftApplyFilter(query) {
+  var clearBtn = document.getElementById('ft-search-clear');
+  var countEl = document.getElementById('ft-filter-count');
+  var tree = document.getElementById('ft-tree');
+  if (!tree) return;
+
+  query = query.trim().toLowerCase();
+
+  if (!query) {
+    // Reset: show all nodes.
+    tree.querySelectorAll('.ft-node').forEach(function(n) {
+      n.classList.remove('ft-hidden', 'ft-match');
+    });
+    clearBtn.classList.add('hidden');
+    countEl.classList.add('hidden');
+    return;
+  }
+
+  clearBtn.classList.remove('hidden');
+
+  // First: hide all nodes.
+  var allNodes = tree.querySelectorAll('.ft-node');
+  allNodes.forEach(function(n) {
+    n.classList.add('ft-hidden');
+    n.classList.remove('ft-match');
+  });
+
+  // Find matching file nodes.
+  var matchCount = 0;
+  var fileNodes = tree.querySelectorAll('.ft-node--file');
+  fileNodes.forEach(function(n) {
+    var nameEl = n.querySelector('.ft-name');
+    if (!nameEl) return;
+    var name = nameEl.textContent.toLowerCase();
+    // Also match on the full file path via data attribute.
+    var filePath = (n.querySelector('[hx-get]') || {}).getAttribute && n.querySelector('.ft-sessions')
+      ? (n.querySelector('.ft-sessions').getAttribute('hx-get') || '')
+      : '';
+    filePath = filePath.toLowerCase();
+    if (name.indexOf(query) >= 0 || filePath.indexOf(query) >= 0) {
+      n.classList.remove('ft-hidden');
+      n.classList.add('ft-match');
+      matchCount++;
+      // Show all ancestor dir nodes.
+      var parent = n.parentElement;
+      while (parent && parent !== tree) {
+        if (parent.classList.contains('ft-node--dir')) {
+          parent.classList.remove('ft-hidden', 'ft-collapsed');
+          var ch = parent.querySelector(':scope > .ft-node-header .ft-chevron');
+          if (ch) ch.classList.add('ft-chevron-open');
+        }
+        parent = parent.parentElement;
+      }
+    }
+  });
+
+  // Also show dir nodes matching the query name (even if no file children match).
+  var dirNodes = tree.querySelectorAll('.ft-node--dir');
+  dirNodes.forEach(function(n) {
+    var nameEl = n.querySelector(':scope > .ft-node-header .ft-name');
+    if (!nameEl) return;
+    if (nameEl.textContent.toLowerCase().indexOf(query) >= 0) {
+      n.classList.remove('ft-hidden');
+      // Show ancestors.
+      var parent = n.parentElement;
+      while (parent && parent !== tree) {
+        if (parent.classList.contains('ft-node--dir')) {
+          parent.classList.remove('ft-hidden', 'ft-collapsed');
+          var ch = parent.querySelector(':scope > .ft-node-header .ft-chevron');
+          if (ch) ch.classList.add('ft-chevron-open');
+        }
+        parent = parent.parentElement;
+      }
+    }
+  });
+
+  countEl.textContent = matchCount + ' file' + (matchCount !== 1 ? 's' : '');
+  countEl.classList.remove('hidden');
+}
+
+function ftClearSearch() {
+  var input = document.getElementById('ft-search');
+  if (input) { input.value = ''; ftApplyFilter(''); input.focus(); }
+}
+</script>
+
+{{end}}
+{{end}}
+
+{{/* ── Root-level tree node (v2 — supports lazy dirs + heatmap) ── */}}
+{{define "ft-node-v2"}}
+{{if .IsDir}}
+<div class="ft-node ft-node--dir ft-collapsed" style="padding-left:{{.IndentPx}}px">
+  <div class="ft-node-header" onclick="ftToggleDirLazy(this)">
+    <svg class="ft-chevron" viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.752.752 0 0 1-1.042-.018.752.752 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>
+    <svg class="ft-icon ft-icon-dir" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg>
+    <span class="ft-name font-mono">{{.Name}}</span>
+    {{if gt .FileCount 0}}<span class="ft-dir-count text-muted">{{.FileCount}}</span>{{end}}
+  </div>
+  {{if .Lazy}}
+  <div class="ft-children"
+       hx-get="/partials/file-tree-children?dir={{.DirPath}}&amp;project={{.ProjectPath}}&amp;max={{.MaxSessions}}"
+       hx-trigger="load-children"
+       hx-swap="innerHTML">
+    <div class="ft-loading">
+      <span class="ft-spinner"></span> Loading…
+    </div>
+  </div>
+  {{else}}
+  <div class="ft-children">
+    {{range .Children}}
+    {{template "ft-node-v2" .}}
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{else}}
+<div class="ft-node ft-node--file{{if .HasAI}} ft-node--ai{{end}}" style="padding-left:{{.IndentPx}}px">
+  <div class="ft-node-header{{if .HasAI}} ft-clickable{{end}}"{{if .HasAI}} onclick="ftToggleFile(this)"{{end}}>
+    {{if .HasAI}}<svg class="ft-chevron" viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.752.752 0 0 1-1.042-.018.752.752 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>{{else}}<span class="ft-chevron-placeholder"></span>{{end}}
+    <svg class="ft-icon ft-icon-file" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/></svg>
+    <span class="ft-name font-mono">{{.Name}}</span>
+    {{if .HasAI}}
+    <span class="ft-file-meta">
+      <span class="ft-col ft-col-ai">
+        <a href="/sessions/{{.LastSessionID}}" class="ft-session-link" title="Last session" onclick="event.stopPropagation()">
+          <span class="fe-ai-badge">AI</span>
+        </a>
+        {{if gt .SessionCount 1}}
+        <a href="/blame?file={{.FilePath}}&amp;project={{.ProjectPath}}" class="ft-session-count {{.HeatClass}}" title="{{.SessionCount}} sessions — view blame" onclick="event.stopPropagation()">+{{sub .SessionCount 1}}</a>
+        {{end}}
+      </span>
+      <span class="ft-col ft-col-commit font-mono">
+        {{if .LastCommitSHA}}<a href="/sessions/{{.LastSessionID}}" class="ft-col-link" title="Commit {{.LastCommitSHA}}" onclick="event.stopPropagation()">{{.LastCommitSHA}}</a>{{end}}
+      </span>
+      <span class="ft-col ft-col-session font-mono">
+        <a href="/sessions/{{.LastSessionID}}" class="ft-col-link" title="Session {{.LastSessionID}}" onclick="event.stopPropagation()">{{truncate .LastSessionID 8}}</a>
+      </span>
+      <span class="ft-col ft-col-time text-muted">{{.LastTimeAgo}}</span>
+    </span>
+    {{end}}
+  </div>
+  {{if .HasAI}}
+  <div class="ft-sessions hidden"
+       hx-get="/partials/file-sessions?file={{.FilePath}}&amp;project={{.ProjectPath}}"
+       hx-trigger="load-sessions"
+       hx-swap="innerHTML"
+       hx-indicator=".ft-loading">
+    <div class="ft-loading">
+      <span class="ft-spinner"></span> Loading sessions…
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}

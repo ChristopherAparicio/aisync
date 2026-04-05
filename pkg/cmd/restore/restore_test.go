@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherAparicio/aisync/git"
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -78,6 +79,48 @@ func testFactory(t *testing.T, prov *mockProvider, store *testutil.MockStore) (*
 				Store:    store,
 				Registry: registry,
 				Git:      gitClient,
+			}), nil
+		},
+	}
+
+	return f, ios, repoDir
+}
+
+// testFactoryWithConfig is like testFactory but wires a Config into the
+// SessionServiceConfig and exposes it via Factory.ConfigFunc.
+func testFactoryWithConfig(t *testing.T, prov *mockProvider, store *testutil.MockStore, cfg *config.Config) (*cmdutil.Factory, *iostreams.IOStreams, string) {
+	t.Helper()
+	ios := iostreams.Test()
+	repoDir := testutil.InitTestRepo(t)
+
+	if store == nil {
+		store = testutil.NewMockStore()
+	}
+	gitClient := git.NewClient(repoDir)
+
+	registry := provider.NewRegistry()
+	if prov != nil {
+		registry = provider.NewRegistry(prov)
+	}
+
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
+		StoreFunc: func() (storage.Store, error) {
+			return store, nil
+		},
+		ConfigFunc: func() (*config.Config, error) {
+			return cfg, nil
+		},
+		RegistryFunc: func() *provider.Registry {
+			return registry
+		},
+		SessionServiceFunc: func() (service.SessionServicer, error) {
+			return service.NewSessionService(service.SessionServiceConfig{
+				Store:    store,
+				Registry: registry,
+				Git:      gitClient,
+				Config:   cfg,
 			}), nil
 		},
 	}
@@ -527,13 +570,19 @@ func TestRestore_byPR(t *testing.T) {
 	sess.Provider = session.ProviderClaudeCode
 	_ = store.Save(sess)
 
-	// Link session to PR #42
-	_ = store.AddLink(sess.ID, session.Link{
-		LinkType: session.LinkPR,
-		Ref:      "42",
-	})
+	// Populate PR sessions (the new resolveSessionFromPR path uses GetSessionsForPR).
+	store.PRSessions["myorg/myrepo#42"] = []session.Summary{
+		{ID: sess.ID, Provider: sess.Provider, Summary: "PR fix"},
+	}
 
-	f, ios, _ := testFactory(t, prov, store)
+	cfg, err := config.New(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = cfg.Set("github.default_owner", "myorg")
+	_ = cfg.Set("github.default_repo", "myrepo")
+
+	f, ios, _ := testFactoryWithConfig(t, prov, store, cfg)
 
 	opts := &Options{
 		IO:      ios,
@@ -541,7 +590,7 @@ func TestRestore_byPR(t *testing.T) {
 		PRFlag:  42,
 	}
 
-	err := runRestore(opts)
+	err = runRestore(opts)
 	if err != nil {
 		t.Fatalf("runRestore() error = %v", err)
 	}
@@ -557,7 +606,16 @@ func TestRestore_byPR(t *testing.T) {
 
 func TestRestore_byPR_notFound(t *testing.T) {
 	store := testutil.NewMockStore()
-	f, ios, _ := testFactory(t, nil, store)
+
+	// Config must be set so resolveSessionFromPR gets past the "not configured" check.
+	cfg, err := config.New(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = cfg.Set("github.default_owner", "myorg")
+	_ = cfg.Set("github.default_repo", "myrepo")
+
+	f, ios, _ := testFactoryWithConfig(t, nil, store, cfg)
 
 	opts := &Options{
 		IO:      ios,
@@ -565,11 +623,242 @@ func TestRestore_byPR_notFound(t *testing.T) {
 		PRFlag:  999,
 	}
 
-	err := runRestore(opts)
+	err = runRestore(opts)
 	if err == nil {
 		t.Fatal("expected error when no session linked to PR")
 	}
 	if !strings.Contains(err.Error(), "PR #999") {
 		t.Errorf("error should mention PR #999, got: %v", err)
+	}
+}
+
+// ── New flag registration tests ──
+
+func TestNewCmdRestore_newFlags(t *testing.T) {
+	ios := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios}
+	cmd := NewCmdRestore(f)
+
+	newFlags := []string{"file", "worktree", "pick", "fix-orphans"}
+	for _, name := range newFlags {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("expected --%s flag to be registered", name)
+		}
+	}
+}
+
+// ── pickSessionForPR tests ──
+
+// testPickStore is a minimal pickStore implementation for picker tests.
+type testPickStore struct {
+	prSessions  map[int][]session.Summary
+	fileEntries map[string][]session.BlameEntry
+}
+
+func (s *testPickStore) GetSessionsForPR(_, _ string, prNumber int) ([]session.Summary, error) {
+	if summaries, ok := s.prSessions[prNumber]; ok {
+		return summaries, nil
+	}
+	return nil, nil
+}
+
+func (s *testPickStore) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntry, error) {
+	if entries, ok := s.fileEntries[query.FilePath]; ok {
+		return entries, nil
+	}
+	return nil, nil
+}
+
+func TestPickSessionForPR_singleSession(t *testing.T) {
+	ios := iostreams.Test()
+	store := &testPickStore{
+		prSessions: map[int][]session.Summary{
+			42: {{ID: "sess-42", Provider: "claude-code"}},
+		},
+	}
+
+	opts := &Options{IO: ios}
+	sid, err := pickSessionForPR(opts, store, 42, "org", "repo")
+	if err != nil {
+		t.Fatalf("pickSessionForPR() error: %v", err)
+	}
+	if sid != "sess-42" {
+		t.Errorf("session ID = %q, want %q", sid, "sess-42")
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Only one session") {
+		t.Error("expected 'Only one session' message for single result")
+	}
+}
+
+func TestPickSessionForPR_noSessions(t *testing.T) {
+	ios := iostreams.Test()
+	store := &testPickStore{prSessions: map[int][]session.Summary{}}
+
+	opts := &Options{IO: ios}
+	_, err := pickSessionForPR(opts, store, 99, "org", "repo")
+	if err == nil {
+		t.Fatal("expected error when no sessions linked to PR")
+	}
+}
+
+func TestPickSessionForPR_multipleSessions(t *testing.T) {
+	ios := iostreams.Test()
+	// Simulate user entering "2" in stdin
+	ios.In = strings.NewReader("2\n")
+
+	store := &testPickStore{
+		prSessions: map[int][]session.Summary{
+			42: {
+				{ID: "sess-a", Provider: "claude-code", Summary: "First"},
+				{ID: "sess-b", Provider: "opencode", Summary: "Second"},
+			},
+		},
+	}
+
+	opts := &Options{IO: ios}
+	sid, err := pickSessionForPR(opts, store, 42, "org", "repo")
+	if err != nil {
+		t.Fatalf("pickSessionForPR() error: %v", err)
+	}
+	if sid != "sess-b" {
+		t.Errorf("session ID = %q, want %q (user chose #2)", sid, "sess-b")
+	}
+}
+
+// ── pickSessionForFile tests ──
+
+func TestPickSessionForFile_singleSession(t *testing.T) {
+	ios := iostreams.Test()
+	store := &testPickStore{
+		fileEntries: map[string][]session.BlameEntry{
+			"src/auth.go": {{SessionID: "sess-file-1", Provider: "claude-code"}},
+		},
+	}
+
+	opts := &Options{IO: ios}
+	sid, err := pickSessionForFile(opts, store, "src/auth.go")
+	if err != nil {
+		t.Fatalf("pickSessionForFile() error: %v", err)
+	}
+	if sid != "sess-file-1" {
+		t.Errorf("session ID = %q, want %q", sid, "sess-file-1")
+	}
+}
+
+func TestPickSessionForFile_noSessions(t *testing.T) {
+	ios := iostreams.Test()
+	store := &testPickStore{fileEntries: map[string][]session.BlameEntry{}}
+
+	opts := &Options{IO: ios}
+	_, err := pickSessionForFile(opts, store, "nonexistent.go")
+	if err == nil {
+		t.Fatal("expected error when no sessions found for file")
+	}
+}
+
+func TestPickSessionForFile_multipleSessions(t *testing.T) {
+	ios := iostreams.Test()
+	ios.In = strings.NewReader("1\n")
+
+	store := &testPickStore{
+		fileEntries: map[string][]session.BlameEntry{
+			"main.go": {
+				{SessionID: "sess-x", Provider: "claude-code", Summary: "Fix main"},
+				{SessionID: "sess-y", Provider: "opencode", Summary: "Refactor"},
+			},
+		},
+	}
+
+	opts := &Options{IO: ios}
+	sid, err := pickSessionForFile(opts, store, "main.go")
+	if err != nil {
+		t.Fatalf("pickSessionForFile() error: %v", err)
+	}
+	if sid != "sess-x" {
+		t.Errorf("session ID = %q, want %q (user chose #1)", sid, "sess-x")
+	}
+}
+
+// ── promptPickFromSummaries tests ──
+
+func TestPromptPickFromSummaries_validChoice(t *testing.T) {
+	ios := iostreams.Test()
+	ios.In = strings.NewReader("2\n")
+
+	summaries := []session.Summary{
+		{ID: "s1", Provider: "claude-code", Summary: "Task A"},
+		{ID: "s2", Provider: "opencode", Summary: "Task B"},
+		{ID: "s3", Provider: "claude-code", Summary: "Task C"},
+	}
+
+	opts := &Options{IO: ios}
+	sid, err := promptPickFromSummaries(opts, summaries)
+	if err != nil {
+		t.Fatalf("promptPickFromSummaries() error: %v", err)
+	}
+	if sid != "s2" {
+		t.Errorf("session ID = %q, want %q", sid, "s2")
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Task A") {
+		t.Error("expected 'Task A' in table output")
+	}
+	if !strings.Contains(output, "Task B") {
+		t.Error("expected 'Task B' in table output")
+	}
+}
+
+func TestPromptPickFromSummaries_invalidChoice(t *testing.T) {
+	ios := iostreams.Test()
+	ios.In = strings.NewReader("99\n")
+
+	summaries := []session.Summary{
+		{ID: "s1", Provider: "claude-code"},
+	}
+
+	opts := &Options{IO: ios}
+	_, err := promptPickFromSummaries(opts, summaries)
+	if err == nil {
+		t.Fatal("expected error for out-of-range choice")
+	}
+}
+
+func TestPromptPickFromSummaries_noInput(t *testing.T) {
+	ios := iostreams.Test()
+	ios.In = strings.NewReader("") // empty input
+
+	summaries := []session.Summary{
+		{ID: "s1", Provider: "claude-code"},
+	}
+
+	opts := &Options{IO: ios}
+	_, err := promptPickFromSummaries(opts, summaries)
+	if err == nil {
+		t.Fatal("expected error when no input received")
+	}
+}
+
+// ── truncateID tests ──
+
+func TestTruncateID(t *testing.T) {
+	tests := []struct {
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"abcdef", 10, "abcdef"},
+		{"abcdefghij", 10, "abcdefghij"},
+		{"abcdefghijk", 10, "abcdefg..."},
+		{"a", 5, "a"},
+	}
+
+	for _, tt := range tests {
+		got := truncateID(tt.input, tt.maxLen)
+		if got != tt.want {
+			t.Errorf("truncateID(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+		}
 	}
 }

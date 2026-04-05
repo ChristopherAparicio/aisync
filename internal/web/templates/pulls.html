@@ -1,0 +1,129 @@
+{{define "pulls.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Pull Requests — aisync{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Pull Requests</h1>
+  <p class="page-subtitle">PRs linked to AI coding sessions</p>
+</div>
+
+{{if .NoPlatform}}
+<div class="pr-empty">
+  <h2>GitHub Integration Not Configured</h2>
+  <p>To see pull requests linked to your AI sessions, configure GitHub integration:</p>
+  <pre class="pr-setup-cmd">aisync config set github.sync_enabled true</pre>
+  <p>The sync will use your <code>gh</code> CLI authentication. Make sure <code>gh auth status</code> works.</p>
+  <p>You can also trigger a manual sync:</p>
+  <pre class="pr-setup-cmd">aisync sync prs</pre>
+</div>
+{{else}}
+
+<!-- Filters -->
+<div class="pr-filters">
+  <a href="/pulls" class="pr-filter-btn {{if eq .StateFilter ""}}active{{end}}">All</a>
+  <a href="/pulls?state=open" class="pr-filter-btn {{if eq .StateFilter "open"}}active{{end}}">Open</a>
+  <a href="/pulls?state=merged" class="pr-filter-btn {{if eq .StateFilter "merged"}}active{{end}}">Merged</a>
+  <a href="/pulls?state=closed" class="pr-filter-btn {{if eq .StateFilter "closed"}}active{{end}}">Closed</a>
+</div>
+
+<!-- KPI Strip -->
+{{if .HasPRs}}
+<div class="kpi-strip">
+  <div class="kpi-strip-item">
+    <span class="kpi-strip-value">{{.TotalPRs}}</span>
+    <span class="kpi-strip-label">Pull Requests</span>
+  </div>
+  <div class="kpi-strip-item">
+    <span class="kpi-strip-value">{{.TotalLinkedSessions}}</span>
+    <span class="kpi-strip-label">Linked Sessions</span>
+  </div>
+  <div class="kpi-strip-item">
+    <span class="kpi-strip-value">{{.TotalTokensStr}}</span>
+    <span class="kpi-strip-label">Total Tokens</span>
+  </div>
+</div>
+{{end}}
+
+<!-- PR List -->
+{{if .HasPRs}}
+<div class="pr-list">
+  {{range .PRs}}
+  <div class="pr-card pr-card--{{.State}}">
+    <div class="pr-card-header">
+      <span class="pr-state-badge pr-state-badge--{{.State}}">{{.StateIcon}} {{.State}}</span>
+      <a href="{{.URL}}" target="_blank" rel="noopener" class="pr-title">#{{.Number}} {{.Title}}</a>
+      <span class="pr-meta">
+        by <strong>{{.Author}}</strong>
+        &middot; {{.Branch}} &rarr; {{.BaseBranch}}
+        &middot; {{.TimeAgo}}
+      </span>
+    </div>
+
+    <div class="pr-card-stats">
+      {{if gt .Additions 0}}<span class="pr-stat pr-stat--add">+{{.Additions}}</span>{{end}}
+      {{if gt .Deletions 0}}<span class="pr-stat pr-stat--del">-{{.Deletions}}</span>{{end}}
+      {{if gt .Comments 0}}<span class="pr-stat pr-stat--comment">&#x1F4AC; {{.Comments}}</span>{{end}}
+      <span class="pr-stat pr-stat--sessions">{{.SessionCount}} session{{if ne .SessionCount 1}}s{{end}}</span>
+      {{if .TokensStr}}<span class="pr-stat pr-stat--tokens">{{.TokensStr}} tokens</span>{{end}}
+      {{if .LatestSessionID}}
+      <span class="pr-stat pr-stat--restore">
+        <a href="/sessions/{{.LatestSessionID}}" class="pr-restore-link" title="Open latest session &amp; restore">&#x1F504; Restore</a>
+      </span>
+      {{end}}
+    </div>
+
+    {{if .HasSessions}}
+    <div class="pr-sessions">
+      <table class="pr-sessions-table">
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Agent</th>
+            <th>Type</th>
+            <th>Messages</th>
+            <th>Tokens</th>
+            <th>When</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Sessions}}
+          <tr{{if .IsLatest}} class="pr-session--latest"{{end}}>
+            <td>
+              <a href="/sessions/{{.ID}}" class="pr-session-link" title="{{.Summary}}">{{.IDShort}}</a>
+              {{if .IsLatest}}<span class="badge badge--type" style="margin-left:0.3em; font-size:0.7em;">latest</span>{{end}}
+            </td>
+            <td>{{.Agent}}</td>
+            <td>{{if .SessionType}}<span class="badge badge--type">{{.SessionType}}</span>{{end}}</td>
+            <td>{{.MessageCount}}</td>
+            <td>{{.TokensStr}}</td>
+            <td>{{.TimeAgo}}</td>
+            <td>
+              <button class="pr-restore-btn" title="Copy restore command" onclick="navigator.clipboard.writeText('aisync restore --session {{.ID}}').then(function(){var b=event.target;b.textContent='Copied!';setTimeout(function(){b.textContent='&#x1F504;'},1500)})">&#x1F504;</button>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{else}}
+<div class="pr-empty">
+  <h2>No Pull Requests Found</h2>
+  {{if .StateFilter}}
+  <p>No {{.StateFilter}} PRs found. Try <a href="/pulls">viewing all PRs</a>.</p>
+  {{else}}
+  <p>PRs will appear here after the sync task runs. You can trigger it manually:</p>
+  <pre class="pr-setup-cmd">aisync sync prs</pre>
+  {{end}}
+</div>
+{{end}}
+
+{{end}}
+
+{{end}}

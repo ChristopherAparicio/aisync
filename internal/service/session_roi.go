@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
 
 // AgentROIAnalysis computes per-agent ROI metrics for a project.
@@ -208,19 +209,36 @@ func (s *SessionService) SkillROIAnalysis(ctx context.Context, projectPath strin
 	}
 	bySkill := make(map[string]*skillAcc)
 
-	// Walk sessions and check for skill events.
+	// Tally session-wide totals and collect IDs for the batch event fetch.
+	// Fix #8: previously issued one GetSessionEvents() call per session (N+1). Now
+	// we fetch all skill_load events for the whole project in a single SQL query,
+	// filtered at the DB level so we don't transfer unrelated event payloads.
 	var totalErrorsAll, totalToolsAll int
+	ids := make([]session.ID, 0, len(projectSessions))
+	summaryByID := make(map[session.ID]session.Summary, len(projectSessions))
 	for _, sm := range projectSessions {
 		totalErrorsAll += sm.ErrorCount
 		totalToolsAll += sm.ToolCallCount
+		ids = append(ids, sm.ID)
+		summaryByID[sm.ID] = sm
+	}
 
-		// Load events for this session to find skill loads.
-		events, evtErr := s.store.GetSessionEvents(sm.ID)
-		if evtErr != nil {
+	// Single batched query filtered to skill_load events only.
+	eventsBySession, evtErr := s.store.GetSessionEventsBatch(ids, sessionevent.EventSkillLoad)
+	if evtErr != nil {
+		// Best-effort: an event-store error shouldn't break ROI analysis — fall back
+		// to an empty map (caller will see zero skills, same as a project with no loads).
+		eventsBySession = map[session.ID][]sessionevent.Event{}
+	}
+
+	for sid, events := range eventsBySession {
+		sm, ok := summaryByID[sid]
+		if !ok {
 			continue
 		}
 		for _, evt := range events {
-			if evt.Type != "skill_load" || evt.SkillLoad == nil {
+			// SQL filter already narrows to skill_load, but defensively guard the payload.
+			if evt.Type != sessionevent.EventSkillLoad || evt.SkillLoad == nil {
 				continue
 			}
 			name := evt.SkillLoad.SkillName

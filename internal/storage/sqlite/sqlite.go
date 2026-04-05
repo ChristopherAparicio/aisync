@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -218,10 +219,14 @@ func (s *Store) Save(session *session.Session) error {
 	// Compute denormalized tool counters
 	toolCallCount, errorCount := countToolCalls(session)
 
+	// Compute denormalized actual cost from provider-reported per-message costs.
+	// Estimated cost (API-equivalent) is set by the service layer before calling Save.
+	actualCost := computeActualCost(session)
+
 	// Upsert session
 	_, err = tx.Exec(`
-		INSERT INTO sessions (id, provider, agent, branch, commit_sha, project_path, remote_url, session_type, project_category, status, parent_id, owner_id, storage_mode, summary, message_count, total_tokens, tool_call_count, error_count, source_updated_at, payload, created_at, exported_at, exported_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO sessions (id, provider, agent, branch, commit_sha, project_path, remote_url, session_type, project_category, status, parent_id, owner_id, storage_mode, summary, message_count, total_tokens, tool_call_count, error_count, estimated_cost, actual_cost, source_updated_at, payload, created_at, exported_at, exported_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			provider=excluded.provider, agent=excluded.agent, branch=excluded.branch,
 			commit_sha=excluded.commit_sha, project_path=excluded.project_path,
@@ -232,6 +237,7 @@ func (s *Store) Save(session *session.Session) error {
 			summary=excluded.summary, message_count=excluded.message_count,
 			total_tokens=excluded.total_tokens,
 			tool_call_count=excluded.tool_call_count, error_count=excluded.error_count,
+			estimated_cost=excluded.estimated_cost, actual_cost=excluded.actual_cost,
 			source_updated_at=excluded.source_updated_at,
 			payload=excluded.payload,
 			created_at=excluded.created_at, exported_at=excluded.exported_at,
@@ -239,7 +245,7 @@ func (s *Store) Save(session *session.Session) error {
 		session.ID, session.Provider, session.Agent, session.Branch,
 		session.CommitSHA, session.ProjectPath, session.RemoteURL, session.SessionType, session.ProjectCategory, session.Status, session.ParentID, session.OwnerID,
 		session.StorageMode, session.Summary, len(session.Messages),
-		session.TokenUsage.TotalTokens, toolCallCount, errorCount, session.SourceUpdatedAt, payload,
+		session.TokenUsage.TotalTokens, toolCallCount, errorCount, session.EstimatedCost, actualCost, session.SourceUpdatedAt, payload,
 		session.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		session.ExportedAt.Format("2006-01-02T15:04:05Z"),
 		session.ExportedBy,
@@ -336,6 +342,165 @@ func (s *Store) Get(id session.ID) (*session.Session, error) {
 	return &sess, nil
 }
 
+// GetBatch retrieves multiple sessions by ID in 3 queries total, regardless of len(ids).
+//
+// This is the batch-aware counterpart to Get(). It is designed to eliminate the N+1
+// query pattern where callers loop over a Summary slice and call Get() per session
+// (which costs 3×N queries: sessions + session_links + file_changes).
+//
+// Query plan:
+//  1. SELECT ... FROM sessions WHERE id IN (?, ?, ...)  — one query for all payloads
+//  2. SELECT ... FROM session_links WHERE session_id IN (?, ?, ...)  — all links at once
+//  3. SELECT ... FROM file_changes  WHERE session_id IN (?, ?, ...)  — all file changes at once
+//
+// Missing IDs are silently omitted from the result map (consistent with the
+// documented "missing IDs are absent" contract). Decompression and unmarshal errors
+// for individual sessions are skipped with a log so that one corrupt row does not
+// poison an entire batch.
+func (s *Store) GetBatch(ids []session.ID) (map[session.ID]*session.Session, error) {
+	if len(ids) == 0 {
+		return map[session.ID]*session.Session{}, nil
+	}
+
+	// De-duplicate IDs to keep the IN-clause compact and avoid double-loading.
+	seen := make(map[session.ID]struct{}, len(ids))
+	uniqueIDs := make([]session.ID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+
+	// Build placeholders and args shared by all three queries.
+	placeholders := make([]string, len(uniqueIDs))
+	args := make([]interface{}, len(uniqueIDs))
+	for i, id := range uniqueIDs {
+		placeholders[i] = "?"
+		args[i] = string(id)
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	result := make(map[session.ID]*session.Session, len(uniqueIDs))
+
+	// ── Query 1: session payloads + mutable columns ──
+	rows, err := s.db.Query(
+		"SELECT id, payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), "+
+			"COALESCE(project_category, ''), COALESCE(status, '') "+
+			"FROM sessions WHERE id IN ("+inClause+")", args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch querying sessions: %w", err)
+	}
+	func() {
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id string
+			var payload []byte
+			var remoteURL, sessionType, projectCategory, status string
+			if scanErr := rows.Scan(&id, &payload, &remoteURL, &sessionType, &projectCategory, &status); scanErr != nil {
+				log.Printf("[GetBatch] scan error: %v", scanErr)
+				continue
+			}
+
+			decompressed, decErr := decompressPayload(payload)
+			if decErr != nil {
+				log.Printf("[GetBatch] decompress error for %s: %v", id, decErr)
+				continue
+			}
+
+			var sess session.Session
+			if umErr := json.Unmarshal(decompressed, &sess); umErr != nil {
+				log.Printf("[GetBatch] unmarshal error for %s: %v", id, umErr)
+				continue
+			}
+
+			// Clear companion slices that may be embedded in the payload JSON.
+			// The DB (session_links, file_changes) is the source of truth — we
+			// will re-populate these below from queries 2 and 3. This matches
+			// Get() semantics which assigns (not appends) loadLinks / loadFileChanges.
+			sess.Links = nil
+			sess.FileChanges = nil
+
+			// Overlay mutable columns (same semantics as Get()).
+			if remoteURL != "" && sess.RemoteURL == "" {
+				sess.RemoteURL = remoteURL
+			}
+			if sessionType != "" && sess.SessionType == "" {
+				sess.SessionType = sessionType
+			}
+			if projectCategory != "" && sess.ProjectCategory == "" {
+				sess.ProjectCategory = projectCategory
+			}
+			if status != "" && sess.Status == "" {
+				sess.Status = session.SessionStatus(status)
+			}
+
+			result[session.ID(id)] = &sess
+		}
+	}()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating batch sessions: %w", err)
+	}
+
+	// Early exit: no rows matched → skip the companion queries entirely.
+	if len(result) == 0 {
+		return result, nil
+	}
+
+	// ── Query 2: all links for matched sessions ──
+	linkRows, err := s.db.Query(
+		"SELECT session_id, link_type, link_ref FROM session_links WHERE session_id IN ("+inClause+")",
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch loading links: %w", err)
+	}
+	func() {
+		defer func() { _ = linkRows.Close() }()
+		for linkRows.Next() {
+			var sessionID string
+			var link session.Link
+			if scanErr := linkRows.Scan(&sessionID, &link.LinkType, &link.Ref); scanErr != nil {
+				log.Printf("[GetBatch] scan link error: %v", scanErr)
+				continue
+			}
+			if sess, ok := result[session.ID(sessionID)]; ok {
+				sess.Links = append(sess.Links, link)
+			}
+		}
+	}()
+	if err := linkRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating batch links: %w", err)
+	}
+
+	// ── Query 3: all file_changes for matched sessions ──
+	fcRows, err := s.db.Query(
+		"SELECT session_id, file_path, change_type FROM file_changes WHERE session_id IN ("+inClause+")",
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch loading file changes: %w", err)
+	}
+	func() {
+		defer func() { _ = fcRows.Close() }()
+		for fcRows.Next() {
+			var sessionID string
+			var fc session.FileChange
+			if scanErr := fcRows.Scan(&sessionID, &fc.FilePath, &fc.ChangeType); scanErr != nil {
+				log.Printf("[GetBatch] scan file change error: %v", scanErr)
+				continue
+			}
+			if sess, ok := result[session.ID(sessionID)]; ok {
+				sess.FileChanges = append(sess.FileChanges, fc)
+			}
+		}
+	}()
+	if err := fcRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating batch file changes: %w", err)
+	}
+
+	return result, nil
+}
+
 // GetLatestByBranch retrieves the most recent session for a project and branch.
 func (s *Store) GetLatestByBranch(projectPath string, branch string) (*session.Session, error) {
 	var id string
@@ -368,7 +533,7 @@ func (s *Store) CountByBranch(projectPath string, branch string) (int, error) {
 
 // List returns session summaries matching the given options.
 func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
-	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, created_at, COALESCE(source_updated_at, 0), COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '') FROM sessions WHERE 1=1"
+	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, COALESCE(estimated_cost, 0), COALESCE(actual_cost, 0), created_at, COALESCE(source_updated_at, 0), COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '') FROM sessions WHERE 1=1"
 	args := []interface{}{}
 
 	if opts.ProjectPath != "" {
@@ -420,7 +585,7 @@ func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
 		var ss session.Summary
 		var createdAt string
 		var updatedAtMs int64
-		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &createdAt, &updatedAtMs, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType, &ss.ProjectCategory, &ss.Status); err != nil {
+		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &ss.EstimatedCost, &ss.ActualCost, &createdAt, &updatedAtMs, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType, &ss.ProjectCategory, &ss.Status); err != nil {
 			return nil, fmt.Errorf("scanning session row: %w", err)
 		}
 		ss.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
@@ -593,6 +758,60 @@ func (s *Store) GetForkRelations(sessionID session.ID) ([]session.ForkRelation, 
 		rels = append(rels, r)
 	}
 	return rels, rows.Err()
+}
+
+// GetForkRelationsForSessions returns fork relations for multiple sessions in a single query.
+func (s *Store) GetForkRelationsForSessions(ids []session.ID) (map[session.ID][]session.ForkRelation, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	// Build WHERE IN (?, ?, ...) clause.
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, 0, len(ids)*2)
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, string(id))
+	}
+	inClause := strings.Join(placeholders, ",")
+	// Duplicate args for the OR condition (original_id IN(...) OR fork_id IN(...)).
+	args = append(args, args...)
+
+	rows, err := s.db.Query(`
+		SELECT original_id, fork_id, fork_point, shared_messages, overlap_ratio,
+		       COALESCE(reason, ''), COALESCE(fork_context, ''),
+		       shared_input_tokens, shared_output_tokens
+		FROM session_forks
+		WHERE original_id IN (`+inClause+`) OR fork_id IN (`+inClause+`)
+		ORDER BY fork_point ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Build a lookup set for fast membership check.
+	idSet := make(map[session.ID]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	result := make(map[session.ID][]session.ForkRelation)
+	for rows.Next() {
+		var r session.ForkRelation
+		if scanErr := rows.Scan(&r.OriginalID, &r.ForkID, &r.ForkPoint, &r.SharedMessages,
+			&r.OverlapRatio, &r.Reason, &r.ForkContext,
+			&r.SharedInputTokens, &r.SharedOutputTokens); scanErr != nil {
+			return nil, scanErr
+		}
+		// Associate this relation with the requested session(s).
+		if idSet[r.OriginalID] {
+			result[r.OriginalID] = append(result[r.OriginalID], r)
+		}
+		if idSet[r.ForkID] {
+			result[r.ForkID] = append(result[r.ForkID], r)
+		}
+	}
+	return result, rows.Err()
 }
 
 // ListAllForkRelations returns every fork relation in the database.
@@ -1148,6 +1367,120 @@ func buildSearchWhere(q session.SearchQuery) (string, []interface{}) {
 	return " WHERE " + strings.Join(conditions, " AND "), args
 }
 
+// SearchFacets returns aggregated counts for faceted navigation.
+// Uses the same WHERE clause as Search so facet counts match the current context.
+// All 7 facets are computed in a single UNION ALL query to minimize round trips.
+func (s *Store) SearchFacets(q session.SearchQuery) (*session.SearchFacets, error) {
+	where, baseArgs := buildSearchWhere(q)
+
+	facets := &session.SearchFacets{}
+
+	// Build a single UNION ALL query for all 7 facets.
+	// Each sub-SELECT returns (facet_name, value, count).
+	type facetSpec struct {
+		name   string // tag for dispatching results
+		column string
+	}
+	specs := []facetSpec{
+		{"project", "COALESCE(NULLIF(remote_url,''), project_path)"},
+		{"provider", "provider"},
+		{"branch", "branch"},
+		{"type", "session_type"},
+		{"category", "project_category"},
+		{"status", "status"},
+		{"agent", "agent"},
+	}
+
+	// Build combined query: each facet is a ranked sub-query limited to top 30.
+	var parts []string
+	var allArgs []interface{}
+	for _, spec := range specs {
+		filterExpr := spec.column + " != ''"
+		var sub string
+		if where != "" {
+			sub = "SELECT '" + spec.name + "' AS facet, " + spec.column + " AS val, COUNT(*) AS cnt FROM sessions" +
+				where + " AND " + filterExpr +
+				" GROUP BY val ORDER BY cnt DESC LIMIT 30"
+		} else {
+			sub = "SELECT '" + spec.name + "' AS facet, " + spec.column + " AS val, COUNT(*) AS cnt FROM sessions" +
+				" WHERE " + filterExpr +
+				" GROUP BY val ORDER BY cnt DESC LIMIT 30"
+		}
+		parts = append(parts, sub)
+		allArgs = append(allArgs, baseArgs...)
+	}
+
+	query := strings.Join(parts, " UNION ALL ")
+
+	rows, err := s.db.Query(query, allArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("facets query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Dispatch rows into the correct facet slice.
+	for rows.Next() {
+		var facetName string
+		var fv session.FacetValue
+		if scanErr := rows.Scan(&facetName, &fv.Value, &fv.Count); scanErr != nil {
+			return nil, fmt.Errorf("facets scan: %w", scanErr)
+		}
+		switch facetName {
+		case "project":
+			facets.Projects = append(facets.Projects, fv)
+		case "provider":
+			facets.Providers = append(facets.Providers, fv)
+		case "branch":
+			facets.Branches = append(facets.Branches, fv)
+		case "type":
+			facets.Types = append(facets.Types, fv)
+		case "category":
+			facets.Categories = append(facets.Categories, fv)
+		case "status":
+			facets.Statuses = append(facets.Statuses, fv)
+		case "agent":
+			facets.Agents = append(facets.Agents, fv)
+		}
+	}
+
+	return facets, rows.Err()
+}
+
+// ── Cost denormalization methods ──
+
+// UpdateCosts sets the denormalized estimated_cost and actual_cost columns.
+func (s *Store) UpdateCosts(id session.ID, estimatedCost, actualCost float64) error {
+	_, err := s.db.Exec("UPDATE sessions SET estimated_cost = ?, actual_cost = ? WHERE id = ?",
+		estimatedCost, actualCost, id)
+	if err != nil {
+		return fmt.Errorf("updating costs for %s: %w", id, err)
+	}
+	return nil
+}
+
+// ListSessionsWithZeroCosts returns session IDs that have estimated_cost = 0.
+// Used by the cost backfill task to find sessions needing cost computation.
+func (s *Store) ListSessionsWithZeroCosts(limit int) ([]session.ID, error) {
+	rows, err := s.db.Query(
+		"SELECT id FROM sessions WHERE COALESCE(estimated_cost, 0) = 0 AND total_tokens > 0 ORDER BY created_at DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions with zero costs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []session.ID
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			continue
+		}
+		ids = append(ids, session.ID(id))
+	}
+	return ids, rows.Err()
+}
+
 // ── Blame methods ──
 
 // GetSessionsByFile returns sessions that touched the given file path.
@@ -1166,6 +1499,9 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 	if query.Provider != "" {
 		conditions = append(conditions, "s.provider = ?")
 		args = append(args, string(query.Provider))
+	}
+	if query.ExcludeReads {
+		conditions = append(conditions, "fc.change_type IN ('created', 'modified', 'deleted')")
 	}
 
 	where := " WHERE " + strings.Join(conditions, " AND ")
@@ -1347,13 +1683,14 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 		       COALESCE(s.summary, '') AS last_summary,
 		       COALESCE(s.branch, '') AS last_branch,
 		       COALESCE(s.provider, '') AS last_provider,
+		       COALESCE(s.commit_sha, '') AS last_commit_sha,
 		       COALESCE(fc.change_type, '') AS last_change_type
 		  FROM file_agg fa
 		  JOIN sessions s ON s.project_path = ? AND s.created_at = fa.last_time
 		  JOIN file_changes fc ON fc.session_id = s.id AND fc.file_path = fa.file_path
 	)
 	SELECT file_path, sess_count, write_count, last_change_type,
-	       last_session_id, last_time, last_summary, last_branch, last_provider
+	       last_session_id, last_time, last_summary, last_branch, last_provider, last_commit_sha
 	  FROM last_session
 	  ORDER BY last_time DESC
 	  LIMIT ?`
@@ -1376,7 +1713,7 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 		var provider, changeType, lastTime string
 		if err := rows.Scan(
 			&e.FilePath, &e.SessionCount, &e.WriteCount, &changeType,
-			&e.LastSessionID, &lastTime, &e.LastSummary, &e.LastBranch, &provider,
+			&e.LastSessionID, &lastTime, &e.LastSummary, &e.LastBranch, &provider, &e.LastCommitSHA,
 		); err != nil {
 			return nil, fmt.Errorf("scanning project file: %w", err)
 		}
@@ -1397,19 +1734,28 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 // ── User methods ──
 
 // SaveUser creates or updates a user. If a user with the same email exists,
-// the name and source are updated and the existing user is returned.
+// the name, source, kind, and role are updated.
 func (s *Store) SaveUser(user *session.User) error {
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = time.Now().UTC()
 	}
+	kind := string(user.Kind)
+	if kind == "" {
+		kind = string(session.UserKindUnknown)
+	}
+	role := string(user.Role)
+	if role == "" {
+		role = string(session.UserRoleMember)
+	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO users (id, name, email, source, created_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO users (id, name, email, source, created_at, kind, slack_id, slack_name, role)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(email) DO UPDATE SET
-			name=excluded.name, source=excluded.source`,
+			name=excluded.name, source=excluded.source, kind=excluded.kind, role=excluded.role`,
 		user.ID, user.Name, user.Email, user.Source,
 		user.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		kind, user.SlackID, user.SlackName, role,
 	)
 	if err != nil {
 		return fmt.Errorf("saving user: %w", err)
@@ -1418,37 +1764,162 @@ func (s *Store) SaveUser(user *session.User) error {
 	return nil
 }
 
-// GetUser retrieves a user by ID.
-func (s *Store) GetUser(id session.ID) (*session.User, error) {
+// scanUser scans a user row with all columns including the enriched fields.
+func scanUser(scan func(dest ...any) error) (*session.User, error) {
 	var u session.User
-	var createdAt string
-	err := s.db.QueryRow("SELECT id, name, email, source, created_at FROM users WHERE id = ?", id).
-		Scan(&u.ID, &u.Name, &u.Email, &u.Source, &createdAt)
+	var createdAt, kind, slackID, slackName, role string
+	err := scan(&u.ID, &u.Name, &u.Email, &u.Source, &createdAt, &kind, &slackID, &slackName, &role)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("querying user: %w", err)
+		return nil, err
 	}
 	u.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
+	u.Kind = session.UserKind(kind)
+	u.SlackID = slackID
+	u.SlackName = slackName
+	u.Role = session.UserRole(role)
 	return &u, nil
+}
+
+const userColumns = "id, name, email, source, created_at, kind, slack_id, slack_name, role"
+
+// GetUser retrieves a user by ID.
+func (s *Store) GetUser(id session.ID) (*session.User, error) {
+	row := s.db.QueryRow("SELECT "+userColumns+" FROM users WHERE id = ?", id)
+	u, err := scanUser(row.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("querying user: %w", err)
+	}
+	return u, nil
 }
 
 // GetUserByEmail retrieves a user by email address.
 // Returns nil, nil if no user matches.
 func (s *Store) GetUserByEmail(email string) (*session.User, error) {
-	var u session.User
-	var createdAt string
-	err := s.db.QueryRow("SELECT id, name, email, source, created_at FROM users WHERE email = ?", email).
-		Scan(&u.ID, &u.Name, &u.Email, &u.Source, &createdAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	row := s.db.QueryRow("SELECT "+userColumns+" FROM users WHERE email = ?", email)
+	u, err := scanUser(row.Scan)
 	if err != nil {
 		return nil, fmt.Errorf("querying user by email: %w", err)
 	}
-	u.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
-	return &u, nil
+	return u, nil
+}
+
+// ListUsers returns all users ordered by name.
+func (s *Store) ListUsers() ([]*session.User, error) {
+	rows, err := s.db.Query("SELECT " + userColumns + " FROM users ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("listing users: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var users []*session.User
+	for rows.Next() {
+		u, scanErr := scanUser(rows.Scan)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scanning user: %w", scanErr)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// ListUsersByKind returns users filtered by kind ("human", "machine", "unknown").
+func (s *Store) ListUsersByKind(kind string) ([]*session.User, error) {
+	rows, err := s.db.Query("SELECT "+userColumns+" FROM users WHERE kind = ? ORDER BY name", kind)
+	if err != nil {
+		return nil, fmt.Errorf("listing users by kind: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var users []*session.User
+	for rows.Next() {
+		u, scanErr := scanUser(rows.Scan)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scanning user: %w", scanErr)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// UpdateUserSlack sets the Slack identity fields for a user.
+func (s *Store) UpdateUserSlack(id session.ID, slackID, slackName string) error {
+	res, err := s.db.Exec("UPDATE users SET slack_id = ?, slack_name = ? WHERE id = ?", slackID, slackName, id)
+	if err != nil {
+		return fmt.Errorf("updating user slack: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %s not found", id)
+	}
+	return nil
+}
+
+// UpdateUserKind sets the kind classification for a user.
+func (s *Store) UpdateUserKind(id session.ID, kind string) error {
+	res, err := s.db.Exec("UPDATE users SET kind = ? WHERE id = ?", kind, id)
+	if err != nil {
+		return fmt.Errorf("updating user kind: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %s not found", id)
+	}
+	return nil
+}
+
+// UpdateUserRole sets the notification role for a user.
+func (s *Store) UpdateUserRole(id session.ID, role string) error {
+	res, err := s.db.Exec("UPDATE users SET role = ? WHERE id = ?", role, id)
+	if err != nil {
+		return fmt.Errorf("updating user role: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("user %s not found", id)
+	}
+	return nil
+}
+
+// OwnerStats returns aggregated session statistics grouped by owner_id
+// for a given time range and optional project filter (empty = all projects).
+func (s *Store) OwnerStats(projectPath string, since, until time.Time) ([]session.OwnerStat, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			s.owner_id,
+			COALESCE(u.name, '') as owner_name,
+			COALESCE(u.email, '') as owner_email,
+			COALESCE(u.kind, 'unknown') as owner_kind,
+			COUNT(*) as session_count,
+			COALESCE(SUM(s.total_tokens), 0) as total_tokens,
+			COALESCE(SUM(s.error_count), 0) as error_count
+		FROM sessions s
+		LEFT JOIN users u ON s.owner_id = u.id
+		WHERE s.created_at >= ? AND s.created_at <= ?
+			AND (? = '' OR s.project_path = ?)
+		GROUP BY s.owner_id
+		ORDER BY session_count DESC`,
+		since.Format("2006-01-02T15:04:05Z"),
+		until.Format("2006-01-02T15:04:05Z"),
+		projectPath, projectPath,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying owner stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stats []session.OwnerStat
+	for rows.Next() {
+		var os session.OwnerStat
+		if err := rows.Scan(&os.OwnerID, &os.OwnerName, &os.OwnerEmail, &os.OwnerKind,
+			&os.SessionCount, &os.TotalTokens, &os.ErrorCount); err != nil {
+			return nil, fmt.Errorf("scanning owner stat: %w", err)
+		}
+		stats = append(stats, os)
+	}
+	return stats, rows.Err()
 }
 
 // ── Auth Users ──
@@ -2540,6 +3011,148 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	// ── Migration 026: pull_requests + session_pull_requests tables ──
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pull_requests (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo_owner TEXT NOT NULL,
+		repo_name TEXT NOT NULL,
+		number INTEGER NOT NULL,
+		title TEXT NOT NULL DEFAULT '',
+		branch TEXT NOT NULL DEFAULT '',
+		base_branch TEXT NOT NULL DEFAULT '',
+		state TEXT NOT NULL DEFAULT 'open',
+		author TEXT NOT NULL DEFAULT '',
+		url TEXT NOT NULL DEFAULT '',
+		additions INTEGER NOT NULL DEFAULT 0,
+		deletions INTEGER NOT NULL DEFAULT 0,
+		comments INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT '',
+		merged_at TEXT NOT NULL DEFAULT '',
+		closed_at TEXT NOT NULL DEFAULT '',
+		UNIQUE(repo_owner, repo_name, number)
+	)`); err != nil {
+		return fmt.Errorf("migration 026 (pull_requests): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_pull_requests_branch ON pull_requests(branch)"); err != nil {
+		return fmt.Errorf("migration 026 (pull_requests branch index): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_pull_requests_state ON pull_requests(state)"); err != nil {
+		return fmt.Errorf("migration 026 (pull_requests state index): %w", err)
+	}
+
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_pull_requests (
+		session_id TEXT NOT NULL,
+		repo_owner TEXT NOT NULL,
+		repo_name TEXT NOT NULL,
+		pr_number INTEGER NOT NULL,
+		linked_at TEXT NOT NULL DEFAULT '',
+		UNIQUE(session_id, repo_owner, repo_name, pr_number),
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	)`); err != nil {
+		return fmt.Errorf("migration 026 (session_pull_requests): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_prs_session ON session_pull_requests(session_id)"); err != nil {
+		return fmt.Errorf("migration 026 (session_prs session index): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_session_prs_pr ON session_pull_requests(repo_owner, repo_name, pr_number)"); err != nil {
+		return fmt.Errorf("migration 026 (session_prs pr index): %w", err)
+	}
+
+	// ── Migration 027: Enrich users table for Slack integration ──
+	// Add kind, slack_id, slack_name, role columns to users.
+	// Add index on sessions.owner_id for GROUP BY performance.
+	userCols027 := []struct {
+		name string
+		def  string
+	}{
+		{"kind", "TEXT NOT NULL DEFAULT 'unknown'"},
+		{"slack_id", "TEXT NOT NULL DEFAULT ''"},
+		{"slack_name", "TEXT NOT NULL DEFAULT ''"},
+		{"role", "TEXT NOT NULL DEFAULT 'member'"},
+	}
+	for _, col := range userCols027 {
+		if !columnExists(db, "users", col.name) {
+			if _, err := db.Exec(fmt.Sprintf("ALTER TABLE users ADD COLUMN %s %s", col.name, col.def)); err != nil {
+				return fmt.Errorf("migration 027 (users.%s): %w", col.name, err)
+			}
+		}
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_owner_id ON sessions(owner_id)"); err != nil {
+		return fmt.Errorf("migration 027 (idx_sessions_owner_id): %w", err)
+	}
+
+	// ── Migration 028: recommendations table ──
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS recommendations (
+		id TEXT PRIMARY KEY,
+		project_path TEXT NOT NULL,
+		type TEXT NOT NULL,
+		priority TEXT NOT NULL DEFAULT 'medium',
+		source TEXT NOT NULL DEFAULT 'deterministic',
+		icon TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL,
+		message TEXT NOT NULL,
+		impact TEXT NOT NULL DEFAULT '',
+		agent TEXT NOT NULL DEFAULT '',
+		skill TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'active',
+		fingerprint TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		dismissed_at DATETIME,
+		snoozed_until DATETIME
+	)`); err != nil {
+		return fmt.Errorf("migration 028 (recommendations table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_recommendations_fingerprint ON recommendations(fingerprint)`); err != nil {
+		return fmt.Errorf("migration 028 (fingerprint index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_recommendations_project_status ON recommendations(project_path, status)`); err != nil {
+		return fmt.Errorf("migration 028 (project_status index): %w", err)
+	}
+
+	// ── Migration 029: denormalized cost columns on sessions ──
+	// estimated_cost = API-equivalent cost (set by service layer via pricing calculator).
+	// actual_cost = sum of provider-reported per-message costs (computed at Save time).
+	// These columns eliminate the need to load full session payloads for cost aggregation
+	// in Stats(), Forecast(), ContextSaturation(), and CacheEfficiency().
+	for _, col := range []struct{ name, ddl string }{
+		{"estimated_cost", "ALTER TABLE sessions ADD COLUMN estimated_cost REAL NOT NULL DEFAULT 0"},
+		{"actual_cost", "ALTER TABLE sessions ADD COLUMN actual_cost REAL NOT NULL DEFAULT 0"},
+	} {
+		if !columnExists(db, "sessions", col.name) {
+			if _, err := db.Exec(col.ddl); err != nil {
+				return fmt.Errorf("migration 029 (%s): %w", col.name, err)
+			}
+		}
+	}
+
+	// ── Migration 030: flat project_capabilities table ──
+	// One row per capability per project, enabling SQL queries like
+	// "which projects have the sentry MCP server?" or "when was skill X first seen?"
+	// Complements project_snapshots (JSON blob audit trail) with a queryable index.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS project_capabilities (
+		id TEXT PRIMARY KEY,
+		project_path TEXT NOT NULL,
+		name TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		scope TEXT NOT NULL DEFAULT 'global',
+		is_active INTEGER NOT NULL DEFAULT 1,
+		first_seen TEXT NOT NULL,
+		last_seen TEXT NOT NULL,
+		UNIQUE(project_path, name, kind)
+	)`); err != nil {
+		return fmt.Errorf("migration 030 (project_capabilities table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_project_capabilities_path
+		ON project_capabilities(project_path, is_active)`); err != nil {
+		return fmt.Errorf("migration 030 (project_capabilities index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_project_capabilities_kind
+		ON project_capabilities(kind, is_active)`); err != nil {
+		return fmt.Errorf("migration 030 (project_capabilities kind index): %w", err)
+	}
+
 	return nil
 }
 
@@ -2596,6 +3209,18 @@ func countToolCalls(s *session.Session) (toolCallCount, errorCount int) {
 		}
 	}
 	return
+}
+
+// computeActualCost sums the provider-reported costs from all assistant messages.
+// This is the "what was actually charged" value; 0 for subscription users.
+func computeActualCost(s *session.Session) float64 {
+	var total float64
+	for i := range s.Messages {
+		if s.Messages[i].Role == session.RoleAssistant {
+			total += s.Messages[i].ProviderCost
+		}
+	}
+	return total
 }
 
 // columnExists checks if a column exists in a table using PRAGMA table_info.

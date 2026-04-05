@@ -94,9 +94,21 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 	// Backend × model cross-tabulation for treemap visualization.
 	treemapAgg := make(map[string]map[string]*treemapModelAgg)
 
+	// Batch-fetch all full sessions in a single query (3 SQL statements total)
+	// instead of N×3 queries from a per-session Get() loop. Missing sessions are
+	// silently absent from the result map and the loop below treats them as skips.
+	filteredIDs := make([]session.ID, 0, len(filtered))
 	for _, sm := range filtered {
-		full, getErr := s.store.Get(sm.ID)
-		if getErr != nil {
+		filteredIDs = append(filteredIDs, sm.ID)
+	}
+	fullSessions, batchErr := s.store.GetBatch(filteredIDs)
+	if batchErr != nil {
+		return nil, fmt.Errorf("batch loading sessions for forecast: %w", batchErr)
+	}
+
+	for _, sm := range filtered {
+		full, ok := fullSessions[sm.ID]
+		if !ok {
 			continue
 		}
 		estimate := s.pricing.SessionCost(full)

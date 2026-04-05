@@ -1,6 +1,6 @@
 # aisync — Feature Backlog & Discussion
 
-> Last updated: 2026-03-27 (Q1-Q5 research completed with production DB validation, leaderboard data captured)
+> Last updated: 2026-04-05 (Section 8 added — Investigation Tooling & Agent Support, triggered by cycloplan session analysis)
 > Purpose: Catalogue of all feature ideas discussed, prioritized by value and effort.
 > Not a commitment — a living document for planning next sessions.
 
@@ -15,6 +15,7 @@
 5. [Packmind-Inspired Ideas](#5-packmind-inspired-ideas)
 6. [Model Recommendation & Leaderboard Integration](#6-model-recommendation--leaderboard-integration)
 7. [Existing Backlog (from TODO.md)](#7-existing-backlog)
+8. [Investigation Tooling & Agent Support](#8-investigation-tooling--agent-support) ⭐ **NEW**
 
 ---
 
@@ -422,61 +423,261 @@ These items are already tracked and remain relevant:
 
 ---
 
+## 8. Investigation Tooling & Agent Support
+
+> **Theme:** Turn aisync into an investigation platform where analysis agents can drill into sessions
+> cheaply and iteratively, instead of stuffing everything into a single LLM prompt.
+>
+> **Triggered by:** 2026-04-05 manual investigation of 2 cycloplan OpenCode sessions
+> (`ses_2a125dde7ffeLfthr64J35CFkq`, `ses_2a1396b09ffeMRMA5b9eEeRxWt`). Key findings:
+>
+> - **Compaction detection rate: ~25%** — our `< 50%` threshold misses OpenCode's ~49% drops. Real rate:
+>   4 compactions per session vs 1 detected. Context climbs to ~168k–183k tokens (85% of 200k window)
+>   before each compaction, roughly 1 compaction every 3 user messages.
+> - **Command output is a black hole** — `CommandDetail` tracks `base_command` + `full_command` + `duration_ms`
+>   but NOT output bytes/tokens. Long bash outputs (lint, tsc, curl verbose, dev server logs) are invisible
+>   in cost attribution and re-compacted on every turn.
+> - **High CLI wrapper opportunity** — 37% repetition ratio on bash commands, 43% of commands exceed 150 chars.
+>   Clear candidates: `vite dev start`, `health check`, `login + token extract`, `port scan`, `pre-commit tsc`.
+>   Wrapping these in a project CLI would save significant tokens through compaction amplification.
+>
+> **Architectural vision: two-level investigation model**
+>
+> - **Level 1 — Cheap aggregates** (no LLM): precomputed hot-spots stored per session
+>   (top commands by output size, compactions with corrected threshold, skill footprints, waste buckets).
+>   Instantly consultable, zero token cost.
+> - **Level 2 — On-demand LLM drill-down**: the analysis agent starts with a ~500 token hot-spots summary,
+>   then pulls individual command details / compaction windows / similar-command queries via targeted tool calls.
+>   Replaces the current "dump everything into an 8k token prompt" approach in `BuildAnalysisPrompt`.
+
+### 8.1 Fix Compaction Threshold + Per-User-Msg Rate
+
+**Problem:** `internal/session/compaction.go` uses strict `< 50%` drop threshold. OpenCode compacts at
+pile ~49% (observed: 49.76%, 47.22%, 49.42%, 43.17% drops in real cycloplan sessions). Result: our
+detector finds 1 compaction when there are actually 4.
+
+**What we'd build:**
+- Relax threshold to `<= 55%` drop from `> 20k` baseline (catches the OpenCode 49% pattern)
+- Add secondary trigger: `>= 40%` drop AND absolute delta `>= 50k tokens` (catches partial compactions)
+- New metric `CompactionsPerUserMessage` in `session.CompactionSummary` — surface the "compaction cascade" signal
+- Update existing tests + add regression tests with real OpenCode token patterns
+
+**Value:** 🔴 **CRITICAL** — Without this fix, every downstream compaction feature under-reports.
+**Effort:** XS (~30 min)
+**Dependencies:** None
+
+### 8.2 Command Output Bytes & Token Tracking
+
+**Problem:** `CommandDetail` struct only captures what goes INTO a command, not what comes OUT.
+Long bash outputs (lint, tsc, dev server logs, curl verbose) are re-compacted on every turn
+but invisible in aisync cost attribution. The "black hole" of command cost.
+
+**What we'd build:**
+- Add `OutputBytes int` and `OutputTokens int` fields to `sessionevent.CommandDetail`
+- Populate during `Processor` extraction by measuring the tool call's output string (`len(output)` → bytes, `/4` → tokens estimate)
+- Migration 031: backfill existing rows with zero, new rows get real values
+- Surface in session detail page: "Top commands by output size" panel (sortable)
+- Update `CommandDetail` marshal/unmarshal in `event_store.go` (avoid the compaction storage bug we hit in Sprint H)
+
+**Value:** 🔴 **CRITICAL** — Unlocks 8.3, 8.5, 8.8 and makes command cost visible for the first time.
+**Effort:** S (~1h)
+**Dependencies:** None
+
+### 8.3 Session Hot-Spots Precomputed Table (Level 1)
+
+**Problem:** Every analysis agent invocation recomputes the same aggregates (top commands, compactions,
+skill footprints) from raw events. Wasteful and slow, and the data format isn't optimized for LLM consumption.
+
+**What we'd build:**
+- New table `session_hotspots` (migration 031 or 032) with pre-aggregated JSON per session:
+  - `top_commands_by_output` — top 20 commands ranked by `OutputBytes` (with event IDs for drill-down)
+  - `top_commands_by_reuse` — top 20 commands by duplicate count (normalized form)
+  - `compaction_events` — all detected compactions with before/after context pointers
+  - `compaction_rate` — compactions per user message
+  - `skill_footprints` — per-skill cumulative tokens (from existing `SkillLoadDetail.EstimatedTokens`)
+  - `expensive_messages` — messages with `input_tokens > 100k` (compaction warning zone)
+- New scheduler task `HotspotsTask` (runs after `analyze_daily`, or on-demand via API)
+- New port method `storage.SessionHotspotStore` (GetHotspots / SetHotspots)
+- UI: new "Hot Spots" tab on session detail page (cheap, no LLM)
+
+**Value:** 🟠 **HIGH** — Foundation for 8.4 (agent tooling) and 8.5 (CLI candidates dashboard).
+**Effort:** M (~2h)
+**Dependencies:** 8.2 (needs OutputBytes to rank commands)
+
+### 8.4 `aisync-investigator` — Agent Investigation API
+
+**Problem:** Current `BuildAnalysisPrompt` dumps ~8k tokens of session data into a single LLM prompt
+and asks for a report. Expensive (Opus input rate × 8k per session) and imprecise (LLM can't ask
+follow-up questions). Your insight: *"permettre à l'agent de lire chaque commande une par une si il souhaite"*.
+
+**What we'd build:**
+- New HTTP endpoints on port 8371 (can be wrapped as MCP stdio server later):
+  - `GET /api/investigate/sessions/{id}/hotspots` → reads from 8.3 table, returns compact JSON
+  - `GET /api/investigate/sessions/{id}/commands?min_bytes=5000` → filtered command list
+  - `GET /api/investigate/sessions/{id}/commands/{event_id}` → full command detail (truncated output)
+  - `GET /api/investigate/sessions/{id}/compactions/{idx}/window?radius=3` → N messages around a compaction
+  - `GET /api/investigate/sessions/{id}/skills` → skill load list with tokens
+  - `GET /api/investigate/commands/similar?pattern=...&scope=all` → find repeated commands cross-session (CLI candidates)
+- Each endpoint returns JSON shaped for LLM consumption (bounded size, stable schema)
+- Optional: `cmd/aisync-investigator-mcp/` stdio wrapper for direct MCP protocol use by agents
+- Documented as "investigation API" in a new `docs/investigation-api.md`
+
+**Value:** 🟠 **HIGH** — Transforms aisync from "dashboard" into "investigation platform".
+**Effort:** M (~2-3h)
+**Dependencies:** 8.3 (hot-spots table must exist)
+
+### 8.5 Repeated Command Detection & CLI Candidates Dashboard
+
+**Problem:** Developers repeatedly paste 150+ character bash commands (vite dev, curl login flows,
+lsof port scans) across sessions. Each repetition costs tokens twice: once in the assistant message,
+once in every subsequent compaction's summary. But aisync has no way to surface these patterns.
+
+**What we'd build:**
+- New analytics query: group commands by normalized form (replace `/path/...` → `/PATH`, numbers → `N`)
+- Count occurrences + unique sessions + unique projects per normalized pattern
+- Filter: commands with `LENGTH(full_command) > 100` AND `count >= 3`
+- Estimate token savings: `total_chars_saved × avg_compaction_amplification_factor`
+- New dashboard page `/investigate/cli-candidates`:
+  - Cross-project table: pattern, occurrences, sessions, projects, chars, est. tokens saved
+  - Click-through to see example invocations
+  - Export as JSON/CSV (for actually building the CLI)
+
+**Value:** 🟠 **HIGH** — Directly actionable. You can build `cyclo` CLI from this, saving tokens on every future session.
+**Effort:** M (~2h)
+**Dependencies:** 8.2 (needs output tracking for savings estimate)
+
+### 8.6 Enhance `BuildAnalysisPrompt` to Use Hot-Spots
+
+**Problem:** `internal/analysis/llm/analyzer.go::BuildAnalysisPrompt` dumps message distribution, tool
+breakdown, first 5 user messages, last 10 messages, errors, files, capabilities — all in plain text,
+~6-8k tokens per call. Misses the compaction + command output signals entirely.
+
+**What we'd build:**
+- Inject `session_hotspots` JSON at the top of the prompt (compact, structured)
+- Remove the redundant full message dump (last 10 messages) — agent can query them on demand via 8.4
+- Update system prompt to instruct the LLM: *"If the hot-spots show suspicious patterns, use the
+  investigation API endpoints to drill down before finalizing your report."*
+- Add new analysis dimensions to the output schema:
+  - `compaction_findings` — assessment of the compaction cascade
+  - `command_waste_findings` — identified expensive/repetitive commands
+  - `cli_suggestions` — proposed CLI wrappers with estimated savings
+- Backwards compatible: existing fields stay, new fields are additive
+
+**Value:** 🟡 **MEDIUM** — Makes every analyzed session report 3–5× more actionable and ~40% cheaper.
+**Effort:** S (~1h)
+**Dependencies:** 8.3 (hot-spots), ideally 8.4 (so LLM can drill down)
+
+### 8.7 Compaction Cascade Alert
+
+**Problem:** When a session compacts more than once per 4 user messages, something is wrong
+(task too large, context bloat, bad model choice). Today this is invisible — no notification, no UI flag.
+
+**What we'd build:**
+- Scheduler task `CompactionCascadeDetectionTask` (runs after `HotspotsTask`)
+- Threshold: `compactions_per_user_message > 0.25` AND `total_compactions >= 3`
+- New event type `EventCompactionCascade` fired via notification service
+- Dedup window: don't re-alert same session within 24h
+- Message template: *"Session `{id}` in project `{project}` compacted {N} times across {M} user messages.
+  Context climbed to {max_tokens} tokens. Consider: splitting the task, switching to a 1M-token model, or
+  wrapping frequent commands in a project CLI (see /investigate/cli-candidates)."*
+- Wire into existing Slack notification infrastructure (already supports project channels)
+
+**Value:** 🟡 **MEDIUM** — Catches runaway sessions before they burn $50+ in compaction overhead.
+**Effort:** S (~1h)
+**Dependencies:** 8.1 (accurate detection), 8.3 (rate computation)
+
+### 8.8 Per-Provider Context Bloat Analysis
+
+**Problem:** Observed: OpenCode pushes context to 168k–183k tokens before compacting, while Claude Code
+(anecdotally) stays lower. We have the data to prove/disprove this but no comparative view.
+
+**What we'd build:**
+- New analytics query: percentile distribution of `input_tokens` per assistant message, grouped by provider
+- Metric: "avg context before compaction" per provider per project
+- Metric: "tokens injected per tool_call" per provider (how verbose is each provider's context packing)
+- Dashboard card on `/analytics`: "Provider Context Efficiency"
+  - Bar chart: avg max context by provider
+  - Bar chart: tool_call → context tokens ratio by provider
+  - Insight callout when delta > 2× between providers on same project
+- Use case: confirm whether OpenCode is genuinely more bloated, data-driven migration decisions
+
+**Value:** 🟡 **MEDIUM** — Validates (or disproves) the "OpenCode is bloated" hypothesis with numbers.
+**Effort:** M (~2h)
+**Dependencies:** 8.2 (for the tool_call → output_bytes correlation)
+
+---
+
+### Section 8 — Suggested Phased Rollout
+
+**Phase 1 — Critical Fixes (~1.5h)** ⚡ *Unblocks everything else*
+- **8.1** Fix compaction threshold (XS, 30 min)
+- **8.2** Command output bytes/tokens (S, 1h)
+- → After Phase 1, re-run analysis on cycloplan sessions: 4 compactions visible, command costs visible.
+
+**Phase 2 — Level 1 Aggregates (~4h)**
+- **8.3** Hot-spots precomputed table (M, 2h)
+- **8.5** CLI candidates dashboard (M, 2h)
+- → After Phase 2, you can browse "Top CLI candidates" for cycloplan and start building `cyclo` CLI.
+
+**Phase 3 — Level 2 Agent Tooling (~3-4h)**
+- **8.4** Investigation API endpoints (M, 2-3h)
+- **8.6** Enhanced analysis prompt using hot-spots (S, 1h)
+- → After Phase 3, `analyze_daily` produces reports that identify compaction cascades + CLI candidates automatically.
+
+**Phase 4 — Alerts & Validation (~3h)**
+- **8.7** Compaction cascade Slack alert (S, 1h)
+- **8.8** Per-provider context bloat dashboard (M, 2h)
+- → After Phase 4, runaway sessions trigger alerts proactively, provider comparison is data-driven.
+
+**Total estimated effort: ~11-12h across 4 phases.** Each phase delivers standalone value.
+
+---
+
 ## Priority Matrix
 
-| Feature | Value | Effort | Dependencies | Priority |
-|---------|-------|--------|-------------|----------|
-| **1.2** Cross-Project MCP Matrix | HIGH | LOW | None | ⭐ P0 |
-| **1.4** Harmonize Events + ClassifyTool | MEDIUM | LOW | None | ⭐ P0 |
-| **Q2 fix** Wire MaxInput/OutputTokens | HIGH | TRIVIAL | None | ⭐ P0 |
-| **1.1** Skill Context Footprint | HIGH | MEDIUM | None | ⭐ P1 |
-| **5.1** Registry Persistence | HIGH | MEDIUM | None | ⭐ P1 |
-| **2.1** Compaction Detection & Cost | VERY HIGH | MEDIUM | Research done ✅ | ⭐ P1 |
-| **6.1** Aider Benchmark Integration | VERY HIGH | MEDIUM | LiteLLM catalog | ⭐ P1 |
-| **1.3** Configured vs Used | HIGH | MEDIUM | 5.1 | P2 |
-| **2.2** Context Saturation Forecast | HIGH | MEDIUM | 2.1, Q2 fix | P2 |
-| **3.1** Model Context Efficiency | HIGH | MEDIUM | Q2 fix | P2 |
-| **5.2** Cross-Project Dashboard | HIGH | MEDIUM | 5.1 | P2 |
-| **6.2** Quality-Adjusted Cost (QAC) | HIGH | MEDIUM | 6.1 | P2 |
-| **4.2** Token Waste Classification | HIGH | HIGH | 2.1 | P3 |
-| **3.2** Model Overload Detection | VERY HIGH | HIGH | 2.1, 3.1 | P3 |
-| **2.3** Session Freshness | HIGH | HIGH | 2.1 | P3 |
-| **1.5** Skill Reuse Map | MEDIUM | LOW | 5.1 | P3 |
-| **5.3** CLAUDE.md Impact Analysis | MEDIUM | MEDIUM | Research done ✅ | P3 |
+> **Note:** Items completed in Sprint C–E sessions (2026-03-31 to 2026-04-02) are marked ✅ DONE.
+
+| Feature | Value | Effort | Dependencies | Status |
+|---------|-------|--------|-------------|--------|
+| ~~**1.2** Cross-Project MCP Matrix~~ | ~~HIGH~~ | ~~LOW~~ | ~~None~~ | ✅ DONE (pre-Sprint F) |
+| ~~**1.4a** ClassifyTool in event processor~~ | ~~MEDIUM~~ | ~~LOW~~ | ~~None~~ | ✅ DONE (pre-Sprint F) |
+| ~~**1.4b** Configurable MCP tool prefixes~~ | ~~MEDIUM~~ | ~~LOW~~ | ~~None~~ | ✅ DONE (Sprint F) |
+| ~~**Q2 fix** Wire MaxInput/OutputTokens~~ | ~~HIGH~~ | ~~TRIVIAL~~ | ~~None~~ | ✅ DONE (pre-Sprint F) |
+| ~~**1.1** Skill Context Footprint~~ | ~~HIGH~~ | ~~MEDIUM~~ | ~~None~~ | ✅ DONE (Sprint H) |
+| ~~**5.1** Registry Persistence~~ | ~~HIGH~~ | ~~MEDIUM~~ | ~~None~~ | ✅ DONE (Sprint F) |
+| ~~**2.1** Compaction Detection & Cost~~ | ~~VERY HIGH~~ | ~~MEDIUM~~ | ~~Research done ✅~~ | ✅ DONE (Sprint H — storage bug fix + session UI) |
+| ~~**6.1** Aider Benchmark Integration~~ | ~~VERY HIGH~~ | ~~MEDIUM~~ | ~~LiteLLM catalog~~ | ✅ DONE (Sprint C) |
+| ~~**1.3** Configured vs Used~~ | ~~HIGH~~ | ~~MEDIUM~~ | ~~5.1~~ | ✅ DONE (pre-Sprint F — full stack verified) |
+| ~~**2.2** Context Saturation Forecast~~ | ~~HIGH~~ | ~~MEDIUM~~ | ~~2.1, Q2 fix~~ | ✅ DONE (Sprint C) |
+| ~~**3.1** Model Context Efficiency~~ | ~~HIGH~~ | ~~MEDIUM~~ | ~~Q2 fix~~ | ✅ DONE (Sprint C) |
+| ~~**5.2** Cross-Project Dashboard~~ | ~~HIGH~~ | ~~MEDIUM~~ | ~~5.1~~ | ✅ DONE (Sprint G) |
+| ~~**6.2** Quality-Adjusted Cost (QAC)~~ | ~~HIGH~~ | ~~MEDIUM~~ | ~~6.1~~ | ✅ DONE (Sprint C — QAC Leaderboard) |
+| ~~**4.2** Token Waste Classification~~ | ~~HIGH~~ | ~~HIGH~~ | ~~2.1~~ | ✅ DONE (Sprint D) |
+| ~~**3.2** Model Overload Detection~~ | ~~VERY HIGH~~ | ~~HIGH~~ | ~~2.1, 3.1 ✅~~ | ✅ DONE (pre-Sprint F — full stack verified, 8 tests) |
+| ~~**2.3** Session Freshness~~ | ~~HIGH~~ | ~~HIGH~~ | ~~2.1~~ | ✅ DONE (Sprint D) |
+| ~~**1.5** Skill Reuse Map~~ | ~~MEDIUM~~ | ~~LOW~~ | ~~5.1~~ | ✅ DONE (Sprint H) |
+| ~~**5.3** CLAUDE.md Impact Analysis~~ | ~~MEDIUM~~ | ~~MEDIUM~~ | ~~Research done ✅~~ | ✅ DONE (Sprint E) |
 | **3.3** Model Recommendation (old) | ~~MEDIUM~~ | ~~MEDIUM~~ | ~~3.1~~ | ~~P4~~ → merged into 6.x |
-| **6.3** Multi-Benchmark Aggregation | MEDIUM | HIGH | 6.1 | P4 |
-| **6.4** Model Fitness Profiles | HIGH | HIGH | 6.1, objectives | P4 |
-| **4.1** Cache Miss Timeline | MEDIUM | LOW | None | P4 |
+| ~~**6.3** Multi-Benchmark Aggregation~~ | ~~MEDIUM~~ | ~~HIGH~~ | ~~6.1~~ | ✅ DONE (Sprint E) |
+| ~~**6.4** Model Fitness Profiles~~ | ~~HIGH~~ | ~~HIGH~~ | ~~6.1, objectives~~ | ✅ DONE (Sprint E) |
+| ~~**4.1** Cache Miss Timeline~~ | ~~MEDIUM~~ | ~~LOW~~ | ~~None~~ | ✅ DONE (Sprint H) |
 
-### Suggested Implementation Order
+### Remaining Work — Suggested Order
 
-**Sprint A** (quick wins + foundation):
-1. **Q2 fix** — Wire `MaxInputTokens`/`MaxOutputTokens` in LiteLLM adapter (trivial, 2 lines)
-2. 1.4 — Harmonize events with ClassifyTool (LOW effort, unblocks better queries)
-3. 1.2 — Cross-project MCP matrix (LOW effort, HIGH value, data exists)
-4. 5.1 — Registry persistence (MEDIUM effort, unblocks 1.3, 1.5, 5.2)
+**Priority Matrix (Sections 1–6): ✅ 100% COMPLETE** — all 22 features delivered through Sprint H.
 
-**Sprint B** (compaction + skills):
-5. 2.1 — Compaction detection (input_tokens drop heuristic, new fields)
-6. 1.1 — Skill context footprint tracking
-7. 2.2 — Context saturation forecast (requires Q2 fix + 2.1)
+**Next focus → Section 8 (Investigation Tooling)** — new backlog triggered by cycloplan session
+analysis (2026-04-05). See [Section 8](#8-investigation-tooling--agent-support) for the 8 new
+features and suggested phased rollout (Phase 1 = critical fixes, Phase 4 = alerts).
 
-**Sprint C** (governance + model recommendations):
-8. 1.3 — Configured vs Used analysis (requires 5.1)
-9. 5.2 — Cross-project capabilities dashboard (requires 5.1)
-10. **6.1 — Aider benchmark integration** (embed leaderboard data, cross-ref with LiteLLM pricing)
-11. 3.1 — Model context efficiency score (uses Q2 fix data)
+### Completed Sprints
 
-**Sprint D** (quality-adjusted analytics):
-12. **6.2 — Quality-Adjusted Cost metric** (combines 6.1 benchmark + error classification)
-13. 3.2 — Model overload detection
-14. 4.2 — Token waste classification
-15. 2.3 — Session freshness & diminishing returns
-
-**Sprint E** (advanced, when data matures):
-16. 6.3 — Multi-benchmark aggregation (multiple data sources)
-17. 6.4 — Model fitness profiles (per-task-type recommendations)
-18. 5.3 — CLAUDE.md impact analysis
+**Sprint C** (2026-03-31): 6.1 Aider Benchmark, 2.2 Saturation Forecast, 3.1 Model Efficiency, 6.2 QAC
+**Sprint D** (2026-03-31): 4.2 Token Waste, 2.3 Session Freshness
+**Sprint E** (2026-03-31): 6.3 Multi-Benchmark, 6.4 Model Fitness, 5.3 CLAUDE.md Impact
+**Sprint F** (2026-04-03): 5.1 Registry Persistence, 1.4b Configurable MCP Prefixes (+ verified: Q2 fix, 1.4a, 1.2, 1.3, 3.2 already done)
+**Sprint G** (2026-04-04): 5.2 Cross-Project Capabilities Dashboard (MCP Governance Matrix)
+**Sprint H** (2026-04-04): 1.1 Skill Context Footprint, 1.5 Skill Reuse Map, 2.1 Compaction (storage fix + session UI), 4.1 Cache Miss Timeline
 
 ---
 

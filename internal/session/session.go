@@ -36,6 +36,8 @@ type Session struct {
 	Errors          []SessionError `json:"errors,omitempty"`            // structured errors extracted from the session
 	Version         int            `json:"version"`
 	SourceUpdatedAt int64          `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
+	EstimatedCost   float64        `json:"-"` // API-equivalent cost in USD; set by service layer before Save, not serialized in payload
+	ActualCost      float64        `json:"-"` // actual provider-reported cost; computed from messages at Save time, not serialized
 }
 
 // Summary is a lightweight representation of a session for listings.
@@ -58,6 +60,8 @@ type Summary struct {
 	TotalTokens     int           `json:"total_tokens"`
 	ToolCallCount   int           `json:"tool_call_count"` // total tool invocations
 	ErrorCount      int           `json:"error_count"`     // tool calls with state=error
+	EstimatedCost   float64       `json:"estimated_cost"`  // API-equivalent cost in USD (denormalized)
+	ActualCost      float64       `json:"actual_cost"`     // actual provider-reported cost (denormalized)
 }
 
 // Message represents a single message in an AI conversation.
@@ -292,6 +296,64 @@ type CacheMissSession struct {
 	WastedTokens   int     `json:"wasted_tokens"`    // tokens that could have been cached
 	WastedCost     float64 `json:"wasted_cost"`      // $ cost of those wasted tokens
 	LongestGapMins int     `json:"longest_gap_mins"` // longest gap between messages in minutes
+}
+
+// CacheMissEvent records a single cache miss within a session. A cache miss
+// occurs when the gap between consecutive assistant messages exceeds the
+// provider's cache TTL (~5 minutes), causing the next request to re-send
+// the full context at full price instead of cache-read price.
+type CacheMissEvent struct {
+	MessageIndex int           `json:"message_index"` // 0-based index of the affected message
+	GapDuration  time.Duration `json:"gap_duration"`  // time since last assistant response
+	GapMinutes   int           `json:"gap_minutes"`   // rounded gap in minutes
+	InputTokens  int           `json:"input_tokens"`  // input tokens on this message (re-sent at full price)
+	Timestamp    time.Time     `json:"timestamp"`     // when the cache miss occurred
+}
+
+// CacheMissTimeline holds per-session cache miss events for timeline display.
+type CacheMissTimeline struct {
+	Events            []CacheMissEvent `json:"events"`
+	TotalMisses       int              `json:"total_misses"`
+	TotalWastedTokens int              `json:"total_wasted_tokens"` // sum of InputTokens across misses
+	LongestGapMins    int              `json:"longest_gap_mins"`
+}
+
+// DetectCacheMisses scans session messages for cache miss events (gaps > 5min
+// between consecutive assistant responses). Returns a timeline of individual events.
+func DetectCacheMisses(messages []Message) CacheMissTimeline {
+	const cacheTTL = 5 * time.Minute
+	var timeline CacheMissTimeline
+
+	var lastAssistantTime time.Time
+	for i := range messages {
+		msg := &messages[i]
+		if msg.Timestamp.IsZero() {
+			continue
+		}
+		if msg.Role == RoleAssistant {
+			if !lastAssistantTime.IsZero() {
+				gap := msg.Timestamp.Sub(lastAssistantTime)
+				if gap > cacheTTL {
+					event := CacheMissEvent{
+						MessageIndex: i,
+						GapDuration:  gap,
+						GapMinutes:   int(gap.Minutes()),
+						InputTokens:  msg.InputTokens,
+						Timestamp:    msg.Timestamp,
+					}
+					timeline.Events = append(timeline.Events, event)
+					timeline.TotalWastedTokens += msg.InputTokens
+					gapMins := int(gap.Minutes())
+					if gapMins > timeline.LongestGapMins {
+						timeline.LongestGapMins = gapMins
+					}
+				}
+			}
+			lastAssistantTime = msg.Timestamp
+		}
+	}
+	timeline.TotalMisses = len(timeline.Events)
+	return timeline
 }
 
 // BudgetStatus represents the current spending status against a budget limit.
@@ -829,6 +891,24 @@ type SearchResult struct {
 	Offset       int                    `json:"offset"`
 }
 
+// SearchFacets holds aggregated counts for faceted navigation.
+// Each slice is sorted by Count DESC (most common values first).
+type SearchFacets struct {
+	Projects   []FacetValue `json:"projects,omitempty"`
+	Providers  []FacetValue `json:"providers,omitempty"`
+	Branches   []FacetValue `json:"branches,omitempty"`
+	Types      []FacetValue `json:"types,omitempty"`      // session_type
+	Categories []FacetValue `json:"categories,omitempty"` // project_category
+	Statuses   []FacetValue `json:"statuses,omitempty"`
+	Agents     []FacetValue `json:"agents,omitempty"`
+}
+
+// FacetValue represents a single facet value with its occurrence count.
+type FacetValue struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
 // VoiceSummary is a compact, TTS-optimized representation of a session.
 // No markdown, no code blocks, plain text only.
 type VoiceSummary struct {
@@ -852,10 +932,11 @@ type BlameEntry struct {
 
 // BlameQuery contains parameters for a blame lookup.
 type BlameQuery struct {
-	FilePath string       // required — relative to project root
-	Branch   string       // optional filter
-	Provider ProviderName // optional filter
-	Limit    int          // 0 = no limit (all sessions); >0 = cap results
+	FilePath     string       // required — relative to project root
+	Branch       string       // optional filter
+	Provider     ProviderName // optional filter
+	Limit        int          // 0 = no limit (all sessions); >0 = cap results
+	ExcludeReads bool         // when true, only count created/modified/deleted (not read)
 }
 
 // SecretMatch represents a single secret detected in content.
@@ -877,13 +958,29 @@ type SecretMatch struct {
 type PullRequest struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	MergedAt   time.Time `json:"merged_at,omitempty"`
+	ClosedAt   time.Time `json:"closed_at,omitempty"`
 	URL        string    `json:"url"`
 	Title      string    `json:"title"`
 	Branch     string    `json:"branch"`
 	BaseBranch string    `json:"base_branch"`
 	State      string    `json:"state"` // "open", "closed", "merged"
 	Author     string    `json:"author"`
+	RepoOwner  string    `json:"repo_owner,omitempty"`
+	RepoName   string    `json:"repo_name,omitempty"`
 	Number     int       `json:"number"`
+	Additions  int       `json:"additions,omitempty"`
+	Deletions  int       `json:"deletions,omitempty"`
+	Comments   int       `json:"comments,omitempty"`
+}
+
+// PRWithSessions pairs a pull request with the sessions that worked on it.
+type PRWithSessions struct {
+	PR           PullRequest `json:"pr"`
+	Sessions     []Summary   `json:"sessions"`
+	SessionCount int         `json:"session_count"`
+	TotalTokens  int         `json:"total_tokens"`
+	TotalCost    float64     `json:"total_cost"`
 }
 
 // PRComment represents a comment on a pull request.
@@ -1154,13 +1251,45 @@ func sortTreemapNodes(nodes []CostTreemapNode) {
 	}
 }
 
+// UserKind classifies a user as human, machine (bot/CI), or unknown.
+type UserKind string
+
+const (
+	UserKindHuman   UserKind = "human"
+	UserKindMachine UserKind = "machine"
+	UserKindUnknown UserKind = "unknown"
+)
+
+// UserRole defines a user's role for notification routing.
+type UserRole string
+
+const (
+	UserRoleAdmin  UserRole = "admin"
+	UserRoleMember UserRole = "member"
+)
+
 // User represents an aisync user, identified by their git identity.
 type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	ID        ID        `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
-	Source    string    `json:"source"` // "git", "config", "api"
+	Source    string    `json:"source"`     // "git", "config", "api"
+	Kind      UserKind  `json:"kind"`       // "human", "machine", "unknown"
+	SlackID   string    `json:"slack_id"`   // Slack user ID for DMs (e.g. "U0123ABCDEF")
+	SlackName string    `json:"slack_name"` // Slack display name for mentions
+	Role      UserRole  `json:"role"`       // "admin", "member"
+}
+
+// OwnerStat holds aggregated session statistics for a single owner.
+type OwnerStat struct {
+	OwnerID      ID     `json:"owner_id"`
+	OwnerName    string `json:"owner_name"`
+	OwnerEmail   string `json:"owner_email"`
+	OwnerKind    string `json:"owner_kind"` // human, machine, unknown
+	SessionCount int    `json:"session_count"`
+	TotalTokens  int    `json:"total_tokens"`
+	ErrorCount   int    `json:"error_count"`
 }
 
 // UserPreferences stores per-user dashboard and UI preferences as JSON.

@@ -865,6 +865,16 @@ func (m *mockStore) Get(id session.ID) (*session.Session, error) {
 	return s, nil
 }
 
+func (m *mockStore) GetBatch(ids []session.ID) (map[session.ID]*session.Session, error) {
+	out := make(map[session.ID]*session.Session, len(ids))
+	for _, id := range ids {
+		if s, ok := m.sessions[id]; ok {
+			out[id] = s
+		}
+	}
+	return out, nil
+}
+
 func (m *mockStore) GetLatestByBranch(_, _ string) (*session.Session, error) {
 	return nil, session.ErrSessionNotFound
 }
@@ -915,7 +925,10 @@ func (m *mockStore) GetSessionFileChanges(_ session.ID) ([]session.SessionFileRe
 	return nil, nil
 }
 func (m *mockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
-func (m *mockStore) Close() error                         { return nil }
+func (m *mockStore) SearchFacets(_ session.SearchQuery) (*session.SearchFacets, error) {
+	return &session.SearchFacets{}, nil
+}
+func (m *mockStore) Close() error { return nil }
 
 func (m *mockStore) GetPreferences(_ session.ID) (*session.UserPreferences, error) { return nil, nil }
 func (m *mockStore) SavePreferences(_ *session.UserPreferences) error              { return nil }
@@ -928,6 +941,14 @@ func (m *mockStore) ListProjects() ([]session.ProjectGroup, error)      { return
 func (m *mockStore) SaveUser(_ *session.User) error                     { return nil }
 func (m *mockStore) GetUser(_ session.ID) (*session.User, error)        { return nil, nil }
 func (m *mockStore) GetUserByEmail(_ string) (*session.User, error)     { return nil, nil }
+func (m *mockStore) ListUsers() ([]*session.User, error)                { return nil, nil }
+func (m *mockStore) ListUsersByKind(_ string) ([]*session.User, error)  { return nil, nil }
+func (m *mockStore) UpdateUserSlack(_ session.ID, _, _ string) error    { return nil }
+func (m *mockStore) UpdateUserKind(_ session.ID, _ string) error        { return nil }
+func (m *mockStore) UpdateUserRole(_ session.ID, _ string) error        { return nil }
+func (m *mockStore) OwnerStats(_ string, _, _ time.Time) ([]session.OwnerStat, error) {
+	return nil, nil
+}
 func (m *mockStore) Search(_ session.SearchQuery) (*session.SearchResult, error) {
 	if m.searchResult != nil {
 		return m.searchResult, nil
@@ -1044,6 +1065,9 @@ func (m *mockStore) SaveEvents(_ []sessionevent.Event) error { return nil }
 func (m *mockStore) GetSessionEvents(_ session.ID) ([]sessionevent.Event, error) {
 	return nil, nil
 }
+func (m *mockStore) GetSessionEventsBatch(_ []session.ID, _ ...sessionevent.EventType) (map[session.ID][]sessionevent.Event, error) {
+	return map[session.ID][]sessionevent.Event{}, nil
+}
 func (m *mockStore) QueryEvents(_ sessionevent.EventQuery) ([]sessionevent.Event, error) {
 	return nil, nil
 }
@@ -1059,6 +1083,57 @@ func (m *mockStore) QueryEventBuckets(_ sessionevent.BucketQuery) ([]sessioneven
 func (m *mockStore) SaveProjectSnapshot(_ *registry.ProjectSnapshot) error         { return nil }
 func (m *mockStore) GetLatestSnapshot(_ string) (*registry.ProjectSnapshot, error) { return nil, nil }
 func (m *mockStore) ListSnapshots(_ string, _ int) ([]registry.ProjectSnapshot, error) {
+	return nil, nil
+}
+func (m *mockStore) UpsertCapabilities(_ string, _ []registry.PersistedCapability) error {
+	return nil
+}
+func (m *mockStore) ListCapabilities(_ registry.CapabilityFilter) ([]registry.PersistedCapability, error) {
+	return nil, nil
+}
+func (m *mockStore) ListCapabilityProjects() ([]string, error) { return nil, nil }
+
+// ── Pull Request Store (stubs) ──
+
+func (m *mockStore) SavePullRequest(_ *session.PullRequest) error { return nil }
+func (m *mockStore) GetPullRequest(_, _ string, _ int) (*session.PullRequest, error) {
+	return nil, session.ErrPRNotFound
+}
+func (m *mockStore) ListPullRequests(_, _, _ string, _ int) ([]session.PullRequest, error) {
+	return nil, nil
+}
+func (m *mockStore) LinkSessionPR(_ session.ID, _, _ string, _ int) error { return nil }
+func (m *mockStore) GetSessionsForPR(_, _ string, _ int) ([]session.Summary, error) {
+	return nil, nil
+}
+func (m *mockStore) GetPRsForSession(_ session.ID) ([]session.PullRequest, error) {
+	return nil, nil
+}
+func (m *mockStore) ListPRsWithSessions(_, _, _ string, _ int) ([]session.PRWithSessions, error) {
+	return nil, nil
+}
+func (m *mockStore) GetPRByBranch(_ string) (*session.PullRequest, error) {
+	return nil, session.ErrPRNotFound
+}
+
+// Recommendation store stubs.
+func (m *mockStore) UpsertRecommendation(_ *session.RecommendationRecord) error { return nil }
+func (m *mockStore) ListRecommendations(_ session.RecommendationFilter) ([]session.RecommendationRecord, error) {
+	return nil, nil
+}
+func (m *mockStore) DismissRecommendation(_ string) error               { return nil }
+func (m *mockStore) SnoozeRecommendation(_ string, _ time.Time) error   { return nil }
+func (m *mockStore) ExpireRecommendations(_ time.Duration) (int, error) { return 0, nil }
+func (m *mockStore) ReactivateSnoozed() (int, error)                    { return 0, nil }
+func (m *mockStore) RecommendationStats(_ string) (session.RecommendationStats, error) {
+	return session.RecommendationStats{}, nil
+}
+func (m *mockStore) DeleteRecommendationsByProject(_ string) (int, error) { return 0, nil }
+func (m *mockStore) UpdateCosts(_ session.ID, _, _ float64) error         { return nil }
+func (m *mockStore) GetForkRelationsForSessions(_ []session.ID) (map[session.ID][]session.ForkRelation, error) {
+	return nil, nil
+}
+func (m *mockStore) ListSessionsWithZeroCosts(_ int) ([]session.ID, error) {
 	return nil, nil
 }
 
@@ -1098,6 +1173,7 @@ func (g *gcMockStore) List(_ session.ListOptions) ([]session.Summary, error) {
 			Summary:      s.Summary,
 			MessageCount: len(s.Messages),
 			TotalTokens:  s.TokenUsage.TotalTokens,
+			CreatedAt:    s.CreatedAt,
 		})
 	}
 	return summaries, nil

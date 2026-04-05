@@ -654,13 +654,27 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 	var promptDataPoints []session.SessionPromptData   // per-session system prompt data for impact analysis (5.3)
 	var fitnessDataPoints []session.SessionFitnessData // per-session fitness data for model fitness profiles (6.4)
 
+	// Pre-filter summaries by projectPath and batch-load all matching sessions in
+	// a single query (3 SQL statements total) rather than N×3 queries per Get().
+	interestingIDs := make([]session.ID, 0, len(summaries))
+	for _, sm := range summaries {
+		if projectPath != "" && sm.ProjectPath != projectPath {
+			continue
+		}
+		interestingIDs = append(interestingIDs, sm.ID)
+	}
+	fullSessions, batchErr := s.store.GetBatch(interestingIDs)
+	if batchErr != nil {
+		return nil, fmt.Errorf("batch loading sessions for saturation: %w", batchErr)
+	}
+
 	for _, sm := range summaries {
 		if projectPath != "" && sm.ProjectPath != projectPath {
 			continue
 		}
 
-		sess, getErr := s.store.Get(sm.ID)
-		if getErr != nil || len(sess.Messages) == 0 {
+		sess, ok := fullSessions[sm.ID]
+		if !ok || len(sess.Messages) == 0 {
 			continue
 		}
 
@@ -1058,13 +1072,27 @@ func (s *SessionService) CacheEfficiency(ctx context.Context, projectPath string
 	var totalGapSum, missGapSum float64
 	var totalGapCount, missGapCount int
 
+	// Pre-filter by projectPath and batch-load matching sessions in a single
+	// query (3 SQL statements total) instead of N×3 per Get().
+	interestingIDs := make([]session.ID, 0, len(summaries))
+	for _, sm := range summaries {
+		if projectPath != "" && sm.ProjectPath != projectPath {
+			continue
+		}
+		interestingIDs = append(interestingIDs, sm.ID)
+	}
+	fullSessions, batchErr := s.store.GetBatch(interestingIDs)
+	if batchErr != nil {
+		return nil, fmt.Errorf("batch loading sessions for cache efficiency: %w", batchErr)
+	}
+
 	for _, sm := range summaries {
 		if projectPath != "" && sm.ProjectPath != projectPath {
 			continue
 		}
 
-		sess, getErr := s.store.Get(sm.ID)
-		if getErr != nil {
+		sess, ok := fullSessions[sm.ID]
+		if !ok {
 			continue
 		}
 

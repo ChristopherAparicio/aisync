@@ -131,6 +131,12 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	allAgents := make(map[string]int)
 	allCommands := make(map[string]int)
 
+	// Aggregate per-day so that multiple project buckets for the same day
+	// are merged into a single row (prevents duplicate date rows when
+	// viewing all projects).
+	dailyMap := make(map[string]*dailyActivity)
+	var dailyOrder []string // preserve chronological order
+
 	for _, b := range buckets {
 		data.TotalToolCalls += b.ToolCallCount
 		data.TotalSkillLoads += b.SkillLoadCount
@@ -155,14 +161,28 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			allCommands[k] += v
 		}
 
-		data.DailyBuckets = append(data.DailyBuckets, dailyActivity{
-			Date:      b.BucketStart.Format("Jan 2"),
-			ToolCalls: b.ToolCallCount,
-			Skills:    b.SkillLoadCount,
-			Commands:  b.CommandCount,
-			Errors:    b.ErrorCount,
-			Sessions:  b.SessionCount,
-		})
+		dateKey := b.BucketStart.Format("Jan 2")
+		if da, ok := dailyMap[dateKey]; ok {
+			da.ToolCalls += b.ToolCallCount
+			da.Skills += b.SkillLoadCount
+			da.Commands += b.CommandCount
+			da.Errors += b.ErrorCount
+			da.Sessions += b.SessionCount
+		} else {
+			dailyMap[dateKey] = &dailyActivity{
+				Date:      dateKey,
+				ToolCalls: b.ToolCallCount,
+				Skills:    b.SkillLoadCount,
+				Commands:  b.CommandCount,
+				Errors:    b.ErrorCount,
+				Sessions:  b.SessionCount,
+			}
+			dailyOrder = append(dailyOrder, dateKey)
+		}
+	}
+
+	for _, key := range dailyOrder {
+		data.DailyBuckets = append(data.DailyBuckets, *dailyMap[key])
 	}
 
 	data.UniqueTools = len(allTools)

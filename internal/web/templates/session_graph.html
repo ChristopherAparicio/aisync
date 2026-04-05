@@ -1,0 +1,203 @@
+{{define "session_graph.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Session Graph — aisync{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">View Mode</div>
+    <ul class="sidebar-nav">
+      <li><a href="/graph?mode=pr" class="sidebar-nav-item {{if eq .Mode "pr"}}active{{end}}"><span class="sidebar-nav-icon">&#x1F500;</span> By Pull Request</a></li>
+      <li><a href="/graph?mode=project" class="sidebar-nav-item {{if eq .Mode "project"}}active{{end}}"><span class="sidebar-nav-icon">&#x1F4C2;</span> By Project</a></li>
+      <li><a href="/graph?mode=branch" class="sidebar-nav-item {{if eq .Mode "branch"}}active{{end}}"><span class="sidebar-nav-icon">&#x1F33F;</span> By Branch</a></li>
+    </ul>
+  </div>
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Your Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/graph?mode={{$.Mode}}&project={{.Path}}" class="sidebar-item {{if .Active}}active{{end}}">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <h1 class="page-title">
+    Session Graph
+    <span class="text-muted">·
+      {{if eq .Mode "pr"}}Pull Requests{{else if eq .Mode "project"}}Projects{{else}}Branches{{end}}
+    </span>
+  </h1>
+  <div class="sg-toolbar">
+    <div class="sg-search-wrap">
+      <input type="text" class="sg-search" id="sg-search" placeholder="Filter…" oninput="sgFilter(this.value)" autocomplete="off" spellcheck="false">
+    </div>
+    <button class="sg-btn" onclick="sgExpandAll()" title="Expand all">&#x25BC; Expand all</button>
+    <button class="sg-btn" onclick="sgCollapseAll()" title="Collapse all">&#x25B6; Collapse all</button>
+  </div>
+</div>
+
+{{if not .HasGroups}}
+<div class="empty-state">
+  <p>No sessions found to visualize.</p>
+  {{if eq .Mode "pr"}}
+  <p class="hint">Link sessions to PRs via <code>aisync sync --prs</code> to see them here.</p>
+  {{end}}
+</div>
+{{else}}
+
+<div class="sg-stats-bar">
+  <span class="sg-stat">{{.Stats.TotalGroups}} {{if eq .Mode "pr"}}PR{{if ne .Stats.TotalGroups 1}}s{{end}}{{else if eq .Mode "project"}}project{{if ne .Stats.TotalGroups 1}}s{{end}}{{else}}branch{{if ne .Stats.TotalGroups 1}}es{{end}}{{end}}</span>
+  <span class="sg-stat">{{.Stats.TotalSessions}} session{{if ne .Stats.TotalSessions 1}}s{{end}}</span>
+  {{if gt .Stats.TotalForks 0}}<span class="sg-stat">{{.Stats.TotalForks}} fork{{if ne .Stats.TotalForks 1}}s{{end}}</span>{{end}}
+  {{if gt .Stats.TotalLinks 0}}<span class="sg-stat">{{.Stats.TotalLinks}} link{{if ne .Stats.TotalLinks 1}}s{{end}}</span>{{end}}
+</div>
+
+<div class="sg-tree" id="sg-tree">
+  {{range .Groups}}
+  <div class="sg-group sg-collapsed" data-group-name="{{.SearchName}}">
+    <div class="sg-group-header" onclick="sgToggleGroup(this)">
+      <svg class="sg-chevron" viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.752.752 0 0 1-1.042-.018.752.752 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>
+      <span class="sg-group-icon">{{.Icon}}</span>
+      <span class="sg-group-title">{{.Title}}</span>
+      {{if .Subtitle}}<span class="sg-group-subtitle text-muted">{{.Subtitle}}</span>{{end}}
+      <span class="sg-group-badges">
+        {{if .State}}<span class="badge sg-badge-state sg-badge-state--{{.State}}">{{.State}}</span>{{end}}
+        <span class="sg-group-count">{{.SessionCount}} session{{if ne .SessionCount 1}}s{{end}}</span>
+        {{if .TokensStr}}<span class="sg-group-tokens text-muted font-mono">{{.TokensStr}}</span>{{end}}
+      </span>
+    </div>
+    <div class="sg-group-children">
+      {{range .Nodes}}
+      {{template "sg-node" .}}
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+
+{{end}}
+
+<!-- ── Session Graph JavaScript ── -->
+<script>
+function sgToggleGroup(el) {
+  var group = el.closest('.sg-group');
+  if (!group) return;
+  group.classList.toggle('sg-collapsed');
+  var ch = el.querySelector('.sg-chevron');
+  if (ch) ch.classList.toggle('sg-chevron-open');
+}
+
+function sgToggleNode(el) {
+  var node = el.closest('.sg-node');
+  if (!node) return;
+  node.classList.toggle('sg-collapsed');
+  var ch = el.querySelector('.sg-chevron');
+  if (ch) ch.classList.toggle('sg-chevron-open');
+}
+
+function sgExpandAll() {
+  document.querySelectorAll('.sg-group.sg-collapsed').forEach(function(g) {
+    g.classList.remove('sg-collapsed');
+    var ch = g.querySelector(':scope > .sg-group-header .sg-chevron');
+    if (ch) ch.classList.add('sg-chevron-open');
+  });
+  document.querySelectorAll('.sg-node.sg-collapsed').forEach(function(n) {
+    n.classList.remove('sg-collapsed');
+    var ch = n.querySelector(':scope > .sg-node-header .sg-chevron');
+    if (ch) ch.classList.add('sg-chevron-open');
+  });
+}
+
+function sgCollapseAll() {
+  document.querySelectorAll('.sg-group:not(.sg-collapsed)').forEach(function(g) {
+    g.classList.add('sg-collapsed');
+    var ch = g.querySelector(':scope > .sg-group-header .sg-chevron');
+    if (ch) ch.classList.remove('sg-chevron-open');
+  });
+  document.querySelectorAll('.sg-node:not(.sg-collapsed)').forEach(function(n) {
+    n.classList.add('sg-collapsed');
+    var ch = n.querySelector(':scope > .sg-node-header .sg-chevron');
+    if (ch) ch.classList.remove('sg-chevron-open');
+  });
+}
+
+// ── Filter ──
+var sgFilterTimeout;
+function sgFilter(query) {
+  clearTimeout(sgFilterTimeout);
+  sgFilterTimeout = setTimeout(function() { sgApplyFilter(query); }, 150);
+}
+function sgApplyFilter(query) {
+  var tree = document.getElementById('sg-tree');
+  if (!tree) return;
+  query = query.trim().toLowerCase();
+  var groups = tree.querySelectorAll('.sg-group');
+  if (!query) {
+    groups.forEach(function(g) { g.classList.remove('sg-filter-hidden'); });
+    tree.querySelectorAll('.sg-node').forEach(function(n) { n.classList.remove('sg-filter-hidden'); });
+    return;
+  }
+  groups.forEach(function(g) {
+    var name = (g.getAttribute('data-group-name') || '').toLowerCase();
+    var nodes = g.querySelectorAll('.sg-node');
+    var hasMatch = name.indexOf(query) >= 0;
+    nodes.forEach(function(n) {
+      var text = (n.getAttribute('data-search') || '').toLowerCase();
+      var match = text.indexOf(query) >= 0 || hasMatch;
+      n.classList.toggle('sg-filter-hidden', !match);
+      if (match) hasMatch = true;
+    });
+    g.classList.toggle('sg-filter-hidden', !hasMatch);
+    if (hasMatch) {
+      g.classList.remove('sg-collapsed');
+      var ch = g.querySelector(':scope > .sg-group-header .sg-chevron');
+      if (ch) ch.classList.add('sg-chevron-open');
+    }
+  });
+}
+</script>
+
+{{end}}
+
+{{/* ── Recursive session node ── */}}
+{{define "sg-node"}}
+<div class="sg-node {{if .HasChildren}}sg-node--parent{{end}} {{if .IsFork}}sg-node--fork{{end}} {{if .HasChildren}}{{else}}sg-collapsed{{end}}"
+     style="margin-left:{{.IndentPx}}px"
+     data-search="{{.SearchText}}">
+  <div class="sg-node-header" {{if .HasChildren}}onclick="sgToggleNode(this)"{{end}}>
+    {{if .IsFork}}<span class="sg-connector-fork">&#x2514;</span>{{else if gt .Depth 0}}<span class="sg-connector-line">&#x2502;</span>{{end}}
+    <span class="sg-dot {{if .IsFork}}sg-dot--fork{{end}} {{if gt .Errors 0}}sg-dot--error{{end}} {{if eq .Status "active"}}sg-dot--active{{end}}"></span>
+    {{if .HasChildren}}<svg class="sg-chevron {{if not .IsCollapsed}}sg-chevron-open{{end}}" viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.752.752 0 0 1-1.042-.018.752.752 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>{{end}}
+    <a href="/sessions/{{.ID}}" class="sg-node-id font-mono" onclick="event.stopPropagation()">{{.IDShort}}</a>
+    <span class="badge badge-provider">{{.Provider}}</span>
+    {{if .Agent}}<span class="badge badge-agent">{{.Agent}}</span>{{end}}
+    {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
+    {{if .IsFork}}<span class="badge sg-badge-fork">fork</span>{{end}}
+    {{range .LinkBadges}}<span class="badge sg-badge-link sg-badge-link--{{.Type}}">{{.Label}}</span>{{end}}
+    <span class="sg-node-stats font-mono text-muted">{{.Messages}} msgs · {{.TokensStr}}{{if gt .Errors 0}} · <span class="text-error">{{.Errors}} err</span>{{end}}</span>
+    <span class="sg-node-when text-muted">{{.TimeAgo}}</span>
+  </div>
+  {{if .Summary}}
+  <div class="sg-node-summary" style="margin-left:{{.SummaryIndent}}px">{{.Summary}}</div>
+  {{end}}
+  {{if .HasChildren}}
+  <div class="sg-node-children">
+    {{range .Children}}
+    {{template "sg-node" .}}
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}

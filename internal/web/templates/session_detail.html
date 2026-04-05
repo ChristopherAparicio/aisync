@@ -5,7 +5,7 @@
 <div class="detail-header">
   <div class="detail-header-top">
     <h1 class="detail-title">
-      <a href="/sessions" class="back-link">&larr;</a>
+      <a href="{{if .BackURL}}{{.BackURL}}{{else}}/sessions{{end}}" class="back-link" title="{{if .BackLabel}}Back to {{.BackLabel}}{{else}}Back to Sessions{{end}}">&larr;</a>
       Session <span class="font-mono">{{truncate .Session.ID 12}}</span>
     </h1>
     <span class="badge badge-provider">{{.Session.Provider}}</span>
@@ -19,6 +19,18 @@
     <div class="meta-item"><span class="meta-label">Created</span><span>{{timeAgo .Session.CreatedAt}}</span></div>
     <div class="meta-item"><span class="meta-label">Mode</span><span>{{.Session.StorageMode}}</span></div>
   </div>
+
+  {{if .HasPRs}}
+  <div class="detail-prs">
+    {{range .PRs}}
+    <a href="{{.URL}}" target="_blank" rel="noopener" class="pr-badge-link pr-badge-{{.StateClass}}">
+      <span class="pr-badge-icon">{{if eq .StateClass "merged"}}&#x1F7E3;{{else if eq .StateClass "closed"}}&#x1F534;{{else}}&#x1F7E2;{{end}}</span>
+      <span class="pr-badge-text">{{.RepoOwner}}/{{.RepoName}}#{{.Number}}</span>
+      <span class="pr-badge-state">{{.State}}</span>
+    </a>
+    {{end}}
+  </div>
+  {{end}}
 
   {{if .Session.Summary}}
   <p class="detail-summary">{{.Session.Summary}}</p>
@@ -57,6 +69,49 @@
     <span class="token-stat-sub">{{len .Session.Messages}} messages</span>
   </div>
 </div>
+
+{{if .HasCompactions}}
+<!-- ── Compaction Alert ── -->
+<div class="detail-compaction-alert">
+  <div class="compaction-header">
+    <span class="compaction-icon">\U0001F4A5</span>
+    <span class="compaction-title">{{.CompactionCount}} Compaction{{if gt .CompactionCount 1}}s{{end}} Detected</span>
+    <span class="compaction-summary text-muted">{{.CompactionTokensLost}} tokens lost · {{.CompactionRebuildCost}} rebuild cost · avg {{.CompactionAvgDrop}} drop</span>
+  </div>
+  <div class="compaction-events">
+    {{range .CompactionEvents}}
+    <div class="compaction-event">
+      <span class="compaction-event-loc">msg #{{.BeforeMsg}} → #{{.AfterMsg}}</span>
+      <span class="compaction-event-drop text-error">-{{.TokensLost}}</span>
+      <span class="compaction-event-pct">({{.DropPercent}})</span>
+      {{if .CacheReset}}<span class="badge badge-poor" title="Cache invalidated — entire context re-sent at full price">cache reset</span>{{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{if .HasCacheMisses}}
+<!-- ── Cache Miss Timeline ── -->
+<div class="detail-cachemiss-alert">
+  <div class="cachemiss-header">
+    <span class="cachemiss-icon">\U000023F1</span>
+    <span class="cachemiss-title">{{.CacheMissCount}} Cache Miss{{if gt .CacheMissCount 1}}es{{end}}</span>
+    <span class="cachemiss-summary text-muted">{{.CacheMissWastedTokens}} re-sent at full price · longest break {{.CacheMissLongestGap}}min</span>
+  </div>
+  <div class="cachemiss-events">
+    {{range .CacheMissEvents}}
+    <div class="cachemiss-event">
+      <span class="cachemiss-event-time font-mono">{{.TimeStr}}</span>
+      <span class="cachemiss-event-loc font-mono">msg #{{.MessageIdx}}</span>
+      <span class="cachemiss-event-gap"><span class="badge badge-warning">{{.GapMinutes}}min break</span></span>
+      <span class="cachemiss-event-tokens text-muted font-mono">{{.WastedTokens}} re-sent</span>
+    </div>
+    {{end}}
+  </div>
+  <p class="text-muted" style="font-size: 0.75rem; margin: 0.5rem 0 0;">Anthropic's prompt cache TTL is ~5 minutes. Breaks longer than this force the entire context to be re-sent at full price instead of the discounted cache-read rate.</p>
+</div>
+{{end}}
 
 <!-- ── Session Timeline (lazy loaded via HTMX) ── -->
 <div id="timeline-container">
@@ -381,10 +436,23 @@
   <!-- Conversation Filters -->
   <div class="conv-filters">
     <button class="conv-btn active" onclick="filterMessages('all', this)">All</button>
-    <button class="conv-btn" onclick="filterMessages('user', this)">User only</button>
+    <button class="conv-btn" onclick="filterMessages('user', this)">User</button>
+    <button class="conv-btn" onclick="filterMessages('assistant', this)">Assistant</button>
     <button class="conv-btn conv-btn-error" onclick="filterMessages('errors', this)">Errors ({{.ErrorCount}})</button>
-    <button class="conv-btn" onclick="filterMessages('tools', this)">Tool calls</button>
+    <button class="conv-btn" onclick="filterMessages('tools', this)">Tools</button>
+    {{if .SkillCount}}
+    <button class="conv-btn conv-btn-skill" onclick="filterMessages('skills', this)">Skills ({{.SkillCount}})</button>
+    {{end}}
+    <input type="text" class="conv-search-input" id="conv-search" placeholder="Search in conversation..." oninput="searchInSession(this.value)">
   </div>
+  {{if .UniqueSkills}}
+  <div class="conv-skill-chips">
+    <span class="conv-skill-chips-label text-muted">Filter by skill:</span>
+    {{range .UniqueSkills}}
+    <button class="conv-chip conv-chip-skill" onclick="filterMessages('skill:{{.}}', this)">{{.}}</button>
+    {{end}}
+  </div>
+  {{end}}
 
   <!-- Pagination controls -->
   <div class="conv-pagination" id="conv-pagination-top">
@@ -395,11 +463,13 @@
 
   <div class="chat" id="chat-container">
     {{range $i, $msg := .Session.Messages}}
-    <div class="chat-msg chat-{{$msg.Role}} {{if $msg.ToolCalls}}has-tools{{end}}" data-role="{{$msg.Role}}" data-idx="{{$i}}" data-has-error="{{range $msg.ToolCalls}}{{if eq .State "error"}}true{{end}}{{end}}">
+    {{$skills := index $.SkillMap $i}}
+    <div class="chat-msg chat-{{$msg.Role}} {{if $msg.ToolCalls}}has-tools{{end}} {{if $skills}}has-skills{{end}}" data-role="{{$msg.Role}}" data-idx="{{$i}}" data-has-error="{{range $msg.ToolCalls}}{{if eq .State "error"}}true{{end}}{{end}}" {{if $skills}}data-skills="{{range $si, $sn := $skills}}{{if $si}},{{end}}{{$sn}}{{end}}"{{end}}>
       <div class="chat-header">
         <span class="chat-idx text-muted">#{{$i}}</span>
         <span class="chat-role">{{$msg.Role}}</span>
         {{if $msg.Model}}<span class="chat-model font-mono">{{$msg.Model}}</span>{{end}}
+        {{if $skills}}{{range $skills}}<span class="badge badge-skill" onclick="filterMessages('skill:{{.}}', null)">{{.}}</span>{{end}}{{end}}
         <span class="chat-time text-muted">{{timeAgo $msg.Timestamp}}</span>
         {{if or $msg.InputTokens $msg.OutputTokens}}
         <span class="chat-tokens text-muted font-mono">{{formatTokens $msg.InputTokens}}→{{formatTokens $msg.OutputTokens}}</span>
@@ -425,17 +495,18 @@
             <span class="tool-name font-mono">{{.Name}}</span>
             <span class="tool-state badge">{{.State}}</span>
             {{if .DurationMs}}<span class="text-muted">{{formatDuration .DurationMs}}</span>{{end}}
+            {{if or .InputTokens .OutputTokens}}<span class="tool-tokens font-mono">{{formatTokens .InputTokens}} in → {{formatTokens .OutputTokens}} out</span>{{end}}
           </summary>
           <div class="tool-body">
             {{if .Input}}
             <div class="tool-section">
-              <div class="tool-section-label">Input</div>
+              <div class="tool-section-label">Input{{if .InputTokens}} <span class="text-muted font-mono">({{formatTokens .InputTokens}} tokens)</span>{{end}}</div>
               <pre class="tool-pre">{{truncate .Input 1000}}</pre>
             </div>
             {{end}}
             {{if .Output}}
             <div class="tool-section">
-              <div class="tool-section-label">Output</div>
+              <div class="tool-section-label">Output{{if .OutputTokens}} <span class="text-muted font-mono">({{formatTokens .OutputTokens}} tokens)</span>{{end}}</div>
               <pre class="tool-pre">{{truncate .Output 1000}}</pre>
             </div>
             {{end}}
@@ -448,7 +519,13 @@
     {{end}}
   </div>
 
-  <!-- Bottom pagination -->
+  {{if .HasMoreMsgs}}
+  <div id="load-more-msgs" hx-get="/partials/session-messages/{{.Session.ID}}?offset=50" hx-trigger="click" hx-swap="outerHTML" class="load-more-btn">
+    Load remaining {{sub .TotalMessages 50}} messages...
+  </div>
+  {{end}}
+
+  <!-- Bottom pagination (client-side, for loaded messages) -->
   <div class="conv-pagination" id="conv-pagination-bottom">
     <button class="conv-btn" onclick="prevPage()">← Prev</button>
     <span class="conv-page-info" id="conv-page-info-bottom"></span>
@@ -461,15 +538,32 @@
   const PAGE_SIZE = 50;
   let currentPage = 0;
   let currentFilter = 'all';
+  let searchTerm = '';
   const container = document.getElementById('chat-container');
   const allMsgs = Array.from(container.querySelectorAll('.chat-msg'));
 
   function getFiltered() {
     return allMsgs.filter(function(el) {
-      if (currentFilter === 'all') return true;
-      if (currentFilter === 'user') return el.dataset.role === 'user';
-      if (currentFilter === 'errors') return el.dataset.hasError === 'true';
-      if (currentFilter === 'tools') return el.classList.contains('has-tools');
+      // Role/type filter
+      var passFilter = true;
+      if (currentFilter === 'all') passFilter = true;
+      else if (currentFilter === 'user') passFilter = el.dataset.role === 'user';
+      else if (currentFilter === 'assistant') passFilter = el.dataset.role === 'assistant';
+      else if (currentFilter === 'errors') passFilter = el.dataset.hasError === 'true';
+      else if (currentFilter === 'tools') passFilter = el.classList.contains('has-tools');
+      else if (currentFilter === 'skills') passFilter = el.classList.contains('has-skills');
+      else if (currentFilter.indexOf('skill:') === 0) {
+        var skillName = currentFilter.substring(6);
+        var skills = (el.dataset.skills || '').split(',');
+        passFilter = skills.indexOf(skillName) >= 0;
+      }
+      if (!passFilter) return false;
+
+      // Text search filter
+      if (searchTerm) {
+        var text = el.textContent.toLowerCase();
+        return text.indexOf(searchTerm) >= 0;
+      }
       return true;
     });
   }
@@ -489,7 +583,11 @@
 
     // Update info
     var info = 'Showing ' + (start+1) + '-' + end + ' of ' + filtered.length;
-    if (currentFilter !== 'all') info += ' (' + currentFilter + ')';
+    if (currentFilter !== 'all') {
+      var label = currentFilter;
+      if (label.indexOf('skill:') === 0) label = label.substring(6);
+      info += ' (' + label + ')';
+    }
     var el1 = document.getElementById('conv-page-info');
     var el2 = document.getElementById('conv-page-info-bottom');
     if (el1) el1.textContent = info;
@@ -499,8 +597,15 @@
   window.filterMessages = function(filter, btn) {
     currentFilter = filter;
     currentPage = 0;
-    document.querySelectorAll('.conv-btn').forEach(function(b) { b.classList.remove('active'); });
+    // Clear active from all filter buttons and chips
+    document.querySelectorAll('.conv-btn, .conv-chip').forEach(function(b) { b.classList.remove('active'); });
     if (btn) btn.classList.add('active');
+    // If no btn provided (e.g. badge click), highlight matching chip
+    if (!btn && filter.indexOf('skill:') === 0) {
+      document.querySelectorAll('.conv-chip-skill').forEach(function(c) {
+        if (c.textContent === filter.substring(6)) c.classList.add('active');
+      });
+    }
     render();
   };
 
@@ -512,6 +617,12 @@
 
   window.prevPage = function() {
     if (currentPage > 0) { currentPage--; render(); }
+  };
+
+  window.searchInSession = function(term) {
+    searchTerm = (term || '').toLowerCase().trim();
+    currentPage = 0;
+    render();
   };
 
   // Initial render

@@ -161,6 +161,10 @@ type AnalysisReport struct {
 	// Populated by the Skill Observer as a post-analysis enrichment step.
 	// Nil/empty if no skills are available for the project.
 	SkillObservation *SkillObservation `json:"skill_observation,omitempty"`
+
+	// ModuleResults contains per-module analysis results from the modular framework.
+	// Each entry is keyed by module name. Empty if no modules were run.
+	ModuleResults []ModuleResult `json:"module_results,omitempty"`
 }
 
 // Validate checks that the report has required fields and valid ranges.

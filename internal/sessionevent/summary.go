@@ -34,8 +34,10 @@ type SessionEventSummary struct {
 	MCPServerBreakdown map[string]int `json:"mcp_server_breakdown,omitempty"` // server name -> call count
 
 	// Skill breakdown
-	SkillsLoaded   []string       `json:"skills_loaded"`   // ordered list of loaded skills
-	SkillBreakdown map[string]int `json:"skill_breakdown"` // skill name -> load count
+	SkillsLoaded        []string       `json:"skills_loaded"`         // ordered list of loaded skills
+	SkillBreakdown      map[string]int `json:"skill_breakdown"`       // skill name -> load count
+	SkillTokenBreakdown map[string]int `json:"skill_token_breakdown"` // skill name -> estimated tokens consumed
+	TotalSkillTokens    int            `json:"total_skill_tokens"`    // sum of all skill tokens
 
 	// Command breakdown
 	UniqueCommandCount int            `json:"unique_command_count"`
@@ -60,13 +62,14 @@ type SessionEventSummary struct {
 // This is a pure function — no side effects, no persistence.
 func NewSessionEventSummary(sessionID session.ID, events []Event) SessionEventSummary {
 	s := SessionEventSummary{
-		SessionID:          sessionID,
-		ToolBreakdown:      make(map[string]int),
-		MCPServerBreakdown: make(map[string]int),
-		SkillBreakdown:     make(map[string]int),
-		CommandBreakdown:   make(map[string]int),
-		ErrorByCategory:    make(map[session.ErrorCategory]int),
-		ErrorBySource:      make(map[session.ErrorSource]int),
+		SessionID:           sessionID,
+		ToolBreakdown:       make(map[string]int),
+		MCPServerBreakdown:  make(map[string]int),
+		SkillBreakdown:      make(map[string]int),
+		SkillTokenBreakdown: make(map[string]int),
+		CommandBreakdown:    make(map[string]int),
+		ErrorByCategory:     make(map[session.ErrorCategory]int),
+		ErrorBySource:       make(map[session.ErrorSource]int),
 	}
 
 	toolsSeen := make(map[string]bool)
@@ -106,6 +109,10 @@ func NewSessionEventSummary(sessionID session.ID, events []Event) SessionEventSu
 					s.SkillsLoaded = append(s.SkillsLoaded, e.SkillLoad.SkillName)
 				}
 				s.SkillBreakdown[e.SkillLoad.SkillName]++
+				if e.SkillLoad.EstimatedTokens > 0 {
+					s.SkillTokenBreakdown[e.SkillLoad.SkillName] += e.SkillLoad.EstimatedTokens
+					s.TotalSkillTokens += e.SkillLoad.EstimatedTokens
+				}
 			}
 
 		case EventCommand:

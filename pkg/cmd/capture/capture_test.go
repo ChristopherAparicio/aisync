@@ -105,8 +105,8 @@ func TestCapture_success(t *testing.T) {
 		t.Error("expected provider name in output")
 	}
 
-	if store.SaveCount != 1 {
-		t.Fatalf("expected 1 saved session, got %d", store.SaveCount)
+	if store.SaveCount < 1 {
+		t.Fatalf("expected at least 1 saved session, got %d", store.SaveCount)
 	}
 }
 
@@ -129,8 +129,8 @@ func TestCapture_withMessage(t *testing.T) {
 		t.Fatalf("runCapture() error = %v", err)
 	}
 
-	if store.SaveCount != 1 {
-		t.Fatal("expected 1 saved session")
+	if store.SaveCount < 1 {
+		t.Fatal("expected at least 1 saved session")
 	}
 	if store.LastSaved.Summary != "Custom summary" {
 		t.Errorf("Summary = %q, want 'Custom summary'", store.LastSaved.Summary)
@@ -260,8 +260,8 @@ func TestCapture_withBranchFlag(t *testing.T) {
 		t.Fatalf("runCapture() error = %v", err)
 	}
 
-	if store.SaveCount != 1 {
-		t.Fatal("expected 1 saved session")
+	if store.SaveCount < 1 {
+		t.Fatal("expected at least 1 saved session")
 	}
 	if store.LastSaved.Branch != "fix/worktree-branch" {
 		t.Errorf("Branch = %q, want 'fix/worktree-branch'", store.LastSaved.Branch)

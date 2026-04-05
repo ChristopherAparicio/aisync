@@ -7,7 +7,10 @@
 // the abstraction (provider.RegistryScanner, service.RegistryService).
 package registry
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"time"
+)
 
 // ── Enums ──
 
@@ -237,9 +240,294 @@ type ProjectSnapshot struct {
 	MCPServersRemoved   int `json:"mcp_servers_removed,omitempty"`
 }
 
-// DiffSnapshots compares two snapshots and returns the delta counts.
-// prev can be nil (for the initial snapshot).
-func DiffSnapshots(prev, curr *Project) (capsAdded, capsRemoved, mcpAdded, mcpRemoved int) {
+// ── Persisted Capabilities (flat, queryable) ──
+
+// PersistedCapability is a flat, per-row record of a capability discovered
+// in a project. Unlike ProjectSnapshot (which stores the full project as a
+// JSON blob), PersistedCapability stores one row per capability per project,
+// enabling SQL queries like "which projects have the sentry MCP server?"
+// or "when was skill X first seen?"
+type PersistedCapability struct {
+	// Identity
+	ID          string `json:"id"`           // unique row ID
+	ProjectPath string `json:"project_path"` // absolute path to project root
+
+	// Capability details
+	Name     string         `json:"name"`      // capability or MCP server name
+	Kind     CapabilityKind `json:"kind"`      // agent, command, skill, tool, plugin, mcp_server
+	Scope    Scope          `json:"scope"`     // global, profile, project
+	IsActive bool           `json:"is_active"` // true if present in latest scan
+
+	// Lifecycle timestamps
+	FirstSeen time.Time `json:"first_seen"` // when first discovered
+	LastSeen  time.Time `json:"last_seen"`  // when last confirmed present
+}
+
+// KindMCPServer is a pseudo-kind for MCP servers stored in the capabilities table.
+const KindMCPServer CapabilityKind = "mcp_server"
+
+// CapabilityFilter holds optional filters for querying persisted capabilities.
+type CapabilityFilter struct {
+	ProjectPath string         // filter by project (empty = all)
+	Kind        CapabilityKind // filter by kind (empty = all)
+	ActiveOnly  bool           // only return is_active == true
+}
+
+// ProjectCapabilityKeys extracts a deduplicated set of (name, kind, scope) tuples
+// from a Project's capabilities and MCP servers. Used by the persistence layer
+// to upsert flat capability rows.
+func ProjectCapabilityKeys(p *Project) []PersistedCapability {
+	seen := make(map[string]bool)
+	var result []PersistedCapability
+
+	for _, c := range p.Capabilities {
+		key := string(c.Kind) + ":" + c.Name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, PersistedCapability{
+			Name:  c.Name,
+			Kind:  c.Kind,
+			Scope: c.Scope,
+		})
+	}
+
+	for _, m := range p.MCPServers {
+		key := string(KindMCPServer) + ":" + m.Name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, PersistedCapability{
+			Name:  m.Name,
+			Kind:  KindMCPServer,
+			Scope: m.Scope,
+		})
+	}
+
+	return result
+}
+
+// ── Cross-Project MCP Governance Matrix (5.2) ──
+
+// MCPGovernanceMatrix is a project × MCP server matrix showing the governance
+// status of each server in each project (active, ghost, orphan, or absent).
+type MCPGovernanceMatrix struct {
+	Servers  []string                  `json:"servers"`  // unique MCP server names (column headers)
+	Projects []MCPGovernanceProjectRow `json:"projects"` // one row per project
+	// Summary counters.
+	TotalActive  int `json:"total_active"`
+	TotalGhost   int `json:"total_ghost"`
+	TotalOrphan  int `json:"total_orphan"`
+	TotalServers int `json:"total_servers"` // distinct MCP servers across all projects
+}
+
+// MCPGovernanceProjectRow is one row of the governance matrix (one project).
+type MCPGovernanceProjectRow struct {
+	ProjectPath string                       `json:"project_path"`
+	DisplayName string                       `json:"display_name"`
+	Cells       map[string]MCPGovernanceCell `json:"cells"` // server name → cell
+	ActiveCount int                          `json:"active_count"`
+	GhostCount  int                          `json:"ghost_count"`
+	OrphanCount int                          `json:"orphan_count"`
+	TotalCost   float64                      `json:"total_cost"`
+}
+
+// MCPGovernanceCell describes one MCP server's status within a single project.
+type MCPGovernanceCell struct {
+	Status    MCPUsageStatus `json:"status"`     // active, ghost, orphan
+	CallCount int            `json:"call_count"` // 0 for ghosts
+	TotalCost float64        `json:"total_cost"` // 0 for ghosts
+}
+
+// MCPGovernanceInput packages the inputs needed to build the governance matrix
+// for a single project. This is a parameter object for BuildMCPGovernanceMatrix.
+type MCPGovernanceInput struct {
+	ProjectPath string
+	DisplayName string
+	Configured  []MCPServer
+	Usage       []MCPUsageData
+}
+
+// BuildMCPGovernanceMatrix creates a cross-project governance matrix from
+// per-project configured servers and usage data. This is a pure function — no I/O.
+func BuildMCPGovernanceMatrix(inputs []MCPGovernanceInput) *MCPGovernanceMatrix {
+	result := &MCPGovernanceMatrix{}
+	serverSet := make(map[string]bool)
+
+	for _, input := range inputs {
+		cvuResult := AnalyzeConfiguredVsUsed(input.Configured, input.Usage)
+		if cvuResult == nil {
+			continue
+		}
+
+		row := MCPGovernanceProjectRow{
+			ProjectPath: input.ProjectPath,
+			DisplayName: input.DisplayName,
+			Cells:       make(map[string]MCPGovernanceCell),
+			ActiveCount: cvuResult.ActiveCount,
+			GhostCount:  cvuResult.GhostCount,
+			OrphanCount: cvuResult.OrphanCount,
+		}
+
+		for _, srv := range cvuResult.Servers {
+			serverSet[srv.Name] = true
+			row.Cells[srv.Name] = MCPGovernanceCell{
+				Status:    srv.Status,
+				CallCount: srv.CallCount,
+				TotalCost: srv.TotalCost,
+			}
+			row.TotalCost += srv.TotalCost
+		}
+
+		result.TotalActive += cvuResult.ActiveCount
+		result.TotalGhost += cvuResult.GhostCount
+		result.TotalOrphan += cvuResult.OrphanCount
+		result.Projects = append(result.Projects, row)
+	}
+
+	// Collect and sort server names.
+	for name := range serverSet {
+		result.Servers = append(result.Servers, name)
+	}
+	sortStrings(result.Servers)
+	result.TotalServers = len(result.Servers)
+
+	return result
+}
+
+// sortStrings is a minimal insertion sort for small string slices.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
+// ── Skill Reuse Map (1.5) ──
+
+// SkillReuseMap classifies skills by their cross-project sharing pattern.
+type SkillReuseMap struct {
+	SharedSkills []SkillReuseEntry `json:"shared_skills"` // used in 2+ projects
+	MonoSkills   []SkillReuseEntry `json:"mono_skills"`   // used in exactly 1 project
+	IdleSkills   []SkillReuseEntry `json:"idle_skills"`   // configured but never loaded
+	TotalSkills  int               `json:"total_skills"`  // total distinct skills
+	TotalLoads   int               `json:"total_loads"`   // total skill loads across all projects
+	SharedCount  int               `json:"shared_count"`
+	MonoCount    int               `json:"mono_count"`
+	IdleCount    int               `json:"idle_count"`
+}
+
+// SkillReuseEntry describes a single skill's reuse status across projects.
+type SkillReuseEntry struct {
+	Name         string   `json:"name"`
+	Scope        Scope    `json:"scope"`         // global or project
+	ProjectCount int      `json:"project_count"` // number of projects using it
+	Projects     []string `json:"projects"`      // display names of projects
+	TotalLoads   int      `json:"total_loads"`   // total load count across all projects
+	TotalTokens  int      `json:"total_tokens"`  // total estimated context tokens consumed
+}
+
+// SkillUsageInput is the per-project skill usage data needed to build the reuse map.
+type SkillUsageInput struct {
+	ProjectPath string
+	DisplayName string
+	Configured  []string       // skill names from registry
+	Usage       map[string]int // skill name → load count (from EventBucket.TopSkills)
+	Tokens      map[string]int // skill name → total tokens (from EventBucket.SkillTokens)
+}
+
+// BuildSkillReuseMap creates a cross-project skill reuse classification.
+// This is a pure function — no I/O.
+func BuildSkillReuseMap(inputs []SkillUsageInput) *SkillReuseMap {
+	result := &SkillReuseMap{}
+
+	// Track per-skill data across projects.
+	type skillData struct {
+		scope       Scope
+		projects    []string
+		totalLoads  int
+		totalTokens int
+		configured  bool // appears in at least one registry
+		loaded      bool // loaded in at least one session
+	}
+	skillMap := make(map[string]*skillData)
+
+	for _, input := range inputs {
+		// Mark configured skills.
+		for _, name := range input.Configured {
+			sd, ok := skillMap[name]
+			if !ok {
+				sd = &skillData{scope: ScopeGlobal}
+				skillMap[name] = sd
+			}
+			sd.configured = true
+		}
+
+		// Mark used skills.
+		for name, count := range input.Usage {
+			sd, ok := skillMap[name]
+			if !ok {
+				sd = &skillData{scope: ScopeProject}
+				skillMap[name] = sd
+			}
+			sd.loaded = true
+			sd.projects = append(sd.projects, input.DisplayName)
+			sd.totalLoads += count
+			result.TotalLoads += count
+
+			if tokens, ok := input.Tokens[name]; ok {
+				sd.totalTokens += tokens
+			}
+		}
+	}
+
+	// Classify each skill.
+	for name, sd := range skillMap {
+		entry := SkillReuseEntry{
+			Name:         name,
+			Scope:        sd.scope,
+			ProjectCount: len(sd.projects),
+			Projects:     sd.projects,
+			TotalLoads:   sd.totalLoads,
+			TotalTokens:  sd.totalTokens,
+		}
+
+		if !sd.loaded {
+			// Configured but never loaded anywhere.
+			result.IdleSkills = append(result.IdleSkills, entry)
+			result.IdleCount++
+		} else if len(sd.projects) > 1 {
+			result.SharedSkills = append(result.SharedSkills, entry)
+			result.SharedCount++
+		} else {
+			result.MonoSkills = append(result.MonoSkills, entry)
+			result.MonoCount++
+		}
+		result.TotalSkills++
+	}
+
+	// Sort by load count (descending) within each category.
+	sortSkillEntries(result.SharedSkills)
+	sortSkillEntries(result.MonoSkills)
+	sortSkillEntries(result.IdleSkills)
+
+	return result
+}
+
+func sortSkillEntries(entries []SkillReuseEntry) {
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0 && entries[j].TotalLoads > entries[j-1].TotalLoads; j-- {
+			entries[j], entries[j-1] = entries[j-1], entries[j]
+		}
+	}
+}
+
+// DiffSnapshots compares two project states and returns the number of capabilities
+// and MCP servers that were added or removed. A nil prev means the project is new.
+func DiffSnapshots(prev *Project, curr *Project) (capsAdded, capsRemoved, mcpAdded, mcpRemoved int) {
 	if prev == nil {
 		return len(curr.Capabilities), 0, len(curr.MCPServers), 0
 	}

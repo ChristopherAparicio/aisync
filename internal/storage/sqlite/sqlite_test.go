@@ -10,6 +10,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
@@ -112,6 +113,315 @@ func TestGet_NotFound(t *testing.T) {
 	if !errors.Is(err, session.ErrSessionNotFound) {
 		t.Errorf("Get(nonexistent) error = %v, want ErrSessionNotFound", err)
 	}
+}
+
+func TestGetBatch(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Seed three sessions with distinct IDs and heterogeneous companion data:
+	//   sess-a: has both links and file changes
+	//   sess-b: has file changes, no links
+	//   sess-c: has no companion rows at all
+	a := testSession("sess-a")
+	b := testSession("sess-b")
+	b.Links = nil
+	c := testSession("sess-c")
+	c.Links = nil
+	c.FileChanges = nil
+
+	for _, s := range []*session.Session{a, b, c} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	t.Run("returns all requested sessions", func(t *testing.T) {
+		got, err := store.GetBatch([]session.ID{"sess-a", "sess-b", "sess-c"})
+		if err != nil {
+			t.Fatalf("GetBatch() error = %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("len(got) = %d, want 3", len(got))
+		}
+		for _, id := range []session.ID{"sess-a", "sess-b", "sess-c"} {
+			if _, ok := got[id]; !ok {
+				t.Errorf("missing session %q in result", id)
+			}
+		}
+	})
+
+	t.Run("hydrates links and file_changes from companion tables", func(t *testing.T) {
+		got, err := store.GetBatch([]session.ID{"sess-a", "sess-b", "sess-c"})
+		if err != nil {
+			t.Fatalf("GetBatch() error = %v", err)
+		}
+
+		gotA := got[session.ID("sess-a")]
+		if len(gotA.Links) != 1 || gotA.Links[0].Ref != "feature/auth" {
+			t.Errorf("sess-a.Links = %+v, want one feature/auth link", gotA.Links)
+		}
+		if len(gotA.FileChanges) != 1 || gotA.FileChanges[0].FilePath != "src/auth.py" {
+			t.Errorf("sess-a.FileChanges = %+v, want one src/auth.py change", gotA.FileChanges)
+		}
+
+		gotB := got[session.ID("sess-b")]
+		if len(gotB.Links) != 0 {
+			t.Errorf("sess-b.Links = %+v, want empty", gotB.Links)
+		}
+		if len(gotB.FileChanges) != 1 {
+			t.Errorf("sess-b.FileChanges len = %d, want 1", len(gotB.FileChanges))
+		}
+
+		gotC := got[session.ID("sess-c")]
+		if len(gotC.Links) != 0 || len(gotC.FileChanges) != 0 {
+			t.Errorf("sess-c should have no companion rows, got links=%d fc=%d",
+				len(gotC.Links), len(gotC.FileChanges))
+		}
+	})
+
+	t.Run("missing IDs are silently omitted", func(t *testing.T) {
+		got, err := store.GetBatch([]session.ID{"sess-a", "does-not-exist"})
+		if err != nil {
+			t.Fatalf("GetBatch() error = %v", err)
+		}
+		if len(got) != 1 {
+			t.Errorf("len(got) = %d, want 1 (missing ID should be dropped silently)", len(got))
+		}
+		if _, ok := got[session.ID("does-not-exist")]; ok {
+			t.Errorf("missing ID should not appear in result map")
+		}
+	})
+
+	t.Run("empty input returns empty map without error", func(t *testing.T) {
+		got, err := store.GetBatch(nil)
+		if err != nil {
+			t.Fatalf("GetBatch(nil) error = %v", err)
+		}
+		if got == nil || len(got) != 0 {
+			t.Errorf("GetBatch(nil) = %v, want empty map", got)
+		}
+	})
+
+	t.Run("duplicate IDs are de-duplicated", func(t *testing.T) {
+		got, err := store.GetBatch([]session.ID{"sess-a", "sess-a", "sess-b"})
+		if err != nil {
+			t.Fatalf("GetBatch() error = %v", err)
+		}
+		if len(got) != 2 {
+			t.Errorf("len(got) = %d, want 2 (dedupe)", len(got))
+		}
+	})
+
+	t.Run("matches Get() semantics for a single ID", func(t *testing.T) {
+		single, err := store.Get(session.ID("sess-a"))
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		batch, err := store.GetBatch([]session.ID{"sess-a"})
+		if err != nil {
+			t.Fatalf("GetBatch() error = %v", err)
+		}
+		got := batch[session.ID("sess-a")]
+		if got.ID != single.ID || got.Summary != single.Summary {
+			t.Errorf("GetBatch result differs from Get: batch=%+v single=%+v", got, single)
+		}
+		if len(got.Links) != len(single.Links) || len(got.FileChanges) != len(single.FileChanges) {
+			t.Errorf("companion row counts differ: batch links=%d fc=%d, single links=%d fc=%d",
+				len(got.Links), len(got.FileChanges), len(single.Links), len(single.FileChanges))
+		}
+	})
+}
+
+// TestGetSessionEventsBatch covers the batch event-load path introduced by Fix #8
+// to eliminate the N+1 pattern in SkillROIAnalysis. It exercises:
+//   - basic multi-session retrieval with correct per-session bucketing
+//   - SQL-level event_type filter (variadic types parameter)
+//   - silent omission of missing IDs
+//   - empty input → empty map
+//   - duplicate ID de-duplication
+//   - parity with GetSessionEvents for a single session (ordering + payload unmarshal)
+func TestGetSessionEventsBatch(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// session_events has a FK to sessions(id) ON DELETE CASCADE, so parent rows
+	// must exist before SaveEvents is called.
+	for _, id := range []string{"sess-a", "sess-b", "sess-c"} {
+		if err := store.Save(testSession(id)); err != nil {
+			t.Fatalf("Save(%s) error = %v", id, err)
+		}
+	}
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed a heterogeneous event mix across three sessions so we can assert both
+	// session bucketing and the type filter path:
+	//   sess-a: 1 skill_load + 1 tool_call
+	//   sess-b: 2 skill_load
+	//   sess-c: 1 tool_call only (no skill_load → should be absent from filtered result)
+	events := []sessionevent.Event{
+		{
+			ID: "evt-a-1", SessionID: "sess-a", Type: sessionevent.EventSkillLoad,
+			MessageIndex: 0, OccurredAt: base,
+			SkillLoad: &sessionevent.SkillLoadDetail{SkillName: "replay-tester", EstimatedTokens: 500},
+		},
+		{
+			ID: "evt-a-2", SessionID: "sess-a", Type: sessionevent.EventToolCall,
+			MessageIndex: 1, OccurredAt: base.Add(1 * time.Second),
+			ToolCall: &sessionevent.ToolCallDetail{ToolName: "bash", ToolCategory: "builtin"},
+		},
+		{
+			ID: "evt-b-1", SessionID: "sess-b", Type: sessionevent.EventSkillLoad,
+			MessageIndex: 0, OccurredAt: base,
+			SkillLoad: &sessionevent.SkillLoadDetail{SkillName: "replay-tester", EstimatedTokens: 450},
+		},
+		{
+			ID: "evt-b-2", SessionID: "sess-b", Type: sessionevent.EventSkillLoad,
+			MessageIndex: 1, OccurredAt: base.Add(2 * time.Second),
+			SkillLoad: &sessionevent.SkillLoadDetail{SkillName: "opencode-sessions", EstimatedTokens: 300},
+		},
+		{
+			ID: "evt-c-1", SessionID: "sess-c", Type: sessionevent.EventToolCall,
+			MessageIndex: 0, OccurredAt: base,
+			ToolCall: &sessionevent.ToolCallDetail{ToolName: "Read", ToolCategory: "builtin"},
+		},
+	}
+	if err := store.SaveEvents(events); err != nil {
+		t.Fatalf("SaveEvents() error = %v", err)
+	}
+
+	t.Run("returns all events bucketed per session", func(t *testing.T) {
+		got, err := store.GetSessionEventsBatch([]session.ID{"sess-a", "sess-b", "sess-c"})
+		if err != nil {
+			t.Fatalf("GetSessionEventsBatch() error = %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("len(got) = %d, want 3 sessions", len(got))
+		}
+		if len(got["sess-a"]) != 2 {
+			t.Errorf("sess-a event count = %d, want 2", len(got["sess-a"]))
+		}
+		if len(got["sess-b"]) != 2 {
+			t.Errorf("sess-b event count = %d, want 2", len(got["sess-b"]))
+		}
+		if len(got["sess-c"]) != 1 {
+			t.Errorf("sess-c event count = %d, want 1", len(got["sess-c"]))
+		}
+	})
+
+	t.Run("event_type filter narrows result at SQL level", func(t *testing.T) {
+		got, err := store.GetSessionEventsBatch(
+			[]session.ID{"sess-a", "sess-b", "sess-c"},
+			sessionevent.EventSkillLoad,
+		)
+		if err != nil {
+			t.Fatalf("GetSessionEventsBatch(types=skill_load) error = %v", err)
+		}
+		// sess-c has no skill_load events → should be absent from the map.
+		if _, ok := got["sess-c"]; ok {
+			t.Errorf("sess-c should be absent from filtered result (no skill_load events)")
+		}
+		if len(got["sess-a"]) != 1 {
+			t.Errorf("sess-a skill_load count = %d, want 1", len(got["sess-a"]))
+		}
+		if len(got["sess-b"]) != 2 {
+			t.Errorf("sess-b skill_load count = %d, want 2", len(got["sess-b"]))
+		}
+		// Verify every returned event is actually a skill_load with its payload unmarshalled.
+		for sid, evs := range got {
+			for _, e := range evs {
+				if e.Type != sessionevent.EventSkillLoad {
+					t.Errorf("%s returned non-skill_load event type %q", sid, e.Type)
+				}
+				if e.SkillLoad == nil || e.SkillLoad.SkillName == "" {
+					t.Errorf("%s event %s has empty SkillLoad payload", sid, e.ID)
+				}
+			}
+		}
+	})
+
+	t.Run("multiple event types via variadic", func(t *testing.T) {
+		got, err := store.GetSessionEventsBatch(
+			[]session.ID{"sess-a"},
+			sessionevent.EventSkillLoad, sessionevent.EventToolCall,
+		)
+		if err != nil {
+			t.Fatalf("GetSessionEventsBatch(types=skill_load,tool_call) error = %v", err)
+		}
+		if len(got["sess-a"]) != 2 {
+			t.Errorf("sess-a multi-type count = %d, want 2", len(got["sess-a"]))
+		}
+	})
+
+	t.Run("missing IDs are silently omitted", func(t *testing.T) {
+		got, err := store.GetSessionEventsBatch([]session.ID{"sess-a", "does-not-exist"})
+		if err != nil {
+			t.Fatalf("GetSessionEventsBatch() error = %v", err)
+		}
+		if _, ok := got["does-not-exist"]; ok {
+			t.Errorf("missing ID should not appear in result map")
+		}
+		if len(got["sess-a"]) != 2 {
+			t.Errorf("sess-a count = %d, want 2", len(got["sess-a"]))
+		}
+	})
+
+	t.Run("empty input returns empty map without error", func(t *testing.T) {
+		got, err := store.GetSessionEventsBatch(nil)
+		if err != nil {
+			t.Fatalf("GetSessionEventsBatch(nil) error = %v", err)
+		}
+		if got == nil || len(got) != 0 {
+			t.Errorf("GetSessionEventsBatch(nil) = %v, want empty map", got)
+		}
+	})
+
+	t.Run("duplicate IDs are de-duplicated", func(t *testing.T) {
+		got, err := store.GetSessionEventsBatch([]session.ID{"sess-a", "sess-a", "sess-b"})
+		if err != nil {
+			t.Fatalf("GetSessionEventsBatch() error = %v", err)
+		}
+		// Dedup: sess-a should only appear once and still hold its 2 events
+		// (not 4 — if dedupe broke, SQL would return duplicate rows).
+		if len(got["sess-a"]) != 2 {
+			t.Errorf("sess-a count = %d, want 2 (dedup check)", len(got["sess-a"]))
+		}
+		if len(got["sess-b"]) != 2 {
+			t.Errorf("sess-b count = %d, want 2", len(got["sess-b"]))
+		}
+	})
+
+	t.Run("matches GetSessionEvents() semantics for a single ID", func(t *testing.T) {
+		single, err := store.GetSessionEvents(session.ID("sess-b"))
+		if err != nil {
+			t.Fatalf("GetSessionEvents() error = %v", err)
+		}
+		batch, err := store.GetSessionEventsBatch([]session.ID{"sess-b"})
+		if err != nil {
+			t.Fatalf("GetSessionEventsBatch() error = %v", err)
+		}
+		got := batch[session.ID("sess-b")]
+		if len(got) != len(single) {
+			t.Fatalf("batch len = %d, single len = %d", len(got), len(single))
+		}
+		for i := range got {
+			if got[i].ID != single[i].ID {
+				t.Errorf("event[%d] ID: batch=%q single=%q", i, got[i].ID, single[i].ID)
+			}
+			if got[i].Type != single[i].Type {
+				t.Errorf("event[%d] Type: batch=%q single=%q", i, got[i].Type, single[i].Type)
+			}
+			// Payload unmarshal parity check.
+			if (got[i].SkillLoad == nil) != (single[i].SkillLoad == nil) {
+				t.Errorf("event[%d] SkillLoad payload parity mismatch", i)
+			}
+			if got[i].SkillLoad != nil && single[i].SkillLoad != nil {
+				if got[i].SkillLoad.SkillName != single[i].SkillLoad.SkillName {
+					t.Errorf("event[%d] SkillName: batch=%q single=%q",
+						i, got[i].SkillLoad.SkillName, single[i].SkillLoad.SkillName)
+				}
+			}
+		}
+	})
 }
 
 func TestSave_Upsert(t *testing.T) {
@@ -2730,5 +3040,439 @@ func TestListSessionsWithEmptyRemoteURL_Limit(t *testing.T) {
 	}
 	if len(candidates) != 3 {
 		t.Fatalf("got %d candidates, want 3", len(candidates))
+	}
+}
+
+// ── User enrichment tests (Phase 1 Slack Integration) ──
+
+func TestSaveUser_WithKindAndRole(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user := &session.User{
+		ID:     session.ID("uk-1"),
+		Name:   "Bot Account",
+		Email:  "bot@ci.dev",
+		Source: "git",
+		Kind:   session.UserKindMachine,
+		Role:   session.UserRoleMember,
+	}
+	if err := store.SaveUser(user); err != nil {
+		t.Fatalf("SaveUser() error = %v", err)
+	}
+
+	got, err := store.GetUser(session.ID("uk-1"))
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetUser() returned nil")
+	}
+	if got.Kind != session.UserKindMachine {
+		t.Errorf("Kind = %q, want %q", got.Kind, session.UserKindMachine)
+	}
+	if got.Role != session.UserRoleMember {
+		t.Errorf("Role = %q, want %q", got.Role, session.UserRoleMember)
+	}
+}
+
+func TestSaveUser_DefaultsKindAndRole(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user := &session.User{
+		ID:     session.ID("uk-2"),
+		Name:   "No Kind",
+		Email:  "nokind@example.com",
+		Source: "git",
+		// Kind and Role left as zero values
+	}
+	if err := store.SaveUser(user); err != nil {
+		t.Fatalf("SaveUser() error = %v", err)
+	}
+
+	got, err := store.GetUser(session.ID("uk-2"))
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetUser() returned nil")
+	}
+	if got.Kind != session.UserKindUnknown {
+		t.Errorf("Kind = %q, want %q (default)", got.Kind, session.UserKindUnknown)
+	}
+	if got.Role != session.UserRoleMember {
+		t.Errorf("Role = %q, want %q (default)", got.Role, session.UserRoleMember)
+	}
+}
+
+func TestListUsers(t *testing.T) {
+	store := mustOpenStore(t)
+
+	users := []*session.User{
+		{ID: "lu-1", Name: "Alice", Email: "alice@test.com", Source: "git", Kind: session.UserKindHuman, Role: session.UserRoleMember},
+		{ID: "lu-2", Name: "Bot", Email: "bot@test.com", Source: "git", Kind: session.UserKindMachine, Role: session.UserRoleMember},
+		{ID: "lu-3", Name: "Charlie", Email: "charlie@test.com", Source: "git", Kind: session.UserKindHuman, Role: session.UserRoleAdmin},
+	}
+	for _, u := range users {
+		if err := store.SaveUser(u); err != nil {
+			t.Fatalf("SaveUser(%s) error = %v", u.ID, err)
+		}
+	}
+
+	got, err := store.ListUsers()
+	if err != nil {
+		t.Fatalf("ListUsers() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListUsers() returned %d users, want 3", len(got))
+	}
+	// Should be ordered by name: Alice, Bot, Charlie
+	if got[0].Name != "Alice" {
+		t.Errorf("first user = %q, want Alice", got[0].Name)
+	}
+	if got[1].Name != "Bot" {
+		t.Errorf("second user = %q, want Bot", got[1].Name)
+	}
+}
+
+func TestListUsersByKind(t *testing.T) {
+	store := mustOpenStore(t)
+
+	users := []*session.User{
+		{ID: "lk-1", Name: "Human1", Email: "h1@test.com", Source: "git", Kind: session.UserKindHuman},
+		{ID: "lk-2", Name: "Human2", Email: "h2@test.com", Source: "git", Kind: session.UserKindHuman},
+		{ID: "lk-3", Name: "Machine", Email: "m@test.com", Source: "git", Kind: session.UserKindMachine},
+		{ID: "lk-4", Name: "Unknown", Email: "u@test.com", Source: "git", Kind: session.UserKindUnknown},
+	}
+	for _, u := range users {
+		if err := store.SaveUser(u); err != nil {
+			t.Fatalf("SaveUser(%s) error = %v", u.ID, err)
+		}
+	}
+
+	humans, err := store.ListUsersByKind("human")
+	if err != nil {
+		t.Fatalf("ListUsersByKind(human) error = %v", err)
+	}
+	if len(humans) != 2 {
+		t.Errorf("ListUsersByKind(human) = %d, want 2", len(humans))
+	}
+
+	machines, err := store.ListUsersByKind("machine")
+	if err != nil {
+		t.Fatalf("ListUsersByKind(machine) error = %v", err)
+	}
+	if len(machines) != 1 {
+		t.Errorf("ListUsersByKind(machine) = %d, want 1", len(machines))
+	}
+}
+
+func TestUpdateUserSlack(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user := &session.User{
+		ID:    "sl-1",
+		Name:  "Slack User",
+		Email: "slack@test.com",
+		Kind:  session.UserKindHuman,
+	}
+	if err := store.SaveUser(user); err != nil {
+		t.Fatalf("SaveUser() error = %v", err)
+	}
+
+	if err := store.UpdateUserSlack("sl-1", "U0123ABCDEF", "slack_user"); err != nil {
+		t.Fatalf("UpdateUserSlack() error = %v", err)
+	}
+
+	got, err := store.GetUser("sl-1")
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if got.SlackID != "U0123ABCDEF" {
+		t.Errorf("SlackID = %q, want %q", got.SlackID, "U0123ABCDEF")
+	}
+	if got.SlackName != "slack_user" {
+		t.Errorf("SlackName = %q, want %q", got.SlackName, "slack_user")
+	}
+}
+
+func TestUpdateUserSlack_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	err := store.UpdateUserSlack("nonexistent", "U123", "name")
+	if err == nil {
+		t.Fatal("expected error for nonexistent user")
+	}
+}
+
+func TestUpdateUserKind(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user := &session.User{
+		ID:    "uk-k1",
+		Name:  "Kind Change",
+		Email: "kind@test.com",
+		Kind:  session.UserKindUnknown,
+	}
+	if err := store.SaveUser(user); err != nil {
+		t.Fatalf("SaveUser() error = %v", err)
+	}
+
+	if err := store.UpdateUserKind("uk-k1", "machine"); err != nil {
+		t.Fatalf("UpdateUserKind() error = %v", err)
+	}
+
+	got, err := store.GetUser("uk-k1")
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if got.Kind != session.UserKindMachine {
+		t.Errorf("Kind = %q, want %q", got.Kind, session.UserKindMachine)
+	}
+}
+
+func TestUpdateUserRole(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user := &session.User{
+		ID:    "ur-1",
+		Name:  "Role Change",
+		Email: "role@test.com",
+		Kind:  session.UserKindHuman,
+		Role:  session.UserRoleMember,
+	}
+	if err := store.SaveUser(user); err != nil {
+		t.Fatalf("SaveUser() error = %v", err)
+	}
+
+	if err := store.UpdateUserRole("ur-1", "admin"); err != nil {
+		t.Fatalf("UpdateUserRole() error = %v", err)
+	}
+
+	got, err := store.GetUser("ur-1")
+	if err != nil {
+		t.Fatalf("GetUser() error = %v", err)
+	}
+	if got.Role != session.UserRoleAdmin {
+		t.Errorf("Role = %q, want %q", got.Role, session.UserRoleAdmin)
+	}
+}
+
+func TestOwnerStats(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Create users
+	u1 := &session.User{ID: "os-u1", Name: "Alice", Email: "alice@os.com", Kind: session.UserKindHuman}
+	u2 := &session.User{ID: "os-u2", Name: "Bot", Email: "bot@os.com", Kind: session.UserKindMachine}
+	for _, u := range []*session.User{u1, u2} {
+		if err := store.SaveUser(u); err != nil {
+			t.Fatalf("SaveUser(%s) error = %v", u.ID, err)
+		}
+	}
+
+	// Create sessions with different owners
+	s1 := testSession("os-s1")
+	s1.OwnerID = "os-u1"
+	s1.TokenUsage.TotalTokens = 100
+	s1.ProjectPath = "/proj/a"
+	s2 := testSession("os-s2")
+	s2.OwnerID = "os-u1"
+	s2.TokenUsage.TotalTokens = 200
+	s2.ProjectPath = "/proj/a"
+	s3 := testSession("os-s3")
+	s3.OwnerID = "os-u2"
+	s3.TokenUsage.TotalTokens = 50
+	s3.ProjectPath = "/proj/a"
+
+	for _, s := range []*session.Session{s1, s2, s3} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	// Query all
+	since := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	stats, err := store.OwnerStats("", since, until)
+	if err != nil {
+		t.Fatalf("OwnerStats() error = %v", err)
+	}
+	if len(stats) < 2 {
+		t.Fatalf("OwnerStats() returned %d rows, want at least 2", len(stats))
+	}
+
+	// Check Alice's stats (should have 2 sessions, 300 tokens)
+	var aliceStat *session.OwnerStat
+	for i := range stats {
+		if stats[i].OwnerID == "os-u1" {
+			aliceStat = &stats[i]
+			break
+		}
+	}
+	if aliceStat == nil {
+		t.Fatal("OwnerStats() missing Alice")
+	}
+	if aliceStat.SessionCount != 2 {
+		t.Errorf("Alice sessions = %d, want 2", aliceStat.SessionCount)
+	}
+	if aliceStat.TotalTokens != 300 {
+		t.Errorf("Alice tokens = %d, want 300", aliceStat.TotalTokens)
+	}
+	if aliceStat.OwnerKind != "human" {
+		t.Errorf("Alice kind = %q, want human", aliceStat.OwnerKind)
+	}
+
+	// Query with project filter
+	statsProj, err := store.OwnerStats("/proj/a", since, until)
+	if err != nil {
+		t.Fatalf("OwnerStats(project) error = %v", err)
+	}
+	if len(statsProj) < 2 {
+		t.Fatalf("OwnerStats(project) returned %d rows, want at least 2", len(statsProj))
+	}
+}
+
+func TestOwnerStats_Empty(t *testing.T) {
+	store := mustOpenStore(t)
+
+	since := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	stats, err := store.OwnerStats("", since, until)
+	if err != nil {
+		t.Fatalf("OwnerStats() error = %v", err)
+	}
+	if len(stats) != 0 {
+		t.Errorf("OwnerStats() = %d, want 0 for empty range", len(stats))
+	}
+}
+
+func TestGetUserByEmail_WithNewFields(t *testing.T) {
+	store := mustOpenStore(t)
+
+	user := &session.User{
+		ID:        "nf-1",
+		Name:      "Full Fields",
+		Email:     "full@test.com",
+		Source:    "git",
+		Kind:      session.UserKindHuman,
+		SlackID:   "U9999",
+		SlackName: "full_user",
+		Role:      session.UserRoleAdmin,
+	}
+	if err := store.SaveUser(user); err != nil {
+		t.Fatalf("SaveUser() error = %v", err)
+	}
+
+	got, err := store.GetUserByEmail("full@test.com")
+	if err != nil {
+		t.Fatalf("GetUserByEmail() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetUserByEmail() returned nil")
+	}
+	if got.Kind != session.UserKindHuman {
+		t.Errorf("Kind = %q, want human", got.Kind)
+	}
+	if got.SlackID != "U9999" {
+		t.Errorf("SlackID = %q, want U9999", got.SlackID)
+	}
+	if got.SlackName != "full_user" {
+		t.Errorf("SlackName = %q, want full_user", got.SlackName)
+	}
+	if got.Role != session.UserRoleAdmin {
+		t.Errorf("Role = %q, want admin", got.Role)
+	}
+}
+
+// ── Benchmarks ──
+
+// seedBenchSessions creates n sessions with realistic-looking payloads
+// (some messages, some tool calls) and returns their IDs.
+func seedBenchSessions(b *testing.B, store *Store, n int) []session.ID {
+	b.Helper()
+	ids := make([]session.ID, 0, n)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		id := session.ID(fmt.Sprintf("bench-sess-%04d", i))
+		sess := &session.Session{
+			ID:          id,
+			Version:     1,
+			Provider:    session.ProviderClaudeCode,
+			Agent:       "claude",
+			Branch:      "main",
+			CommitSHA:   "abc1234",
+			ProjectPath: "/home/chris/bench-project",
+			CreatedAt:   base.Add(time.Duration(i) * time.Minute),
+			Summary:     fmt.Sprintf("Benchmark session %d — some work on feature X", i),
+			StorageMode: session.StorageModeCompact,
+			TokenUsage: session.TokenUsage{
+				InputTokens:  1000 + i,
+				OutputTokens: 500 + i,
+				TotalTokens:  1500 + 2*i,
+			},
+			Messages: []session.Message{
+				{ID: "m1", Role: session.RoleUser, Content: "Hello world, do X", Timestamp: base},
+				{ID: "m2", Role: session.RoleAssistant, Content: "Working on X now", Timestamp: base},
+				{ID: "m3", Role: session.RoleUser, Content: "Now also do Y please", Timestamp: base},
+				{ID: "m4", Role: session.RoleAssistant, Content: "Y is done as well", Timestamp: base},
+			},
+			FileChanges: []session.FileChange{
+				{FilePath: "src/foo.go", ChangeType: session.ChangeCreated},
+				{FilePath: "src/bar.go", ChangeType: session.ChangeModified},
+			},
+			Links: []session.Link{
+				{LinkType: session.LinkBranch, Ref: "main"},
+			},
+		}
+		if err := store.Save(sess); err != nil {
+			b.Fatalf("seed Save(%s) error = %v", id, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// BenchmarkGet_Loop baselines the legacy N+1 pattern: call Get() for each
+// session ID in a loop. Each Get() costs 3 SQL queries (payload + links + file_changes).
+func BenchmarkGet_Loop(b *testing.B) {
+	const n = 500
+	dbPath := filepath.Join(b.TempDir(), "bench.db")
+	store, err := New(dbPath)
+	if err != nil {
+		b.Fatalf("New error = %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ids := seedBenchSessions(b, store, n)
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for _, id := range ids {
+			if _, err := store.Get(id); err != nil {
+				b.Fatalf("Get error = %v", err)
+			}
+		}
+	}
+}
+
+// BenchmarkGetBatch measures the batch path: one call loads everything with
+// 3 SQL queries total regardless of len(ids).
+func BenchmarkGetBatch(b *testing.B) {
+	const n = 500
+	dbPath := filepath.Join(b.TempDir(), "bench.db")
+	store, err := New(dbPath)
+	if err != nil {
+		b.Fatalf("New error = %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ids := seedBenchSessions(b, store, n)
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := store.GetBatch(ids); err != nil {
+			b.Fatalf("GetBatch error = %v", err)
+		}
 	}
 }

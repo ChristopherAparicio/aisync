@@ -56,6 +56,7 @@
         </div>
       </div>
       {{end}}
+      {{if .NotifChannel}}<div class="pc-field"><span class="pc-label">Notification Channel</span><span class="pc-value font-mono">{{.NotifChannel}}</span></div>{{end}}
     </div>
   </div>
   <div class="pc-card-form" style="display:none;">
@@ -74,12 +75,16 @@
       <fieldset class="pc-fieldset"><legend>Agent Rules</legend><div class="pc-rule-list">{{range .AgentRules}}<div class="pc-rule-row"><input type="text" name="agent_rule_pattern[]" class="pc-form-input pc-form-input--sm font-mono" value="{{.Pattern}}"><span class="pc-arrow">&rarr;</span><input type="text" name="agent_rule_type[]" class="pc-form-input pc-form-input--sm" value="{{.Type}}"><button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button></div>{{end}}</div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'agent_rule', 'review', 'review')">+ Rule</button></fieldset>
       <fieldset class="pc-fieldset"><legend>Commit Rules</legend><div class="pc-rule-list">{{range .CommitRules}}<div class="pc-rule-row"><input type="text" name="commit_rule_pattern[]" class="pc-form-input pc-form-input--sm font-mono" value="{{.Pattern}}"><span class="pc-arrow">&rarr;</span><input type="text" name="commit_rule_type[]" class="pc-form-input pc-form-input--sm" value="{{.Type}}"><button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button></div>{{end}}</div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'commit_rule', 'fix', 'bug')">+ Rule</button></fieldset>
       <fieldset class="pc-fieldset"><legend>Status Rules</legend><div class="pc-rule-list">{{range .StatusRules}}<div class="pc-rule-row"><input type="text" name="status_rule_pattern[]" class="pc-form-input pc-form-input--sm font-mono" value="{{.Pattern}}"><span class="pc-arrow">&rarr;</span><input type="text" name="status_rule_type[]" class="pc-form-input pc-form-input--sm" value="{{.Type}}"><button type="button" class="pc-btn pc-btn--remove" onclick="this.parentElement.remove();">&times;</button></div>{{end}}</div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'status_rule', '[WIP]', 'active')">+ Rule</button></fieldset>
+      <div class="pc-preview-section"><button type="button" class="pc-btn pc-btn--preview" onclick="pcPreview(this)">Preview Rules</button><div class="pc-preview-results"></div></div>
       <fieldset class="pc-fieldset"><legend>Budget</legend>
         <div class="pc-form-row"><label class="pc-form-label">Monthly ($)</label><input type="number" name="budget_monthly" class="pc-form-input pc-form-input--num" step="0.01" min="0" value="{{.MonthlyLimit}}"></div>
         <div class="pc-form-row"><label class="pc-form-label">Daily ($)</label><input type="number" name="budget_daily" class="pc-form-input pc-form-input--num" step="0.01" min="0" value="{{.DailyLimit}}"></div>
         <div class="pc-form-row"><label class="pc-form-label">Alert (%)</label><input type="number" name="budget_alert_percent" class="pc-form-input pc-form-input--num" min="0" max="100" value="{{.AlertPercent}}"></div>
         <div class="pc-form-row"><label class="pc-form-label">Cost Mode</label><select name="budget_cost_mode" class="pc-form-select"><option value="actual" {{if eq .CostMode "actual"}}selected{{end}}>actual</option><option value="estimated" {{if eq .CostMode "estimated"}}selected{{end}}>estimated</option><option value="all" {{if eq .CostMode "all"}}selected{{end}}>all</option></select></div>
         <div class="pc-form-row"><label class="pc-form-label">Webhook</label><input type="text" name="budget_alert_webhook" class="pc-form-input font-mono" value="{{.AlertWebhook}}"></div>
+      </fieldset>
+      <fieldset class="pc-fieldset"><legend>Notifications</legend>
+        <div class="pc-form-row"><label class="pc-form-label">Channel</label><input type="text" name="notif_channel" class="pc-form-input font-mono" placeholder="#project-ai" value="{{.NotifChannel}}"></div>
       </fieldset>
       <div class="pc-form-actions">
         <button type="submit" class="pc-btn pc-btn--save">Save</button>
@@ -115,12 +120,16 @@
         <fieldset class="pc-fieldset"><legend>Agent Rules</legend><div class="pc-rule-list"></div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'agent_rule', 'review', 'review')">+ Rule</button></fieldset>
         <fieldset class="pc-fieldset"><legend>Commit Rules</legend><div class="pc-rule-list"></div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'commit_rule', 'fix', 'bug')">+ Rule</button></fieldset>
         <fieldset class="pc-fieldset"><legend>Status Rules</legend><div class="pc-rule-list"></div><button type="button" class="pc-btn pc-btn--add-rule" onclick="addRuleRow(this, 'status_rule', '[WIP]', 'active')">+ Rule</button></fieldset>
+        <div class="pc-preview-section"><button type="button" class="pc-btn pc-btn--preview" onclick="pcPreview(this)">Preview Rules</button><div class="pc-preview-results"></div></div>
         <fieldset class="pc-fieldset"><legend>Budget</legend>
           <div class="pc-form-row"><label class="pc-form-label">Monthly ($)</label><input type="number" name="budget_monthly" class="pc-form-input pc-form-input--num" step="0.01" min="0" placeholder="0"></div>
           <div class="pc-form-row"><label class="pc-form-label">Daily ($)</label><input type="number" name="budget_daily" class="pc-form-input pc-form-input--num" step="0.01" min="0" placeholder="0"></div>
           <div class="pc-form-row"><label class="pc-form-label">Alert (%)</label><input type="number" name="budget_alert_percent" class="pc-form-input pc-form-input--num" min="0" max="100" placeholder="80"></div>
           <div class="pc-form-row"><label class="pc-form-label">Cost Mode</label><select name="budget_cost_mode" class="pc-form-select"><option value="actual" selected>actual</option><option value="estimated">estimated</option><option value="all">all</option></select></div>
           <div class="pc-form-row"><label class="pc-form-label">Webhook</label><input type="text" name="budget_alert_webhook" class="pc-form-input font-mono" placeholder="slack"></div>
+        </fieldset>
+        <fieldset class="pc-fieldset"><legend>Notifications</legend>
+          <div class="pc-form-row"><label class="pc-form-label">Channel</label><input type="text" name="notif_channel" class="pc-form-input font-mono" placeholder="#project-ai"></div>
         </fieldset>
         <div class="pc-form-actions"><button type="submit" class="pc-btn pc-btn--save">Save</button></div>
       </form>

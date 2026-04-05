@@ -160,6 +160,7 @@ type SessionAI interface {
 	AnalyzeEfficiency(ctx context.Context, req EfficiencyRequest) (*EfficiencyResult, error)
 	ComputeObjective(ctx context.Context, req ComputeObjectiveRequest) (*session.SessionObjective, error)
 	GetObjective(ctx context.Context, sessionID string) (*session.SessionObjective, error)
+	Diagnose(ctx context.Context, req DiagnoseRequest) (*session.DiagnosisReport, error)
 }
 
 // SessionManager provides session lifecycle management operations.
@@ -239,6 +240,9 @@ type AnalysisServicer interface {
 
 	// ListAnalyses returns all analyses for a session, newest first.
 	ListAnalyses(sessionID string) ([]*analysis.SessionAnalysis, error)
+
+	// AvailableModules returns info about all registered analysis modules.
+	AvailableModules() []analysis.ModuleInfo
 }
 
 // Compile-time check: *AnalysisService implements AnalysisServicer.

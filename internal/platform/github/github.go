@@ -14,6 +14,9 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
+// prJSONFields is the set of fields requested from gh CLI for PR queries.
+const prJSONFields = "number,title,headRefName,baseRefName,state,url,author,createdAt,updatedAt,mergedAt,closedAt,additions,deletions,comments"
+
 // Client implements the Platform operations for GitHub.
 type Client struct {
 	// repoDir is the git repository directory (for running gh commands in context).
@@ -45,7 +48,7 @@ func (c *Client) GetPRForBranch(branch string) (*session.PullRequest, error) {
 		"--head", branch,
 		"--state", "open",
 		"--limit", "1",
-		"--json", "number,title,headRefName,baseRefName,state,url,author,createdAt,updatedAt",
+		"--json", prJSONFields,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing PRs for branch %q: %w", branch, err)
@@ -60,7 +63,12 @@ func (c *Client) GetPRForBranch(branch string) (*session.PullRequest, error) {
 		return nil, session.ErrPRNotFound
 	}
 
-	return prs[0].toDomain(), nil
+	pr := prs[0].toDomain()
+	if owner, repo := extractRepoFromURL(pr.URL); owner != "" {
+		pr.RepoOwner = owner
+		pr.RepoName = repo
+	}
+	return pr, nil
 }
 
 // GetPR retrieves a PR by number.
@@ -68,7 +76,7 @@ func (c *Client) GetPR(number int) (*session.PullRequest, error) {
 	out, err := c.run(
 		"pr", "view",
 		strconv.Itoa(number),
-		"--json", "number,title,headRefName,baseRefName,state,url,author,createdAt,updatedAt",
+		"--json", prJSONFields,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("getting PR #%d: %w", number, session.ErrPRNotFound)
@@ -79,7 +87,12 @@ func (c *Client) GetPR(number int) (*session.PullRequest, error) {
 		return nil, fmt.Errorf("parsing PR #%d: %w", number, jsonErr)
 	}
 
-	return pr.toDomain(), nil
+	result := pr.toDomain()
+	if owner, repo := extractRepoFromURL(result.URL); owner != "" {
+		result.RepoOwner = owner
+		result.RepoName = repo
+	}
+	return result, nil
 }
 
 // ListPRsForBranch returns all PRs (open, closed, merged) for a branch.
@@ -89,7 +102,7 @@ func (c *Client) ListPRsForBranch(branch string) ([]session.PullRequest, error) 
 		"--head", branch,
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,title,headRefName,baseRefName,state,url,author,createdAt,updatedAt",
+		"--json", prJSONFields,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing PRs for branch %q: %w", branch, err)
@@ -102,7 +115,48 @@ func (c *Client) ListPRsForBranch(branch string) ([]session.PullRequest, error) 
 
 	result := make([]session.PullRequest, 0, len(prs))
 	for _, pr := range prs {
-		result = append(result, *pr.toDomain())
+		domPR := pr.toDomain()
+		if owner, repo := extractRepoFromURL(domPR.URL); owner != "" {
+			domPR.RepoOwner = owner
+			domPR.RepoName = repo
+		}
+		result = append(result, *domPR)
+	}
+
+	return result, nil
+}
+
+// ListRecentPRs returns recent PRs for the repository (all branches).
+func (c *Client) ListRecentPRs(state string, limit int) ([]session.PullRequest, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if state == "" {
+		state = "all"
+	}
+	out, err := c.run(
+		"pr", "list",
+		"--state", state,
+		"--limit", strconv.Itoa(limit),
+		"--json", prJSONFields,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing recent PRs: %w", err)
+	}
+
+	var prs []ghPR
+	if jsonErr := json.Unmarshal([]byte(out), &prs); jsonErr != nil {
+		return nil, fmt.Errorf("parsing PR list: %w", jsonErr)
+	}
+
+	result := make([]session.PullRequest, 0, len(prs))
+	for _, pr := range prs {
+		domPR := pr.toDomain()
+		if owner, repo := extractRepoFromURL(domPR.URL); owner != "" {
+			domPR.RepoOwner = owner
+			domPR.RepoName = repo
+		}
+		result = append(result, *domPR)
 	}
 
 	return result, nil
@@ -186,29 +240,57 @@ func jsonEscape(s string) string {
 // --- gh CLI JSON structures ---
 
 type ghPR struct {
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	Title       string    `json:"title"`
-	HeadRefName string    `json:"headRefName"`
-	BaseRefName string    `json:"baseRefName"`
-	State       string    `json:"state"`
-	URL         string    `json:"url"`
-	Author      ghAuthor  `json:"author"`
-	Number      int       `json:"number"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
+	MergedAt    time.Time         `json:"mergedAt"`
+	ClosedAt    time.Time         `json:"closedAt"`
+	Title       string            `json:"title"`
+	HeadRefName string            `json:"headRefName"`
+	BaseRefName string            `json:"baseRefName"`
+	State       string            `json:"state"`
+	URL         string            `json:"url"`
+	Author      ghAuthor          `json:"author"`
+	Comments    []json.RawMessage `json:"comments"` // gh returns comment objects, we just count them
+	Number      int               `json:"number"`
+	Additions   int               `json:"additions"`
+	Deletions   int               `json:"deletions"`
 }
 
 func (p *ghPR) toDomain() *session.PullRequest {
+	state := strings.ToLower(p.State)
+	// gh CLI returns "MERGED" as a state
+	if state == "merged" && p.MergedAt.IsZero() {
+		// state is merged but mergedAt not present — keep state as-is
+	}
 	return &session.PullRequest{
 		Number:     p.Number,
 		Title:      p.Title,
 		Branch:     p.HeadRefName,
 		BaseBranch: p.BaseRefName,
-		State:      strings.ToLower(p.State),
+		State:      state,
 		URL:        p.URL,
 		Author:     p.Author.Login,
 		CreatedAt:  p.CreatedAt,
 		UpdatedAt:  p.UpdatedAt,
+		MergedAt:   p.MergedAt,
+		ClosedAt:   p.ClosedAt,
+		Additions:  p.Additions,
+		Deletions:  p.Deletions,
+		Comments:   len(p.Comments),
 	}
+}
+
+// extractRepoFromURL extracts owner and repo from a GitHub URL.
+// e.g. "https://github.com/owner/repo/pull/123" → ("owner", "repo")
+func extractRepoFromURL(ghURL string) (owner, repo string) {
+	// URL format: https://github.com/{owner}/{repo}/pull/{number}
+	parts := strings.Split(ghURL, "/")
+	for i, p := range parts {
+		if p == "github.com" && i+2 < len(parts) {
+			return parts[i+1], parts[i+2]
+		}
+	}
+	return "", ""
 }
 
 type ghAuthor struct {

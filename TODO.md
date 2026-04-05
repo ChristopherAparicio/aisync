@@ -1,8 +1,356 @@
 # aisync — Next Session TODO
 
-> Last updated: 2026-04-01
+> Last updated: 2026-04-05
 
-## Recently Completed (2026-04-01)
+## Recently Completed (2026-04-05)
+
+### N+1 Query Performance Fixes — Phase 2 ✅
+- [x] **Fix #17: `store.GetBatch(ids)`** — Root 3-query amplifier eliminated
+  - Added `GetBatch(ids []session.ID) (map[session.ID]*session.Session, error)` to `storage.SessionReader` interface
+  - SQLite implementation: **3 queries total** instead of 3N — IN-clause for sessions + links + file_changes, dedup input IDs, silent skip of missing rows, per-row error logging, resets payload-embedded slices before hydrating from companion tables (DB is source of truth)
+  - **Benchmark results** (500-session dataset): `Get()` loop = 37.1ms, `GetBatch()` = 15.2ms → **2.45× speedup**, eliminates 1497 SQL round-trips
+  - Refactored 3 consumers: `Forecast()` (session_forecast.go:98), `ContextSaturation()` (session_usage.go:662), `CacheEfficiency()` (session_usage.go:1066) — each pre-filters → batch-fetches → loops with map lookup
+  - 6 unit tests (all requested returned, hydrates companion tables, missing IDs omitted, empty input, dedup, Get parity) + 2 benchmarks
+  - All mock stores updated: `testutil/mock_store.go`, `service/session_test.go`, `scheduler/analyze_task_test.go`
+  - **Production deployed** on 1764 sessions, 0 regressions, all endpoints healthy (dashboard 75-80ms warm, stats 123-162ms)
+- [x] **Fix #2: Forecast N+1** — Now uses GetBatch (was separate issue, fixed via #17 refactor)
+- [x] **Fix #3: ContextSaturation N+1** — Now uses GetBatch (was separate issue, fixed via #17 refactor)
+- [x] **Fix #4: CacheEfficiency N+1** — Now uses GetBatch (was separate issue, fixed via #17 refactor)
+- [x] **Fix #10: Dashboard Stats+List redundancy** — Eliminated duplicate full table scans per dashboard hit
+   - Extended `service.StatsResult` with 4 new fields: `TotalErrors`, `TotalToolCalls`, `SessionsWithErrors`, `RecentSessions` (JSON tags for wire-format compat)
+   - Populated inline in `Stats()` summary loop (zero added cost — same iteration) with dedicated RecentSessions sort+truncate (top 10 by UpdatedAt desc, uses local `copy()` to avoid mutating store slice)
+   - Deleted redundant "Recent sessions + error counts" goroutine (~45 lines) from `handleDashboard` — was doing a second full `sessionSvc.List(req)` with identical filters
+   - Mirrored in `client.StatsResult` for remote service round-trip
+   - **Bonus**: Fixed latent bug in `countErrors()` (`digest_task.go`) — old impl summed from `PerType` buckets, silently dropping sessions without `SessionType` classification. Now reads `stats.TotalErrors` directly (O(1), correct). Added `TestCountErrors_UntypedSessions` regression test.
+   - **Production verified** (1764 sessions): `total_errors=4354`, `total_tool_calls=404503`, `sessions_with_errors=585`, `recent_sessions=10`. Dashboard warm latency **9.8ms** (down from 75-80ms baseline — goroutine removal shaved ~65ms). Stats endpoint 141ms.
+   - All 92 test packages green
+- [x] **Fix #8: SkillROI N+1** — Eliminated per-session `GetSessionEvents` loop in `SkillROIAnalysis`
+   - Added `SessionEventStore.GetSessionEventsBatch(ids, types...)` port (`internal/storage/store.go`) with variadic event-type filter — single query, dedup input, buckets events into `map[session.ID][]sessionevent.Event`
+   - SQLite impl (`internal/storage/sqlite/event_store.go`): one query with optional `event_type IN (...)` clause, reuses `scanEvents` helper, orders by `session_id, occurred_at, message_index`
+   - Refactored `SkillROIAnalysis` (`internal/service/session_roi.go:211-260`): pre-loop collects IDs + `summaryByID` lookup, single batched call filtered to `EventSkillLoad` at SQL level, outer loop over result map. Best-effort fallback preserves existing contract (ROI must not hard-fail on event store errors).
+   - **Why variadic type filter is critical**: prod has 532,891 total events / avg 300 per session, but skill ROI only needs 1029 `skill_load` rows across 335 sessions. SQL-level filter avoids transferring irrelevant payloads.
+   - Mocks updated: `testutil/mock_store.go`, inline mock in `session_test.go`
+   - Added `TestGetSessionEventsBatch` (`storage/sqlite/sqlite_test.go`) with 7 subtests: bucketing, type filter narrowing, variadic multi-type, missing IDs omitted, empty input, dedup, semantic parity with `GetSessionEvents` for single ID. Seeds parent sessions before events (FK requirement).
+   - **Production verified** on `/projects/Users/guardix/dev/aisync` (130 skill_load events, 90d window): cold **3.78s** (ROI computation + cache write), warm **110ms** (cache hit). SkillROI section renders correctly with ghost badges, verdict classes, and downstream recommendations populated. Daemon log clean.
+   - All 92 test packages green
+
+## Recently Completed (2026-04-04)
+
+### N+1 Query Performance Fixes — Phase 1 ✅
+- [x] **Fix #14: GC dry-run** (`session_gc.go`): Uses `sm.CreatedAt` from Summary instead of `store.Get()` — eliminates ~4801 queries for 1638 sessions
+- [x] **Fix #1: Stats() N+1** (`session_stats.go`): Costs from denormalized `sm.EstimatedCost`/`sm.ActualCost`, file changes from `GetSessionFileChanges()`, full `Get()` only for `IncludeTools` — eliminates ~6401 queries for default Stats() path
+- [x] **Fix #16: SearchFacets 7→1** (`sqlite.go`): Rewrote 7 sequential GROUP BY queries into single UNION ALL query
+- [x] **Fix #6+7: Batch fork relations** (`sqlite.go` + `session_timeline.go` + `handlers.go`): `GetForkRelationsForSessions(ids)` batch method replaces per-session `GetForkRelations()` loops
+- [x] **Cost denormalization**: Migration 029 adds `estimated_cost`/`actual_cost` columns; `Save()` writes both; `List()` reads into Summary; `stampCosts()` on all write paths (Capture, CaptureAll, CaptureByID, Ingest, Export, Rewind)
+- [x] **CostBackfillTask**: New scheduler task processes 200 sessions/run, registered at `*/30 * * * *` + WarmUp
+- [x] **MockStore `GetSessionFileChanges` enhanced**: Synthesizes `SessionFileRecord[]` from session's `FileChanges` field (mirrors real store behavior)
+- [x] **All 92 test packages passing**, 0 failures
+
+### Remaining N+1 Issues
+_All 17 audit items resolved. See Phase 1 (2026-04-04) and Phase 2 (2026-04-05) above._
+
+### Phase 3 Candidates (Non-Blocking, Low-Priority)
+Discovered during post-Phase-2 audit on 2026-04-05. None are on hot web paths — all are
+background tasks, CLI one-shots, or branch-scoped handlers. Safe to leave for later.
+
+- [ ] **`ComputeTokenBuckets`** (`session_usage.go:124`) — periodic scheduler task, loops `store.Get(sm.ID)` per session to access per-message timestamps/tokens. Could use `GetBatch` but requires the full payload anyway (not just Summary). Low impact: runs in background.
+- [ ] **`ClassifyProjectSessions`** (`session_classifier.go:146`) — CLI-triggered classification pass, loops `store.Get(sm.ID)` for classifier rules. Could use `GetBatch`. Low impact: one-shot CLI command.
+- [ ] **`DetectOffTopic`** (`session_offtopic.go:46+74`) — web handler but scoped to a single branch (N ≈ 5-20 sessions). Could use `GetBatch`. Low impact: small N.
+- [ ] _Legitimate one-shots (no action needed)_: `BackfillFileBlame` (file_blame.go:78), `IndexAllSessions` (session_index.go:50), `CostBackfillTask` (cost_backfill_task.go:70) — all document themselves as expensive one-shot/migration tasks.
+
+### Feature 1.5 — Skill Reuse Map ✅ (Sprint H)
+- [x] **Domain** (`internal/registry/domain.go`): `SkillReuseMap`, `SkillReuseEntry`, `SkillUsageInput` structs, `BuildSkillReuseMap()` pure function. Classifies skills as shared (2+ projects), mono (1 project), or idle (configured never loaded). Sorts by load count descending.
+- [x] **Domain tests** (`internal/registry/domain_test.go`): 4 tests — `TestBuildSkillReuseMap_Empty`, `_SharedSkills`, `_IdleSkills`, `_SortByLoads`. All pass.
+- [x] **Service** (`internal/service/registry.go`): `SkillReuseAnalysis(since)` method combining registry capabilities (`KindSkill`) with event bucket `TopSkills`/`SkillTokens` data.
+- [x] **Handler** (`internal/web/handlers.go`): `skillReuseView` struct, `HasSkillReuse` + KPI fields on `costDashboardPage`, wired in `buildCostsData()` for cross-project view.
+- [x] **Template** (`internal/web/templates/cost_tools_partial.html`): New "Skill Reuse Map" section with KPI cards (Total Loads/Shared/Mono/Idle), 3 sub-tables (Shared Skills, Mono-Project Skills, Idle Skills) with status badges.
+
+### Feature 5.2 — Cross-Project Capabilities Dashboard ✅ (Sprint G)
+- [x] **Domain** (`internal/registry/domain.go`): `MCPGovernanceMatrix`, `MCPGovernanceProjectRow`, `MCPGovernanceCell`, `MCPGovernanceInput` structs, `BuildMCPGovernanceMatrix()` pure function reusing `AnalyzeConfiguredVsUsed()` per project.
+- [x] **Domain tests** (`internal/registry/domain_test.go`): 4 tests — `TestBuildMCPGovernanceMatrix_Empty`, `_SingleProject`, `_MultiProject`, `_Costs`.
+- [x] **Service** (`internal/service/registry.go`): `CrossProjectMCPGovernance(since)` method, extracted shared `aggregateMCPUsage()` helper, refactored `ConfiguredVsUsed()` to use it (DRY).
+- [x] **Handler** (`internal/web/handlers.go`): `mcpGovMatrixView`, `mcpGovMatrixRowView`, `mcpGovCellView` structs, wired in `buildCostsData()`.
+- [x] **Template** (`internal/web/templates/cost_tools_partial.html`): "MCP Governance Across Projects" section with KPI cards, matrix table, per-cell status badges (✓/👻/?/—), cost/summary columns.
+
+### Feature 5.1 — Registry Persistence ✅ (Sprint F)
+- [x] Migration 030 (`project_capabilities` table), store interface extended, SQLite implementation, scheduler task, config, all wired.
+
+### Feature 1.4b — Configurable MCP Tool Prefixes ✅ (Sprint F)
+- [x] Auto-populate `knownMCPPrefixes` from registry's discovered `MCPServer` entries.
+
+### Session Graph — Interactive Tree Visualization ✅
+- [x] **New page**: `/graph` — interactive expandable tree grouping sessions by PR, project, or branch
+- [x] **3 view modes**: `?mode=pr` (default), `?mode=project`, `?mode=branch` — sidebar quick-switch
+- [x] **Tree construction**: Reuses `ParentID` fork relationships to build parent→children hierarchy; root sessions (no parent in set) become top-level; forked sessions nested as children
+- [x] **Session links**: Link badges (delegation, continuation, replay, related) enriched recursively on each node via `GetLinkedSessions()`
+- [x] **Handler `handleSessionGraph`**: 3 build methods — `buildGraphByPR` (via `ListPRsWithSessions`), `buildGraphByProject` (groups `List()` by project path), `buildGraphByBranch` (groups by branch name). Project filter support via `?project=` query param
+- [x] **View models**: `sgGroup` (top-level grouping with icon, state, token total), `sgNode` (recursive with depth, indent, fork indicator, link badges, summary), `sgBadge` (link type with CSS modifier), `sgStats` (totals)
+- [x] **Template**: `session_graph.html` with sidebar (view mode + project list), stats bar, collapsible group cards, recursive `sg-node` template with connector lines, fork/link badges, session ID links
+- [x] **JavaScript**: Toggle group/node expand/collapse, expand all/collapse all, text filter with 150ms debounce (searches group names + node text)
+- [x] **CSS**: ~250 lines of `.sg-*` classes (group cards, node headers, connector lines, dot indicators, fork/link badges, state badges, filter)
+- [x] **Navbar**: "Graph" link added between PRs and Analytics
+- [x] **Files**: `templates/session_graph.html`, `handlers.go` (+400 lines), `server.go` (route + pageSpec), `layout.html` (nav link), `style.css` (+250 lines)
+
+## Previously Completed (2026-04-02)
+
+### File Tree Page — Interactive Expandable Tree View ✅
+- [x] **New page**: `/tree/{path...}` — full recursive tree of all files with AI session activity
+- [x] **Recursive Go template**: `ft-node` self-referencing pattern (like `bt-node` in branch timeline), renders dirs first then files, with indent via `padding-left`
+- [x] **HTMX lazy-loading**: Clicking a file expands to show all sessions that touched it (`/partials/file-sessions` endpoint), loaded on demand — avoids 378 upfront session queries
+- [x] **Handler `handleFileTree`**: Builds recursive `fileTreeNode` tree from `FilesForProject()` flat entries, no new store methods needed
+- [x] **Handler `handleFileTreeSessions`**: HTMX partial returning `blameEntryView` list per file via `GetSessionsByFile()`
+- [x] **Template**: `file_tree.html` with toolbar (Expand all / Collapse all), stats bar, recursive tree, inline JavaScript for toggle/expand/collapse
+- [x] **Partial**: `file_tree_sessions_partial.html` for HTMX session list per file
+- [x] **CSS**: ~200 lines of `.ft-*` classes (tree connectors, expand/collapse animation, session cards with colored dots, change type badges, spinner)
+- [x] **Navbar**: "Tree" link added to layout.html
+- [x] **Stats**: 117 directories, 378 AI-touched files rendered for aisync project (~755 Ko HTML), render in ~80ms warm cache
+- [x] **Files**: `templates/file_tree.html`, `templates/file_tree_sessions_partial.html`, `handlers.go` (+200 lines), `server.go` (routes + template registration), `layout.html` (nav link), `style.css` (+200 lines)
+
+### 3 Bug Fixes — CSS/UX ✅
+- [x] **Projects page badge overflow**: `.project-card` now has `overflow: hidden`, `.project-card-header` has `flex-wrap: wrap`, badges have `flex-shrink: 0; white-space: nowrap`, project name has `text-overflow: ellipsis`
+- [x] **Sessions list relative dates**: Fixed `timeAgoString()` — added clock-skew guard (negative durations → "just now" or date fallback instead of "-5m ago"), added month/year buckets ("3mo ago", "Jan 2026") instead of unbounded "Xd ago" for old sessions. Fixed `timeAgo()` — month calculation now rounds (`30.44` avg days/month + `+0.5`) instead of truncating (was undercounting months)
+- [x] **Analytics table data repetition**: Daily Activity table now deduplicates buckets by date — when viewing all projects (no filter), multiple project buckets for the same day are merged into a single row via `dailyMap`. Previously showed N duplicate rows per date (one per project). KPI totals were already correct (they aggregate all buckets), but the table was misleading.
+
+### Dashboard Performance Optimization — Concurrent Handlers + Caching ✅
+- [x] **Root cause identified**: Project detail pages (`/projects/{path}`) timed out at 30s for large projects (900+ sessions). The handler ran 14+ service calls **sequentially**, including catastrophically expensive ones:
+  - `AgentROIAnalysis()`: Full table scan + 900 `store.Get()` calls (full payload decompression) via `ContextSaturation()`
+  - `SkillROIAnalysis()`: Full table scan + 900 `GetSessionEvents()` individual queries
+  - `SecurityDetector.ScanProject()`: 900 `store.Get()` calls + rule scanning on every message
+  - `GenerateRecommendations()` fallback: Calls **all** of the above + `CacheEfficiency()` — the single worst offender
+- [x] **Concurrent handler (`buildProjectDetailData`)**: Rewrote to run **14 independent sections in goroutines** using `sync.WaitGroup` + `sync.Mutex`. All data fetches that don't depend on each other now run in parallel.
+- [x] **New cache wrappers**: `cachedAgentROI()` (2h TTL), `cachedSkillROI()` (2h TTL) — matches existing patterns for saturation/trends/cacheEfficiency
+- [x] **Security scan moved to cache-only**: Removed inline `SecurityDetector.ScanProject()` — reads from cache only (scheduler should pre-warm). On cold cache, section is silently skipped instead of blocking the page for 30+ seconds.
+- [x] **Removed `GenerateRecommendations` fallback**: The on-the-fly computation was the single most expensive operation (triggers AgentROI + SkillROI + CacheEfficiency + ContextSaturation all inline). Now reads only from pre-computed store recommendations.
+- [x] **Dashboard page (`/`) also optimized**: Same concurrent pattern applied to `buildDashboardData()` — 6 goroutines for List, Forecast, CacheEfficiency, Trends, Capabilities, Sparklines.
+- [x] **Used `cachedSidebarGroups()` in project detail**: Replaced direct `ListProjects()` call (full table GROUP BY) with existing cached sidebar accessor.
+- [x] **Performance results** (warm cache): `/projects/{path}`: **47-67ms** (was 30s+ timeout), `/`: **117ms** (was 10s+ timeout), `/settings`: **2ms**
+- [x] **Cold cache** first-hit: `/projects/aisync` (21 sessions): ~7s, `/projects/omogen-backend` (900+ sessions): ~0.6s (most expensive sections cached on first project visit), `/`: ~23s (CacheEfficiency global scan — cached after)
+- [x] **All 92 test packages passing**, 0 failures
+
+### Settings Page Emoji Encoding Fix ✅
+- [x] **Bug**: Section icons showed HTML entities (`&#x2699;`, `&#x1F6A9;`, `&#x1F50D;`) instead of actual emojis
+- [x] **Root cause**: `Icon` field was `string` with HTML entities, but Go's `html/template` auto-escapes `&` to `&amp;`, turning `&#x2699;` into `&amp;#x2699;` (rendered as literal text)
+- [x] **Fix**: Replaced all 11 HTML entity strings in `handleSettings()` with actual Unicode emoji characters (⚙, 🚩, 🔍, 🧠, 🏷, 🔒, ⚠, 📊, 🖥, ⏰)
+- [x] **Verified**: Settings page now shows proper emojis for all section headers
+
+### Build Fix ✅
+- [x] Fixed `pkg/cmd/servecmd/serve.go` — removed dead `LLMQueue`/`Enricher` references in RecommendationConfig
+
+### LLM-Enhanced Recommendations via Queue (Étape 3) ✅
+- [x] **Domain type** (`session/recommendation.go`): `EnrichedRecommendation` struct — `Title`, `Message`, `Impact` fields for LLM-enriched content, JSON-serializable for structured LLM responses
+- [x] **Port interface** (`scheduler/enricher.go`): `RecommendationEnricher` interface with `Enrich(ctx, recs) ([]EnrichedRecommendation, error)` — consumer-side interface (Go idiom), batch-oriented for efficiency
+- [x] **LLM adapter** (`scheduler/enricher.go`): `LLMEnricher` uses `llm.Client.Complete()` with a structured system prompt that instructs the model to rewrite recommendations with (1) clearer titles, (2) actionable 2-4 sentence explanations, (3) concrete impact descriptions. Configurable `MaxBatch` (default 10). JSON response parsing with fallback `extractJSONArray()` for markdown-fenced output.
+- [x] **Queue integration** (`scheduler/recommendation_task.go`): `submitEnrichmentJob()` submits an async `llmqueue.Job` after deterministic persistence + analysis bridge (Step 6). Non-blocking — the job runs in the LLM queue worker goroutine. `runEnrichment()` applies enriched fields (title/message/impact) and updates `Source` to `RecSourceLLM` via `UpsertRecommendation`. Skips enrichments with empty Message (keeps original).
+- [x] **Task config enriched**: `RecommendationConfig` now accepts `Enricher RecommendationEnricher`, `LLMQueue LLMJobQueue`, `MaxEnrich int` (default 10). `LLMJobQueue` port interface decouples from concrete `llmqueue.Queue`. `LLMJob` type alias avoids leaking imports.
+- [x] **Factory wiring** (`serve.go`): Creates `llmfactory.NewClientFromConfig()` → `LLMEnricher` → passed to `RecommendationConfig` alongside `llmQ`. Graceful degradation: if LLM client creation fails (no claude CLI, etc.), enrichment is simply disabled.
+- [x] **Mock store fix**: `UpsertRecommendation` now also updates the `Source` field (was missing), matching the real SQLite `ON CONFLICT DO UPDATE SET source = excluded.source` behavior
+- [x] **16 new tests**: 6 enricher adapter (`Enrich` success, empty recs, LLM error, invalid JSON, batch limit, default maxBatch), 5 helper unit tests (`extractJSONArray` 6 subtests, `parseEnrichResponse` 4 subtests, `buildEnrichPrompt` content verification), 6 task integration (`EnrichesViaQueue` — full flow with source/title/message/impact verification, `SkipsEmptyMessage`, `NoEnrichmentWithoutEnricher`, `EnrichmentQueueFull`, `EnrichmentErrorNonFatal`, `DefaultMaxEnrich`)
+- [x] **All tests passing**: 94 test packages, 0 new failures (1 pre-existing in `internal/service`)
+
+### Bridge Analysis → Recommendations (Étape 2) ✅
+- [x] **`bridgeAnalysisRecommendations()` method** (`scheduler/recommendation_task.go`): Iterates all projects, lists recent sessions (last 7 days), fetches LLM analysis via `store.GetAnalysisBySession()`, and bridges analysis insights into the recommendation store with `Source=RecSourceAnalysis`
+- [x] **Analysis recommendation bridge**: Maps `analysis.Recommendation` → `session.RecommendationRecord` — `Type = "analysis_" + category`, `Description → Message`, `mapAnalysisPriority()` (1→high, 2-3→medium, 4-5→low), `mapAnalysisIcon()` (🧩 skill, ⚙️ config, 🔄 workflow, 🔧 tool)
+- [x] **Skill suggestion bridge**: Maps `analysis.SkillSuggestion` → rec with `Type = "analysis_skill_suggestion"`, `Priority = "low"`, `Icon = "💡"`, `Skill = ss.Name`, `Title = "Suggested skill: <name>"`
+- [x] **Missed skill bridge**: Maps `analysis.SkillObservation.Missed` → rec with `Type = "analysis_skill_missed"`, `Priority = "medium"`, `Icon = "🔍"`, `Skill = missed`, contextual message explaining the observation
+- [x] **Graceful skip**: Sessions without analyses are silently skipped (uses `analysis.ErrAnalysisNotFound` sentinel)
+- [x] **Integrated into `Run()` flow**: Bridge runs as Step 5 after deterministic persistence + notifications, only when store is available
+- [x] **7 new bridge tests**: `BridgeAnalysisRecommendations` (2 recs, priority/icon/message verification), `BridgeSkillSuggestions` (2 suggestions, source/priority/icon/skill fields), `BridgeMissedSkills` (1 missed, priority/source/skill/icon), `BridgeSkipsSessionsWithoutAnalysis` (2 sessions, 1 with analysis → only 1 rec), `BridgeFullScenario` (integration: 1 deterministic + 1 config rec + 1 suggestion + 2 missed = 5 total, source count verification)
+- [x] **2 unit tests**: `TestMapAnalysisPriority` (7 cases: 0-5 + 99), `TestMapAnalysisIcon` (5 cases: 4 categories + unknown)
+- [x] **24 total recommendation tests** (was 17), all passing. Full test suite: 114 packages, 0 new failures
+
+### Recommendations Persistence & Cache (Étape 1) ✅
+- [x] **Domain types** (`session/recommendation.go`): `RecommendationRecord` with lifecycle tracking (ID, fingerprint, status, created_at, updated_at, dismissed_at, snoozed_until), `RecommendationStatus` (active/dismissed/snoozed/expired), `RecommendationSource` (deterministic/analysis/llm), `RecommendationFilter`, `RecommendationStats`, `RecommendationFingerprint()` (FNV-1a hash for dedup)
+- [x] **Store interface** (`storage/store.go`): `RecommendationStore` with 8 methods — `UpsertRecommendation` (INSERT ON CONFLICT fingerprint, preserves dismissed/snoozed), `ListRecommendations` (filter + priority sort), `DismissRecommendation`, `SnoozeRecommendation`, `ExpireRecommendations` (maxAge TTL), `ReactivateSnoozed`, `RecommendationStats`, `DeleteRecommendationsByProject`
+- [x] **SQLite migration 028**: `recommendations` table with all columns + unique fingerprint index + composite (project_path, status) index
+- [x] **SQLite implementation** (`sqlite/recommendation_store.go`): Full 8-method implementation with `sql.NullString` for nullable time fields, `CASE priority` ordering, `RowsAffected` counting
+- [x] **Mock stores updated**: `testutil.MockStore` with real in-memory logic (upsert by fingerprint, filter/sort, dismiss/snooze tracking) + `service/session_test.go` stubs
+- [x] **Scheduler task enriched**: `RecommendationTask` now persists recs to store (upsert by fingerprint), expires stale recs (14-day default TTL), reactivates snoozed recs, AND sends notifications. Works in store-only mode (no notification service required).
+- [x] **serve.go updated**: Task now runs even without `notifSvc` (store-only persistence). Store passed to task config.
+- [x] **Web handler: store-first reads**: Project detail page reads recommendations from store (pre-computed, instant) with fallback to on-the-fly `GenerateRecommendations()` when store is empty
+- [x] **Dismiss/Snooze API**: `POST /api/recommendations/dismiss` (by ID) and `POST /api/recommendations/snooze` (by ID + optional days, default 7, max 90)
+- [x] **insightView enriched**: Added `ID` field for HTMX dismiss/snooze actions
+- [x] **17 new tests**: 14 RecommendationTask (name, nil notif, no projects, list error, sends notification, skips low-only, skips empty, multiple projects, severity escalation, items cap, recs error, store persistence, store-only mode, default expiry), 3 Slack formatter
+- [x] **All tests passing** across 114 packages, 0 failures
+
+### `aisync resume` — Smart Restore Filter Propagation ✅
+- [x] **Filter flags added to resume command**: `--clean-errors`, `--strip-empty`, `--fix-orphans`, `--redact-secrets`, `--exclude` — identical to `aisync restore`, same filter chain order (exclude → fix-orphans → strip-empty → clean-errors → redact-secrets)
+- [x] **`buildFilters()` + `parseExcludeFlag()`**: Reuses `internal/restore/filter` package directly; supports message indices, role names, and `/regex/` content patterns
+- [x] **Filter results displayed**: "Smart Restore filters applied:" section shows which filters were applied with summaries
+- [x] **Help text updated**: Long description includes filter flag documentation + examples
+- [x] **16 new tests**: Flag registration (8 flags verified), buildFilters (4 — none, all, single, invalid), parseExcludeFlag (7 — indices, roles, pattern, mixed, negative, multiple patterns, invalid regex), integration (4 — strip-empty with output, clean-errors, multiple filters, invalid exclude error)
+- [x] **All tests passing**, full build clean
+
+### `aisync restore --dry-run` — Preview Before Applying ✅
+- [x] **Domain types**: `DryRunPreview` struct in both `internal/restore/` (engine) and `internal/service/` (service layer) — SessionID, Provider, Branch, Summary, Method, MessageCount, ToolCallCount, ErrorCount, InputTokens, OutputTokens, TotalTokens, FileChanges, FilterResults
+- [x] **`DryRun bool` field** added to `restore.Request`, `service.RestoreRequest`, and `client.RestoreRequest` (JSON transport)
+- [x] **Engine dry-run short-circuit**: After session lookup + agent override + filter application, but **before** any I/O (no CONTEXT.md generation, no provider import), builds preview via `buildDryRunPreview()`
+- [x] **Method detection**: Determines `native`/`converted`/`context` without actually performing the restore, by checking provider/target match and `AsContext` flag
+- [x] **`--dry-run` flag** on both `aisync restore` and `aisync resume` CLI commands
+- [x] **`renderDryRunPreview()`** / **`renderResumeDryRun()`**: Human-readable preview output with session info, token counts, file changes, filter effects, and "Run without --dry-run to apply" hint
+- [x] **Remote service updated**: `DryRun` field mapped through `client.RestoreRequest` → `service/remote/session.go`
+- [x] **5 engine tests**: dryRunByBranch (full field verification + no CONTEXT.md written), dryRunWithFilters (filter applied + reported), dryRunMethodDetection (3 sub-tests: native/converted/context)
+- [x] **3 resume tests**: dryRun (output verification), dryRunWithFilters (filter info in output), dryRunFlag registration
+- [x] **All tests passing** across 92 packages, 0 failures
+
+### Recommendations Engine — Enrichment & Notification ✅
+- [x] **Fixed LSP errors**: `SystemPromptImpact` field names (`AvgPromptTokens` → `AvgEstimate`, `CostPercent` → `AvgPromptCostPct`) and `ModelSaturation` field name (`AvgPeakSaturation` → `AvgPeakPct`) in `session_recommendations.go`
+- [x] **12 new recommendation types** enriching `GenerateRecommendations()`:
+  - `token_waste_retry` — >15% retry waste
+  - `token_waste_compaction` — >20% compaction waste
+  - `token_waste_cache` — >10% cache miss waste
+  - `token_waste_low_productivity` — <60% productive tokens
+  - `model_fitness` — bridges `FitnessAnalysis.Recommendations` strings
+  - `freshness_error_growth` — error rate spike after compaction (>50%)
+  - `freshness_output_decay` — output ratio decay after compaction (>30%)
+  - `freshness_optimal_length` — optimal session length recommendation
+  - `prompt_large` — system prompts averaging >8K tokens
+  - `prompt_growing` — growing prompt size trend
+  - `model_oversized` — using large model but <20% utilization
+  - `model_saturated` — consistently hitting context limits
+- [x] **Notification domain** (`notification/domain.go`): `EventRecommendation` event type + `RecommendationData` / `RecommendationItem` structs
+- [x] **Router** (`notification/router.go`): `EventRecommendation` routes to project channel (or default)
+- [x] **Slack Block Kit formatter** (`adapter/slack/formatter.go`): `formatRecommendations()` — title with project, total/high count summary, divider, per-item cards with priority emoji (red/orange/white), impact line, `divider()` helper
+- [x] **RecommendationTask** (`scheduler/recommendation_task.go`): Daily cron (7 AM) — iterates all projects, generates recommendations, filters to high-priority, sends notification with max 10 items. Severity escalation (≥3 high → warning). Errors per-project are logged and non-fatal.
+- [x] **Wired in serve.go**: Task registered when `notifSvc != nil`
+- [x] **16 new tests**: 11 RecommendationTask (name, nil notif, no projects, list error, sends high-priority, skips low-only, skips empty, multiple projects, severity escalation, items limited to 10, recs error continues), 3 Slack formatter (valid data, invalid data, empty project), 2 router (routes to project, falls back to default)
+- [x] **All tests passing** across 114 packages, 0 failures
+
+### `aisync diagnose <session-id>` — Unified Session Debugging ✅
+- [x] **Domain types** (`internal/session/diagnosis.go`): `DiagnosisReport`, `ErrorTimelineEntry`, `PhaseAnalysis`, `SessionPhase`, `ToolReport`, `ToolReportEntry`, `DiagnosisVerdict`, `RestoreAdvice` — all pure domain, no I/O
+- [x] **Pure domain functions**: `BuildErrorTimeline()` (positions errors in message flow with phase + escalation detection), `AnalyzePhases()` (splits session into quarters, labels clean/degrading/broken), `BuildToolReport()` (per-tool call+error counts, sorted by error rate), `ComputeVerdict()` (derives healthy/degraded/broken status from health score + overload + phases), `ComputeRestoreAdvice()` (suggests rewind point + filter flags)
+- [x] **Phase pattern classification**: `classifyPattern()` detects "healthy", "clean-start-late-crash", "error-from-start", "steady-decline", "intermittent" patterns from phase quality progression
+- [x] **Service layer** (`internal/service/session_diagnose.go`): `Diagnose(ctx, DiagnoseRequest)` with quick scan (pure domain, instant) + optional deep analysis (LLM-powered via `AnalyzeEfficiency` reuse). `sessionToSummary()` helper builds lightweight Summary from full Session for health score computation
+- [x] **`SessionAI` interface updated** in `iface.go`: Added `Diagnose(ctx, DiagnoseRequest) (*session.DiagnosisReport, error)`
+- [x] **Remote adapter stub**: `remote/session.go` returns "not supported in remote mode"
+- [x] **Mock stubs**: Updated `scheduler/tasks_test.go` mock (inherited by all embedded mocks: budgetMockService, mockSaturationSessionService, etc.)
+- [x] **CLI command** (`pkg/cmd/diagnosecmd/diagnosecmd.go`): `aisync diagnose <session-id>` with `--deep` (LLM analysis), `--json` (structured JSON), `--quiet` (one-liner verdict). Full text renderer with verdict icon, health score breakdown, phase analysis, overload, tool report, error timeline, error summary, restore advice, and deep analysis sections
+- [x] **Registered in root.go**: `diagnosecmd.NewCmdDiagnose(f)` added to command tree
+- [x] **17 domain tests** (`diagnosis_test.go`): BuildErrorTimeline (3), classifyPhase (1), AnalyzePhases (4), BuildToolReport (2), ComputeVerdict (3), ComputeRestoreAdvice (3), sortToolReportEntries (1)
+- [x] **6 service tests** (`session_diagnose_test.go`): Quick scan healthy/broken/empty/not-found, deep scan with LLM, deep scan without LLM (graceful fallback)
+- [x] **6 CLI tests** (`diagnosecmd_test.go`): No args error, session not found, quick scan output, JSON output, quiet output, broken session with restore advice
+- [x] **29 tests total**, all passing, full build clean across entire codebase
+
+### Slack Integration Phase 3 — Identity Matching ✅
+- [x] **Identity bounded context** (`internal/identity/`): Clean hexagonal architecture with domain types, ports (SlackClient interface), and service orchestration
+- [x] **Domain types** (`domain.go`): `SlackMember`, `Suggestion`, `SyncResult`, `MatchConfidence` (exact/high/medium/low/none), `SuggestionStatus` (pending/approved/rejected), `ScoreToConfidence()`
+- [x] **Fuzzy name matcher** (`matcher.go`): 5-strategy matching — exact email, exact name, token overlap (Jaccard similarity), Levenshtein distance, email username vs name tokens. Handles dot/dash/underscore separators, case-insensitive. Pure functions, zero dependencies.
+- [x] **Slack API client** (`slack.go`): `SlackClient` port interface + `slackAPIClient` adapter using `net/http` directly (no external deps). Fetches workspace members via `users.list` API with cursor pagination. Filters USLACKBOT. Configurable base URL for testing.
+- [x] **Identity service** (`service.go`): `SyncSlackMembers()` orchestrates fetch → match → suggest/auto-link flow. Skips already-linked users, machine accounts. Prevents double-linking (same Slack member matched to multiple Git users). `LinkUser()` for manual linking. Configurable min confidence threshold and auto-link mode.
+- [x] **CLI `aisync users sync-slack`**: Fetches Slack members, matches against Git users, displays suggestion table with scores/confidence/reasons. Flags: `--auto-link` (auto-link exact matches), `--min-confidence` (filter threshold), `--dry-run`.
+- [x] **CLI `aisync users link`**: Manual identity linking with user existence verification. Args: `<user-id> <slack-id> [slack-name]`.
+- [x] **54 new tests**: 33 matcher tests (11 MatchNames, 7 tokenize, 5 tokenOverlap, 4 levenshtein, 5 extractEmailUsername, 4 normalizeName, 9 ScoreToConfidence, 1 min3), 15 service tests (nil guards, sync scenarios, auto-link, filters, sorting, errors, no-double-link), 6 Slack client tests (nil/create, success with member types, pagination, API error, HTTP error)
+- [x] **All tests passing** across 114 packages, 0 failures
+
+### Enhanced `aisync restore` — PR, File & Worktree Restore ✅
+- [x] **Store — `GetPRByBranch()`**: New `PullRequestStore` method returning the most recent PR for a given branch (`ORDER BY updated_at DESC LIMIT 1`); SQLite implementation + 3 tests
+- [x] **RestoreRequest enrichment**: Added `FilePath string`, `Worktree bool` to `service.RestoreRequest` + `client.RestoreRequest`; added `WorktreePath string` to `RestoreResult`; remote session service mapping updated
+- [x] **4-step session resolution** in `session_restore.go`: explicit SessionID → `--pr N` (via `GetSessionsForPR`) → `--file path` (via `GetSessionsByFile`) → default branch lookup. Replaces old `GetByLink(LinkPR)` mechanism with rich PR metadata
+- [x] **`resolveSessionFromPR()`**: Reads `github.default_owner` / `github.default_repo` from config, queries `PullRequestStore.GetSessionsForPR()`, picks most recent session
+- [x] **`resolveSessionFromFile()`**: Queries `GetSessionsByFile(BlameQuery{FilePath})`, picks most recent entry
+- [x] **`createWorktree()`**: Creates git worktree at session's `CommitSHA` via `git.WorktreeAdd()`, auto-generates descriptive path (`.worktrees/pr-42-abc12345` or `.worktrees/restore-abc12345`)
+- [x] **CLI `--file` flag**: File-based restore — finds the most recent session that touched a file
+- [x] **CLI `--worktree` flag**: Creates a git worktree at the session's commit SHA for isolated work
+- [x] **Contextual `--pick`**: Works with `--pr` and `--file` — shows table of matching sessions, user picks interactively
+- [x] **`pickSessionForPR()` / `pickSessionForFile()` / `promptPickFromSummaries()`**: Contextual pickers with `pickStore` interface for minimal dependency
+- [x] **Git client extensions**: `SwitchBranch()`, `WorktreeAdd()`, `WorktreeRemove()` in `git/client.go` + 6 tests
+- [x] **MockStore enrichment**: Added `PRSessions map[string][]session.Summary` field, `GetSessionsForPR()` now checks it (supports test data)
+- [x] **42 tests total**: 3 SQLite PR store, 6 git client, 10 service restore helpers, 11 CLI pickers/flags, 2 pre-existing PR tests fixed, all passing
+- [x] **All tests passing**, full build clean
+
+### Notification System (Slack Integration Phase 2) ✅
+- [x] **Hexagonal architecture**: `internal/notification/` bounded context with domain, ports, service, router, and adapters (Slack + webhook)
+- [x] **6 event types**: budget.alert, error.spike, session.captured, daily.digest, weekly.report, personal.daily — all with Block Kit formatting
+- [x] **Config section**: `notification.*` with Slack (webhook_url, bot_token), webhook (url, secret), routing (default_channel, project_channels), alert/digest toggles, cron schedules
+- [x] **Factory + scheduler wiring**: NotificationService built from config, injected into PostCaptureFunc + BudgetCheckTask + DailyDigestTask + WeeklyReportTask + UserKindBackfillTask
+- [x] **2,492 tests passing** across 113 packages (70 new notification tests)
+
+### File Explorer Blame Page ✅
+- [x] **`blame.html` template**: Full blame page showing all sessions that modified/read a file — change type badges (created/modified/deleted/read), session links, branch pills, provider, time ago, back navigation to file explorer
+- [x] **`handleBlame()` handler**: Constructs absolute path from project + relative file, calls `GetSessionsByFile(BlameQuery)`, maps `BlameEntry` to `blameEntryView` with CSS class mapping
+- [x] **Route**: `GET /blame?file=...&project=...` registered in `server.go`
+- [x] **File explorer redesign**: AI column now shows AI badge linking directly to last session + `+N` link to blame page when >1 session
+- [x] **CSS**: `.blame-*` classes (file header, entry list, change type badges with color per type, session links, branch pills, provider/time layout); `.fe-ai-more` for +N links
+- [x] **End-to-end verified**: `handlers.go` shows 46 sessions, `funcs.go` 27 sessions (19 modified + 8 read), all links functional
+
+## Previously Completed (2026-04-01)
+
+### Slack Integration Phase 1 — Foundation ✅
+- [x] **User struct enriched** (`session.User`): Added `Kind` (human/machine/unknown), `SlackID`, `SlackName`, `Role` (admin/member) fields; `UserKind` and `UserRole` typed constants; `OwnerStat` aggregate struct
+- [x] **UserStore enriched** (`storage.UserStore`): 5 new interface methods — `ListUsers()`, `ListUsersByKind(kind)`, `UpdateUserSlack(id, slackID, slackName)`, `UpdateUserKind(id, kind)`, `UpdateUserRole(id, role)`, `OwnerStats(project, since, until)`
+- [x] **SQLite migration 027**: Adds `kind`, `slack_id`, `slack_name`, `role` columns to `users` table; creates `idx_sessions_owner_id` index on `sessions(owner_id)` for GROUP BY performance
+- [x] **SQLite implementation**: All 6 new methods + rewritten `scanUser()` helper with all 9 columns; `SaveUser` now persists kind/role with defaults; `OwnerStats` via GROUP BY owner_id with LEFT JOIN users
+- [x] **Mock stores updated**: `testutil.MockStore` and `service.mockStore` both implement all new UserStore methods
+- [x] **Config `owners` section**: New `ownersConf` struct with `MachinePatterns` (email glob patterns); 7 default patterns (`*[bot]@*`, `ci@*`, `bot@*`, `automation@*`, `dependabot*`, `renovate*`, `github-actions*`); `GetMachinePatterns()` getter; `loadFrom()` merge
+- [x] **`ClassifyUserKind(email, patterns)`**: Exported pure function in `service/owner.go` — glob matching with `*` wildcard, case-insensitive, machine patterns → machine, noreply without bot → unknown, everything else → human
+- [x] **`resolveOwner()` enriched**: Now calls `ClassifyUserKind()` at user creation with configured patterns; sets `Kind` and `Role` on new users
+- [x] **CLI `aisync users`**: 5 subcommands — `list` (with `--kind` filter and `--json`), `set-kind`, `set-slack`, `set-role`, `backfill-kind` (with `--dry-run`)
+- [x] **`UserKindBackfillTask`**: Scheduler task that reclassifies all users based on current machine patterns; logs updated count
+- [x] **50 new tests**: 15 ClassifyUserKind + 18 globMatch, 11 SQLite (kind/role save, defaults, list, list-by-kind, update-slack, update-kind, update-role, owner-stats, owner-stats-empty, get-by-email-new-fields), 4 backfill task (name, run, nil config, empty), CLI validation in set-kind/set-role
+- [x] **All 2,422 tests passing** across 109 packages, 0 failures
+
+### Live Preview of Classification Rules ✅
+- [x] **Preview endpoint**: `POST /api/settings/project/preview` — parses proposed rules from form, queries all sessions, filters by project name match (remote URL display name, raw URL, project path, basename), applies classification cascade in dry-run mode, returns HTMX partial
+- [x] **Classification functions exported**: `MatchBranchRule()`, `MatchConventionalCommit()`, `MatchSummaryPrefix()` in service package — enables reuse in web preview handler
+- [x] **`RemoteDisplayName()` exported**: Config helper for extracting `org/repo` from git remote URLs
+- [x] **`sessionMatchesProject()`**: Matches sessions to project names via 4 candidate keys (display name, raw URL, path, basename)
+- [x] **`classifySessionPreview()`**: Dry-run classification with same priority cascade (commit > branch > agent), detects type and status changes vs current values
+- [x] **HTMX partial**: `classification_preview_partial.html` — stats header (sessions, type/status changes), results table with current→new type/status, change highlighting, truncation note for >50 sessions
+- [x] **UI integration**: "Preview Rules" button in both edit and new project forms (settings page + HTMX partial), targets inline preview results div, JS `pcPreview()` function with loading state
+- [x] **CSS**: `.pc-preview-section`, `.pc-btn--preview`, `.cp-*` classes (header stats, table, change indicators with strikethrough old → highlighted new, truncation message)
+- [x] **20 tests**: 7 integration (no store, empty name, no matching sessions, with matching sessions, status rule changes, type change detection, project path match), 6 unit `sessionMatchesProject` (remote URL, raw URL, project path, basename, no match, empty name), 7 unit `classifySessionPreview` (commit priority, branch match, agent match, status match, already classified same/different, no match)
+
+### Elasticsearch Search Adapter ✅
+- [x] **`internal/search/elastic/`**: Full `search.Engine` implementation using Elasticsearch 8.x HTTP API (no external Go client dependency — uses `net/http` directly)
+- [x] **Index management**: `ensureIndex()` auto-creates index with custom mapping — `code_analyzer` (standard + lowercase + asciifolding), keyword fields for filters, date/integer for metrics
+- [x] **Search**: Multi-match query across `summary^3`, `content`, `tool_names`, `branch^2` with BM25 ranking, `fuzziness: AUTO`, highlighted snippets (`<mark>` tags)
+- [x] **All filter types**: project_path, remote_url, branch, provider, agent, session_type, project_category, date range (since/until), has_errors — mapped to Elasticsearch bool/filter clauses
+- [x] **Faceted aggregations**: Any keyword field can be requested via `FacetFields`, returns bucketed counts (top 20)
+- [x] **Incremental indexing**: `IndexedSessionIDs()` via scroll API — enumerates all document IDs in batches of 10K, cleans up scroll context
+- [x] **Factory wiring**: `buildSearchEngine()` in `default.go` — `case "elasticsearch"` creates engine with config URL + index, falls back to LIKE on connection error, chains with LIKE fallback
+- [x] **Config getters**: `GetElasticsearchURL()` (default `http://localhost:9200`), `GetElasticsearchIndex()` (default `aisync-sessions`)
+- [x] **Capabilities**: FullText, Facets, Highlights, FuzzyMatch, Ranking (Semantic=false)
+- [x] **16 tests**: All using `httptest.Server` mocks — constructor (create index, index exists, defaults), capabilities, search (empty query, with results + highlights, with filters, with facets, server error), index (document, server error), delete (existing, not found), IndexedSessionIDs (scroll), buildSearchQuery (all filters + facets), close
+
+### Bugfixes ✅
+- [x] **`pulls.html` template fix**: Missing `{{end}}` for `{{if .NoPlatform}}` block caused "unexpected EOF" parse error — added closing `{{end}}`
+- [x] **Scheduler mock fix**: `mockAnalysisService` in `analyze_task_test.go` was missing `AvailableModules()` method — added stub returning nil
+
+### GitHub Integration — PR ↔ Session Linking ✅
+- [x] **Domain enrichment**: `session.PullRequest` extended with `MergedAt`, `ClosedAt`, `RepoOwner`, `RepoName`, `Additions`, `Deletions`, `Comments`; new `session.PRWithSessions` struct
+- [x] **Platform port**: `ListRecentPRs(state, limit)` added to `platform.Platform` interface
+- [x] **GitHub adapter**: `prJSONFields` constant, enriched `ghPR` struct, `extractRepoFromURL()` helper, `ListRecentPRs()` method, all existing methods enriched
+- [x] **Storage layer**: Migration 026 — `pull_requests` table + `session_pull_requests` junction table; `PullRequestStore` interface (Save, Get, List, Link, GetSessionsForPR, GetPRsForSession, ListPRsWithSessions); full SQLite implementation
+- [x] **Config**: `github.token`, `github.default_owner`, `github.default_repo`, `github.sync_enabled`, `github.sync_cron` with Get/Set/loadFrom merge, cron validation
+- [x] **Scheduler task**: `PRSyncTask` — fetches PRs via platform, saves to store, links sessions by branch name; wired in serve.go scheduler when `github.sync_enabled` is true
+- [x] **`/pulls` page**: Filter by state (open/merged/closed), KPI strip, PR cards with state badges, +/- stats, expandable session tables, empty state with setup instructions
+- [x] **Session detail PR badge**: Linked PRs shown as colored badges (green/purple/red) with repo/number, linking to GitHub
+- [x] **CSS**: ~180 lines of `.pr-*` and `.detail-prs` classes
+- [x] **Navbar**: "PRs" link added
+- [x] **24 tests**: 9 SQLite PR store (save, get, list, link, sessions-for-PR, PRs-for-session, list-with-sessions, upsert, merged-at), 5 PR sync task (name, nil platform, fetch+save+link, platform error, skip missing repo), 8 extractRepoFromURL + enriched toDomain, 5 config (set/get, getters, defaults, invalid cron, save/reload)
+
+### Project Setup & Onboarding — `aisync project` Command Group ✅
+- [x] **Config enrichment**: `ProjectClassifierConf` extended with 5 new fields — `DefaultBranch`, `PREnabled`, `GitRemote`, `Platform`, `ProjectPath`; JSON serialization via existing `loadFrom`/`Save` flow; no new Get/Set cases needed (uses `SetProjectClassifier()` directly)
+- [x] **Git client extensions**: `DefaultBranch()` (symbolic-ref + fallback to common names), `ListBranches()` (for-each-ref), `RepoDir()` accessor
+- [x] **`aisync project init` wizard**: Auto-detects git remote, default branch, platform (GitHub/GitLab/Bitbucket) from remote URL; interactive prompts (name, branch, PR tracking, budget, tags) with defaults; `--no-prompt` flag for CI/scripting; `--name`, `--branch`, `--pr-enabled`, `--budget`, `--tags` flags; shows session count from DB; saves to `~/.aisync/config.json`
+- [x] **`aisync project list`**: Merges DB-discovered projects (from sessions) with config-defined projects; table output with columns: project, sessions, branch, PRs, budget, status (configured/unconfigured); sorted: configured first, then alphabetical
+- [x] **`aisync project show`**: Displays full project config — path, remote, platform, branch, PR sync, sessions, budget (monthly+daily+alert), rules (tickets, branch, agent, tags); auto-detects from current directory or accepts explicit name argument
+- [x] **`aisync project sync-prs`**: Manual PR sync for current directory; creates GitHub platform client, fetches PRs via `gh` CLI, saves to store, links sessions by branch
+- [x] **PRSyncTask multi-repo refactor**: `NewMultiRepoPRSyncTask(cfg, store, logger)` — iterates all projects with `pr_enabled: true`, creates per-project GitHub client, syncs PRs independently; backward-compatible `NewPRSyncTask()` preserved for single-platform mode; `savePRs()` extracted as shared helper; serve.go auto-selects multi-repo when any project has `pr_enabled`
+- [x] **Registered in root.go**: `projectcmd.NewCmdProject(f)` added to root command
+- [x] **18 tests**: 4 init wizard (non-interactive, with PR+budget, interactive prompts, update existing), 2 list (empty, with projects), 2 show (not configured, fully configured), 3 utility (platformDisplayName, truncate, prompt/promptYesNo), 5 existing PRSync tests still passing
+- [x] **End-to-end verified**: `aisync project init --no-prompt --pr-enabled --tags "devtools, go, cli"` → auto-detected aisync repo, 220 sessions, saved config; `aisync project list` → 29 projects (3 configured, 26 unconfigured); `aisync project show` → full config display with budget, rules, sessions
+
+### Session Conversation Filters: Skills + Assistant ✅
+- [x] **Skill detection**: `detectSkillsPerMessage()` — scans messages for skill loads via tool calls (`name == "skill"`, parses JSON input for skill name) and content tags (`<skill_content name="xxx">` in assistant messages)
+- [x] **Handler integration**: `handleSessionDetail()` now builds `SkillMap` (message index → skill names), `SkillCount`, `UniqueSkills` (sorted list)
+- [x] **New filter buttons**: "Assistant" (filter by role), "Skills (N)" (filter messages with any skill), per-skill chip filters (click "replay-tester" → shows only messages with that skill)
+- [x] **Skill badges on messages**: Purple `badge-skill` badges in chat header, clickable → triggers skill-specific filter
+- [x] **Visual indicators**: `has-skills` CSS class on messages with skills → purple left border; `.conv-skill-chips` bar with per-skill pill buttons
+- [x] **JS filter logic**: Extended `getFiltered()` with `assistant`, `skills`, and `skill:<name>` filters; active state synced across buttons + chips
+- [x] **7 filter types total**: All, User, Assistant, Errors, Tools, Skills (any), Skill:specific-name
+- [x] **CSS**: `.badge-skill`, `.conv-btn-skill`, `.conv-chip`, `.conv-chip-skill`, `.conv-skill-chips`, `.chat-msg.has-skills` — purple theme consistent with skill styling elsewhere
+- [x] **7 tests**: no skills, tool call skill, content tag skill, multiple skills one message, mixed detection, extractSkillNameFromInput (5 cases), extractSkillContentNames (4 cases)
+- [x] **All 2,372 tests passing** across 87 packages (107 total including no-test-file packages)
 
 ### Branch Session Tree (2.1) ✅
 - [x] **Enhanced handler**: `handleBranchTimeline` now calls `ListTree()` for parent-child hierarchy + `GetForkRelations()` for fork connections on top of the existing flat timeline
@@ -379,18 +727,20 @@ Future: semantic search needs chunking (sessions are 100K+ tokens).
 - Summarize git add/commit activity per session for indexing
 - Semantic search on summarized work products, not raw conversation
 
-### 1.2 Elasticsearch / Typesense Adapter
-- [ ] `search/elastic/` adapter implementing `search.Engine`
-- [ ] Faceted search: group results by project, branch, agent, session type
-- [ ] Fuzzy matching for typo tolerance
-- [ ] Config: `search.engine: "elasticsearch"` + URL
+### 1.2 Elasticsearch Adapter ✅ COMPLETE
+- [x] `search/elastic/` adapter implementing `search.Engine` (HTTP-only, no external client dependency)
+- [x] Faceted search: group results by project, branch, agent, session type (via ES aggregations)
+- [x] Fuzzy matching for typo tolerance (`fuzziness: AUTO`)
+- [x] Config: `search.engine: "elasticsearch"` + URL + index name
+- [x] Incremental indexing via scroll API + Chain fallback to LIKE
+- [x] 16 tests with httptest mocks
 
-### 1.3 Advanced Search UI ✅ COMPLETE (highlights + engine badge)
+### 1.3 Advanced Search UI ✅ COMPLETE (highlights + engine badge + facets + search within)
 - [x] Show search engine capabilities in UI (badge: "FTS5" / "Semantic")
 - [x] Highlighted snippets in search results (FTS5 `<mark>` tags rendered)
 - [x] Rich result metadata: project, branch, type badge, error count
-- [ ] Facet sidebar: filter by project, branch, type, date range (deferred — needs aggregation queries)
-- [ ] Search within a session (find specific tool calls, messages)
+- [x] **Facet sidebar**: `SearchFacets()` store query — aggregates counts by provider, session type, agent, branches, projects, categories, statuses. Displayed in sessions page sidebar with clickable filter links. Active facet highlighted. Top 30 values per facet.
+- [x] **Search within session**: Client-side text search input in the conversation section — filters messages and tool calls by text content in real-time, combined with existing role/error/skill filters. Styled search input with focus highlight.
 
 ---
 
@@ -440,15 +790,47 @@ Future: semantic search needs chunking (sessions are 100K+ tokens).
 
 ## Priority 3: Platform & Integration
 
-### 3.1 Slack Integration
-- [ ] Rich Slack webhook payloads (blocks, buttons, color-coded alerts)
-- [ ] Budget alerts with inline bar chart
-- [ ] Daily/weekly digest: session count, cost, top errors, recommendations
+### 3.1 Slack Integration — Phase 1 ✅ COMPLETE (Foundation)
+- [x] User identity enrichment: kind (human/machine/unknown), slack_id, slack_name, role (admin/member)
+- [x] Machine account detection: configurable email glob patterns with 7 built-in defaults
+- [x] OwnerStats query: GROUP BY owner_id with LEFT JOIN users for digest data collection
+- [x] `idx_sessions_owner_id` index for GROUP BY performance
+- [x] CLI `aisync users list/set-kind/set-slack/set-role/backfill-kind`
+- [x] Scheduler `UserKindBackfillTask` for reclassifying existing users
+- [x] Full spec: `SLACK_SPEC.md` with 4-phase implementation plan
 
-### 3.2 Team & Ownership
-- [ ] Multi-user: track who spawned which session (git user identity)
-- [ ] Per-user cost tracking and budget allocation
-- [ ] Team dashboard: compare agent usage across developers
+### 3.1 Slack Integration — Phase 2 ✅ COMPLETE (Notification System)
+Architecture: Clean **Notification bounded context** (hexagonal) — channel-agnostic, decoupled from Slack.
+- [x] **Domain** (`notification/domain.go`): 6 event types (budget.alert, error.spike, session.captured, daily.digest, weekly.report, personal.daily), Severity, data structs, Recipient, RenderedMessage
+- [x] **Ports** (`notification/ports.go`): Channel, Formatter, Router interfaces
+- [x] **Service** (`notification/service.go`): `NewService()`, `Notify()` (async fire-and-forget), `NotifySync()` (sync for tests/scheduler), nil-safe
+- [x] **Router** (`notification/router.go`): `DefaultRouter` with RoutingConfig — default channel, project channel overrides, alert/digest enable toggles, personal DM routing
+- [x] **Slack adapter** (`notification/adapter/slack/`): `Client` (webhook + bot mode via net/http), `Formatter` (Block Kit JSON for all 6 event types — progress bars, leaderboards, dashboard links)
+- [x] **Webhook adapter** (`notification/adapter/webhook/`): `Client` (generic HTTP POST with retries), `Formatter` (raw JSON event serialization)
+- [x] **Config** (`config.go`): `notificationConf` with Slack (webhook_url, bot_token), generic webhook (url, secret), default_channel, project_channels, alert toggles (budget/errors/capture), digest toggles (daily/weekly/personal), error spike thresholds, digest cron schedules, dashboard_url; full merge in `loadFrom()`; 20+ getter methods; `IsNotificationEnabled()` convenience
+- [x] **Factory wiring** (`default.go`): Builds `notification.Service` from config, injects into PostCaptureFunc for `session.captured` events
+- [x] **BudgetCheckTask enriched**: Fires `notification.Event{EventBudgetAlert}` alongside legacy webhooks for both monthly and daily alerts
+- [x] **DailyDigestTask** (`scheduler/digest_task.go`): Collects yesterday's stats via `Stats()` + `OwnerStats()` + per-project breakdown, fires `EventDailyDigest`; skips when 0 sessions
+- [x] **WeeklyReportTask** (`scheduler/digest_task.go`): Collects last week's stats with owner leaderboard, fires `EventWeeklyReport`; week-boundary calculation via `mostRecentMonday()`
+- [x] **Scheduler wiring** (`serve.go`): `notification.Service` built once, shared across budget_check, daily_digest, weekly_report tasks; user_kind_backfill also wired (daily 5 AM)
+- [x] **43 new tests**: 13 router, 9 service, 21 adapter (client + formatter), 19 digest task (daily/weekly send, skip, error, helpers)
+- [x] **2,492 tests passing** across 113 packages
+
+### 3.1 Slack Integration — Phase 3 (Error Spikes & Dedup) ✅ COMPLETE
+- [x] Error spike detection task — `ErrorSpikeTask` checks error count in configurable time window, fires `EventErrorSpike` notifications
+- [x] Wired in `serve.go` with `*/15 * * * *` schedule, configurable threshold + window from config
+- [x] Alert dedup — `Deduplicator` in notification service suppresses duplicate alerts (same event type + project) within 30min cooldown. Digests never deduplicated. Integrated into `Notify()` and `NotifySync()`, wired in `serve.go`.
+- [x] `users.lookupByEmail` — `SlackResolveTask` auto-resolves slack_id from Slack API for human users without slack_id. `Client.LookupByEmail()` adapter uses Slack Web API (requires bot token with `users:read.email` scope). Wired in `serve.go` at `0 6 * * *` (daily 6 AM).
+
+### 3.1 Slack Integration — Phase 4 (Personal DMs) ✅
+- [x] Personal daily digests via DM — `PersonalDigestTask` sends per-user DMs with individual stats + team avg
+- [x] `EventPersonalDaily` firing for each human user with slack_id, uses `NotifySync()` for reliable DM delivery
+- [x] Wired in `serve.go` with `30 8 * * *` schedule (8:30 AM, after global digest)
+
+### 3.2 Team & Ownership — Mostly Done ✅
+- [x] Multi-user: track who spawned which session (git user identity) — enriched with kind/role
+- [x] Per-user cost tracking — OwnerStats query ready (GROUP BY owner_id)
+- [x] **Team Dashboard** (`/team`): Leaderboard with per-user stats (sessions, tokens, errors, error rate), progress bars showing % share, human/machine badges, period filter (today/yesterday/week/month) via sidebar. Navbar link added. KPI strip with team size, total sessions, tokens, errors.
 - [ ] Billing entity per project (for client invoicing)
 
 ### 3.3 Export & Reporting
@@ -456,15 +838,17 @@ Future: semantic search needs chunking (sessions are 100K+ tokens).
 - [ ] CSV export for cost data (for accounting)
 - [ ] API for external dashboards (Grafana, Datadog)
 
-### 3.4 Settings Web UI ✅ COMPLETE (full CRUD)
-- [x] `/settings` page: display of all config sections (11 sections) with inline editing
+### 3.4 Settings Web UI ✅ COMPLETE (full CRUD + Notifications)
+- [x] `/settings` page: display of all config sections (12 sections) with inline editing
 - [x] Navbar gear icon, responsive grid layout, enabled/disabled color coding
 - [x] **Inline CRUD via HTMX**: 4 input types — toggle (checkbox switch), select (dropdown), text, number
 - [x] **POST /api/settings**: Updates `Config.Set()` + `Config.Save()`, returns HTMX partial with "saved" indicator
+- [x] **Notifications section** (global): Slack webhook/bot token, generic webhook, default channel, dashboard URL, alert toggles (budget/errors/capture), error spike thresholds, digest toggles (daily/weekly/personal), digest cron schedules — 17 config keys with full `Get()`/`Set()` support
+- [x] **Per-project notification channel**: Added `notif_channel` field to Project Classifiers — allows per-project Slack channel override (e.g. `#backend-ai`). Stored in `notification.project_channels` map via `SetNotificationProjectChannel()`
 - [x] **~25 editable settings**: storage mode, auto capture, file blame, search engine, analysis adapter/model, tagging, secrets mode, error classifier, dashboard page size/sort, scheduler tasks
 - [x] **8 tests**: toggle, select, text, number, missing key, invalid value, no config, persistence to disk
 - [x] CRUD for project classifiers and budgets — full inline editing with HTMX, 4 rule types + budget with 5 fields, dynamic add/remove rule rows
-- [ ] Live preview of classification rules against existing sessions (future)
+- [x] Live preview of classification rules against existing sessions ✅
 
 ---
 

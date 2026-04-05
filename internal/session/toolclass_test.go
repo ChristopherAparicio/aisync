@@ -70,3 +70,130 @@ func TestMCPServerName(t *testing.T) {
 		t.Errorf("MCPServerName(builtin) = %q, want empty", got)
 	}
 }
+
+// ── Extra MCP prefix tests ──
+
+func TestSetExtraMCPPrefixes(t *testing.T) {
+	defer session.ResetExtraMCPPrefixes()
+
+	// Before: unknown tool is builtin.
+	if got := session.ClassifyTool("myserver_do_thing"); got != "builtin" {
+		t.Fatalf("before SetExtra: got %q, want builtin", got)
+	}
+
+	// Register extra prefix.
+	session.SetExtraMCPPrefixes([]session.MCPPrefix{
+		{Prefix: "myserver_", Server: "myserver"},
+	})
+
+	// After: recognized as MCP.
+	if got := session.ClassifyTool("myserver_do_thing"); got != "mcp:myserver" {
+		t.Errorf("after SetExtra: got %q, want mcp:myserver", got)
+	}
+
+	// Extras returned correctly.
+	extras := session.ExtraMCPPrefixes()
+	if len(extras) != 1 || extras[0].Prefix != "myserver_" {
+		t.Errorf("ExtraMCPPrefixes() = %v, want [{myserver_ myserver}]", extras)
+	}
+}
+
+func TestSetExtraMCPPrefixes_OverridesBuiltin(t *testing.T) {
+	defer session.ResetExtraMCPPrefixes()
+
+	// Extra prefixes take priority: re-map sentry_ to custom-sentry.
+	session.SetExtraMCPPrefixes([]session.MCPPrefix{
+		{Prefix: "sentry_", Server: "custom-sentry"},
+	})
+
+	if got := session.ClassifyTool("sentry_search_issues"); got != "mcp:custom-sentry" {
+		t.Errorf("extra override: got %q, want mcp:custom-sentry", got)
+	}
+}
+
+func TestSetExtraMCPPrefixes_SortedLongestFirst(t *testing.T) {
+	defer session.ResetExtraMCPPrefixes()
+
+	// Register two prefixes where one is a substring of the other.
+	session.SetExtraMCPPrefixes([]session.MCPPrefix{
+		{Prefix: "ab_", Server: "short"},
+		{Prefix: "abc_", Server: "long"},
+	})
+
+	// The longer prefix should match first.
+	if got := session.ClassifyTool("abc_tool"); got != "mcp:long" {
+		t.Errorf("longest-first: got %q, want mcp:long", got)
+	}
+	if got := session.ClassifyTool("ab_tool"); got != "mcp:short" {
+		t.Errorf("short match: got %q, want mcp:short", got)
+	}
+}
+
+func TestRegisterMCPServerPrefixes(t *testing.T) {
+	defer session.ResetExtraMCPPrefixes()
+
+	session.RegisterMCPServerPrefixes([]string{"github-mcp", "linear"})
+
+	// Auto-generated prefixes: "github-mcp_" and "linear_".
+	if got := session.ClassifyTool("github-mcp_list_repos"); got != "mcp:github-mcp" {
+		t.Errorf("auto-register: got %q, want mcp:github-mcp", got)
+	}
+	if got := session.ClassifyTool("linear_create_issue"); got != "mcp:linear" {
+		t.Errorf("auto-register: got %q, want mcp:linear", got)
+	}
+}
+
+func TestRegisterMCPServerPrefixes_SkipsExisting(t *testing.T) {
+	defer session.ResetExtraMCPPrefixes()
+
+	// "sentry" already has a built-in prefix "sentry_".
+	session.RegisterMCPServerPrefixes([]string{"sentry", "newserver"})
+
+	extras := session.ExtraMCPPrefixes()
+	// Only "newserver_" should be added (sentry_ is built-in).
+	if len(extras) != 1 {
+		t.Fatalf("expected 1 extra prefix (newserver), got %d: %v", len(extras), extras)
+	}
+	if extras[0].Prefix != "newserver_" {
+		t.Errorf("expected newserver_ prefix, got %q", extras[0].Prefix)
+	}
+}
+
+func TestRegisterMCPServerPrefixes_MergesWithExtra(t *testing.T) {
+	defer session.ResetExtraMCPPrefixes()
+
+	// First set some extras.
+	session.SetExtraMCPPrefixes([]session.MCPPrefix{
+		{Prefix: "custom_", Server: "custom"},
+	})
+
+	// Then register from server names.
+	session.RegisterMCPServerPrefixes([]string{"newmcp"})
+
+	extras := session.ExtraMCPPrefixes()
+	if len(extras) != 2 {
+		t.Fatalf("expected 2 extras, got %d: %v", len(extras), extras)
+	}
+
+	// Both should work.
+	if got := session.ClassifyTool("custom_tool"); got != "mcp:custom" {
+		t.Errorf("custom_tool: got %q, want mcp:custom", got)
+	}
+	if got := session.ClassifyTool("newmcp_tool"); got != "mcp:newmcp" {
+		t.Errorf("newmcp_tool: got %q, want mcp:newmcp", got)
+	}
+}
+
+func TestResetExtraMCPPrefixes(t *testing.T) {
+	session.SetExtraMCPPrefixes([]session.MCPPrefix{
+		{Prefix: "temp_", Server: "temp"},
+	})
+	session.ResetExtraMCPPrefixes()
+
+	if got := session.ClassifyTool("temp_tool"); got != "builtin" {
+		t.Errorf("after reset: got %q, want builtin", got)
+	}
+	if extras := session.ExtraMCPPrefixes(); len(extras) != 0 {
+		t.Errorf("after reset: extras = %v, want empty", extras)
+	}
+}

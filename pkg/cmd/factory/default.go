@@ -16,6 +16,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/client"
 	"github.com/ChristopherAparicio/aisync/git"
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/analysis/tooleff"
 	"github.com/ChristopherAparicio/aisync/internal/auth"
 	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/categorizer"
@@ -27,6 +28,9 @@ import (
 	claudellm "github.com/ChristopherAparicio/aisync/internal/llm/claude"
 	ollamallm "github.com/ChristopherAparicio/aisync/internal/llm/ollama"
 	"github.com/ChristopherAparicio/aisync/internal/llmfactory"
+	"github.com/ChristopherAparicio/aisync/internal/notification"
+	notifslack "github.com/ChristopherAparicio/aisync/internal/notification/adapter/slack"
+	notifwebhook "github.com/ChristopherAparicio/aisync/internal/notification/adapter/webhook"
 	"github.com/ChristopherAparicio/aisync/internal/platform"
 	ghplatform "github.com/ChristopherAparicio/aisync/internal/platform/github"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
@@ -35,6 +39,7 @@ import (
 	cursorprov "github.com/ChristopherAparicio/aisync/internal/provider/cursor"
 	"github.com/ChristopherAparicio/aisync/internal/provider/opencode"
 	"github.com/ChristopherAparicio/aisync/internal/search"
+	"github.com/ChristopherAparicio/aisync/internal/search/elastic"
 	"github.com/ChristopherAparicio/aisync/internal/search/fts5"
 	"github.com/ChristopherAparicio/aisync/internal/search/like"
 	"github.com/ChristopherAparicio/aisync/internal/secrets"
@@ -376,7 +381,60 @@ func New() *cmdutil.Factory {
 				}
 			}
 
-			// Post-capture hooks: auto-analysis + auto-tagging + webhooks.
+			// ── Notification service (optional) ──
+			// Built from config; nil-safe — Notify() is a no-op when nil.
+			var notifSvc *notification.Service
+			if cfgErr == nil && cfg.IsNotificationEnabled() {
+				var channels []notification.ChannelWithFormatter
+
+				// Slack adapter
+				slackClient := notifslack.NewClient(notifslack.ClientConfig{
+					WebhookURL: cfg.GetNotificationSlackWebhookURL(),
+					BotToken:   cfg.GetNotificationSlackBotToken(),
+				})
+				if slackClient != nil {
+					channels = append(channels, notification.ChannelWithFormatter{
+						Channel:   slackClient,
+						Formatter: notifslack.NewFormatter(),
+					})
+				}
+
+				// Generic webhook adapter
+				whClient := notifwebhook.NewClient(notifwebhook.ClientConfig{
+					URL:    cfg.GetNotificationWebhookURL(),
+					Secret: cfg.GetNotificationWebhookSecret(),
+				})
+				if whClient != nil {
+					channels = append(channels, notification.ChannelWithFormatter{
+						Channel:   whClient,
+						Formatter: notifwebhook.NewFormatter(),
+					})
+				}
+
+				router := notification.NewDefaultRouter(notification.RoutingConfig{
+					DefaultChannel:  cfg.GetNotificationDefaultChannel(),
+					ProjectChannels: cfg.GetNotificationProjectChannels(),
+					Alerts: notification.AlertConfig{
+						Budget:          cfg.IsNotificationAlertBudgetEnabled(),
+						Errors:          cfg.IsNotificationAlertErrorsEnabled(),
+						Capture:         cfg.IsNotificationAlertCaptureEnabled(),
+						ErrorThreshold:  cfg.GetNotificationErrorThreshold(),
+						ErrorWindowMins: cfg.GetNotificationErrorWindowMins(),
+					},
+					Digest: notification.DigestConfig{
+						Daily:    cfg.IsNotificationDigestDailyEnabled(),
+						Weekly:   cfg.IsNotificationDigestWeeklyEnabled(),
+						Personal: cfg.IsNotificationDigestPersonalEnabled(),
+					},
+				})
+
+				notifSvc = notification.NewService(notification.ServiceConfig{
+					Channels: channels,
+					Router:   router,
+				})
+			}
+
+			// Post-capture hooks: auto-analysis + auto-tagging + webhooks + notifications.
 			var postCapture service.PostCaptureFunc
 
 			wantAnalysis := cfgErr == nil && cfg.IsAnalysisAutoEnabled()
@@ -384,11 +442,12 @@ func New() *cmdutil.Factory {
 			wantCategoryDetect := cfgErr == nil && cfg.IsProjectAutoDetectEnabled()
 			wantFileBlame := cfgErr == nil && cfg.IsFileBlameEnabled()
 			wantWebhooks := whDispatcher != nil
+			wantNotifications := notifSvc != nil
 
 			// Error classification always runs (it's deterministic and fast).
 			wantErrorProcessing := true
 
-			if wantAnalysis || wantTagging || wantCategoryDetect || wantWebhooks || wantErrorProcessing {
+			if wantAnalysis || wantTagging || wantCategoryDetect || wantWebhooks || wantErrorProcessing || wantNotifications {
 				errorThreshold := float64(0)
 				minToolCalls := 0
 				if wantAnalysis {
@@ -425,6 +484,26 @@ func New() *cmdutil.Factory {
 							"branch":     sess.Branch,
 							"summary":    sess.Summary,
 							"tokens":     sess.TokenUsage.TotalTokens,
+						})
+					}
+
+					// Notification: session.captured
+					if wantNotifications {
+						notifSvc.Notify(notification.Event{
+							Type:         notification.EventSessionCaptured,
+							Severity:     notification.SeverityInfo,
+							Project:      config.RemoteDisplayName(sess.RemoteURL),
+							ProjectPath:  sess.ProjectPath,
+							OwnerID:      string(sess.OwnerID),
+							DashboardURL: cfg.GetNotificationDashboardURL(),
+							Data: notification.SessionCapturedData{
+								SessionID: string(sess.ID),
+								Provider:  string(sess.Provider),
+								Agent:     sess.Agent,
+								Branch:    sess.Branch,
+								Summary:   sess.Summary,
+								Tokens:    sess.TokenUsage.TotalTokens,
+							},
 						})
 					}
 
@@ -633,9 +712,21 @@ func New() *cmdutil.Factory {
 				return
 			}
 
+			// Register pluggable analysis modules.
+			modules := map[analysis.ModuleName]analysis.AnalysisModule{}
+
+			// Tool Efficiency module requires an LLM client.
+			llmClient, llmErr := llmfactory.NewClientFromConfig(cfg, "")
+			if llmErr != nil {
+				slog.Warn("tool efficiency module unavailable: LLM client creation failed", "error", llmErr)
+			} else {
+				modules[analysis.ModuleToolEfficiency] = tooleff.NewModule(llmClient)
+			}
+
 			cachedAnalysisSvc = service.NewAnalysisService(service.AnalysisServiceConfig{
 				Store:    store,
 				Analyzer: analyzer,
+				Modules:  modules,
 			})
 		})
 		return cachedAnalysisSvc, analysisSvcErr
@@ -787,6 +878,19 @@ func buildSearchEngine(cfg *config.Config, store storage.Store) search.Engine {
 		}
 		log.Printf("[search] store does not expose DB() for FTS5, falling back to LIKE")
 		return likeEngine
+	case "elasticsearch":
+		esURL := cfg.GetElasticsearchURL()
+		esIndex := cfg.GetElasticsearchIndex()
+		eng, err := elastic.New(elastic.Config{
+			URL:       esURL,
+			IndexName: esIndex,
+		})
+		if err != nil {
+			log.Printf("[search] failed to init Elasticsearch at %s: %v, falling back to LIKE", esURL, err)
+			return likeEngine
+		}
+		log.Printf("[search] Elasticsearch engine initialized (url=%s, index=%s)", esURL, esIndex)
+		return search.NewChain(log.Default(), eng, likeEngine)
 	case "like", "":
 		return likeEngine
 	default:

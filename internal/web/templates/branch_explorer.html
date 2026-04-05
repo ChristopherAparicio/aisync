@@ -52,75 +52,39 @@
   </div>
 {{else}}
 
-<!-- ── Branch Cards ── -->
-<div class="branch-grid">
-  {{range .Branches}}
-  <div class="branch-card" id="branch-{{.Slug}}">
-    <div class="branch-card-header">
-      <a href="/branches/{{.Name}}" class="branch-name font-mono" style="text-decoration:none;color:var(--text)">{{if .Name}}{{.Name}}{{else}}<span class="text-muted">unknown</span>{{end}}</a>
-      <span class="branch-count">{{.SessionCount}} session{{if ne .SessionCount 1}}s{{end}}</span>
-    </div>
-    <div class="branch-card-stats">
-      <span class="font-mono">{{formatTokens .TotalTokens}}</span> tokens
-      <span class="branch-sep">·</span>
-      <span class="font-mono">{{formatCost .TotalCost}}</span>
-    </div>
+<div class="be-summary">
+  <span class="be-summary-count">{{len .Branches}} branch{{if ne (len .Branches) 1}}es{{end}}</span>
+</div>
 
-    <!-- Timeline -->
-    {{if .Sessions}}
-    <div class="timeline">
-      {{range .Sessions}}
-      <div class="timeline-node {{if .IsFork}}timeline-fork{{end}}">
-        <div class="timeline-dot"></div>
-        <div class="timeline-content">
-          <a href="/sessions/{{.Summary.ID}}" class="timeline-id font-mono">{{truncate .Summary.ID 10}}</a>
-          <span class="timeline-provider badge badge-provider">{{.Summary.Provider}}</span>
-          {{if .Summary.SessionType}}<span class="badge badge-type">{{.Summary.SessionType}}</span>{{end}}
-          {{if .Summary.Status}}<span class="badge badge-status-{{.Summary.Status}}">{{.Summary.Status}}</span>{{end}}
-          {{if .Summary.Summary}}<span class="timeline-summary text-muted">{{truncate .Summary.Summary 50}}</span>{{end}}
-          <span class="timeline-when text-muted">{{timeAgo .Summary.CreatedAt}}</span>
-          <span class="timeline-tokens font-mono text-muted">{{formatTokens .Summary.TotalTokens}}</span>
-          {{with index $.Objectives (print .Summary.ID)}}
-          <div class="timeline-objective">
-            {{if .Intent}}<div class="timeline-intent"><strong>Intent:</strong> {{.Intent}}</div>{{end}}
-            {{if .Outcome}}<div class="timeline-outcome"><strong>Outcome:</strong> {{.Outcome}}</div>{{end}}
-          </div>
-          {{end}}
-        </div>
-
-        {{if .Children}}
-        <div class="timeline-children">
-          {{template "tree_children" .Children}}
-        </div>
-        {{end}}
-      </div>
+<div class="be-table-wrap">
+  <table class="be-table">
+    <thead>
+      <tr>
+        <th class="be-th-name">Branch</th>
+        <th class="be-th-num">Sessions</th>
+        <th class="be-th-num">Tokens</th>
+        <th class="be-th-num">Cost</th>
+        <th class="be-th-when">Last Activity</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Branches}}
+      <tr class="be-row" onclick="location.href='/branches/{{.Name}}'">
+        <td class="be-cell-name">
+          <a href="/branches/{{.Name}}" class="be-branch-link font-mono">{{if .Name}}{{.Name}}{{else}}<span class="text-muted">(no branch)</span>{{end}}</a>
+        </td>
+        <td class="be-cell-num">
+          <span class="be-session-count">{{.SessionCount}}</span>
+        </td>
+        <td class="be-cell-num font-mono">{{formatTokens .TotalTokens}}</td>
+        <td class="be-cell-num font-mono">{{formatCost .TotalCost}}</td>
+        <td class="be-cell-when text-muted">{{.LastActivity}}</td>
+      </tr>
       {{end}}
-    </div>
-    {{end}}
-  </div>
-  {{end}}
+    </tbody>
+  </table>
 </div>
 
-{{end}}
-{{end}}
-
-{{define "tree_children"}}
-{{range .}}
-<div class="timeline-node timeline-fork">
-  <div class="timeline-dot dot-fork"></div>
-  <div class="timeline-content">
-    <a href="/sessions/{{.Summary.ID}}" class="timeline-id font-mono">{{truncate .Summary.ID 10}}</a>
-    <span class="timeline-provider badge badge-provider">{{.Summary.Provider}}</span>
-    {{if .Summary.Summary}}<span class="timeline-summary text-muted">{{truncate .Summary.Summary 40}}</span>{{end}}
-    <span class="timeline-when text-muted">{{timeAgo .Summary.CreatedAt}}</span>
-    <span class="timeline-tokens font-mono text-muted">{{formatTokens .Summary.TotalTokens}}</span>
-  </div>
-  {{if .Children}}
-  <div class="timeline-children">
-    {{template "tree_children" .Children}}
-  </div>
-  {{end}}
-</div>
 {{end}}
 {{end}}
 

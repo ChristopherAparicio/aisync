@@ -33,6 +33,11 @@ type Request struct {
 	ProviderName session.ProviderName // empty = use source provider
 	AsContext    bool                 // generate CONTEXT.md instead of native import
 
+	// DryRun previews the restore without writing anything to disk.
+	// When true, the pipeline runs session lookup + filters but stops before
+	// any file I/O (no CONTEXT.md generation, no provider import).
+	DryRun bool
+
 	// Filters is a chain of SessionFilter strategies applied before restore.
 	// Each filter transforms the session (e.g. clean errors, redact secrets).
 	// Filters are applied in order; an empty slice means no filtering.
@@ -45,6 +50,24 @@ type Result struct {
 	Method        string                 // "native", "converted", or "context"
 	ContextPath   string                 // only set if Method == "context"
 	FilterResults []session.FilterResult // results from each applied filter (empty if no filters)
+	DryRun        *DryRunPreview         // only set if DryRun was requested
+}
+
+// DryRunPreview contains a preview of what a restore would do.
+type DryRunPreview struct {
+	SessionID     session.ID             `json:"session_id"`
+	Provider      session.ProviderName   `json:"provider"`
+	Branch        string                 `json:"branch"`
+	Summary       string                 `json:"summary"`
+	Method        string                 `json:"method"` // "native", "converted", or "context"
+	MessageCount  int                    `json:"message_count"`
+	ToolCallCount int                    `json:"tool_call_count"`
+	ErrorCount    int                    `json:"error_count"`
+	InputTokens   int                    `json:"input_tokens"`
+	OutputTokens  int                    `json:"output_tokens"`
+	TotalTokens   int                    `json:"total_tokens"`
+	FileChanges   int                    `json:"file_changes"`
+	FilterResults []session.FilterResult `json:"filter_results,omitempty"`
 }
 
 // Service orchestrates the restore workflow.
@@ -95,7 +118,18 @@ func (s *Service) Restore(req Request) (*Result, error) {
 		filterResults = results
 	}
 
-	// Step 3: If --as-context, generate CONTEXT.md
+	// Step 3: If dry-run, build preview and return early (no I/O).
+	if req.DryRun {
+		preview := buildDryRunPreview(sess, req, filterResults)
+		return &Result{
+			Session:       sess,
+			Method:        preview.Method,
+			FilterResults: filterResults,
+			DryRun:        preview,
+		}, nil
+	}
+
+	// Step 4: If --as-context, generate CONTEXT.md
 	if req.AsContext {
 		result, contextErr := s.restoreAsContext(sess, req.ProjectPath)
 		if contextErr != nil {
@@ -105,7 +139,7 @@ func (s *Service) Restore(req Request) (*Result, error) {
 		return result, nil
 	}
 
-	// Step 4: Determine target provider
+	// Step 5: Determine target provider
 	targetName := req.ProviderName
 	if targetName == "" {
 		targetName = sess.Provider
@@ -122,7 +156,7 @@ func (s *Service) Restore(req Request) (*Result, error) {
 		return result, nil
 	}
 
-	// Step 5: Check if import is supported
+	// Step 6: Check if import is supported
 	if !target.CanImport() {
 		result, contextErr := s.restoreAsContext(sess, req.ProjectPath)
 		if contextErr != nil {
@@ -132,7 +166,7 @@ func (s *Service) Restore(req Request) (*Result, error) {
 		return result, nil
 	}
 
-	// Step 6: Import directly — each provider's Import() handles
+	// Step 7: Import directly — each provider's Import() handles
 	// conversion from the unified session format to its native format.
 	// Cross-provider conversion is handled transparently by Import().
 	method := "native"
@@ -184,6 +218,52 @@ func (s *Service) findSession(req Request) (*session.Session, error) {
 		return nil, fmt.Errorf("no session found for branch %q: %w", req.Branch, err)
 	}
 	return sess, nil
+}
+
+// buildDryRunPreview computes a preview of what the restore would do.
+// It determines the restore method (native, converted, or context) by
+// querying the registry without actually performing any import or I/O.
+func buildDryRunPreview(sess *session.Session, req Request, filterResults []session.FilterResult) *DryRunPreview {
+	// Determine target provider and method.
+	targetName := req.ProviderName
+	if targetName == "" {
+		targetName = sess.Provider
+	}
+	method := "context" // default fallback
+	if !req.AsContext {
+		if sess.Provider == targetName {
+			method = "native"
+		} else {
+			method = "converted"
+		}
+	}
+
+	// Count tool calls and errors.
+	var toolCalls, errors int
+	for i := range sess.Messages {
+		for j := range sess.Messages[i].ToolCalls {
+			toolCalls++
+			if sess.Messages[i].ToolCalls[j].State == session.ToolStateError {
+				errors++
+			}
+		}
+	}
+
+	return &DryRunPreview{
+		SessionID:     sess.ID,
+		Provider:      targetName,
+		Branch:        sess.Branch,
+		Summary:       sess.Summary,
+		Method:        method,
+		MessageCount:  len(sess.Messages),
+		ToolCallCount: toolCalls,
+		ErrorCount:    errors,
+		InputTokens:   sess.TokenUsage.InputTokens,
+		OutputTokens:  sess.TokenUsage.OutputTokens,
+		TotalTokens:   sess.TokenUsage.TotalTokens,
+		FileChanges:   len(sess.FileChanges),
+		FilterResults: filterResults,
+	}
 }
 
 // generateContextFile creates a CONTEXT.md file using the shared converter.

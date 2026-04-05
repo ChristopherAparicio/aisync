@@ -62,9 +62,9 @@ func TestMatchBranchRule(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.branch, func(t *testing.T) {
-			got := matchBranchRule(rules, tt.branch)
+			got := MatchBranchRule(rules, tt.branch)
 			if got != tt.want {
-				t.Errorf("matchBranchRule(%q) = %q, want %q", tt.branch, got, tt.want)
+				t.Errorf("MatchBranchRule(%q) = %q, want %q", tt.branch, got, tt.want)
 			}
 		})
 	}
@@ -100,9 +100,9 @@ func TestMatchConventionalCommit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.summary, func(t *testing.T) {
-			got := matchConventionalCommit(rules, tt.summary)
+			got := MatchConventionalCommit(rules, tt.summary)
 			if got != tt.want {
-				t.Errorf("matchConventionalCommit(%q) = %q, want %q", tt.summary, got, tt.want)
+				t.Errorf("MatchConventionalCommit(%q) = %q, want %q", tt.summary, got, tt.want)
 			}
 		})
 	}
@@ -125,9 +125,9 @@ func TestMatchSummaryPrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.summary, func(t *testing.T) {
-			got := matchSummaryPrefix(rules, tt.summary)
+			got := MatchSummaryPrefix(rules, tt.summary)
 			if got != tt.want {
-				t.Errorf("matchSummaryPrefix(%q) = %q, want %q", tt.summary, got, tt.want)
+				t.Errorf("MatchSummaryPrefix(%q) = %q, want %q", tt.summary, got, tt.want)
 			}
 		})
 	}

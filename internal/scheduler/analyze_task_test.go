@@ -54,6 +54,10 @@ func (m *mockAnalysisService) ListAnalyses(_ string) ([]*analysis.SessionAnalysi
 	return nil, nil
 }
 
+func (m *mockAnalysisService) AvailableModules() []analysis.ModuleInfo {
+	return nil
+}
+
 // ── Mock SessionReader ──
 
 type mockSessionReader struct {
@@ -62,6 +66,10 @@ type mockSessionReader struct {
 
 func (m *mockSessionReader) Get(_ session.ID) (*session.Session, error) {
 	return nil, session.ErrSessionNotFound
+}
+
+func (m *mockSessionReader) GetBatch(_ []session.ID) (map[session.ID]*session.Session, error) {
+	return map[session.ID]*session.Session{}, nil
 }
 
 func (m *mockSessionReader) GetLatestByBranch(_, _ string) (*session.Session, error) {

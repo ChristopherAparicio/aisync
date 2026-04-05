@@ -1,0 +1,20 @@
+{{define "ft-sessions-partial"}}
+{{range .Entries}}
+<div class="ft-session-entry">
+  <div class="ft-session-dot ft-session-dot--{{.ChangeClass}}"></div>
+  <div class="ft-session-body">
+    <div class="ft-session-header">
+      <a href="/sessions/{{.SessionID}}" class="ft-session-id font-mono">{{truncate .SessionID 12}}</a>
+      <span class="badge badge-provider">{{.Provider}}</span>
+      <span class="ft-change-badge ft-change-{{.ChangeClass}}">{{.ChangeType}}</span>
+      <span class="ft-session-time text-muted">{{.TimeAgo}}</span>
+    </div>
+    {{if .Summary}}<div class="ft-session-summary">{{.Summary}}</div>{{end}}
+    {{if .Branch}}<div class="ft-session-branch text-muted"><span class="font-mono">{{.Branch}}</span></div>{{end}}
+  </div>
+</div>
+{{end}}
+{{if not .Entries}}
+<div class="ft-session-empty text-muted">No sessions found.</div>
+{{end}}
+{{end}}

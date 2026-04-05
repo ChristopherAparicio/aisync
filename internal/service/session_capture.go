@@ -73,6 +73,12 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 		Skipped:      result.Skipped,
 	}
 
+	// Stamp denormalized costs on parent session (capture service saved without costs).
+	if !result.Skipped {
+		s.stampCosts(result.Session)
+		_ = s.store.Save(result.Session)
+	}
+
 	// Save child sessions (sub-agents) as separate rows in the store.
 	// This makes them searchable, listable, and visible in the dashboard.
 	if len(result.Session.Children) > 0 {
@@ -89,6 +95,7 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 			if child.Branch == "" {
 				child.Branch = result.Session.Branch
 			}
+			s.stampCosts(child)
 			_ = s.store.Save(child)
 			// Post-capture hook for child: extract events, classify errors, etc.
 			if s.postCapture != nil {
@@ -118,6 +125,7 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 
 			// Re-save with updated summary (session already in store from capture).
 			// Log error but don't fail capture — summary loss is acceptable.
+			s.stampCosts(result.Session)
 			if saveErr := s.store.Save(result.Session); saveErr != nil {
 				captureResult.Summarized = false // summary was not persisted
 			}
@@ -168,6 +176,12 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 			r.Session.RemoteURL = resolveRemoteURLForPath(r.Session.ProjectPath)
 		}
 
+		// Stamp denormalized costs on parent session (capture service saved without costs).
+		if !r.Skipped {
+			s.stampCosts(r.Session)
+			_ = s.store.Save(r.Session)
+		}
+
 		// Save child sessions (sub-agents) as separate rows.
 		if len(r.Session.Children) > 0 {
 			for i := range r.Session.Children {
@@ -182,6 +196,7 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 				if child.Branch == "" {
 					child.Branch = r.Session.Branch
 				}
+				s.stampCosts(child)
 				_ = s.store.Save(child)
 				// Post-capture hook for child: extract events, classify errors, etc.
 				if s.postCapture != nil {
@@ -236,6 +251,12 @@ func (s *SessionService) CaptureByID(req CaptureRequest, sessionID session.ID) (
 	// Fallback: try resolving from the session's own project path.
 	if result.Session.RemoteURL == "" && result.Session.ProjectPath != "" {
 		result.Session.RemoteURL = resolveRemoteURLForPath(result.Session.ProjectPath)
+	}
+
+	// Stamp denormalized costs and re-save (capture service saved without costs).
+	if !result.Skipped {
+		s.stampCosts(result.Session)
+		_ = s.store.Save(result.Session)
 	}
 
 	captureResult := &CaptureResult{

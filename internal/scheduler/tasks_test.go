@@ -123,6 +123,9 @@ func (m *mockSessionService) Explain(_ context.Context, _ service.ExplainRequest
 func (m *mockSessionService) AnalyzeEfficiency(_ context.Context, _ service.EfficiencyRequest) (*service.EfficiencyResult, error) {
 	return nil, nil
 }
+func (m *mockSessionService) Diagnose(_ context.Context, _ service.DiagnoseRequest) (*session.DiagnosisReport, error) {
+	return nil, nil
+}
 func (m *mockSessionService) ComputeObjective(_ context.Context, _ service.ComputeObjectiveRequest) (*session.SessionObjective, error) {
 	return nil, nil
 }

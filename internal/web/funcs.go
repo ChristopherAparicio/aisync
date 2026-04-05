@@ -96,7 +96,10 @@ func timeAgo(t time.Time) string {
 		}
 		return fmt.Sprintf("%d days ago", days)
 	case d < 365*24*time.Hour:
-		months := int(d.Hours() / 24 / 30)
+		months := int(d.Hours()/24/30.44 + 0.5) // round instead of truncate
+		if months < 1 {
+			months = 1
+		}
 		if months == 1 {
 			return "1 month ago"
 		}

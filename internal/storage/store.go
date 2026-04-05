@@ -25,6 +25,16 @@ type SessionReader interface {
 	// Returns ErrSessionNotFound if the session does not exist.
 	Get(id session.ID) (*session.Session, error)
 
+	// GetBatch retrieves multiple sessions by ID in a minimal number of queries.
+	// Returns a map keyed by session ID; missing IDs are simply absent from the map
+	// (no error is raised for not-found entries — callers should check map membership).
+	//
+	// This is the batch-aware counterpart to Get() and is the preferred API for any
+	// code path that iterates over a Summary slice and needs the full Session for each
+	// element. A single GetBatch call performs 3 SQL queries total regardless of how
+	// many IDs are requested, versus 3×N queries for a Get() loop.
+	GetBatch(ids []session.ID) (map[session.ID]*session.Session, error)
+
 	// GetLatestByBranch retrieves the most recent session for a project and branch.
 	// Returns ErrSessionNotFound if no session matches.
 	GetLatestByBranch(projectPath string, branch string) (*session.Session, error)
@@ -78,6 +88,11 @@ type SessionWriter interface {
 	// Used by ComputeTokenBuckets and Forecast to build a dedup map.
 	ListAllForkRelations() ([]session.ForkRelation, error)
 
+	// GetForkRelationsForSessions returns fork relations for multiple sessions in a single query.
+	// Returns a map of session ID → []ForkRelation. A session appears in the map if it has
+	// any fork relations (as original or fork).
+	GetForkRelationsForSessions(ids []session.ID) (map[session.ID][]session.ForkRelation, error)
+
 	// GetTotalDeduplication returns the total shared tokens across all detected forks.
 	GetTotalDeduplication() (sharedInput, sharedOutput int, err error)
 
@@ -125,6 +140,19 @@ type SessionWriter interface {
 
 	// CountSessionsWithFiles returns how many sessions have file-blame data.
 	CountSessionsWithFiles() (int, error)
+
+	// SearchFacets returns aggregated counts for faceted navigation.
+	// Respects the same filters as Search (project, date range, etc.) so that
+	// facet counts reflect the current search context.
+	SearchFacets(q session.SearchQuery) (*session.SearchFacets, error)
+
+	// UpdateCosts sets the denormalized cost columns for a session.
+	// Used by the cost backfill task to populate costs for existing sessions.
+	UpdateCosts(id session.ID, estimatedCost, actualCost float64) error
+
+	// ListSessionsWithZeroCosts returns session IDs that have estimated_cost = 0.
+	// Used by the cost backfill task to find sessions needing cost computation.
+	ListSessionsWithZeroCosts(limit int) ([]session.ID, error)
 }
 
 // LinkStore manages associations between sessions and git objects (branches, commits, PRs)
@@ -159,6 +187,25 @@ type UserStore interface {
 	// GetUserByEmail retrieves a user by email address.
 	// Returns nil, nil if no user matches.
 	GetUserByEmail(email string) (*session.User, error)
+
+	// ListUsers returns all users ordered by name.
+	ListUsers() ([]*session.User, error)
+
+	// ListUsersByKind returns users filtered by kind ("human", "machine", "unknown").
+	ListUsersByKind(kind string) ([]*session.User, error)
+
+	// UpdateUserSlack sets the Slack identity fields for a user.
+	UpdateUserSlack(id session.ID, slackID, slackName string) error
+
+	// UpdateUserKind sets the kind classification for a user.
+	UpdateUserKind(id session.ID, kind string) error
+
+	// UpdateUserRole sets the notification role for a user.
+	UpdateUserRole(id session.ID, role string) error
+
+	// OwnerStats returns aggregated session statistics grouped by owner_id
+	// for a given time range and optional project filter (empty = all projects).
+	OwnerStats(projectPath string, since, until time.Time) ([]session.OwnerStat, error)
 }
 
 // SearchStore provides full-text search and file-level blame queries.
@@ -293,6 +340,24 @@ type SessionEventStore interface {
 	// GetSessionEvents returns all events for a session, ordered by occurred_at ASC.
 	GetSessionEvents(sessionID session.ID) ([]sessionevent.Event, error)
 
+	// GetSessionEventsBatch returns events for multiple sessions in a single SQL query,
+	// keyed by session ID. This is the batch-aware counterpart to GetSessionEvents and
+	// exists to eliminate N+1 patterns in analytics paths (e.g. SkillROIAnalysis) that
+	// previously looped over a Summary slice calling GetSessionEvents per session.
+	//
+	// Missing session IDs are silently omitted from the result map (no empty slice entry).
+	// Duplicate IDs are de-duplicated before the IN-clause is built.
+	//
+	// The variadic types parameter filters events at the SQL level via event_type IN (...).
+	// Passing zero types returns all event types for the requested sessions. Callers that
+	// only need a subset (e.g. only skill_load events) SHOULD pass explicit types to avoid
+	// transferring unrelated event payloads — this can turn a multi-hundred-thousand row
+	// scan into a few thousand.
+	//
+	// Within each returned slice, events are ordered by occurred_at ASC, message_index ASC
+	// (same ordering as GetSessionEvents for compatibility).
+	GetSessionEventsBatch(ids []session.ID, types ...sessionevent.EventType) (map[session.ID][]sessionevent.Event, error)
+
 	// QueryEvents returns events matching the given filters.
 	QueryEvents(query sessionevent.EventQuery) ([]sessionevent.Event, error)
 
@@ -318,6 +383,71 @@ type SessionEventStore interface {
 	QueryEventBuckets(query sessionevent.BucketQuery) ([]sessionevent.EventBucket, error)
 }
 
+// PullRequestStore manages pull request persistence and session-PR associations.
+type PullRequestStore interface {
+	// SavePullRequest creates or updates a pull request (upsert by repo_owner/repo_name/number).
+	SavePullRequest(pr *session.PullRequest) error
+
+	// GetPullRequest retrieves a pull request by owner, repo and number.
+	GetPullRequest(repoOwner, repoName string, number int) (*session.PullRequest, error)
+
+	// ListPullRequests returns pull requests matching optional filters.
+	// If repoOwner+repoName are empty, returns all PRs. State "" means all states.
+	ListPullRequests(repoOwner, repoName, state string, limit int) ([]session.PullRequest, error)
+
+	// LinkSessionPR links a session to a pull request.
+	// Idempotent — duplicate links are silently ignored.
+	LinkSessionPR(sessionID session.ID, repoOwner, repoName string, prNumber int) error
+
+	// GetSessionsForPR returns all sessions linked to a specific PR.
+	GetSessionsForPR(repoOwner, repoName string, prNumber int) ([]session.Summary, error)
+
+	// GetPRsForSession returns all PRs linked to a specific session.
+	GetPRsForSession(sessionID session.ID) ([]session.PullRequest, error)
+
+	// ListPRsWithSessions returns PRs enriched with linked session data.
+	// This is the main query for the /pulls page.
+	ListPRsWithSessions(repoOwner, repoName, state string, limit int) ([]session.PRWithSessions, error)
+
+	// GetPRByBranch finds a pull request by its source branch name.
+	// Returns the most recently updated PR matching the branch.
+	// Returns session.ErrPRNotFound if no PR matches.
+	GetPRByBranch(branch string) (*session.PullRequest, error)
+}
+
+// RecommendationStore persists and retrieves actionable recommendations.
+type RecommendationStore interface {
+	// UpsertRecommendation creates or updates a recommendation by fingerprint.
+	// If a recommendation with the same fingerprint exists and is active,
+	// its title/message/impact/priority are updated. Dismissed/snoozed recs
+	// are NOT overwritten (user intent is preserved).
+	UpsertRecommendation(rec *session.RecommendationRecord) error
+
+	// ListRecommendations returns recommendations matching the filter.
+	// Results are ordered by priority (high > medium > low), then created_at DESC.
+	ListRecommendations(filter session.RecommendationFilter) ([]session.RecommendationRecord, error)
+
+	// DismissRecommendation marks a recommendation as dismissed by ID.
+	DismissRecommendation(id string) error
+
+	// SnoozeRecommendation marks a recommendation as snoozed until the given time.
+	SnoozeRecommendation(id string, until time.Time) error
+
+	// ExpireRecommendations marks active recommendations older than maxAge as expired.
+	// Returns the count of expired recommendations.
+	ExpireRecommendations(maxAge time.Duration) (int, error)
+
+	// ReactivateSnoozed reactivates snoozed recommendations whose snooze period has passed.
+	// Returns the count of reactivated recommendations.
+	ReactivateSnoozed() (int, error)
+
+	// RecommendationStats returns aggregate counts by status for a project (empty = all).
+	RecommendationStats(projectPath string) (session.RecommendationStats, error)
+
+	// DeleteRecommendationsByProject removes all recommendations for a project.
+	DeleteRecommendationsByProject(projectPath string) (int, error)
+}
+
 // ── Composed Interface ──
 
 // Store composes all role interfaces into a single persistence contract.
@@ -338,12 +468,14 @@ type Store interface {
 	ErrorStore
 	SessionEventStore
 	RegistryStore
+	PullRequestStore
+	RecommendationStore
 
 	// Close releases any resources held by the store.
 	Close() error
 }
 
-// RegistryStore persists project capability snapshots.
+// RegistryStore persists project capability snapshots and flat capability records.
 type RegistryStore interface {
 	// SaveProjectSnapshot persists a capability snapshot for a project.
 	SaveProjectSnapshot(snapshot *registry.ProjectSnapshot) error
@@ -354,6 +486,18 @@ type RegistryStore interface {
 
 	// ListSnapshots returns all snapshots for a project, newest first.
 	ListSnapshots(projectPath string, limit int) ([]registry.ProjectSnapshot, error)
+
+	// UpsertCapabilities inserts or updates flat capability records for a project.
+	// Capabilities present in the list are marked active with updated last_seen.
+	// Capabilities NOT in the list but previously active are marked inactive.
+	UpsertCapabilities(projectPath string, caps []registry.PersistedCapability) error
+
+	// ListCapabilities returns persisted capabilities matching the filter.
+	ListCapabilities(filter registry.CapabilityFilter) ([]registry.PersistedCapability, error)
+
+	// ListCapabilityProjects returns distinct project paths that have at least
+	// one persisted capability.
+	ListCapabilityProjects() ([]string, error)
 }
 
 // ErrAnalysisNotFound is returned when an analysis lookup yields no results.

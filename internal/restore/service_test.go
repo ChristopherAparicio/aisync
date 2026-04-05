@@ -499,6 +499,191 @@ func (f *mockFailFilter) Apply(_ *session.Session) (*session.Session, *session.F
 	return nil, nil, fmt.Errorf("intentional test failure")
 }
 
+func TestRestore_dryRunByBranch(t *testing.T) {
+	sess := &session.Session{
+		ID:          "ses-dry",
+		Provider:    session.ProviderClaudeCode,
+		Agent:       "claude",
+		Branch:      "feat/dry",
+		ProjectPath: "/test/project",
+		Summary:     "Dry-run test session",
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "fix the bug"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "Done!", ToolCalls: []session.ToolCall{
+				{ID: "tc-1", Name: "bash", State: session.ToolStateCompleted, Output: "ok"},
+				{ID: "tc-2", Name: "write", State: session.ToolStateError, Output: "permission denied"},
+			}},
+		},
+		FileChanges: []session.FileChange{
+			{FilePath: "auth.go", ChangeType: session.ChangeModified},
+			{FilePath: "test.go", ChangeType: session.ChangeCreated},
+		},
+		TokenUsage: session.TokenUsage{
+			InputTokens:  500,
+			OutputTokens: 200,
+			TotalTokens:  700,
+		},
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/dry"] = sess
+	reg := provider.NewRegistry()
+	svc := NewService(reg, store)
+
+	result, err := svc.Restore(Request{
+		ProjectPath: projectDir,
+		Branch:      "feat/dry",
+		DryRun:      true,
+	})
+	if err != nil {
+		t.Fatalf("Restore(DryRun) error: %v", err)
+	}
+
+	if result.DryRun == nil {
+		t.Fatal("expected DryRun preview to be set")
+	}
+
+	p := result.DryRun
+	if p.SessionID != "ses-dry" {
+		t.Errorf("SessionID = %q, want %q", p.SessionID, "ses-dry")
+	}
+	if p.Provider != session.ProviderClaudeCode {
+		t.Errorf("Provider = %q, want %q", p.Provider, session.ProviderClaudeCode)
+	}
+	if p.Branch != "feat/dry" {
+		t.Errorf("Branch = %q, want %q", p.Branch, "feat/dry")
+	}
+	if p.Summary != "Dry-run test session" {
+		t.Errorf("Summary = %q, want %q", p.Summary, "Dry-run test session")
+	}
+	if p.MessageCount != 2 {
+		t.Errorf("MessageCount = %d, want 2", p.MessageCount)
+	}
+	if p.ToolCallCount != 2 {
+		t.Errorf("ToolCallCount = %d, want 2", p.ToolCallCount)
+	}
+	if p.ErrorCount != 1 {
+		t.Errorf("ErrorCount = %d, want 1", p.ErrorCount)
+	}
+	if p.InputTokens != 500 {
+		t.Errorf("InputTokens = %d, want 500", p.InputTokens)
+	}
+	if p.OutputTokens != 200 {
+		t.Errorf("OutputTokens = %d, want 200", p.OutputTokens)
+	}
+	if p.TotalTokens != 700 {
+		t.Errorf("TotalTokens = %d, want 700", p.TotalTokens)
+	}
+	if p.FileChanges != 2 {
+		t.Errorf("FileChanges = %d, want 2", p.FileChanges)
+	}
+
+	// Dry-run should NOT create CONTEXT.md
+	contextPath := filepath.Join(projectDir, "CONTEXT.md")
+	if _, statErr := os.Stat(contextPath); statErr == nil {
+		t.Error("CONTEXT.md should NOT have been created in dry-run mode")
+	}
+}
+
+func TestRestore_dryRunWithFilters(t *testing.T) {
+	sess := &session.Session{
+		ID:       "ses-dry-filter",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Branch:   "feat/dry-filter",
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "hello"},
+			{ID: "m2", Role: session.RoleAssistant, Content: ""},      // empty — will be removed
+			{ID: "m3", Role: session.RoleAssistant, Content: "Done!"}, // kept
+		},
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/dry-filter"] = sess
+	reg := provider.NewRegistry()
+	svc := NewService(reg, store)
+
+	result, err := svc.Restore(Request{
+		ProjectPath: projectDir,
+		Branch:      "feat/dry-filter",
+		DryRun:      true,
+		Filters:     []session.SessionFilter{&mockEmptyFilter{}},
+	})
+	if err != nil {
+		t.Fatalf("Restore(DryRun+Filter) error: %v", err)
+	}
+
+	if result.DryRun == nil {
+		t.Fatal("expected DryRun preview to be set")
+	}
+
+	// Filters were applied: the empty message was removed.
+	if result.DryRun.MessageCount != 2 {
+		t.Errorf("MessageCount = %d, want 2 (empty message removed)", result.DryRun.MessageCount)
+	}
+
+	// Filter results should be reported.
+	if len(result.DryRun.FilterResults) != 1 {
+		t.Fatalf("expected 1 filter result, got %d", len(result.DryRun.FilterResults))
+	}
+	if !result.DryRun.FilterResults[0].Applied {
+		t.Error("mock-empty filter should have applied")
+	}
+}
+
+func TestRestore_dryRunMethodDetection(t *testing.T) {
+	sess := &session.Session{
+		ID:       "ses-method",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Branch:   "feat/method",
+		Messages: []session.Message{
+			{ID: "m1", Content: "hello"},
+		},
+	}
+
+	projectDir := t.TempDir()
+	store := testutil.NewMockStore(sess)
+	store.ByBranch[projectDir+":feat/method"] = sess
+
+	tests := []struct {
+		name       string
+		asContext  bool
+		target     session.ProviderName
+		wantMethod string
+	}{
+		{"native (same provider)", false, "", "native"},
+		{"converted (different provider)", false, session.ProviderOpenCode, "converted"},
+		{"context (explicit)", true, "", "context"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := provider.NewRegistry()
+			svc := NewService(reg, store)
+
+			result, err := svc.Restore(Request{
+				ProjectPath:  projectDir,
+				Branch:       "feat/method",
+				DryRun:       true,
+				AsContext:    tt.asContext,
+				ProviderName: tt.target,
+			})
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if result.DryRun == nil {
+				t.Fatal("expected DryRun to be set")
+			}
+			if result.DryRun.Method != tt.wantMethod {
+				t.Errorf("Method = %q, want %q", result.DryRun.Method, tt.wantMethod)
+			}
+		})
+	}
+}
+
 func TestRestore_asContextTooLarge(t *testing.T) {
 	// Build a session with enough data to exceed the CONTEXT.md size limit.
 	bigContent := strings.Repeat("x", 10*1024) // 10KB per message

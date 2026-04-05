@@ -15,6 +15,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
+	"github.com/ChristopherAparicio/aisync/internal/storage/sqlite"
 	"github.com/ChristopherAparicio/aisync/internal/testutil"
 )
 
@@ -445,11 +446,13 @@ func TestBranches_withData(t *testing.T) {
 	if !strings.Contains(body, "fix/typo") {
 		t.Error("expected fix/typo branch")
 	}
-	if !strings.Contains(body, "2 sessions") {
-		t.Error("expected '2 sessions' for feature/auth")
+	// Session count should be visible as a number in the table row.
+	if !strings.Contains(body, ">2</span>") {
+		t.Error("expected session count 2 for feature/auth")
 	}
-	if !strings.Contains(body, "branch-sess-1") {
-		t.Error("expected session ID in timeline")
+	// Branch names should link to the detail page.
+	if !strings.Contains(body, "/branches/feature/auth") {
+		t.Error("expected link to branch detail page")
 	}
 }
 
@@ -491,15 +494,16 @@ func TestBranches_withForks(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, "fork-parent") {
-		t.Error("expected parent session in timeline")
+	// Branch explorer now shows a stats table — branch name + session count.
+	// Individual sessions are on the detail page /branches/{name}.
+	if !strings.Contains(body, "feature/fork-test") {
+		t.Error("expected fork-test branch in table")
 	}
-	if !strings.Contains(body, "fork-child") {
-		t.Error("expected child session in timeline")
+	if !strings.Contains(body, ">2</span>") {
+		t.Error("expected session count 2 for fork-test branch")
 	}
-	// Child should be rendered in a nested timeline-children div.
-	if !strings.Contains(body, "timeline-children") {
-		t.Error("expected timeline-children div for fork")
+	if !strings.Contains(body, "/branches/feature/fork-test") {
+		t.Error("expected link to branch detail page")
 	}
 }
 
@@ -2672,5 +2676,485 @@ func TestTruncateID(t *testing.T) {
 	}
 	if got := truncateID("short", 10); got != "short" {
 		t.Errorf("truncateID = %q, want short", got)
+	}
+}
+
+// ── Skill Detection Tests ────────────────────────────────────────────────
+
+func TestDetectSkillsPerMessage_noSkills(t *testing.T) {
+	msgs := []session.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+	}
+	m := detectSkillsPerMessage(msgs)
+	if m != nil {
+		t.Errorf("expected nil map, got %v", m)
+	}
+}
+
+func TestDetectSkillsPerMessage_toolCallSkill(t *testing.T) {
+	msgs := []session.Message{
+		{Role: "user", Content: "use the skill"},
+		{Role: "assistant", ToolCalls: []session.ToolCall{
+			{Name: "skill", Input: `{"name": "replay-tester"}`, State: "success"},
+		}},
+		{Role: "assistant", Content: "done"},
+	}
+	m := detectSkillsPerMessage(msgs)
+	if len(m) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(m))
+	}
+	skills := m[1] // message index 1
+	if len(skills) != 1 || skills[0] != "replay-tester" {
+		t.Errorf("skills = %v, want [replay-tester]", skills)
+	}
+}
+
+func TestDetectSkillsPerMessage_contentTag(t *testing.T) {
+	msgs := []session.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: `Here is the skill: <skill_content name="opencode-sessions">skill instructions here</skill_content> done`},
+	}
+	m := detectSkillsPerMessage(msgs)
+	if len(m) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(m))
+	}
+	skills := m[1]
+	if len(skills) != 1 || skills[0] != "opencode-sessions" {
+		t.Errorf("skills = %v, want [opencode-sessions]", skills)
+	}
+}
+
+func TestDetectSkillsPerMessage_multipleSkillsOneMessage(t *testing.T) {
+	msgs := []session.Message{
+		{Role: "assistant", Content: `<skill_content name="alpha">A</skill_content> and <skill_content name="beta">B</skill_content>`},
+	}
+	m := detectSkillsPerMessage(msgs)
+	if len(m) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(m))
+	}
+	skills := m[0]
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(skills))
+	}
+	if skills[0] != "alpha" || skills[1] != "beta" {
+		t.Errorf("skills = %v, want [alpha beta]", skills)
+	}
+}
+
+func TestDetectSkillsPerMessage_mixedDetection(t *testing.T) {
+	msgs := []session.Message{
+		{Role: "user", Content: "load skill"},
+		{Role: "assistant", ToolCalls: []session.ToolCall{
+			{Name: "skill", Input: `{"name": "replay-tester"}`, State: "success"},
+		}, Content: `<skill_content name="replay-tester">content</skill_content>`},
+	}
+	m := detectSkillsPerMessage(msgs)
+	if len(m[1]) != 2 {
+		t.Errorf("expected 2 skills on msg 1, got %d: %v", len(m[1]), m[1])
+	}
+}
+
+func TestExtractSkillNameFromInput(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`{"name": "replay-tester"}`, "replay-tester"},
+		{`{"name":"opencode-sessions"}`, "opencode-sessions"},
+		{`invalid json`, ""},
+		{`{}`, ""},
+		{`{"name": ""}`, ""},
+	}
+	for _, tt := range tests {
+		got := extractSkillNameFromInput(tt.input)
+		if got != tt.want {
+			t.Errorf("extractSkillNameFromInput(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// ── Classification Preview Tests ──
+
+func newTestServerWithStoreAndConfig(t *testing.T) (*Server, *sqlite.Store, *config.Config) {
+	t.Helper()
+	store := testutil.MustOpenStore(t)
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+	configDir := t.TempDir()
+	cfg, err := config.New(configDir, "")
+	if err != nil {
+		t.Fatalf("config.New: %v", err)
+	}
+	srv, err := New(Config{
+		SessionService: sessionSvc,
+		Store:          store,
+		AppConfig:      cfg,
+		Addr:           ":0",
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	return srv, store, cfg
+}
+
+func TestClassificationPreview_noStore(t *testing.T) {
+	// Server without store should return 503.
+	srv := newTestServer(t)
+	form := "name=my/project"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/project/preview", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+}
+
+func TestClassificationPreview_emptyName(t *testing.T) {
+	srv, _, _ := newTestServerWithStoreAndConfig(t)
+	form := "name="
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/project/preview", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "project name is required") {
+		t.Errorf("body should contain error message, got: %s", w.Body.String())
+	}
+}
+
+func TestClassificationPreview_noMatchingSessions(t *testing.T) {
+	srv, store, _ := newTestServerWithStoreAndConfig(t)
+
+	// Seed a session with a different project.
+	_ = store.Save(&session.Session{
+		ID:          "sess-other",
+		Branch:      "main",
+		Agent:       "explore",
+		Summary:     "Explore codebase",
+		RemoteURL:   "git@github.com:other/repo.git",
+		ProjectPath: "/tmp/other",
+	})
+
+	form := "name=my/project"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/project/preview", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "No sessions found") {
+		t.Errorf("body should indicate no sessions found, got: %s", body)
+	}
+}
+
+func TestClassificationPreview_withMatchingSessions(t *testing.T) {
+	srv, store, _ := newTestServerWithStoreAndConfig(t)
+
+	// Seed sessions matching "my/project" via remote URL.
+	_ = store.Save(&session.Session{
+		ID:          "sess-feat",
+		Branch:      "feature/auth",
+		Agent:       "coder",
+		Summary:     "Implement auth flow",
+		RemoteURL:   "git@github.com:my/project.git",
+		ProjectPath: "/tmp/my/project",
+	})
+	_ = store.Save(&session.Session{
+		ID:          "sess-fix",
+		Branch:      "main",
+		Agent:       "explore",
+		Summary:     "fix: login bug",
+		RemoteURL:   "git@github.com:my/project.git",
+		ProjectPath: "/tmp/my/project",
+	})
+
+	// Preview with branch rules: feature/* -> feature
+	form := "name=my/project" +
+		"&branch_rule_pattern[]=feature/*&branch_rule_type[]=feature"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/project/preview", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "2 sessions") {
+		t.Errorf("should show 2 sessions, got: %s", body)
+	}
+	// The fix: summary should match via default commit rules.
+	if !strings.Contains(body, "bug") {
+		t.Errorf("should show 'bug' type from commit rules, got: %s", body)
+	}
+	// feature/auth should match branch rule.
+	if !strings.Contains(body, "feature") {
+		t.Errorf("should show 'feature' type from branch rules, got: %s", body)
+	}
+}
+
+func TestClassificationPreview_statusRuleChanges(t *testing.T) {
+	srv, store, _ := newTestServerWithStoreAndConfig(t)
+
+	_ = store.Save(&session.Session{
+		ID:          "sess-wip",
+		Branch:      "main",
+		Agent:       "coder",
+		Summary:     "[WIP] Work in progress",
+		RemoteURL:   "git@github.com:status/project.git",
+		ProjectPath: "/tmp/status/project",
+		Status:      "",
+	})
+
+	// Preview with custom status rules: [WIP] -> in-progress (different from default "active").
+	form := "name=status/project" +
+		"&status_rule_pattern[]=[WIP]&status_rule_type[]=in-progress"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/project/preview", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "in-progress") {
+		t.Errorf("should show new status 'in-progress', got: %s", body)
+	}
+	if !strings.Contains(body, "status change") {
+		t.Errorf("should indicate status changes, got: %s", body)
+	}
+}
+
+func TestClassificationPreview_typeChangeDetection(t *testing.T) {
+	srv, store, _ := newTestServerWithStoreAndConfig(t)
+
+	// Session with existing type that matches the proposed rules.
+	_ = store.Save(&session.Session{
+		ID:          "sess-already",
+		Branch:      "feature/login",
+		Agent:       "coder",
+		Summary:     "Implement login",
+		RemoteURL:   "git@github.com:tc/project.git",
+		ProjectPath: "/tmp/tc/project",
+		SessionType: "feature", // Already classified as "feature"
+	})
+	// Session without existing type.
+	_ = store.Save(&session.Session{
+		ID:          "sess-untyped",
+		Branch:      "feature/signup",
+		Agent:       "coder",
+		Summary:     "Implement signup",
+		RemoteURL:   "git@github.com:tc/project.git",
+		ProjectPath: "/tmp/tc/project",
+		SessionType: "", // Not yet classified
+	})
+
+	form := "name=tc/project" +
+		"&branch_rule_pattern[]=feature/*&branch_rule_type[]=feature"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/project/preview", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// sess-already: currentType=feature, newType=feature -> no change
+	// sess-untyped: currentType="", newType=feature -> type change
+	if !strings.Contains(body, "1 type change") {
+		t.Errorf("should detect 1 type change, got: %s", body)
+	}
+}
+
+func TestClassificationPreview_projectPathMatch(t *testing.T) {
+	srv, store, _ := newTestServerWithStoreAndConfig(t)
+
+	// Session without remote URL but with project path matching basename.
+	_ = store.Save(&session.Session{
+		ID:          "sess-local",
+		Branch:      "main",
+		Agent:       "explore",
+		Summary:     "Explore local project",
+		RemoteURL:   "",
+		ProjectPath: "/home/user/myapp",
+	})
+
+	form := "name=myapp"
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/project/preview", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "1 sessions") {
+		t.Errorf("should find 1 session via project path basename, got: %s", body)
+	}
+}
+
+// ── Unit tests for helper functions ──
+
+func TestSessionMatchesProject(t *testing.T) {
+	tests := []struct {
+		name    string
+		sm      session.Summary
+		project string
+		want    bool
+	}{
+		{
+			name:    "remote URL display name match",
+			sm:      session.Summary{RemoteURL: "git@github.com:foo/bar.git"},
+			project: "foo/bar",
+			want:    true,
+		},
+		{
+			name:    "raw remote URL match",
+			sm:      session.Summary{RemoteURL: "git@github.com:foo/bar.git"},
+			project: "git@github.com:foo/bar.git",
+			want:    true,
+		},
+		{
+			name:    "project path match",
+			sm:      session.Summary{ProjectPath: "/home/user/projects/myapp"},
+			project: "/home/user/projects/myapp",
+			want:    true,
+		},
+		{
+			name:    "project path basename match",
+			sm:      session.Summary{ProjectPath: "/home/user/projects/myapp"},
+			project: "myapp",
+			want:    true,
+		},
+		{
+			name:    "no match",
+			sm:      session.Summary{RemoteURL: "git@github.com:other/repo.git", ProjectPath: "/tmp/other"},
+			project: "foo/bar",
+			want:    false,
+		},
+		{
+			name:    "empty project name",
+			sm:      session.Summary{RemoteURL: "git@github.com:foo/bar.git"},
+			project: "",
+			want:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sessionMatchesProject(tt.sm, tt.project)
+			if got != tt.want {
+				t.Errorf("sessionMatchesProject = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifySessionPreview(t *testing.T) {
+	branchRules := map[string]string{"feature/*": "feature", "fix/*": "bug"}
+	agentRules := map[string]string{"explore": "exploration", "review": "review"}
+	commitRules := config.DefaultCommitRules
+	statusRules := config.DefaultStatusRules
+
+	tests := []struct {
+		name          string
+		sm            session.Summary
+		wantType      string
+		wantTypeChg   bool
+		wantStatus    string
+		wantStatusChg bool
+	}{
+		{
+			name:        "commit rule priority (fix:)",
+			sm:          session.Summary{Summary: "fix: broken auth", Branch: "feature/auth"},
+			wantType:    "bug",
+			wantTypeChg: true,
+		},
+		{
+			name:        "branch rule match",
+			sm:          session.Summary{Summary: "Implement login", Branch: "feature/auth"},
+			wantType:    "feature",
+			wantTypeChg: true,
+		},
+		{
+			name:        "agent rule match",
+			sm:          session.Summary{Summary: "Explore codebase", Branch: "main", Agent: "explore"},
+			wantType:    "exploration",
+			wantTypeChg: true,
+		},
+		{
+			name:          "status rule match",
+			sm:            session.Summary{Summary: "[WIP] Work in progress"},
+			wantType:      "",
+			wantStatus:    "active",
+			wantStatusChg: true,
+		},
+		{
+			name:        "already classified, same type",
+			sm:          session.Summary{Summary: "fix: bug", SessionType: "bug"},
+			wantType:    "bug",
+			wantTypeChg: false,
+		},
+		{
+			name:        "already classified, different type",
+			sm:          session.Summary{Summary: "fix: bug", SessionType: "feature"},
+			wantType:    "bug",
+			wantTypeChg: true,
+		},
+		{
+			name:        "no match",
+			sm:          session.Summary{Summary: "Random session", Branch: "main", Agent: "coder"},
+			wantType:    "",
+			wantTypeChg: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := classifySessionPreview(tt.sm, branchRules, agentRules, commitRules, statusRules)
+			if row.NewType != tt.wantType {
+				t.Errorf("NewType = %q, want %q", row.NewType, tt.wantType)
+			}
+			if row.TypeChanged != tt.wantTypeChg {
+				t.Errorf("TypeChanged = %v, want %v", row.TypeChanged, tt.wantTypeChg)
+			}
+			if tt.wantStatus != "" {
+				if row.NewStatus != tt.wantStatus {
+					t.Errorf("NewStatus = %q, want %q", row.NewStatus, tt.wantStatus)
+				}
+			}
+			if row.StatusChanged != tt.wantStatusChg {
+				t.Errorf("StatusChanged = %v, want %v", row.StatusChanged, tt.wantStatusChg)
+			}
+		})
+	}
+}
+
+func TestExtractSkillContentNames(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{`no skills here`, 0},
+		{`<skill_content name="one">content</skill_content>`, 1},
+		{`<skill_content name="a">x</skill_content> gap <skill_content name="b">y</skill_content>`, 2},
+		{`<skill_content name="">empty</skill_content>`, 0},
+	}
+	for _, tt := range tests {
+		got := extractSkillContentNames(tt.input)
+		if len(got) != tt.want {
+			t.Errorf("extractSkillContentNames = %d names, want %d", len(got), tt.want)
+		}
 	}
 }

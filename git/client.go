@@ -213,6 +213,39 @@ func (c *Client) Checkout(branch string) error {
 	return nil
 }
 
+// SwitchBranch switches to the given branch using `git switch`.
+// Unlike Checkout (which uses `git checkout --`), this does a proper branch switch.
+func (c *Client) SwitchBranch(branch string) error {
+	_, err := c.run("switch", branch)
+	if err != nil {
+		return fmt.Errorf("switch to %s: %w", branch, err)
+	}
+	return nil
+}
+
+// WorktreeAdd creates a new git worktree at the given path, checked out at ref.
+// The worktree directory is created automatically by git.
+// ref can be a branch name, tag, or commit SHA; if empty, HEAD is used.
+func (c *Client) WorktreeAdd(path, ref string) error {
+	if ref == "" {
+		ref = "HEAD"
+	}
+	_, err := c.run("worktree", "add", "--detach", path, ref)
+	if err != nil {
+		return fmt.Errorf("worktree add %s at %s: %w", path, ref, err)
+	}
+	return nil
+}
+
+// WorktreeRemove removes a previously created worktree.
+func (c *Client) WorktreeRemove(path string) error {
+	_, err := c.run("worktree", "remove", "--force", path)
+	if err != nil {
+		return fmt.Errorf("worktree remove %s: %w", path, err)
+	}
+	return nil
+}
+
 // --- Sync branch operations ---
 // These methods use git plumbing to read/write files on the aisync/sessions
 // branch without touching the working directory.
@@ -405,6 +438,41 @@ func (c *Client) RemoteURL(name string) string {
 		return ""
 	}
 	return url
+}
+
+// DefaultBranch returns the default branch of the remote (e.g. "main", "master").
+// It reads from refs/remotes/origin/HEAD, falling back to common branch names.
+func (c *Client) DefaultBranch() string {
+	// Try symbolic-ref for the remote HEAD
+	out, err := c.run("symbolic-ref", "refs/remotes/origin/HEAD")
+	if err == nil {
+		// Format: refs/remotes/origin/main → extract "main"
+		parts := strings.Split(out, "/")
+		if len(parts) > 0 {
+			return parts[len(parts)-1]
+		}
+	}
+	// Fallback: check common branch names
+	for _, name := range []string{"main", "master", "dev", "develop"} {
+		if _, err := c.run("rev-parse", "--verify", "refs/heads/"+name); err == nil {
+			return name
+		}
+	}
+	return ""
+}
+
+// ListBranches returns local branch names.
+func (c *Client) ListBranches() []string {
+	out, err := c.run("for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil || out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
+}
+
+// RepoDir returns the repository directory.
+func (c *Client) RepoDir() string {
+	return c.repoDir
 }
 
 // runRaw runs a git command and returns raw output bytes (no trimming).

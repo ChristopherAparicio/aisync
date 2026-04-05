@@ -87,8 +87,12 @@
           {{if .HasAI}}
           <a href="/sessions/{{.LastSessionID}}" class="fe-ai-link" title="{{.LastSummary}}">
             <span class="fe-ai-badge">AI</span>
-            <span class="fe-ai-count">{{.SessionCount}}</span>
           </a>
+          {{if .LastCommitSHA}}<a href="/sessions/{{.LastSessionID}}" class="fe-sha-badge font-mono" title="Commit {{.LastCommitSHA}}">{{.LastCommitSHA}}</a>{{end}}
+          <a href="/sessions/{{.LastSessionID}}" class="fe-session-badge font-mono" title="Session {{.LastSessionID}}">{{truncate .LastSessionID 8}}</a>
+          {{if gt .SessionCount 1}}
+          <a href="/blame?file={{if $.DirPrefix}}{{$.DirPrefix}}/{{end}}{{.Name}}&amp;project={{$.ProjectPath}}" class="fe-ai-more" title="{{.SessionCount}} sessions modified this file">+{{sub .SessionCount 1}}</a>
+          {{end}}
           {{end}}
         </td>
         <td class="fe-cell-when text-muted">{{if .LastCommitAgo}}{{.LastCommitAgo}}{{else}}{{.LastTimeAgo}}{{end}}</td>

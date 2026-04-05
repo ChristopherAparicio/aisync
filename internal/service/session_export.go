@@ -160,6 +160,7 @@ func (s *SessionService) Import(req ImportRequest) (*ImportResult, error) {
 		if sess.OwnerID == "" {
 			sess.OwnerID = s.resolveOwner()
 		}
+		s.stampCosts(sess)
 		if err := s.store.Save(sess); err != nil {
 			return nil, fmt.Errorf("storing session: %w", err)
 		}
