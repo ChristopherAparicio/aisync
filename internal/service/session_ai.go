@@ -428,6 +428,7 @@ func (s *SessionService) Rewind(ctx context.Context, req RewindRequest) (*Rewind
 	if err := s.store.Save(rewound); err != nil {
 		return nil, fmt.Errorf("saving rewound session: %w", err)
 	}
+	s.stampAnalytics(rewound)
 
 	return &RewindResult{
 		NewSession:      rewound,

@@ -3,6 +3,11 @@
 //
 // This adapter is for users with an Anthropic API key (subscription or pay-as-you-go).
 // It calls POST https://api.anthropic.com/v1/messages with the session analysis prompt.
+//
+// When a ToolExecutor is provided in the AnalyzeRequest, this adapter operates
+// in agentic mode: it sends tool definitions to the model, then runs a multi-turn
+// loop executing tools and feeding results back until the model produces a final
+// text response or the iteration cap is reached.
 package anthropic
 
 import (
@@ -25,6 +30,10 @@ const (
 	DefaultModel   = "claude-sonnet-4-20250514"
 	DefaultTimeout = 120 * time.Second
 	apiVersion     = "2023-06-01"
+
+	// MaxToolIterations is the hard cap on agentic loop iterations.
+	// Prevents runaway token consumption if the model keeps calling tools.
+	MaxToolIterations = 10
 )
 
 // Config configures the Anthropic analysis adapter.
@@ -46,14 +55,19 @@ type Config struct {
 
 	// HTTPClient is an optional custom HTTP client (useful for testing).
 	HTTPClient *http.Client
+
+	// MaxIterations overrides the default max agentic loop iterations.
+	// 0 uses MaxToolIterations.
+	MaxIterations int
 }
 
 // Analyzer implements analysis.Analyzer using the Anthropic Messages API.
 type Analyzer struct {
-	apiKey  string
-	baseURL string
-	model   string
-	client  *http.Client
+	apiKey        string
+	baseURL       string
+	model         string
+	client        *http.Client
+	maxIterations int
 }
 
 // NewAnalyzer creates a new Anthropic-based analyzer.
@@ -83,12 +97,17 @@ func NewAnalyzer(cfg Config) (*Analyzer, error) {
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
+	maxIter := cfg.MaxIterations
+	if maxIter <= 0 {
+		maxIter = MaxToolIterations
+	}
 
 	return &Analyzer{
-		apiKey:  apiKey,
-		baseURL: baseURL,
-		model:   model,
-		client:  client,
+		apiKey:        apiKey,
+		baseURL:       baseURL,
+		model:         model,
+		client:        client,
+		maxIterations: maxIter,
 	}, nil
 }
 
@@ -98,6 +117,7 @@ func (a *Analyzer) Name() analysis.AdapterName {
 }
 
 // Analyze examines a session by calling the Anthropic Messages API.
+// When req.ToolExecutor is non-nil, operates in agentic mode with tool use.
 func (a *Analyzer) Analyze(ctx context.Context, req analysis.AnalyzeRequest) (*analysis.AnalysisReport, error) {
 	if len(req.Session.Messages) == 0 {
 		return nil, fmt.Errorf("session has no messages to analyze")
@@ -111,10 +131,76 @@ func (a *Analyzer) Analyze(ctx context.Context, req analysis.AnalyzeRequest) (*a
 		MaxTokens: 4096,
 		System:    systemPrompt,
 		Messages: []message{
-			{Role: "user", Content: prompt},
+			{Role: "user", Content: []contentBlock{{Type: "text", Text: prompt}}},
 		},
 	}
 
+	// Attach tools if executor is available (agentic mode).
+	if req.ToolExecutor != nil {
+		tools := analysis.AnalystTools()
+		for _, t := range tools {
+			msgReq.Tools = append(msgReq.Tools, toolDefinition{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			})
+		}
+	}
+
+	// Agentic loop: call API, execute tools, repeat until end_turn or max iterations.
+	var finalContent string
+	for iteration := 0; iteration <= a.maxIterations; iteration++ {
+		resp, err := a.callAPI(ctx, msgReq)
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if this is a tool_use response.
+		if resp.StopReason == "tool_use" && req.ToolExecutor != nil && iteration < a.maxIterations {
+			// Append the assistant's response (with tool_use blocks) to messages.
+			msgReq.Messages = append(msgReq.Messages, message{
+				Role:    "assistant",
+				Content: resp.Content,
+			})
+
+			// Execute each tool call and build tool_result blocks.
+			var toolResults []contentBlock
+			for _, block := range resp.Content {
+				if block.Type != "tool_use" {
+					continue
+				}
+				resultText, isError := dispatchTool(req.ToolExecutor, block.Name, block.Input)
+				toolResults = append(toolResults, contentBlock{
+					Type:      "tool_result",
+					ToolUseID: block.ID,
+					Content:   resultText,
+					IsError:   isError,
+				})
+			}
+
+			// Append tool results as a user message (Anthropic API convention).
+			msgReq.Messages = append(msgReq.Messages, message{
+				Role:    "user",
+				Content: toolResults,
+			})
+
+			continue // Next iteration of the agentic loop.
+		}
+
+		// Not a tool_use response (or max iterations reached) — extract final text.
+		finalContent = extractText(resp.Content)
+		break
+	}
+
+	if finalContent == "" {
+		return nil, fmt.Errorf("anthropic returned empty text content after %d iterations", a.maxIterations)
+	}
+
+	return parseReport(finalContent)
+}
+
+// callAPI sends a single request to the Anthropic Messages API and returns the parsed response.
+func (a *Analyzer) callAPI(ctx context.Context, msgReq messagesRequest) (*messagesResponse, error) {
 	body, err := json.Marshal(msgReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling anthropic request: %w", err)
@@ -144,13 +230,11 @@ func (a *Analyzer) Analyze(ctx context.Context, req analysis.AnalyzeRequest) (*a
 		return nil, fmt.Errorf("decoding anthropic response: %w", err)
 	}
 
-	// Extract text content from the response.
-	content := extractText(msgResp.Content)
-	if content == "" {
-		return nil, fmt.Errorf("anthropic returned empty text content")
-	}
+	return &msgResp, nil
+}
 
-	// Parse the JSON analysis report.
+// parseReport extracts and validates an analysis report from the model's text output.
+func parseReport(content string) (*analysis.AnalysisReport, error) {
 	var report analysis.AnalysisReport
 	if err := json.Unmarshal([]byte(content), &report); err != nil {
 		// Try extracting JSON from markdown fences (models sometimes ignore instructions).
@@ -239,31 +323,60 @@ func trimSpace(s string) string {
 }
 
 // ── Anthropic API types ──
+//
+// These types model the Anthropic Messages API request/response format.
+// Content is represented as []contentBlock to support both text and tool_use
+// content types in the same message (required for the agentic loop).
 
 type messagesRequest struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system,omitempty"`
-	Messages  []message `json:"messages"`
+	Model     string           `json:"model"`
+	MaxTokens int              `json:"max_tokens"`
+	System    string           `json:"system,omitempty"`
+	Messages  []message        `json:"messages"`
+	Tools     []toolDefinition `json:"tools,omitempty"`
 }
 
+// message represents a single message in the conversation.
+// Content is always []contentBlock for both request and response.
 type message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string         `json:"role"`
+	Content []contentBlock `json:"content"`
 }
 
 type messagesResponse struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Role    string         `json:"role"`
-	Content []contentBlock `json:"content"`
-	Model   string         `json:"model"`
-	Usage   usage          `json:"usage"`
+	ID         string         `json:"id"`
+	Type       string         `json:"type"`
+	Role       string         `json:"role"`
+	Content    []contentBlock `json:"content"`
+	Model      string         `json:"model"`
+	StopReason string         `json:"stop_reason"`
+	Usage      usage          `json:"usage"`
 }
 
+// contentBlock represents a single content element within a message.
+// Multiple types are supported: text, tool_use, tool_result.
 type contentBlock struct {
+	// Common field.
 	Type string `json:"type"`
+
+	// For type="text": the text content.
 	Text string `json:"text,omitempty"`
+
+	// For type="tool_use": the tool call details.
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+
+	// For type="tool_result": the result of a tool call.
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	Content   string `json:"content,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
+}
+
+type toolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type usage struct {
@@ -271,53 +384,5 @@ type usage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
-// systemPrompt is identical to the LLM/Ollama adapters for output consistency.
-const systemPrompt = `You are a senior AI coding session analyst. Given detailed statistics about an AI coding session
-(tool usage, error rates, message patterns, capabilities, MCP servers), produce a structured JSON analysis report.
-
-Your response must be a valid JSON object with these fields:
-
-{
-  "score": <integer 0-100>,
-  "summary": "<one-paragraph assessment>",
-  "problems": [
-    {
-      "severity": "<low|medium|high>",
-      "description": "<what went wrong>",
-      "message_start": <optional 1-based message index>,
-      "message_end": <optional 1-based message index>,
-      "tool_name": "<optional tool name>"
-    }
-  ],
-  "recommendations": [
-    {
-      "category": "<skill|config|workflow|tool>",
-      "title": "<short heading>",
-      "description": "<detailed explanation>",
-      "priority": <1-5, 1=highest>
-    }
-  ],
-  "skill_suggestions": [
-    {
-      "name": "<proposed skill identifier>",
-      "description": "<what it would do>",
-      "trigger": "<when to activate>",
-      "content": "<optional draft content>"
-    }
-  ]
-}
-
-Scoring guidelines:
-- 80-100: Excellent. Minimal wasted tokens, focused tool usage, clean conversation flow.
-- 60-79: Good. Minor inefficiencies but generally well-structured.
-- 40-59: Fair. Noticeable waste — retry loops, excessive reads, or bloated contexts.
-- 20-39: Poor. Significant token waste from retries, hallucination recovery, or unfocused exploration.
-- 0-19: Very poor. Most tokens wasted on failed attempts or circular conversation.
-
-Focus on actionable findings:
-- Identify retry loops, repeated file reads, unused tool calls, error cascades
-- Suggest skills that could automate repetitive patterns
-- Recommend configuration changes (e.g., adjusting context size, enabling caching)
-- Flag workflow improvements (e.g., breaking tasks into smaller commits)
-
-Respond ONLY with valid JSON, no markdown fences, no explanation.`
+// systemPrompt reuses the canonical prompt from the llm adapter for consistency.
+var systemPrompt = llmadapter.SystemPrompt

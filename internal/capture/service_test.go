@@ -48,9 +48,10 @@ func TestCapture_autoDetect(t *testing.T) {
 		t.Errorf("Provider = %q, want %q", result.Provider, session.ProviderClaudeCode)
 	}
 
-	// Verify session was stored
-	if store.LastSaved == nil {
-		t.Error("Session was not saved to store")
+	// captureOne no longer calls Save() — the service layer handles persistence.
+	// Verify that captureOne returned the session without saving.
+	if store.SaveCount != 0 {
+		t.Errorf("Save() called %d times, want 0 (deferred to service layer)", store.SaveCount)
 	}
 
 	// Verify branch link was added
@@ -333,9 +334,9 @@ func TestCapture_multiSession(t *testing.T) {
 		t.Errorf("Second capture ID = %q, should differ from first (no dedup)", firstID)
 	}
 
-	// Both sessions should be saved (saveCount == 2)
-	if store.SaveCount != 2 {
-		t.Errorf("saveCount = %d, want 2", store.SaveCount)
+	// captureOne no longer calls Save() — the service layer handles persistence.
+	if store.SaveCount != 0 {
+		t.Errorf("saveCount = %d, want 0 (deferred to service layer)", store.SaveCount)
 	}
 
 	// Summary should reflect the second session
@@ -377,9 +378,9 @@ func TestCaptureAll_explicitProvider(t *testing.T) {
 		t.Fatalf("CaptureAll() returned %d results, want 3", len(results))
 	}
 
-	// Verify all sessions were saved
-	if store.SaveCount != 3 {
-		t.Errorf("saveCount = %d, want 3", store.SaveCount)
+	// captureOne no longer calls Save() — the service layer handles persistence.
+	if store.SaveCount != 0 {
+		t.Errorf("saveCount = %d, want 0 (deferred to service layer)", store.SaveCount)
 	}
 
 	// Verify IDs match
@@ -449,8 +450,8 @@ func TestCaptureByID(t *testing.T) {
 	if result.Session.Summary != "second" {
 		t.Errorf("Summary = %q, want %q", result.Session.Summary, "second")
 	}
-	if store.SaveCount != 1 {
-		t.Errorf("saveCount = %d, want 1", store.SaveCount)
+	if store.SaveCount != 0 {
+		t.Errorf("saveCount = %d, want 0 (deferred to service layer)", store.SaveCount)
 	}
 }
 
@@ -579,8 +580,8 @@ func TestCapture_noSkipWhenMessageCountDiffers(t *testing.T) {
 	if result.Skipped {
 		t.Error("Capture() should NOT skip when message count differs")
 	}
-	if store.SaveCount != 1 {
-		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	if store.SaveCount != 0 {
+		t.Errorf("Save() called %d times, want 0 (deferred to service layer)", store.SaveCount)
 	}
 }
 
@@ -622,8 +623,8 @@ func TestCapture_noSkipWhenUpdatedAtDiffers(t *testing.T) {
 	if result.Skipped {
 		t.Error("Capture() should NOT skip when updatedAt differs (rewind case)")
 	}
-	if store.SaveCount != 1 {
-		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	if store.SaveCount != 0 {
+		t.Errorf("Save() called %d times, want 0 (deferred to service layer)", store.SaveCount)
 	}
 }
 
@@ -661,8 +662,8 @@ func TestCapture_noSkipOnFirstCapture(t *testing.T) {
 	if result.Skipped {
 		t.Error("Capture() should NOT skip on first capture")
 	}
-	if store.SaveCount != 1 {
-		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	if store.SaveCount != 0 {
+		t.Errorf("Save() called %d times, want 0 (deferred to service layer)", store.SaveCount)
 	}
 }
 
@@ -695,8 +696,194 @@ func TestCapture_noSkipForNonFreshnessProvider(t *testing.T) {
 	if result.Skipped {
 		t.Error("Capture() should NOT skip for providers without FreshnessChecker")
 	}
-	if store.SaveCount != 1 {
-		t.Errorf("Save() called %d times, want 1", store.SaveCount)
+	if store.SaveCount != 0 {
+		t.Errorf("Save() called %d times, want 0 (deferred to service layer)", store.SaveCount)
+	}
+}
+
+// --- Incremental capture tests ---
+
+func TestCapture_incrementalExport_usedWhenAvailable(t *testing.T) {
+	store := testutil.NewMockStore()
+	// Pre-populate store with existing session (3 messages).
+	existingSession := &session.Session{
+		ID:       "ses-inc",
+		Provider: session.ProviderOpenCode,
+		Branch:   "main",
+		Messages: []session.Message{
+			{ID: "m1", Role: session.RoleUser, Content: "hello"},
+			{ID: "m2", Role: session.RoleAssistant, Content: "hi"},
+			{ID: "m3", Role: session.RoleUser, Content: "do X"},
+		},
+		TokenUsage: session.TokenUsage{InputTokens: 300, OutputTokens: 200, TotalTokens: 500},
+	}
+	store.Sessions["ses-inc"] = existingSession
+	store.Freshness = map[session.ID][2]int64{
+		"ses-inc": {3, 1000}, // stored: 3 msgs
+	}
+
+	prov := &mockIncrementalProvider{
+		mockFreshnessProvider: mockFreshnessProvider{
+			mockProvider: mockProvider{
+				name: session.ProviderOpenCode,
+				sessions: []session.Summary{
+					{ID: "ses-inc", Provider: session.ProviderOpenCode, Branch: "main", CreatedAt: time.Now()},
+				},
+				exportSession: &session.Session{
+					ID: "ses-inc", Provider: session.ProviderOpenCode,
+					Branch: "main", ProjectPath: "/test",
+					Messages: make([]session.Message, 5), // 5 total — full export
+				},
+			},
+			freshness: map[session.ID]*provider.Freshness{
+				"ses-inc": {MessageCount: 5, UpdatedAt: 2000}, // 5 > 3 → changed
+			},
+		},
+		incrementalResult: &provider.IncrementalResult{
+			NewMessages: []session.Message{
+				{ID: "m4", Role: session.RoleAssistant, Content: "done X"},
+				{ID: "m5", Role: session.RoleUser, Content: "thanks"},
+			},
+			UpdatedAt:  2000,
+			TokenUsage: session.TokenUsage{InputTokens: 500, OutputTokens: 350, TotalTokens: 850},
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+
+	// Should have used incremental path, not full export.
+	if !prov.incrementalCalled {
+		t.Error("ExportIncremental() was not called")
+	}
+	if prov.exportCalled {
+		t.Error("Export() should NOT be called when incremental succeeds")
+	}
+
+	// Merged session should have 5 messages (3 existing + 2 new).
+	if len(result.Session.Messages) != 5 {
+		t.Errorf("message count = %d, want 5", len(result.Session.Messages))
+	}
+
+	// Token usage should be updated to the full session's totals.
+	if result.Session.TokenUsage.TotalTokens != 850 {
+		t.Errorf("TotalTokens = %d, want 850", result.Session.TokenUsage.TotalTokens)
+	}
+}
+
+func TestCapture_incrementalExport_fallbackOnError(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.Sessions["ses-fb"] = &session.Session{
+		ID:       "ses-fb",
+		Provider: session.ProviderOpenCode,
+		Messages: []session.Message{{ID: "m1"}},
+	}
+	store.Freshness = map[session.ID][2]int64{
+		"ses-fb": {1, 1000},
+	}
+
+	prov := &mockIncrementalProvider{
+		mockFreshnessProvider: mockFreshnessProvider{
+			mockProvider: mockProvider{
+				name: session.ProviderOpenCode,
+				sessions: []session.Summary{
+					{ID: "ses-fb", Provider: session.ProviderOpenCode, Branch: "main", CreatedAt: time.Now()},
+				},
+				exportSession: &session.Session{
+					ID: "ses-fb", Provider: session.ProviderOpenCode,
+					Branch: "main", ProjectPath: "/test",
+					Messages: []session.Message{{ID: "m1"}, {ID: "m2"}, {ID: "m3"}},
+				},
+			},
+			freshness: map[session.ID]*provider.Freshness{
+				"ses-fb": {MessageCount: 3, UpdatedAt: 2000},
+			},
+		},
+		incrementalErr: provider.ErrIncrementalNotPossible, // force fallback
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+
+	// Incremental was attempted but failed — should fall back to full Export.
+	if !prov.incrementalCalled {
+		t.Error("ExportIncremental() should have been called")
+	}
+	if !prov.exportCalled {
+		t.Error("Export() should be called as fallback when incremental fails")
+	}
+
+	// Full export returns 3 messages.
+	if len(result.Session.Messages) != 3 {
+		t.Errorf("message count = %d, want 3", len(result.Session.Messages))
+	}
+}
+
+func TestCapture_incrementalExport_firstCapture_usesFullExport(t *testing.T) {
+	store := testutil.NewMockStore() // no freshness, no stored session
+
+	prov := &mockIncrementalProvider{
+		mockFreshnessProvider: mockFreshnessProvider{
+			mockProvider: mockProvider{
+				name: session.ProviderOpenCode,
+				sessions: []session.Summary{
+					{ID: "ses-new", Provider: session.ProviderOpenCode, Branch: "main", CreatedAt: time.Now()},
+				},
+				exportSession: &session.Session{
+					ID: "ses-new", Provider: session.ProviderOpenCode,
+					Branch: "main", ProjectPath: "/test",
+					Messages: []session.Message{{ID: "m1"}, {ID: "m2"}},
+				},
+			},
+			freshness: map[session.ID]*provider.Freshness{
+				"ses-new": {MessageCount: 2, UpdatedAt: 1000},
+			},
+		},
+	}
+
+	reg := provider.NewRegistry(prov)
+	svc := NewService(reg, store)
+
+	result, err := svc.Capture(Request{
+		ProjectPath:  "/test",
+		Branch:       "main",
+		Mode:         session.StorageModeCompact,
+		ProviderName: session.ProviderOpenCode,
+	})
+	if err != nil {
+		t.Fatalf("Capture() error: %v", err)
+	}
+
+	// First capture: no stored session → should use full Export, not incremental.
+	if prov.incrementalCalled {
+		t.Error("ExportIncremental() should NOT be called on first capture")
+	}
+	if !prov.exportCalled {
+		t.Error("Export() should be called on first capture")
+	}
+
+	if len(result.Session.Messages) != 2 {
+		t.Errorf("message count = %d, want 2", len(result.Session.Messages))
 	}
 }
 
@@ -743,4 +930,26 @@ func (m *mockFreshnessProvider) SessionFreshness(id session.ID) (*provider.Fresh
 		}
 	}
 	return nil, session.ErrSessionNotFound
+}
+
+// mockIncrementalProvider supports FreshnessChecker + IncrementalExporter.
+type mockIncrementalProvider struct {
+	mockFreshnessProvider
+	incrementalResult *provider.IncrementalResult
+	incrementalErr    error
+	exportCalled      bool
+	incrementalCalled bool
+}
+
+func (m *mockIncrementalProvider) Export(id session.ID, mode session.StorageMode) (*session.Session, error) {
+	m.exportCalled = true
+	return m.mockProvider.Export(id, mode)
+}
+
+func (m *mockIncrementalProvider) ExportIncremental(_ session.ID, _ int, _ session.StorageMode) (*provider.IncrementalResult, error) {
+	m.incrementalCalled = true
+	if m.incrementalErr != nil {
+		return nil, m.incrementalErr
+	}
+	return m.incrementalResult, nil
 }

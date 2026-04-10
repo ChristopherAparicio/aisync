@@ -268,54 +268,6 @@ type chatResponse struct {
 	EvalCount       int         `json:"eval_count,omitempty"`
 }
 
-// systemPrompt is the system instruction for the Ollama analysis call.
-// Same schema as the LLM adapter for consistent output format.
-const systemPrompt = `You are a senior AI coding session analyst. Given detailed statistics about an AI coding session
-(tool usage, error rates, message patterns, capabilities, MCP servers), produce a structured JSON analysis report.
-
-Your response must be a valid JSON object with these fields:
-
-{
-  "score": <integer 0-100>,
-  "summary": "<one-paragraph assessment>",
-  "problems": [
-    {
-      "severity": "<low|medium|high>",
-      "description": "<what went wrong>",
-      "message_start": <optional 1-based message index>,
-      "message_end": <optional 1-based message index>,
-      "tool_name": "<optional tool name>"
-    }
-  ],
-  "recommendations": [
-    {
-      "category": "<skill|config|workflow|tool>",
-      "title": "<short heading>",
-      "description": "<detailed explanation>",
-      "priority": <1-5, 1=highest>
-    }
-  ],
-  "skill_suggestions": [
-    {
-      "name": "<proposed skill identifier>",
-      "description": "<what it would do>",
-      "trigger": "<when to activate>",
-      "content": "<optional draft content>"
-    }
-  ]
-}
-
-Scoring guidelines:
-- 80-100: Excellent. Minimal wasted tokens, focused tool usage, clean conversation flow.
-- 60-79: Good. Minor inefficiencies but generally well-structured.
-- 40-59: Fair. Noticeable waste — retry loops, excessive reads, or bloated contexts.
-- 20-39: Poor. Significant token waste from retries, hallucination recovery, or unfocused exploration.
-- 0-19: Very poor. Most tokens wasted on failed attempts or circular conversation.
-
-Focus on actionable findings:
-- Identify retry loops, repeated file reads, unused tool calls, error cascades
-- Suggest skills that could automate repetitive patterns
-- Recommend configuration changes (e.g., adjusting context size, enabling caching)
-- Flag workflow improvements (e.g., breaking tasks into smaller commits)
-
-Respond ONLY with valid JSON, no markdown fences, no explanation.`
+// systemPrompt reuses the canonical prompt from the llm adapter for consistency.
+// Defined in internal/analysis/llm/analyzer.go as SystemPrompt.
+var systemPrompt = llmadapter.SystemPrompt

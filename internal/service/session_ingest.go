@@ -169,6 +169,7 @@ func (s *SessionService) Ingest(_ context.Context, req IngestRequest) (*IngestRe
 	if err := s.store.Save(sess); err != nil {
 		return nil, fmt.Errorf("storing ingested session: %w", err)
 	}
+	s.stampAnalytics(sess)
 
 	// Post-capture hook: extract events, classify errors, fire webhooks, etc.
 	// Non-blocking: errors are swallowed (same contract as Capture).

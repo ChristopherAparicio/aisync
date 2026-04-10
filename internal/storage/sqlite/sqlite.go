@@ -290,9 +290,10 @@ func (s *Store) Save(session *session.Session) error {
 func (s *Store) Get(id session.ID) (*session.Session, error) {
 	var payload []byte
 	var remoteURL, sessionType, projectCategory, status string
+	var sourceUpdatedAt int64
 	err := s.db.QueryRow(
-		"SELECT payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '') FROM sessions WHERE id = ?", id,
-	).Scan(&payload, &remoteURL, &sessionType, &projectCategory, &status)
+		"SELECT payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, ''), COALESCE(source_updated_at, 0) FROM sessions WHERE id = ?", id,
+	).Scan(&payload, &remoteURL, &sessionType, &projectCategory, &status, &sourceUpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, session.ErrSessionNotFound
 	}
@@ -309,6 +310,10 @@ func (s *Store) Get(id session.ID) (*session.Session, error) {
 	if unmarshalErr := json.Unmarshal(payload, &sess); unmarshalErr != nil {
 		return nil, fmt.Errorf("unmarshaling session: %w", unmarshalErr)
 	}
+
+	// SourceUpdatedAt has json:"-" so it is never in the payload — restore it
+	// from the dedicated DB column.
+	sess.SourceUpdatedAt = sourceUpdatedAt
 
 	// Overlay mutable columns that may have been updated after the payload was saved.
 	// These columns can be changed via UpdateRemoteURL, UpdateSessionType, etc.
@@ -387,7 +392,7 @@ func (s *Store) GetBatch(ids []session.ID) (map[session.ID]*session.Session, err
 	// ── Query 1: session payloads + mutable columns ──
 	rows, err := s.db.Query(
 		"SELECT id, payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), "+
-			"COALESCE(project_category, ''), COALESCE(status, '') "+
+			"COALESCE(project_category, ''), COALESCE(status, ''), COALESCE(source_updated_at, 0) "+
 			"FROM sessions WHERE id IN ("+inClause+")", args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch querying sessions: %w", err)
@@ -398,7 +403,8 @@ func (s *Store) GetBatch(ids []session.ID) (map[session.ID]*session.Session, err
 			var id string
 			var payload []byte
 			var remoteURL, sessionType, projectCategory, status string
-			if scanErr := rows.Scan(&id, &payload, &remoteURL, &sessionType, &projectCategory, &status); scanErr != nil {
+			var sourceUpdatedAt int64
+			if scanErr := rows.Scan(&id, &payload, &remoteURL, &sessionType, &projectCategory, &status, &sourceUpdatedAt); scanErr != nil {
 				log.Printf("[GetBatch] scan error: %v", scanErr)
 				continue
 			}
@@ -414,6 +420,9 @@ func (s *Store) GetBatch(ids []session.ID) (map[session.ID]*session.Session, err
 				log.Printf("[GetBatch] unmarshal error for %s: %v", id, umErr)
 				continue
 			}
+
+			// SourceUpdatedAt has json:"-" — restore from DB column.
+			sess.SourceUpdatedAt = sourceUpdatedAt
 
 			// Clear companion slices that may be embedded in the payload JSON.
 			// The DB (session_links, file_changes) is the source of truth — we
@@ -1467,6 +1476,379 @@ func (s *Store) ListSessionsWithZeroCosts(limit int) ([]session.ID, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions with zero costs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []session.ID
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			continue
+		}
+		ids = append(ids, session.ID(id))
+	}
+	return ids, rows.Err()
+}
+
+// ── Materialized analytics (Phase 4 CQRS read model) ──
+//
+// The three methods below persist and query the session_analytics /
+// session_agent_usage tables created by migration 031. They are the SQLite
+// side of the CQRS materialized read model that replaces the old per-request
+// message-array recompute in Forecast / CacheEfficiency / ContextSaturation /
+// AgentROIAnalysis.
+
+// marshalJSONBlob marshals v as JSON. Returns "" for nil pointers.
+// json.Marshal encodes a typed nil pointer as the four-byte string "null";
+// we normalize that to "" so the read path treats it the same as "never set".
+func marshalJSONBlob(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	data, err := json.Marshal(v)
+	if err != nil || string(data) == "null" {
+		return ""
+	}
+	return string(data)
+}
+
+// unmarshalJSONBlob deserializes a JSON TEXT column into dst.
+// Empty/blank strings are treated as "no data" and leave dst unchanged.
+func unmarshalJSONBlob(raw string, dst interface{}) {
+	if raw == "" {
+		return
+	}
+	_ = json.Unmarshal([]byte(raw), dst)
+}
+
+// UpsertSessionAnalytics stores or replaces the materialized analytics row
+// for a session along with its sibling session_agent_usage rows.
+// The entire operation runs in a single transaction: the parent row in
+// session_analytics is upserted, all existing session_agent_usage rows for
+// the session are deleted, and the AgentUsage slice is inserted fresh.
+func (s *Store) UpsertSessionAnalytics(a session.Analytics) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx for UpsertSessionAnalytics: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Marshal the 6 JSON blob columns.
+	wasteJSON := marshalJSONBlob(a.WasteBreakdown)
+	freshnessJSON := marshalJSONBlob(a.Freshness)
+	overloadJSON := marshalJSONBlob(a.Overload)
+	syspromptJSON := marshalJSONBlob(a.PromptData)
+	fitnessJSON := marshalJSONBlob(a.FitnessData)
+	forecastJSON := marshalJSONBlob(a.ForecastInput)
+
+	_, err = tx.Exec(`
+		INSERT INTO session_analytics (
+			session_id,
+			peak_input_tokens, dominant_model, max_context_window, peak_saturation_pct,
+			has_compaction, compaction_count, compaction_drop_pct, compaction_wasted_tokens,
+			cache_read_tokens, cache_write_tokens, input_tokens,
+			cache_miss_count, cache_wasted_tokens, longest_gap_mins, session_avg_gap_mins,
+			backend, estimated_cost, actual_cost, fork_offset, deduplicated_cost,
+			total_agent_invocations, unique_agents_used, agent_tokens, agent_cost, total_wasted_tokens,
+			waste_breakdown_json, freshness_json, overload_json, sysprompt_json, fitness_json, forecast_input_json,
+			schema_version, computed_at
+		) VALUES (
+			?,
+			?,?,?,?,
+			?,?,?,?,
+			?,?,?,
+			?,?,?,?,
+			?,?,?,?,?,
+			?,?,?,?,?,
+			?,?,?,?,?,?,
+			?,?
+		)
+		ON CONFLICT(session_id) DO UPDATE SET
+			peak_input_tokens=excluded.peak_input_tokens, dominant_model=excluded.dominant_model,
+			max_context_window=excluded.max_context_window, peak_saturation_pct=excluded.peak_saturation_pct,
+			has_compaction=excluded.has_compaction, compaction_count=excluded.compaction_count,
+			compaction_drop_pct=excluded.compaction_drop_pct, compaction_wasted_tokens=excluded.compaction_wasted_tokens,
+			cache_read_tokens=excluded.cache_read_tokens, cache_write_tokens=excluded.cache_write_tokens,
+			input_tokens=excluded.input_tokens,
+			cache_miss_count=excluded.cache_miss_count, cache_wasted_tokens=excluded.cache_wasted_tokens,
+			longest_gap_mins=excluded.longest_gap_mins, session_avg_gap_mins=excluded.session_avg_gap_mins,
+			backend=excluded.backend, estimated_cost=excluded.estimated_cost,
+			actual_cost=excluded.actual_cost, fork_offset=excluded.fork_offset,
+			deduplicated_cost=excluded.deduplicated_cost,
+			total_agent_invocations=excluded.total_agent_invocations, unique_agents_used=excluded.unique_agents_used,
+			agent_tokens=excluded.agent_tokens, agent_cost=excluded.agent_cost,
+			total_wasted_tokens=excluded.total_wasted_tokens,
+			waste_breakdown_json=excluded.waste_breakdown_json, freshness_json=excluded.freshness_json,
+			overload_json=excluded.overload_json, sysprompt_json=excluded.sysprompt_json,
+			fitness_json=excluded.fitness_json, forecast_input_json=excluded.forecast_input_json,
+			schema_version=excluded.schema_version, computed_at=excluded.computed_at`,
+		a.SessionID,
+		a.PeakInputTokens, a.DominantModel, a.MaxContextWindow, a.PeakSaturationPct,
+		boolToInt(a.HasCompaction), a.CompactionCount, a.CompactionDropPct, a.CompactionWastedTokens,
+		a.CacheReadTokens, a.CacheWriteTokens, a.InputTokens,
+		a.CacheMissCount, a.CacheWastedTokens, a.LongestGapMins, a.SessionAvgGapMins,
+		a.Backend, a.EstimatedCost, a.ActualCost, a.ForkOffset, a.DeduplicatedCost,
+		a.TotalAgentInvocations, a.UniqueAgentsUsed, a.AgentTokens, a.AgentCost, a.TotalWastedTokens,
+		wasteJSON, freshnessJSON, overloadJSON, syspromptJSON, fitnessJSON, forecastJSON,
+		a.SchemaVersion, a.ComputedAt.Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert session_analytics for %s: %w", a.SessionID, err)
+	}
+
+	// Replace agent usage rows atomically: delete all, then insert fresh.
+	if _, err := tx.Exec("DELETE FROM session_agent_usage WHERE session_id = ?", a.SessionID); err != nil {
+		return fmt.Errorf("delete session_agent_usage for %s: %w", a.SessionID, err)
+	}
+	if len(a.AgentUsage) > 0 {
+		stmt, err := tx.Prepare(`INSERT INTO session_agent_usage
+			(session_id, agent_name, invocations, tokens, cost, errors)
+			VALUES (?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			return fmt.Errorf("prepare session_agent_usage insert: %w", err)
+		}
+		defer func() { _ = stmt.Close() }()
+		for _, au := range a.AgentUsage {
+			if _, err := stmt.Exec(a.SessionID, au.AgentName, au.Invocations, au.Tokens, au.Cost, au.Errors); err != nil {
+				return fmt.Errorf("insert session_agent_usage %s/%s: %w", a.SessionID, au.AgentName, err)
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetSessionAnalytics retrieves the materialized analytics for a single
+// session, with its AgentUsage slice hydrated from session_agent_usage.
+// Returns (nil, nil) — not an error — when no row exists.
+func (s *Store) GetSessionAnalytics(id session.ID) (*session.Analytics, error) {
+	var a session.Analytics
+	var hasCompaction int
+	var wasteJSON, freshnessJSON, overloadJSON, syspromptJSON, fitnessJSON, forecastJSON string
+	var computedAtStr string
+
+	err := s.db.QueryRow(`
+		SELECT session_id,
+			peak_input_tokens, dominant_model, max_context_window, peak_saturation_pct,
+			has_compaction, compaction_count, compaction_drop_pct, compaction_wasted_tokens,
+			cache_read_tokens, cache_write_tokens, input_tokens,
+			cache_miss_count, cache_wasted_tokens, longest_gap_mins, session_avg_gap_mins,
+			backend, estimated_cost, actual_cost, fork_offset, deduplicated_cost,
+			total_agent_invocations, unique_agents_used, agent_tokens, agent_cost, total_wasted_tokens,
+			COALESCE(waste_breakdown_json,''), COALESCE(freshness_json,''),
+			COALESCE(overload_json,''), COALESCE(sysprompt_json,''),
+			COALESCE(fitness_json,''), COALESCE(forecast_input_json,''),
+			schema_version, computed_at
+		FROM session_analytics WHERE session_id = ?`, id,
+	).Scan(
+		&a.SessionID,
+		&a.PeakInputTokens, &a.DominantModel, &a.MaxContextWindow, &a.PeakSaturationPct,
+		&hasCompaction, &a.CompactionCount, &a.CompactionDropPct, &a.CompactionWastedTokens,
+		&a.CacheReadTokens, &a.CacheWriteTokens, &a.InputTokens,
+		&a.CacheMissCount, &a.CacheWastedTokens, &a.LongestGapMins, &a.SessionAvgGapMins,
+		&a.Backend, &a.EstimatedCost, &a.ActualCost, &a.ForkOffset, &a.DeduplicatedCost,
+		&a.TotalAgentInvocations, &a.UniqueAgentsUsed, &a.AgentTokens, &a.AgentCost, &a.TotalWastedTokens,
+		&wasteJSON, &freshnessJSON, &overloadJSON, &syspromptJSON, &fitnessJSON, &forecastJSON,
+		&a.SchemaVersion, &computedAtStr,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get session_analytics for %s: %w", id, err)
+	}
+
+	a.HasCompaction = hasCompaction != 0
+	a.ComputedAt, _ = time.Parse(time.RFC3339, computedAtStr)
+
+	// Unmarshal JSON blobs into pointer fields (empty strings → nil pointers).
+	if wasteJSON != "" {
+		a.WasteBreakdown = new(session.TokenWasteBreakdown)
+		unmarshalJSONBlob(wasteJSON, a.WasteBreakdown)
+	}
+	if freshnessJSON != "" {
+		a.Freshness = new(session.SessionFreshness)
+		unmarshalJSONBlob(freshnessJSON, a.Freshness)
+	}
+	if overloadJSON != "" {
+		a.Overload = new(session.OverloadAnalysis)
+		unmarshalJSONBlob(overloadJSON, a.Overload)
+	}
+	if syspromptJSON != "" {
+		a.PromptData = new(session.SessionPromptData)
+		unmarshalJSONBlob(syspromptJSON, a.PromptData)
+	}
+	if fitnessJSON != "" {
+		a.FitnessData = new(session.SessionFitnessData)
+		unmarshalJSONBlob(fitnessJSON, a.FitnessData)
+	}
+	if forecastJSON != "" {
+		a.ForecastInput = new(session.SessionForecastInput)
+		unmarshalJSONBlob(forecastJSON, a.ForecastInput)
+	}
+
+	// Hydrate AgentUsage from sibling table.
+	agentRows, err := s.db.Query(
+		"SELECT agent_name, invocations, tokens, cost, errors FROM session_agent_usage WHERE session_id = ? ORDER BY agent_name",
+		id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query session_agent_usage for %s: %w", id, err)
+	}
+	defer func() { _ = agentRows.Close() }()
+
+	for agentRows.Next() {
+		var au session.AgentUsage
+		if scanErr := agentRows.Scan(&au.AgentName, &au.Invocations, &au.Tokens, &au.Cost, &au.Errors); scanErr != nil {
+			continue
+		}
+		a.AgentUsage = append(a.AgentUsage, au)
+	}
+	if err := agentRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session_agent_usage for %s: %w", id, err)
+	}
+
+	return &a, nil
+}
+
+// QueryAnalytics returns analytics rows matching the filter, joined with
+// the parent sessions table to populate AnalyticsRow.ProjectPath, CreatedAt,
+// and Branch in a single query. AgentUsage is NOT hydrated (hot paths
+// aggregate at parent level; per-agent reads go through GetSessionAnalytics).
+func (s *Store) QueryAnalytics(filter session.AnalyticsFilter) ([]session.AnalyticsRow, error) {
+	query := `
+		SELECT
+			sa.session_id,
+			sa.peak_input_tokens, sa.dominant_model, sa.max_context_window, sa.peak_saturation_pct,
+			sa.has_compaction, sa.compaction_count, sa.compaction_drop_pct, sa.compaction_wasted_tokens,
+			sa.cache_read_tokens, sa.cache_write_tokens, sa.input_tokens,
+			sa.cache_miss_count, sa.cache_wasted_tokens, sa.longest_gap_mins, sa.session_avg_gap_mins,
+			sa.backend, sa.estimated_cost, sa.actual_cost, sa.fork_offset, sa.deduplicated_cost,
+			sa.total_agent_invocations, sa.unique_agents_used, sa.agent_tokens, sa.agent_cost, sa.total_wasted_tokens,
+			COALESCE(sa.waste_breakdown_json,''), COALESCE(sa.freshness_json,''),
+			COALESCE(sa.overload_json,''), COALESCE(sa.sysprompt_json,''),
+			COALESCE(sa.fitness_json,''), COALESCE(sa.forecast_input_json,''),
+			sa.schema_version, sa.computed_at,
+			s.project_path, s.created_at, COALESCE(s.branch,''),
+			COALESCE(s.summary,''), COALESCE(s.agent,''),
+			COALESCE(s.message_count,0), COALESCE(s.total_tokens,0),
+			COALESCE(s.tool_call_count,0), COALESCE(s.error_count,0),
+			COALESCE(s.session_type,''), COALESCE(s.status,'')
+		FROM session_analytics sa
+		JOIN sessions s ON sa.session_id = s.id
+		WHERE 1=1`
+	var args []interface{}
+
+	if filter.ProjectPath != "" {
+		query += " AND s.project_path = ?"
+		args = append(args, filter.ProjectPath)
+	}
+	if !filter.Since.IsZero() {
+		query += " AND s.created_at >= ?"
+		args = append(args, filter.Since.Format(time.RFC3339))
+	}
+	if !filter.Until.IsZero() {
+		query += " AND s.created_at <= ?"
+		args = append(args, filter.Until.Format(time.RFC3339))
+	}
+	if filter.Backend != "" {
+		query += " AND sa.backend = ?"
+		args = append(args, filter.Backend)
+	}
+	if filter.MinSchemaVersion > 0 {
+		query += " AND sa.schema_version >= ?"
+		args = append(args, filter.MinSchemaVersion)
+	}
+
+	query += " ORDER BY s.created_at DESC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query session_analytics: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []session.AnalyticsRow
+	for rows.Next() {
+		var ar session.AnalyticsRow
+		var hasCompaction int
+		var wasteJSON, freshnessJSON, overloadJSON, syspromptJSON, fitnessJSON, forecastJSON string
+		var computedAtStr, createdAtStr string
+
+		var statusStr string
+		if err := rows.Scan(
+			&ar.SessionID,
+			&ar.PeakInputTokens, &ar.DominantModel, &ar.MaxContextWindow, &ar.PeakSaturationPct,
+			&hasCompaction, &ar.CompactionCount, &ar.CompactionDropPct, &ar.CompactionWastedTokens,
+			&ar.CacheReadTokens, &ar.CacheWriteTokens, &ar.InputTokens,
+			&ar.CacheMissCount, &ar.CacheWastedTokens, &ar.LongestGapMins, &ar.SessionAvgGapMins,
+			&ar.Backend, &ar.EstimatedCost, &ar.ActualCost, &ar.ForkOffset, &ar.DeduplicatedCost,
+			&ar.TotalAgentInvocations, &ar.UniqueAgentsUsed, &ar.AgentTokens, &ar.AgentCost, &ar.TotalWastedTokens,
+			&wasteJSON, &freshnessJSON, &overloadJSON, &syspromptJSON, &fitnessJSON, &forecastJSON,
+			&ar.SchemaVersion, &computedAtStr,
+			&ar.ProjectPath, &createdAtStr, &ar.Branch,
+			&ar.Summary, &ar.Agent,
+			&ar.MessageCount, &ar.TotalTokens,
+			&ar.ToolCallCount, &ar.ErrorCount,
+			&ar.SessionType, &statusStr,
+		); err != nil {
+			continue
+		}
+
+		ar.HasCompaction = hasCompaction != 0
+		ar.ComputedAt, _ = time.Parse(time.RFC3339, computedAtStr)
+		ar.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		ar.Status = session.SessionStatus(statusStr)
+
+		// Unmarshal JSON blobs.
+		if wasteJSON != "" {
+			ar.WasteBreakdown = new(session.TokenWasteBreakdown)
+			unmarshalJSONBlob(wasteJSON, ar.WasteBreakdown)
+		}
+		if freshnessJSON != "" {
+			ar.Freshness = new(session.SessionFreshness)
+			unmarshalJSONBlob(freshnessJSON, ar.Freshness)
+		}
+		if overloadJSON != "" {
+			ar.Overload = new(session.OverloadAnalysis)
+			unmarshalJSONBlob(overloadJSON, ar.Overload)
+		}
+		if syspromptJSON != "" {
+			ar.PromptData = new(session.SessionPromptData)
+			unmarshalJSONBlob(syspromptJSON, ar.PromptData)
+		}
+		if fitnessJSON != "" {
+			ar.FitnessData = new(session.SessionFitnessData)
+			unmarshalJSONBlob(fitnessJSON, ar.FitnessData)
+		}
+		if forecastJSON != "" {
+			ar.ForecastInput = new(session.SessionForecastInput)
+			unmarshalJSONBlob(forecastJSON, ar.ForecastInput)
+		}
+
+		result = append(result, ar)
+	}
+
+	return result, rows.Err()
+}
+
+// ListSessionsNeedingAnalytics returns session IDs that either have no row
+// in session_analytics at all, or have a row with schema_version < the
+// provided minSchemaVersion. Results are ordered by created_at DESC so that
+// the most recent sessions are backfilled first.
+func (s *Store) ListSessionsNeedingAnalytics(minSchemaVersion int, limit int) ([]session.ID, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`
+		SELECT s.id FROM sessions s
+		LEFT JOIN session_analytics sa ON s.id = sa.session_id
+		WHERE sa.session_id IS NULL OR sa.schema_version < ?
+		ORDER BY s.created_at DESC
+		LIMIT ?
+	`, minSchemaVersion, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions needing analytics: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -3151,6 +3533,137 @@ func runMigrations(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_project_capabilities_kind
 		ON project_capabilities(kind, is_active)`); err != nil {
 		return fmt.Errorf("migration 030 (project_capabilities kind index): %w", err)
+	}
+
+	// ── Migration 031: session_analytics sidecar table (CQRS read model) ──
+	//
+	// One row per session, computed once in the same transaction as Save() via
+	// the service-layer stampAnalytics() hook. Replaces the per-request recompute
+	// inside Forecast(), CacheEfficiency(), ContextSaturation(), AgentROIAnalysis()
+	// which used to load full session payloads and walk message arrays on every
+	// dashboard hit (12-14s for 1764 sessions, 90-day window, cache disabled).
+	//
+	// Design decisions (validated 2026-04-05):
+	//  - Inline in Save(): single-writer model, ~50ms overhead per write is invisible
+	//  - schema_version column: force-rebuild on formula changes via backfill task
+	//  - Backfill strategy: AnalyticsBackfillTask 200/run + handler fallback to live
+	//    computation for any session not yet in session_analytics (zero-downtime)
+	//
+	// The columns below cover the four catastrophic hot paths:
+	//  * ContextSaturation: peak_input_tokens, dominant_model, peak_saturation_pct,
+	//    compaction_*, max_context_window
+	//  * CacheEfficiency: cache_read_tokens, cache_write_tokens, input_tokens,
+	//    cache_miss_count, cache_wasted_tokens, longest_gap_mins, session_avg_gap_mins
+	//  * Forecast: backend, estimated_cost, actual_cost, fork_offset, deduplicated_cost
+	//  * AgentROI: rolled up via the sibling session_agent_usage table below
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_analytics (
+		session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+
+		-- ContextSaturation fields
+		peak_input_tokens        INTEGER NOT NULL DEFAULT 0,
+		dominant_model           TEXT    NOT NULL DEFAULT '',
+		max_context_window       INTEGER NOT NULL DEFAULT 0,
+		peak_saturation_pct      REAL    NOT NULL DEFAULT 0,
+		has_compaction           INTEGER NOT NULL DEFAULT 0,
+		compaction_count         INTEGER NOT NULL DEFAULT 0,
+		compaction_drop_pct      REAL    NOT NULL DEFAULT 0,
+		compaction_wasted_tokens INTEGER NOT NULL DEFAULT 0,
+
+		-- CacheEfficiency fields
+		cache_read_tokens        INTEGER NOT NULL DEFAULT 0,
+		cache_write_tokens       INTEGER NOT NULL DEFAULT 0,
+		input_tokens             INTEGER NOT NULL DEFAULT 0,
+		cache_miss_count         INTEGER NOT NULL DEFAULT 0,
+		cache_wasted_tokens      INTEGER NOT NULL DEFAULT 0,
+		longest_gap_mins         INTEGER NOT NULL DEFAULT 0,
+		session_avg_gap_mins     REAL    NOT NULL DEFAULT 0,
+
+		-- Forecast / cost breakdown fields
+		backend                  TEXT    NOT NULL DEFAULT '',
+		estimated_cost           REAL    NOT NULL DEFAULT 0,
+		actual_cost              REAL    NOT NULL DEFAULT 0,
+		fork_offset              INTEGER NOT NULL DEFAULT 0,
+		deduplicated_cost        REAL    NOT NULL DEFAULT 0,
+
+		-- Per-session agent rollups (see also session_agent_usage for per-agent breakdown)
+		total_agent_invocations  INTEGER NOT NULL DEFAULT 0,
+		unique_agents_used       INTEGER NOT NULL DEFAULT 0,
+		agent_tokens             INTEGER NOT NULL DEFAULT 0,
+		agent_cost               REAL    NOT NULL DEFAULT 0,
+		total_wasted_tokens      INTEGER NOT NULL DEFAULT 0,
+
+		-- JSON blob columns for complex per-session analyses that would
+		-- otherwise require walking messages on every dashboard hit. Each blob
+		-- is ~1-2 KB and deserializes in microseconds; the existing domain
+		-- Aggregate* helpers operate on these structs and are already fast.
+		--
+		-- These cover:
+		--  * waste_breakdown_json      → session.TokenWasteBreakdown     (ClassifyTokenWaste)
+		--  * freshness_json            → session.SessionFreshness        (AnalyzeFreshness)
+		--  * overload_json             → session.OverloadAnalysis        (DetectOverload)
+		--  * sysprompt_json            → session.SessionPromptData       (SystemPromptEstimate + counters)
+		--  * fitness_json              → session.SessionFitnessData      (per-task-type fitness)
+		--  * forecast_input_json       → session.SessionForecastInput    (ForecastSaturation input)
+		waste_breakdown_json     TEXT    NOT NULL DEFAULT '',
+		freshness_json           TEXT    NOT NULL DEFAULT '',
+		overload_json            TEXT    NOT NULL DEFAULT '',
+		sysprompt_json           TEXT    NOT NULL DEFAULT '',
+		fitness_json             TEXT    NOT NULL DEFAULT '',
+		forecast_input_json      TEXT    NOT NULL DEFAULT '',
+
+		-- Housekeeping
+		schema_version           INTEGER NOT NULL DEFAULT 1,
+		computed_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("migration 031 (session_analytics table): %w", err)
+	}
+	// Index on schema_version to let the backfill task quickly find rows needing
+	// rebuild after a formula change.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_analytics_schema_version
+		ON session_analytics(schema_version)`); err != nil {
+		return fmt.Errorf("migration 031 (session_analytics schema_version index): %w", err)
+	}
+
+	// Sibling table for per-agent usage rollups. Normalized because the cardinality
+	// of agents-per-session is small (~1-10) but unbounded, so exploding them into
+	// columns on session_analytics would be wrong.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_agent_usage (
+		session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+		agent_name  TEXT NOT NULL,
+		invocations INTEGER NOT NULL DEFAULT 0,
+		tokens      INTEGER NOT NULL DEFAULT 0,
+		cost        REAL    NOT NULL DEFAULT 0,
+		errors      INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (session_id, agent_name)
+	)`); err != nil {
+		return fmt.Errorf("migration 031 (session_agent_usage table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_agent_usage_agent
+		ON session_agent_usage(agent_name)`); err != nil {
+		return fmt.Errorf("migration 031 (session_agent_usage agent index): %w", err)
+	}
+
+	// ── Migration 032: session_hotspots sidecar table ──
+	//
+	// Pre-computed investigation hot-spots for each session. Populated by the
+	// nightly HotspotsTask and read by the session detail "Hot Spots" tab and
+	// the investigation API.
+	//
+	// The payload column stores a compressed (gzip) JSON blob of
+	// session.SessionHotspots. schema_version tracks the struct revision so
+	// the backfill task can re-process stale rows when the schema evolves.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_hotspots (
+		session_id     TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+		payload        BLOB NOT NULL,
+		schema_version INTEGER NOT NULL DEFAULT 1,
+		computed_at    DATETIME NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(session_id)
+	)`); err != nil {
+		return fmt.Errorf("migration 032 (session_hotspots table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_hotspots_schema_version
+		ON session_hotspots(schema_version)`); err != nil {
+		return fmt.Errorf("migration 032 (session_hotspots schema_version index): %w", err)
 	}
 
 	return nil

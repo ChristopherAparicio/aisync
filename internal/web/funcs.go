@@ -52,6 +52,19 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
+func formatBytes(n int) string {
+	if n == 0 {
+		return "0 B"
+	}
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1f MB", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1f KB", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d B", n)
+}
+
 func formatCost(cost float64) string {
 	if cost == 0 {
 		return "$0.00"

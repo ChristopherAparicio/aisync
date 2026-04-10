@@ -70,6 +70,49 @@ func (s *SessionService) stampCosts(sess *session.Session) {
 	}
 }
 
+// stampAnalytics computes and persists the materialized analytics row for a
+// session into the session_analytics sidecar table. This is the CQRS write
+// hook that replaces the old per-request recompute in the four catastrophic
+// hot paths (Forecast, CacheEfficiency, ContextSaturation, AgentROI).
+//
+// It is called immediately after Store.Save() succeeds (not before, because
+// analytics live in a separate table). Any error is logged but does NOT fail
+// the caller — analytics are an optimization, not a correctness requirement.
+// The AnalyticsBackfillTask will catch up on any missed rows.
+//
+// Must be called AFTER stampCosts so that sess.EstimatedCost/ActualCost are
+// already populated (ComputeAnalytics copies them).
+func (s *SessionService) stampAnalytics(sess *session.Session) {
+	if sess == nil || len(sess.Messages) == 0 {
+		return
+	}
+
+	// Determine fork offset: if this session is a fork, find SharedMessages.
+	var forkOffset int
+	rels, err := s.store.GetForkRelations(sess.ID)
+	if err == nil {
+		for _, r := range rels {
+			if r.ForkID == sess.ID {
+				forkOffset = r.SharedMessages
+				break
+			}
+		}
+	}
+
+	// Compute analytics. pricing may be nil — ComputeAnalytics handles that.
+	var pricingLookup session.AnalyticsPricingLookup
+	if s.pricing != nil {
+		pricingLookup = s.pricing
+	}
+	a := session.ComputeAnalytics(sess, pricingLookup, forkOffset)
+
+	// Persist. Errors are non-fatal — backfill task will pick up misses.
+	if upsertErr := s.store.UpsertSessionAnalytics(a); upsertErr != nil {
+		// Log but don't fail the caller.
+		_ = upsertErr
+	}
+}
+
 // SessionServiceConfig holds all dependencies for creating a SessionService.
 type SessionServiceConfig struct {
 	Store        storage.Store

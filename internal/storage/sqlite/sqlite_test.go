@@ -3476,3 +3476,630 @@ func BenchmarkGetBatch(b *testing.B) {
 		}
 	}
 }
+
+// ── Session Analytics (CQRS read model) round-trip tests ──
+
+// makeAnalyticsFixture builds a rich Analytics value with all 6 JSON blob
+// pointer fields non-nil and a 2-row AgentUsage slice. Used by the
+// round-trip tests below to verify that every column and blob field
+// survives an upsert → read cycle through SQLite.
+func makeAnalyticsFixture(sessionID string) session.Analytics {
+	now := time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
+	return session.Analytics{
+		SessionID: session.ID(sessionID),
+
+		// ContextSaturation
+		PeakInputTokens:        95_000,
+		DominantModel:          "claude-sonnet-4-20250514",
+		MaxContextWindow:       200_000,
+		PeakSaturationPct:      47.5,
+		HasCompaction:          true,
+		CompactionCount:        3,
+		CompactionDropPct:      22.5,
+		CompactionWastedTokens: 18_000,
+
+		// CacheEfficiency
+		CacheReadTokens:   50_000,
+		CacheWriteTokens:  12_000,
+		InputTokens:       120_000,
+		CacheMissCount:    2,
+		CacheWastedTokens: 8_000,
+		LongestGapMins:    45,
+		SessionAvgGapMins: 12.7,
+
+		// Forecast
+		Backend:          "claude",
+		EstimatedCost:    1.23,
+		ActualCost:       0.98,
+		ForkOffset:       5,
+		DeduplicatedCost: 0.85,
+
+		// Agent rollups
+		TotalAgentInvocations: 7,
+		UniqueAgentsUsed:      2,
+		AgentTokens:           30_000,
+		AgentCost:             0.15,
+		TotalWastedTokens:     26_000,
+
+		// Per-agent breakdown
+		AgentUsage: []session.AgentUsage{
+			{AgentName: "coder", Invocations: 5, Tokens: 25_000, Cost: 0.12, Errors: 1},
+			{AgentName: "reviewer", Invocations: 2, Tokens: 5_000, Cost: 0.03, Errors: 0},
+		},
+
+		// JSON blobs
+		WasteBreakdown: &session.TokenWasteBreakdown{
+			TotalTokens:   120_000,
+			ProductivePct: 78.3,
+			WastePct:      21.7,
+		},
+		Freshness: &session.SessionFreshness{
+			TotalMessages:     42,
+			CompactionCount:   3,
+			Recommendation:    "consider splitting after message 30",
+			OptimalMessageIdx: 30,
+		},
+		Overload: &session.OverloadAnalysis{
+			IsOverloaded:  true,
+			Verdict:       "overloaded",
+			InflectionAt:  28,
+			HealthScore:   45,
+			TotalMessages: 42,
+		},
+		PromptData: &session.SessionPromptData{
+			PromptTokens: 12_000,
+			TotalInput:   120_000,
+			ErrorRate:    0.05,
+			RetryRate:    0.02,
+		},
+		FitnessData: &session.SessionFitnessData{
+			Model:         "claude-sonnet-4-20250514",
+			SessionType:   "feature",
+			TotalTokens:   120_000,
+			OutputTokens:  30_000,
+			MessageCount:  42,
+			ToolCalls:     15,
+			ToolErrors:    1,
+			EstimatedCost: 1.23,
+			HasRetries:    true,
+		},
+		ForecastInput: &session.SessionForecastInput{
+			Model:                "claude-sonnet-4-20250514",
+			MaxInputTokens:       200_000,
+			MessageCount:         42,
+			PeakInputTokens:      95_000,
+			MsgAtFirstCompaction: 25,
+			TokenGrowthPerMsg:    2_100,
+		},
+
+		SchemaVersion: 1,
+		ComputedAt:    now,
+	}
+}
+
+func TestUpsertAndGetSessionAnalytics(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// The session_analytics table has a FK to sessions, so we need a parent row.
+	sess := testSession("analytics-sess-1")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save session: %v", err)
+	}
+
+	want := makeAnalyticsFixture("analytics-sess-1")
+
+	// Upsert
+	if err := store.UpsertSessionAnalytics(want); err != nil {
+		t.Fatalf("UpsertSessionAnalytics: %v", err)
+	}
+
+	// Read back
+	got, err := store.GetSessionAnalytics(session.ID("analytics-sess-1"))
+	if err != nil {
+		t.Fatalf("GetSessionAnalytics: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSessionAnalytics returned nil, expected non-nil")
+	}
+
+	// Scalar fields
+	if got.SessionID != want.SessionID {
+		t.Errorf("SessionID = %q, want %q", got.SessionID, want.SessionID)
+	}
+	if got.PeakInputTokens != want.PeakInputTokens {
+		t.Errorf("PeakInputTokens = %d, want %d", got.PeakInputTokens, want.PeakInputTokens)
+	}
+	if got.DominantModel != want.DominantModel {
+		t.Errorf("DominantModel = %q, want %q", got.DominantModel, want.DominantModel)
+	}
+	if got.MaxContextWindow != want.MaxContextWindow {
+		t.Errorf("MaxContextWindow = %d, want %d", got.MaxContextWindow, want.MaxContextWindow)
+	}
+	if got.PeakSaturationPct != want.PeakSaturationPct {
+		t.Errorf("PeakSaturationPct = %f, want %f", got.PeakSaturationPct, want.PeakSaturationPct)
+	}
+	if got.HasCompaction != want.HasCompaction {
+		t.Errorf("HasCompaction = %v, want %v", got.HasCompaction, want.HasCompaction)
+	}
+	if got.CompactionCount != want.CompactionCount {
+		t.Errorf("CompactionCount = %d, want %d", got.CompactionCount, want.CompactionCount)
+	}
+	if got.CompactionDropPct != want.CompactionDropPct {
+		t.Errorf("CompactionDropPct = %f, want %f", got.CompactionDropPct, want.CompactionDropPct)
+	}
+	if got.CompactionWastedTokens != want.CompactionWastedTokens {
+		t.Errorf("CompactionWastedTokens = %d, want %d", got.CompactionWastedTokens, want.CompactionWastedTokens)
+	}
+	if got.CacheReadTokens != want.CacheReadTokens {
+		t.Errorf("CacheReadTokens = %d, want %d", got.CacheReadTokens, want.CacheReadTokens)
+	}
+	if got.CacheWriteTokens != want.CacheWriteTokens {
+		t.Errorf("CacheWriteTokens = %d, want %d", got.CacheWriteTokens, want.CacheWriteTokens)
+	}
+	if got.InputTokens != want.InputTokens {
+		t.Errorf("InputTokens = %d, want %d", got.InputTokens, want.InputTokens)
+	}
+	if got.CacheMissCount != want.CacheMissCount {
+		t.Errorf("CacheMissCount = %d, want %d", got.CacheMissCount, want.CacheMissCount)
+	}
+	if got.CacheWastedTokens != want.CacheWastedTokens {
+		t.Errorf("CacheWastedTokens = %d, want %d", got.CacheWastedTokens, want.CacheWastedTokens)
+	}
+	if got.LongestGapMins != want.LongestGapMins {
+		t.Errorf("LongestGapMins = %d, want %d", got.LongestGapMins, want.LongestGapMins)
+	}
+	if got.SessionAvgGapMins != want.SessionAvgGapMins {
+		t.Errorf("SessionAvgGapMins = %f, want %f", got.SessionAvgGapMins, want.SessionAvgGapMins)
+	}
+	if got.Backend != want.Backend {
+		t.Errorf("Backend = %q, want %q", got.Backend, want.Backend)
+	}
+	if got.EstimatedCost != want.EstimatedCost {
+		t.Errorf("EstimatedCost = %f, want %f", got.EstimatedCost, want.EstimatedCost)
+	}
+	if got.ActualCost != want.ActualCost {
+		t.Errorf("ActualCost = %f, want %f", got.ActualCost, want.ActualCost)
+	}
+	if got.ForkOffset != want.ForkOffset {
+		t.Errorf("ForkOffset = %d, want %d", got.ForkOffset, want.ForkOffset)
+	}
+	if got.DeduplicatedCost != want.DeduplicatedCost {
+		t.Errorf("DeduplicatedCost = %f, want %f", got.DeduplicatedCost, want.DeduplicatedCost)
+	}
+	if got.TotalAgentInvocations != want.TotalAgentInvocations {
+		t.Errorf("TotalAgentInvocations = %d, want %d", got.TotalAgentInvocations, want.TotalAgentInvocations)
+	}
+	if got.UniqueAgentsUsed != want.UniqueAgentsUsed {
+		t.Errorf("UniqueAgentsUsed = %d, want %d", got.UniqueAgentsUsed, want.UniqueAgentsUsed)
+	}
+	if got.AgentTokens != want.AgentTokens {
+		t.Errorf("AgentTokens = %d, want %d", got.AgentTokens, want.AgentTokens)
+	}
+	if got.AgentCost != want.AgentCost {
+		t.Errorf("AgentCost = %f, want %f", got.AgentCost, want.AgentCost)
+	}
+	if got.TotalWastedTokens != want.TotalWastedTokens {
+		t.Errorf("TotalWastedTokens = %d, want %d", got.TotalWastedTokens, want.TotalWastedTokens)
+	}
+	if got.SchemaVersion != want.SchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", got.SchemaVersion, want.SchemaVersion)
+	}
+
+	// Agent usage (ordered by agent_name)
+	if len(got.AgentUsage) != 2 {
+		t.Fatalf("AgentUsage len = %d, want 2", len(got.AgentUsage))
+	}
+	if got.AgentUsage[0].AgentName != "coder" {
+		t.Errorf("AgentUsage[0].AgentName = %q, want %q", got.AgentUsage[0].AgentName, "coder")
+	}
+	if got.AgentUsage[0].Invocations != 5 {
+		t.Errorf("AgentUsage[0].Invocations = %d, want 5", got.AgentUsage[0].Invocations)
+	}
+	if got.AgentUsage[0].Errors != 1 {
+		t.Errorf("AgentUsage[0].Errors = %d, want 1", got.AgentUsage[0].Errors)
+	}
+	if got.AgentUsage[1].AgentName != "reviewer" {
+		t.Errorf("AgentUsage[1].AgentName = %q, want %q", got.AgentUsage[1].AgentName, "reviewer")
+	}
+
+	// JSON blobs — verify non-nil and spot-check key fields
+	if got.WasteBreakdown == nil {
+		t.Fatal("WasteBreakdown is nil")
+	}
+	if got.WasteBreakdown.TotalTokens != 120_000 {
+		t.Errorf("WasteBreakdown.TotalTokens = %d, want 120000", got.WasteBreakdown.TotalTokens)
+	}
+	if got.WasteBreakdown.ProductivePct != 78.3 {
+		t.Errorf("WasteBreakdown.ProductivePct = %f, want 78.3", got.WasteBreakdown.ProductivePct)
+	}
+
+	if got.Freshness == nil {
+		t.Fatal("Freshness is nil")
+	}
+	if got.Freshness.TotalMessages != 42 {
+		t.Errorf("Freshness.TotalMessages = %d, want 42", got.Freshness.TotalMessages)
+	}
+	if got.Freshness.Recommendation != "consider splitting after message 30" {
+		t.Errorf("Freshness.Recommendation = %q", got.Freshness.Recommendation)
+	}
+
+	if got.Overload == nil {
+		t.Fatal("Overload is nil")
+	}
+	if !got.Overload.IsOverloaded {
+		t.Error("Overload.IsOverloaded = false, want true")
+	}
+	if got.Overload.HealthScore != 45 {
+		t.Errorf("Overload.HealthScore = %d, want 45", got.Overload.HealthScore)
+	}
+
+	if got.PromptData == nil {
+		t.Fatal("PromptData is nil")
+	}
+	if got.PromptData.PromptTokens != 12_000 {
+		t.Errorf("PromptData.PromptTokens = %d, want 12000", got.PromptData.PromptTokens)
+	}
+
+	if got.FitnessData == nil {
+		t.Fatal("FitnessData is nil")
+	}
+	if got.FitnessData.SessionType != "feature" {
+		t.Errorf("FitnessData.SessionType = %q, want %q", got.FitnessData.SessionType, "feature")
+	}
+	if !got.FitnessData.HasRetries {
+		t.Error("FitnessData.HasRetries = false, want true")
+	}
+
+	if got.ForecastInput == nil {
+		t.Fatal("ForecastInput is nil")
+	}
+	if got.ForecastInput.TokenGrowthPerMsg != 2_100 {
+		t.Errorf("ForecastInput.TokenGrowthPerMsg = %d, want 2100", got.ForecastInput.TokenGrowthPerMsg)
+	}
+	if got.ForecastInput.MsgAtFirstCompaction != 25 {
+		t.Errorf("ForecastInput.MsgAtFirstCompaction = %d, want 25", got.ForecastInput.MsgAtFirstCompaction)
+	}
+}
+
+func TestGetSessionAnalytics_NotFound(t *testing.T) {
+	store := mustOpenStore(t)
+
+	got, err := store.GetSessionAnalytics(session.ID("nonexistent"))
+	if err != nil {
+		t.Fatalf("GetSessionAnalytics error = %v, want nil", err)
+	}
+	if got != nil {
+		t.Errorf("GetSessionAnalytics = %+v, want nil", got)
+	}
+}
+
+func TestUpsertSessionAnalytics_Update(t *testing.T) {
+	store := mustOpenStore(t)
+	sess := testSession("analytics-update-1")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Insert initial values
+	initial := session.Analytics{
+		SessionID:       session.ID("analytics-update-1"),
+		PeakInputTokens: 50_000,
+		DominantModel:   "gpt-4o",
+		Backend:         "openai",
+		EstimatedCost:   0.50,
+		SchemaVersion:   1,
+		ComputedAt:      time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC),
+		AgentUsage: []session.AgentUsage{
+			{AgentName: "old-agent", Invocations: 1, Tokens: 1000},
+		},
+	}
+	if err := store.UpsertSessionAnalytics(initial); err != nil {
+		t.Fatalf("UpsertSessionAnalytics (initial): %v", err)
+	}
+
+	// Overwrite with updated values
+	updated := session.Analytics{
+		SessionID:       session.ID("analytics-update-1"),
+		PeakInputTokens: 99_000,
+		DominantModel:   "claude-sonnet-4-20250514",
+		Backend:         "claude",
+		EstimatedCost:   2.50,
+		SchemaVersion:   2,
+		ComputedAt:      time.Date(2026, 4, 6, 14, 0, 0, 0, time.UTC),
+		AgentUsage: []session.AgentUsage{
+			{AgentName: "new-agent-a", Invocations: 3, Tokens: 15_000},
+			{AgentName: "new-agent-b", Invocations: 1, Tokens: 5_000},
+		},
+	}
+	if err := store.UpsertSessionAnalytics(updated); err != nil {
+		t.Fatalf("UpsertSessionAnalytics (update): %v", err)
+	}
+
+	got, err := store.GetSessionAnalytics(session.ID("analytics-update-1"))
+	if err != nil {
+		t.Fatalf("GetSessionAnalytics: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSessionAnalytics returned nil")
+	}
+
+	// Verify updated values replaced initial
+	if got.PeakInputTokens != 99_000 {
+		t.Errorf("PeakInputTokens = %d, want 99000", got.PeakInputTokens)
+	}
+	if got.DominantModel != "claude-sonnet-4-20250514" {
+		t.Errorf("DominantModel = %q, want claude-sonnet-4-20250514", got.DominantModel)
+	}
+	if got.Backend != "claude" {
+		t.Errorf("Backend = %q, want claude", got.Backend)
+	}
+	if got.EstimatedCost != 2.50 {
+		t.Errorf("EstimatedCost = %f, want 2.50", got.EstimatedCost)
+	}
+	if got.SchemaVersion != 2 {
+		t.Errorf("SchemaVersion = %d, want 2", got.SchemaVersion)
+	}
+
+	// Agent usage should be fully replaced (old-agent gone)
+	if len(got.AgentUsage) != 2 {
+		t.Fatalf("AgentUsage len = %d, want 2", len(got.AgentUsage))
+	}
+	if got.AgentUsage[0].AgentName != "new-agent-a" {
+		t.Errorf("AgentUsage[0].AgentName = %q, want new-agent-a", got.AgentUsage[0].AgentName)
+	}
+	if got.AgentUsage[1].AgentName != "new-agent-b" {
+		t.Errorf("AgentUsage[1].AgentName = %q, want new-agent-b", got.AgentUsage[1].AgentName)
+	}
+}
+
+func TestUpsertSessionAnalytics_NilBlobs(t *testing.T) {
+	store := mustOpenStore(t)
+	sess := testSession("analytics-nilblobs")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Upsert with all blob pointers nil
+	a := session.Analytics{
+		SessionID:     session.ID("analytics-nilblobs"),
+		Backend:       "claude",
+		SchemaVersion: 1,
+		ComputedAt:    time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC),
+	}
+	if err := store.UpsertSessionAnalytics(a); err != nil {
+		t.Fatalf("UpsertSessionAnalytics: %v", err)
+	}
+
+	got, err := store.GetSessionAnalytics(session.ID("analytics-nilblobs"))
+	if err != nil {
+		t.Fatalf("GetSessionAnalytics: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSessionAnalytics returned nil")
+	}
+
+	// All pointers should remain nil (empty JSON strings → nil)
+	if got.WasteBreakdown != nil {
+		t.Error("WasteBreakdown should be nil")
+	}
+	if got.Freshness != nil {
+		t.Error("Freshness should be nil")
+	}
+	if got.Overload != nil {
+		t.Error("Overload should be nil")
+	}
+	if got.PromptData != nil {
+		t.Error("PromptData should be nil")
+	}
+	if got.FitnessData != nil {
+		t.Error("FitnessData should be nil")
+	}
+	if got.ForecastInput != nil {
+		t.Error("ForecastInput should be nil")
+	}
+	if len(got.AgentUsage) != 0 {
+		t.Errorf("AgentUsage len = %d, want 0", len(got.AgentUsage))
+	}
+}
+
+func TestQueryAnalytics_Filters(t *testing.T) {
+	store := mustOpenStore(t)
+
+	// Seed 3 sessions with different project paths, dates, and backends.
+	now := time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
+	sessions := []struct {
+		id          string
+		projectPath string
+		branch      string
+		createdAt   time.Time
+		backend     string
+		schema      int
+	}{
+		{"qa-1", "/proj/alpha", "main", now.Add(-48 * time.Hour), "claude", 1},
+		{"qa-2", "/proj/alpha", "feat", now.Add(-24 * time.Hour), "openai", 1},
+		{"qa-3", "/proj/beta", "main", now, "claude", 2},
+	}
+
+	for _, tc := range sessions {
+		s := testSession(tc.id)
+		s.ProjectPath = tc.projectPath
+		s.Branch = tc.branch
+		s.CreatedAt = tc.createdAt
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save %s: %v", tc.id, err)
+		}
+		a := session.Analytics{
+			SessionID:     session.ID(tc.id),
+			Backend:       tc.backend,
+			SchemaVersion: tc.schema,
+			ComputedAt:    now,
+		}
+		if err := store.UpsertSessionAnalytics(a); err != nil {
+			t.Fatalf("Upsert %s: %v", tc.id, err)
+		}
+	}
+
+	t.Run("no filter returns all ordered by created_at DESC", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 3 {
+			t.Fatalf("len = %d, want 3", len(rows))
+		}
+		// Newest first
+		if rows[0].SessionID != "qa-3" {
+			t.Errorf("[0].SessionID = %q, want qa-3", rows[0].SessionID)
+		}
+		if rows[1].SessionID != "qa-2" {
+			t.Errorf("[1].SessionID = %q, want qa-2", rows[1].SessionID)
+		}
+		if rows[2].SessionID != "qa-1" {
+			t.Errorf("[2].SessionID = %q, want qa-1", rows[2].SessionID)
+		}
+		// Verify hydrated metadata
+		if rows[0].ProjectPath != "/proj/beta" {
+			t.Errorf("[0].ProjectPath = %q, want /proj/beta", rows[0].ProjectPath)
+		}
+		if rows[0].Branch != "main" {
+			t.Errorf("[0].Branch = %q, want main", rows[0].Branch)
+		}
+	})
+
+	t.Run("filter by ProjectPath", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{ProjectPath: "/proj/alpha"})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 2 {
+			t.Fatalf("len = %d, want 2", len(rows))
+		}
+		// Both should be alpha, newest first
+		if rows[0].SessionID != "qa-2" {
+			t.Errorf("[0].SessionID = %q, want qa-2", rows[0].SessionID)
+		}
+		if rows[1].SessionID != "qa-1" {
+			t.Errorf("[1].SessionID = %q, want qa-1", rows[1].SessionID)
+		}
+	})
+
+	t.Run("filter by Backend", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{Backend: "openai"})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("len = %d, want 1", len(rows))
+		}
+		if rows[0].SessionID != "qa-2" {
+			t.Errorf("[0].SessionID = %q, want qa-2", rows[0].SessionID)
+		}
+	})
+
+	t.Run("filter by Since", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{
+			Since: now.Add(-25 * time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 2 {
+			t.Fatalf("len = %d, want 2 (qa-2 and qa-3)", len(rows))
+		}
+	})
+
+	t.Run("filter by Until", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{
+			Until: now.Add(-25 * time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("len = %d, want 1 (qa-1)", len(rows))
+		}
+		if rows[0].SessionID != "qa-1" {
+			t.Errorf("[0].SessionID = %q, want qa-1", rows[0].SessionID)
+		}
+	})
+
+	t.Run("filter by MinSchemaVersion", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{MinSchemaVersion: 2})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("len = %d, want 1 (qa-3 with schema=2)", len(rows))
+		}
+		if rows[0].SessionID != "qa-3" {
+			t.Errorf("[0].SessionID = %q, want qa-3", rows[0].SessionID)
+		}
+	})
+
+	t.Run("combined filters", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{
+			ProjectPath: "/proj/alpha",
+			Backend:     "claude",
+		})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("len = %d, want 1 (qa-1: alpha+claude)", len(rows))
+		}
+		if rows[0].SessionID != "qa-1" {
+			t.Errorf("[0].SessionID = %q, want qa-1", rows[0].SessionID)
+		}
+	})
+
+	t.Run("no match returns empty", func(t *testing.T) {
+		rows, err := store.QueryAnalytics(session.AnalyticsFilter{Backend: "gemini"})
+		if err != nil {
+			t.Fatalf("QueryAnalytics: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Errorf("len = %d, want 0", len(rows))
+		}
+	})
+}
+
+func TestQueryAnalytics_BlobsHydrated(t *testing.T) {
+	store := mustOpenStore(t)
+	sess := testSession("qa-blobs")
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	a := makeAnalyticsFixture("qa-blobs")
+	if err := store.UpsertSessionAnalytics(a); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	rows, err := store.QueryAnalytics(session.AnalyticsFilter{})
+	if err != nil {
+		t.Fatalf("QueryAnalytics: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("len = %d, want 1", len(rows))
+	}
+
+	got := rows[0]
+	if got.WasteBreakdown == nil {
+		t.Error("WasteBreakdown is nil in QueryAnalytics result")
+	}
+	if got.Freshness == nil {
+		t.Error("Freshness is nil in QueryAnalytics result")
+	}
+	if got.Overload == nil {
+		t.Error("Overload is nil in QueryAnalytics result")
+	}
+	if got.PromptData == nil {
+		t.Error("PromptData is nil in QueryAnalytics result")
+	}
+	if got.FitnessData == nil {
+		t.Error("FitnessData is nil in QueryAnalytics result")
+	}
+	if got.ForecastInput == nil {
+		t.Error("ForecastInput is nil in QueryAnalytics result")
+	}
+}

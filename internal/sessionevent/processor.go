@@ -185,6 +185,10 @@ func (p *Processor) commandEvent(sess *session.Session, msgIdx int, msg *session
 		fullCmd = fullCmd[:maxFullCommandLen]
 	}
 
+	// Measure command output size for context-cost tracking (Section 8.2).
+	outputBytes := len(tc.Output)
+	outputTokens := outputBytes / 4
+
 	return &Event{
 		ID:           uuid.New().String(),
 		SessionID:    sess.ID,
@@ -197,11 +201,13 @@ func (p *Processor) commandEvent(sess *session.Session, msgIdx int, msg *session
 		Provider:     sess.Provider,
 		Agent:        sess.Agent,
 		Command: &CommandDetail{
-			BaseCommand: baseCmd,
-			FullCommand: fullCmd,
-			ToolCallID:  tc.ID,
-			State:       tc.State,
-			DurationMs:  tc.DurationMs,
+			BaseCommand:  baseCmd,
+			FullCommand:  fullCmd,
+			ToolCallID:   tc.ID,
+			State:        tc.State,
+			DurationMs:   tc.DurationMs,
+			OutputBytes:  outputBytes,
+			OutputTokens: outputTokens,
 		},
 	}
 }

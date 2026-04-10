@@ -1,6 +1,6 @@
 # aisync — Feature Backlog & Discussion
 
-> Last updated: 2026-04-05 (Section 8 added — Investigation Tooling & Agent Support, triggered by cycloplan session analysis)
+> Last updated: 2026-04-05 (Section 8 added — Investigation Tooling & Agent Support, triggered by 2026-04-05 session investigation; detection-only philosophy, provider-agnostic)
 > Purpose: Catalogue of all feature ideas discussed, prioritized by value and effort.
 > Not a commitment — a living document for planning next sessions.
 
@@ -16,6 +16,7 @@
 6. [Model Recommendation & Leaderboard Integration](#6-model-recommendation--leaderboard-integration)
 7. [Existing Backlog (from TODO.md)](#7-existing-backlog)
 8. [Investigation Tooling & Agent Support](#8-investigation-tooling--agent-support) ⭐ **NEW**
+9. [Actionable Diagnostics & Token Economy](#9-actionable-diagnostics--token-economy) ⭐ **NEW**
 
 ---
 
@@ -428,42 +429,109 @@ These items are already tracked and remain relevant:
 > **Theme:** Turn aisync into an investigation platform where analysis agents can drill into sessions
 > cheaply and iteratively, instead of stuffing everything into a single LLM prompt.
 >
-> **Triggered by:** 2026-04-05 manual investigation of 2 cycloplan OpenCode sessions
-> (`ses_2a125dde7ffeLfthr64J35CFkq`, `ses_2a1396b09ffeMRMA5b9eEeRxWt`). Key findings:
+> ### ⚖️ Philosophy: Detection, not prescription
 >
-> - **Compaction detection rate: ~25%** — our `< 50%` threshold misses OpenCode's ~49% drops. Real rate:
->   4 compactions per session vs 1 detected. Context climbs to ~168k–183k tokens (85% of 200k window)
->   before each compaction, roughly 1 compaction every 3 user messages.
-> - **Command output is a black hole** — `CommandDetail` tracks `base_command` + `full_command` + `duration_ms`
->   but NOT output bytes/tokens. Long bash outputs (lint, tsc, curl verbose, dev server logs) are invisible
->   in cost attribution and re-compacted on every turn.
-> - **High CLI wrapper opportunity** — 37% repetition ratio on bash commands, 43% of commands exceed 150 chars.
->   Clear candidates: `vite dev start`, `health check`, `login + token extract`, `port scan`, `pre-commit tsc`.
->   Wrapping these in a project CLI would save significant tokens through compaction amplification.
+> **aisync is a detection/observation tool.** It reports *what happened* with numbers, frequencies,
+> and comparisons against factual baselines (project averages, percentiles, cross-provider deltas).
+> It does **not** prescribe fixes, suggest refactors, or recommend tooling changes. Users and their
+> agents draw their own conclusions from the observed data.
 >
-> **Architectural vision: two-level investigation model**
+> **Allowed language** (facts & factual comparisons):
+> - ✅ *"Session reached 183k input tokens (91% of 200k window) before each of 4 compactions"*
+> - ✅ *"Command pattern `curl -X POST .../login ...` observed 12× across 5 sessions, avg length 377 chars"*
+> - ✅ *"Compaction rate 0.36/user_msg exceeds this project's P90 of 0.12"*
+> - ✅ *"Provider `opencode` averages 168k max context vs `claude-code` 94k on same project"*
+>
+> **Forbidden language** (prescription / recommendations):
+> - ❌ *"Consider splitting the task"* / *"Switch to a larger model"* / *"Wrap these in a CLI"*
+> - ❌ *"Suggested refactor"* / *"Recommended action"* / *"You should..."*
+> - ❌ Output schemas with fields like `suggestions`, `recommendations`, `fixes`, `actions_to_take`
+>
+> Observation fields describe **what is** (`observed_command_patterns`, `compaction_findings`,
+> `high_output_commands`). Interpretation and action are the user's job.
+>
+> ### Provider scope
+>
+> All Section 8 features apply across aisync's supported providers (`claude-code`, `opencode`, `cursor`
+> and any future provider). The investigation data comes from the provider-agnostic `sessionevent`
+> pipeline. Where empirical values are cited below (e.g. "~49% drop threshold"), they come from specific
+> observed sessions — detectors remain heuristic-based and provider-neutral.
+>
+> ### Triggering investigation
+>
+> **2026-04-05 manual investigation** of 2 sessions (`ses_2a125dde7ffeLfthr64J35CFkq`,
+> `ses_2a1396b09ffeMRMA5b9eEeRxWt`) — both captured from an `opencode` provider on the same project.
+> Key observations that revealed gaps in current detection:
+>
+> - **Compaction detection miss rate** — current `< 50%` strict threshold in `internal/session/compaction.go`
+>   misses drops in the 47–49% range. Observed drops in these sessions: 49.76%, 47.22%, 49.42%, 43.17%.
+>   Detector reports 1 compaction per session; actual count is 4. Context peaks at 168k–183k tokens
+>   (85–91% of the model's 200k window) before each compaction. Ratio: ~0.36 compactions per user message.
+> - **Command output not measured** — `sessionevent.CommandDetail` stores `base_command`, `full_command`
+>   and `duration_ms`, but no output size. Commands producing large outputs (lint/test/tsc/curl verbose/
+>   dev server logs) are invisible to cost attribution even though their output is re-sent in every
+>   subsequent compaction cycle.
+> - **Command repetition measurable but unsurfaced** — bash command repetition ratio in these 2 sessions:
+>   37% (13 duplicates / 35 total). 43% of commands exceed 150 characters. The data exists in
+>   `session_events` but no aggregation or dashboard exposes it.
+>
+> These are all *detection gaps* — aisync currently can't *see* these patterns. Section 8 makes them
+> visible. What the user does with the visibility is out of scope.
+>
+> ### Architectural vision: two-level investigation model
 >
 > - **Level 1 — Cheap aggregates** (no LLM): precomputed hot-spots stored per session
->   (top commands by output size, compactions with corrected threshold, skill footprints, waste buckets).
+>   (top commands by output size, compactions with corrected threshold, skill footprints, command patterns).
 >   Instantly consultable, zero token cost.
 > - **Level 2 — On-demand LLM drill-down**: the analysis agent starts with a ~500 token hot-spots summary,
 >   then pulls individual command details / compaction windows / similar-command queries via targeted tool calls.
 >   Replaces the current "dump everything into an 8k token prompt" approach in `BuildAnalysisPrompt`.
+>   The agent's job is to **describe observed facts** in natural language, not to recommend fixes.
 
-### 8.1 Fix Compaction Threshold + Per-User-Msg Rate
+### 8.1 Fix Compaction Threshold + 2-Pass Cascade Detection + Per-User-Msg Rate
 
-**Problem:** `internal/session/compaction.go` uses strict `< 50%` drop threshold. OpenCode compacts at
-pile ~49% (observed: 49.76%, 47.22%, 49.42%, 43.17% drops in real cycloplan sessions). Result: our
-detector finds 1 compaction when there are actually 4.
+**Problem:** `internal/session/compaction.go` uses a strict `< 50%` drop threshold. But investigation of
+`ses_2a6cb55f6ffeENWr6H1LnWdnLu` (3426 msgs, $360, 403M tokens) revealed that OpenCode uses a
+**2-pass compaction pattern**:
+- Pass 1: `168k → 105k` (~37% drop, `cache_read_tokens` completely reset to 0)
+- Pass 2: `105k → 68k` (~35% drop, 2 messages later, partial cache recovery)
+- Total effective: `168k → 68k` = 59.5% drop — but each pass is individually below our 50% threshold!
+
+Distribution across `ses_2a6cb55f`: 25 drops in 30–40% band (many are 2-pass cascade legs),
+16 drops in 40–50% band, 15 in 50%+ band. With all thresholds combined: **31 real compactions
+detected vs only 15 by current code. $18.41 in compaction cost invisible.** The detector is
+provider-agnostic but calibrated too strictly; the 2-pass pattern also appeared in shorter sessions
+(`ses_2a125dde`, `ses_2a1396b0` — 4 compactions each vs 1 detected).
 
 **What we'd build:**
-- Relax threshold to `<= 55%` drop from `> 20k` baseline (catches the OpenCode 49% pattern)
-- Add secondary trigger: `>= 40%` drop AND absolute delta `>= 50k tokens` (catches partial compactions)
-- New metric `CompactionsPerUserMessage` in `session.CompactionSummary` — surface the "compaction cascade" signal
-- Update existing tests + add regression tests with real OpenCode token patterns
+- Relax primary threshold to `< 55%` (captures single-pass 45–50% drops)
+- Add secondary threshold: `< 65% AND delta > 40k tokens AND CacheInvalidated == true` (captures 35% drops
+  with large absolute delta). **Cache invalidation is required** for this secondary trigger to avoid false
+  positives from normal response size variation (e.g. loading a large file then a small response).
+- Add **2-pass cascade merging**: when two detected drops arrive ≤ 3 messages apart, merge them into a
+  single compaction event with combined `DropPercent`. Tagged with `IsCascade: true`, `MergedLegs: 2`.
+  This captures the `168k → 105k → 68k` pattern as a single 59.5% compaction event.
+- New metric `CompactionsPerUserMessage` in `session.CompactionSummary` (pure factual ratio)
+- New metric `LastQuartileCompactionRate float64` — compaction rate computed over the last 25% of user
+  messages only. Detects end-of-session acceleration (3 compactions in last 8 messages vs 0 in first 80).
+  Stored alongside global rate in `CompactionSummary` and `session_hotspots`.
+- New field `CascadeCount` in `CompactionSummary` (how many 2-pass events were detected)
+- New field `MessagesWithTokenData int` in `CompactionSummary` — count of messages where `InputTokens > 0`.
+  If this is 0, the detector had nothing to analyze (distinct from "analyzed and found 0 compactions").
+- New enum field `DetectionCoverage string` in `CompactionSummary`: `"full"` (majority of assistant
+  messages have token data), `"partial"` (some data), `"none"` (zero messages with token data — e.g.
+  Cursor provider). Dashboard displays `"Compaction detection: not available (no per-message token data)"`
+  instead of misleading `"0 compactions"` when coverage is `"none"`.
+- Update tests using real token patterns from `ses_2a6cb55f` including cascade merging scenarios
+- Detector remains provider-neutral — no branching on `session.Provider`
 
-**Value:** 🔴 **CRITICAL** — Without this fix, every downstream compaction feature under-reports.
-**Effort:** XS (~30 min)
+> **Known provider limitation (Cursor):** Cursor sessions have `InputTokens == 0` on all messages
+> (message content is stored server-side, only IDs available locally). Compaction detection returns
+> `DetectionCoverage: "none"`, `MessagesWithTokenData: 0`. The dashboard must surface this as "no data"
+> rather than "no compactions". This is a Cursor data limitation, not an aisync bug.
+
+**Value:** 🔴 **CRITICAL** — Without this fix, compaction under-reports by 2–3× for providers using incremental compaction.
+**Effort:** S (~45 min — expanded from XS after discovering the 2-pass pattern)
 **Dependencies:** None
 
 ### 8.2 Command Output Bytes & Token Tracking
@@ -475,9 +543,28 @@ but invisible in aisync cost attribution. The "black hole" of command cost.
 **What we'd build:**
 - Add `OutputBytes int` and `OutputTokens int` fields to `sessionevent.CommandDetail`
 - Populate during `Processor` extraction by measuring the tool call's output string (`len(output)` → bytes, `/4` → tokens estimate)
-- Migration 031: backfill existing rows with zero, new rows get real values
+- No migration needed — JSON payload column, existing rows keep working (fields default to 0)
 - Surface in session detail page: "Top commands by output size" panel (sortable)
 - Update `CommandDetail` marshal/unmarshal in `event_store.go` (avoid the compaction storage bug we hit in Sprint H)
+
+> **Backfill strategy:** `ToolCall.Output` is populated at ingestion time for `claude-code` and `opencode`
+> providers (verified in code). The raw session data (compressed in `sessions` table) still contains the
+> full `ToolCall.Output` strings. However, existing `session_events` rows have `CommandDetail` without
+> `OutputBytes`. Two options:
+>
+> 1. **Re-process existing sessions** — call `Processor.ExtractAll()` again on sessions that have
+>    `CommandDetail` events with `OutputBytes == 0`. This regenerates all events from the raw session
+>    data and populates the new fields. Cost: ~5 min for 1687 sessions, one-time batch.
+> 2. **Accept the gap** — only new sessions (captured after this change) get output tracking. Simpler,
+>    no risk of re-processing side effects, but historical data stays incomplete.
+>
+> **Decision: Option 1 (re-process)** — the raw data exists, the cost is low, and it's needed for the
+> validation checklist (cycloplan sessions are historical). Implement as a one-time scheduler task
+> `BackfillCommandOutputTask` that re-extracts events for sessions with stale event data.
+
+> **Known provider limitation (Cursor):** Cursor sessions have zero `ToolCall` entries (message content
+> is stored server-side). `CommandDetail` events are never created for Cursor. The "Top commands by
+> output size" panel will show "No command data available for this provider" for Cursor sessions.
 
 **Value:** 🔴 **CRITICAL** — Unlocks 8.3, 8.5, 8.8 and makes command cost visible for the first time.
 **Effort:** S (~1h)
@@ -486,7 +573,7 @@ but invisible in aisync cost attribution. The "black hole" of command cost.
 ### 8.3 Session Hot-Spots Precomputed Table (Level 1)
 
 **Problem:** Every analysis agent invocation recomputes the same aggregates (top commands, compactions,
-skill footprints) from raw events. Wasteful and slow, and the data format isn't optimized for LLM consumption.
+skill footprints) from raw events. Slow, and the data format isn't optimized for LLM consumption.
 
 **What we'd build:**
 - New table `session_hotspots` (migration 031 or 032) with pre-aggregated JSON per session:
@@ -500,7 +587,7 @@ skill footprints) from raw events. Wasteful and slow, and the data format isn't 
 - New port method `storage.SessionHotspotStore` (GetHotspots / SetHotspots)
 - UI: new "Hot Spots" tab on session detail page (cheap, no LLM)
 
-**Value:** 🟠 **HIGH** — Foundation for 8.4 (agent tooling) and 8.5 (CLI candidates dashboard).
+**Value:** 🟠 **HIGH** — Foundation for 8.4 (agent tooling) and 8.5 (command pattern dashboard).
 **Effort:** M (~2h)
 **Dependencies:** 8.2 (needs OutputBytes to rank commands)
 
@@ -517,7 +604,7 @@ follow-up questions). Your insight: *"permettre à l'agent de lire chaque comman
   - `GET /api/investigate/sessions/{id}/commands/{event_id}` → full command detail (truncated output)
   - `GET /api/investigate/sessions/{id}/compactions/{idx}/window?radius=3` → N messages around a compaction
   - `GET /api/investigate/sessions/{id}/skills` → skill load list with tokens
-  - `GET /api/investigate/commands/similar?pattern=...&scope=all` → find repeated commands cross-session (CLI candidates)
+  - `GET /api/investigate/commands/similar?pattern=...&scope=all` → find repeated normalized commands cross-session (returns raw patterns + counts, no recommendation wrapper)
 - Each endpoint returns JSON shaped for LLM consumption (bounded size, stable schema)
 - Optional: `cmd/aisync-investigator-mcp/` stdio wrapper for direct MCP protocol use by agents
 - Documented as "investigation API" in a new `docs/investigation-api.md`
@@ -526,82 +613,112 @@ follow-up questions). Your insight: *"permettre à l'agent de lire chaque comman
 **Effort:** M (~2-3h)
 **Dependencies:** 8.3 (hot-spots table must exist)
 
-### 8.5 Repeated Command Detection & CLI Candidates Dashboard
+### 8.5 Repeated Command Pattern Dashboard
 
-**Problem:** Developers repeatedly paste 150+ character bash commands (vite dev, curl login flows,
-lsof port scans) across sessions. Each repetition costs tokens twice: once in the assistant message,
-once in every subsequent compaction's summary. But aisync has no way to surface these patterns.
+**Problem:** Long bash commands (150+ characters) recur across sessions — the same `vite dev` invocation,
+the same `curl` login flow, the same `lsof` port scan. Each repetition takes tokens twice: once in the
+assistant message, once again in every subsequent compaction summary that still references it. aisync
+currently has no aggregation or view that surfaces these patterns.
 
 **What we'd build:**
-- New analytics query: group commands by normalized form (replace `/path/...` → `/PATH`, numbers → `N`)
-- Count occurrences + unique sessions + unique projects per normalized pattern
-- Filter: commands with `LENGTH(full_command) > 100` AND `count >= 3`
-- Estimate token savings: `total_chars_saved × avg_compaction_amplification_factor`
-- New dashboard page `/investigate/cli-candidates`:
-  - Cross-project table: pattern, occurrences, sessions, projects, chars, est. tokens saved
-  - Click-through to see example invocations
-  - Export as JSON/CSV (for actually building the CLI)
+- New analytics query: group commands by normalized form (replace `/path/...` → `/PATH`, digits → `N`, quoted literals → `"..."`)
+- Per pattern, compute: occurrence count, unique session count, unique project count, avg length, total characters
+- Filter surface: `LENGTH(full_command) > 100` AND `count >= 3` (configurable)
+- Compute a factual re-transmission estimate: `total_chars × observed_compaction_multiplier_per_session`
+  (this is a measurement, not a savings claim — it describes how many characters the model re-ingested)
+- New dashboard page `/investigate/command-patterns`:
+  - Cross-project table: pattern, occurrences, sessions, projects, avg length, cumulative re-transmitted characters
+  - Drill-down to see raw invocations per pattern
+  - Export as JSON/CSV for external analysis
 
-**Value:** 🟠 **HIGH** — Directly actionable. You can build `cyclo` CLI from this, saving tokens on every future session.
+**Value:** 🟠 **HIGH** — Makes repetition patterns measurable for the first time. No recommendation is produced;
+the dashboard describes what was sent to the model, repeatedly.
 **Effort:** M (~2h)
-**Dependencies:** 8.2 (needs output tracking for savings estimate)
+**Dependencies:** 8.2 (needs output tracking to also rank patterns by output cost)
 
-### 8.6 Enhance `BuildAnalysisPrompt` to Use Hot-Spots
+### 8.6 Enhance `BuildAnalysisPrompt` to Use Hot-Spots (Observation Mode)
 
 **Problem:** `internal/analysis/llm/analyzer.go::BuildAnalysisPrompt` dumps message distribution, tool
 breakdown, first 5 user messages, last 10 messages, errors, files, capabilities — all in plain text,
-~6-8k tokens per call. Misses the compaction + command output signals entirely.
+~6-8k tokens per call. It misses the compaction and command output signals entirely, and its prompt
+currently allows the LLM to drift into recommendation territory.
 
-**What we'd build:**
+**What we'd build (observation-mode rewrite):**
 - Inject `session_hotspots` JSON at the top of the prompt (compact, structured)
 - Remove the redundant full message dump (last 10 messages) — agent can query them on demand via 8.4
-- Update system prompt to instruct the LLM: *"If the hot-spots show suspicious patterns, use the
-  investigation API endpoints to drill down before finalizing your report."*
-- Add new analysis dimensions to the output schema:
-  - `compaction_findings` — assessment of the compaction cascade
-  - `command_waste_findings` — identified expensive/repetitive commands
-  - `cli_suggestions` — proposed CLI wrappers with estimated savings
+- Rewrite the system prompt to enforce observation-only output:
+  > *"You are a session observer. Describe observed facts about the session: token usage patterns,
+  > compaction events with numbers, commands with their measured output sizes, repeated patterns with
+  > their frequencies. Do NOT recommend actions, suggest refactors, propose tooling changes, or use
+  > words like 'should', 'consider', 'recommend'. If the hot-spots data is insufficient, query the
+  > investigation API endpoints for additional facts before responding."*
+- Output schema — **observation fields only**, no recommendation fields:
+  - `compaction_findings` — factual description of compactions (count, rate, drop sizes, context peaks)
+  - `high_output_commands` — ranked list of commands by observed output bytes (no "waste" framing)
+  - `observed_command_patterns` — repeated normalized commands with counts, lengths, session spread
+  - `context_saturation` — max input tokens reached per assistant turn, binned
+  - (Explicitly excluded: `suggestions`, `recommendations`, `cli_suggestions`, `fixes`, `waste_reduction_estimate`)
 - Backwards compatible: existing fields stay, new fields are additive
 
-**Value:** 🟡 **MEDIUM** — Makes every analyzed session report 3–5× more actionable and ~40% cheaper.
+**Value:** 🟡 **MEDIUM** — Analysis reports become structured observation records, ~40% cheaper,
+and cannot drift into prescription. Users and external agents reading the reports decide what to do.
 **Effort:** S (~1h)
 **Dependencies:** 8.3 (hot-spots), ideally 8.4 (so LLM can drill down)
 
-### 8.7 Compaction Cascade Alert
+### 8.7 Compaction Cascade Notification (Fact Report)
 
-**Problem:** When a session compacts more than once per 4 user messages, something is wrong
-(task too large, context bloat, bad model choice). Today this is invisible — no notification, no UI flag.
+**Problem:** Sessions with a high compaction rate (many compactions per user message) currently
+generate no surface signal — no notification, no UI flag. There is no configurable fact-based
+threshold for surfacing these patterns.
 
 **What we'd build:**
 - Scheduler task `CompactionCascadeDetectionTask` (runs after `HotspotsTask`)
-- Threshold: `compactions_per_user_message > 0.25` AND `total_compactions >= 3`
-- New event type `EventCompactionCascade` fired via notification service
-- Dedup window: don't re-alert same session within 24h
-- Message template: *"Session `{id}` in project `{project}` compacted {N} times across {M} user messages.
-  Context climbed to {max_tokens} tokens. Consider: splitting the task, switching to a 1M-token model, or
-  wrapping frequent commands in a project CLI (see /investigate/cli-candidates)."*
-- Wire into existing Slack notification infrastructure (already supports project channels)
+- Trigger (pure numeric conditions, configurable): `compactions_per_user_message > 0.25`
+  AND `total_compactions >= 3`
+- New event type `EventCompactionCascade` fired via the existing notification service
+- Dedup window: do not re-notify the same session within 24h
+- **Notification template — facts only, no recommendations:**
+  > *"Session `{id}` · project `{project}` · provider `{provider}`*
+  > *Compactions: **{N}** across **{M}** user messages (rate: {rate}/msg)*
+  > *Peak input tokens before compactions: {p1}, {p2}, {p3}, ... (model window: {model_window})*
+  > *Rebuild cost: ${total_rebuild_cost} · Total tokens lost: {tokens_lost}*
+  > *Details: {aisync_url}/sessions/{id}"*
+- Template contains no "consider", "suggest", "recommend", or action verbs. Purely descriptive.
+- Wire into existing Slack notification infrastructure (project channels)
+- Include a **template-lint test** that greps the rendered message for forbidden prescription words
+  (`should`, `consider`, `recommend`, `suggest`, `try`) and fails the test suite if any appear
 
-**Value:** 🟡 **MEDIUM** — Catches runaway sessions before they burn $50+ in compaction overhead.
+> **Timing caveat:** Notifications are **forensic, not real-time**. The `CompactionCascadeDetectionTask`
+> runs on a schedule (after `HotspotsTask`), so the notification arrives after the session has ended
+> and tokens have already been spent. aisync is a downstream observation tool — it cannot intercept or
+> prevent a running session's token spend. The notification's value is for pattern awareness across
+> sessions, not for intervention on the current session. This should be documented in the notification
+> message itself (e.g. include the session's end time, not just its start time).
+
+**Value:** 🟡 **MEDIUM** — Surfaces high-compaction sessions in pure factual form, for post-session awareness.
 **Effort:** S (~1h)
 **Dependencies:** 8.1 (accurate detection), 8.3 (rate computation)
 
-### 8.8 Per-Provider Context Bloat Analysis
+### 8.8 Per-Provider Context Usage Comparison
 
-**Problem:** Observed: OpenCode pushes context to 168k–183k tokens before compacting, while Claude Code
-(anecdotally) stays lower. We have the data to prove/disprove this but no comparative view.
+**Problem:** The 2026-04-05 investigation showed one `opencode` provider session reaching 168k–183k
+tokens before compaction. Whether other providers (`claude-code`, `cursor`) exhibit similar, lower,
+or higher peaks on comparable projects is currently unmeasurable — aisync has the per-message token
+data but no cross-provider aggregation or comparative view.
 
-**What we'd build:**
+**What we'd build (measurement-only, no verdict):**
 - New analytics query: percentile distribution of `input_tokens` per assistant message, grouped by provider
-- Metric: "avg context before compaction" per provider per project
-- Metric: "tokens injected per tool_call" per provider (how verbose is each provider's context packing)
-- Dashboard card on `/analytics`: "Provider Context Efficiency"
-  - Bar chart: avg max context by provider
-  - Bar chart: tool_call → context tokens ratio by provider
-  - Insight callout when delta > 2× between providers on same project
-- Use case: confirm whether OpenCode is genuinely more bloated, data-driven migration decisions
+- Metric: avg / p50 / p95 max context reached before compaction, per provider, per project
+- Metric: mean context tokens per `tool_call` event, per provider (density of context per operation)
+- Dashboard card on `/analytics`: "Provider Context Usage"
+  - Bar chart: avg / p95 max context by provider
+  - Bar chart: context tokens per tool_call by provider
+  - Factual callout when delta > 2× between providers on the same project — e.g.
+    *"On project `<name>`: provider `opencode` avg max context = 168k, provider `claude-code` avg max context = 94k (delta 1.79×)"*
+  - No labels like "bloated", "efficient", "better". Just the numbers and the ratio.
+- Per-project drilldown showing which sessions contributed to each provider's statistics
 
-**Value:** 🟡 **MEDIUM** — Validates (or disproves) the "OpenCode is bloated" hypothesis with numbers.
+**Value:** 🟡 **MEDIUM** — Makes cross-provider context usage measurable and comparable on identical workloads.
 **Effort:** M (~2h)
 **Dependencies:** 8.2 (for the tool_call → output_bytes correlation)
 
@@ -612,24 +729,282 @@ breakdown, first 5 user messages, last 10 messages, errors, files, capabilities 
 **Phase 1 — Critical Fixes (~1.5h)** ⚡ *Unblocks everything else*
 - **8.1** Fix compaction threshold (XS, 30 min)
 - **8.2** Command output bytes/tokens (S, 1h)
-- → After Phase 1, re-run analysis on cycloplan sessions: 4 compactions visible, command costs visible.
+- → After Phase 1, re-run detection on the validation sessions: 4 compactions visible per session, command output sizes visible.
 
 **Phase 2 — Level 1 Aggregates (~4h)**
 - **8.3** Hot-spots precomputed table (M, 2h)
-- **8.5** CLI candidates dashboard (M, 2h)
-- → After Phase 2, you can browse "Top CLI candidates" for cycloplan and start building `cyclo` CLI.
+- **8.5** Command pattern dashboard (M, 2h)
+- → After Phase 2, `/investigate/command-patterns` surfaces repeated commands across all sessions with measured counts and cumulative characters. Users interpret the data themselves.
 
 **Phase 3 — Level 2 Agent Tooling (~3-4h)**
 - **8.4** Investigation API endpoints (M, 2-3h)
-- **8.6** Enhanced analysis prompt using hot-spots (S, 1h)
-- → After Phase 3, `analyze_daily` produces reports that identify compaction cascades + CLI candidates automatically.
+- **8.6** Analysis prompt rewrite to observation mode (S, 1h)
+- → After Phase 3, `analyze_daily` produces structured observation reports with `compaction_findings`, `high_output_commands`, `observed_command_patterns`, `context_saturation` fields. No recommendation fields.
 
-**Phase 4 — Alerts & Validation (~3h)**
-- **8.7** Compaction cascade Slack alert (S, 1h)
-- **8.8** Per-provider context bloat dashboard (M, 2h)
-- → After Phase 4, runaway sessions trigger alerts proactively, provider comparison is data-driven.
+**Phase 4 — Notifications & Comparisons (~3h)**
+- **8.7** Compaction cascade fact notification (S, 1h)
+- **8.8** Per-provider context usage comparison (M, 2h)
+- → After Phase 4, high-compaction sessions surface via facts-only notifications, and cross-provider context usage is measurable on identical projects.
 
-**Total estimated effort: ~11-12h across 4 phases.** Each phase delivers standalone value.
+**Total estimated effort: ~11-12h across 4 phases.** Each phase delivers standalone measurement value.
+
+**Every phase must pass the philosophy audit** (grep for forbidden words in templates/prompts/alerts).
+See `TODO-section8.md` → Cross-Phase Tasks → Philosophy audit.
+
+---
+
+## 9. Actionable Diagnostics & Token Economy
+
+> **Theme:** Transform aisync from a passive observation tool into a **diagnostic + prescription platform**.
+> When `aisync inspect` identifies token economy problems (expensive screenshots, verbose command output,
+> excessive compaction), it generates **provider-specific, ready-to-apply artefacts** — scripts, config
+> patches, skills — that the user can review and install.
+>
+> ### Philosophy evolution: Detection → Detection + Prescription
+>
+> Section 8 established aisync as strictly observational. Section 9 adds a second layer: **generated
+> artefacts that address observed problems**. The distinction is critical:
+>
+> - **Section 8** = the diagnostic report. Facts, numbers, ratios. No opinion.
+> - **Section 9** = the prescription. Concrete, provider-specific fixes. Always opt-in (`--generate-fix`).
+>   Never applied automatically. The user reviews and installs.
+>
+> This is the difference between a lab report (Section 8) and a doctor's prescription (Section 9).
+> The lab report never says "take antibiotics". The prescription does, but the patient chooses.
+>
+> ### Provider-specific artefact targets
+>
+> Each fix is adapted to the user's provider ecosystem:
+>
+> | Provider | Agent instructions file | CLI/scripts location | Skills/commands | Config |
+> |----------|------------------------|---------------------|-----------------|--------|
+> | `opencode` | `AGENTS.md` | `.opencode/bin/` | `.opencode/skills/` | `.opencode/config.json` |
+> | `claude-code` | `CLAUDE.md` | `.claude/commands/` | n/a | `.claude/settings.json` |
+> | `cursor` | `.cursorrules` | n/a | n/a | `.cursor/settings.json` |
+>
+> aisync detects the provider from the session metadata and generates fixes targeting the right
+> ecosystem. Cross-provider sessions get fixes for each detected provider.
+>
+> ### Triggering observation (2026-04-06)
+>
+> Investigation of `ses_2a6cb55f6ffeENWr6H1LnWdnLu` (3978 msgs, OpenCode, $360, 468M input tokens)
+> revealed that **228 screenshot reads** consumed an estimated **27.1M billed input tokens** ($81 at
+> Sonnet pricing) because each image (~1,500 tokens) stays in context for an average of **79 assistant
+> turns** before the next compaction clears it. The screenshots were captured at 1000px resolution via
+> `sips -Z 1000`; reducing to 500px and converting to JPEG Q50 would reduce per-image tokens by ~66%.
+>
+> No mechanism exists to:
+> 1. Compress images before they enter the LLM context
+> 2. Instruct the agent to describe-and-discard screenshots after reading them
+> 3. Provide optimized capture scripts that the agent can discover and use
+>
+> These are all **solvable with provider-specific artefacts** that aisync can generate from diagnostic data.
+
+### 9.1 `aisync inspect` — Unified Session Diagnostic CLI (✅ DONE)
+
+**Status:** Implemented 2026-04-06. `pkg/cmd/inspectcmd/inspectcmd.go`, registered in root.go.
+
+**What it does:**
+- Single command `aisync inspect <session-id>` that produces a comprehensive analysis report.
+- Four sections: **tokens** (input/output/cache/image breakdown per model), **images** (screenshot
+  count, simctl captures, sips resizes, per-image billed tokens based on context duration until
+  next compaction, estimated cost), **compactions** (events, cascades, detection coverage, interval
+  stats), **commands** (total output bytes, top 20 commands by output size).
+- Flags: `--json` (machine-readable), `--section tokens|images|compactions|commands` (limit output).
+- All output is observational — facts, counts, ratios. No recommendations.
+
+**Provider scope:** Works on all providers. Command output section falls back to direct ToolCall
+scanning when session events are not yet backfilled (8.2). Image section detects both inline
+`ImageMeta` and tool-read images (`.png`/`.jpg` via `read`/`mcp_read`).
+
+### 9.2 Problem Detectors — Identify Actionable Issues
+
+**Problem:** `aisync inspect` dumps raw data. A user (or LLM) must manually interpret it. We need
+a layer that **identifies specific problems** from the diagnostic data and names them.
+
+**What we'd build:**
+
+A `ProblemDetector` pipeline that runs after `inspect` data collection and emits a list of
+**named problems** with severity and quantified impact:
+
+```go
+// internal/diagnostic/detector.go
+
+type Problem struct {
+    ID          string  // e.g. "expensive-screenshots", "verbose-commands", "frequent-compaction"
+    Severity    string  // "high", "medium", "low"
+    Category    string  // "images", "commands", "compaction", "tokens"
+    Provider    string  // detected provider
+    Impact      string  // factual: "228 images × 79 avg turns × 1500 tok = 27.1M billed tokens ($81)"
+    Observation string  // factual: "screenshots resized to 1000px, avg 79 assistant turns in context"
+}
+```
+
+**Detectors (initial set):**
+
+| Detector | Trigger | Impact formula |
+|----------|---------|---------------|
+| `expensive-screenshots` | `ToolReadImages > 10 AND AvgTurnsInCtx > 20` | images × avgTurns × tokPerImage × $rate |
+| `oversized-screenshots` | `SimctlCaptures > 0 AND SipsResizes with -Z > 600` | token reduction from smaller size |
+| `verbose-command-output` | `TopCommand.TotalBytes > 100KB` | outputBytes × contextTurns × $rate |
+| `frequent-compaction` | `PerUserMsg > 0.2` | totalTokensLost × inputRate |
+| `no-cache-utilization` | `CachePct < 50%` | cacheable tokens × (full_price - cache_price) |
+| `large-context-at-compaction` | `AvgBeforeTokens > 0.85 × windowSize` | tokens wasted on near-limit context |
+
+Each detector is **provider-agnostic** for the detection logic, but the **fix generation** (9.3) is
+provider-specific.
+
+**Effort:** M, 3h. **Priority:** HIGH — gates all fix generation.
+
+### 9.3 Fix Generators — Provider-Specific Artefacts (✅ DONE)
+
+**Status:** Implemented 2026-04-06. `internal/diagnostic/fixgen.go` + `fix.go`, integrated in
+`pkg/cmd/inspectcmd/inspectcmd.go` via `--generate-fix` flag.
+
+**What it does:**
+
+For each detected problem, a **fix generator** produces ready-to-apply artefacts adapted to
+the session's provider. Triggered via `aisync inspect --generate-fix <session-id>`.
+
+**Fix: `expensive-screenshots` / `oversized-screenshots`**
+
+Generated artefacts:
+
+1. **Capture script** — `capture-screen.sh` (or provider equivalent):
+   ```bash
+   #!/bin/bash
+   # Generated by aisync — optimized screenshot capture
+   # Reduces token cost by ~66% (1500 → ~500 tokens per image)
+   DEVICE="${DEVICE_ID:-booted}"
+   OUT="${1:-/tmp/screenshot.png}"
+   xcrun simctl io "$DEVICE" screenshot /tmp/_raw_capture.png
+   sips -Z 500 /tmp/_raw_capture.png --out /tmp/_resized.png
+   sips -s format jpeg -s formatOptions 50 /tmp/_resized.png --out "${OUT%.png}.jpg"
+   rm -f /tmp/_raw_capture.png /tmp/_resized.png
+   echo "${OUT%.png}.jpg"
+   ```
+
+2. **Agent instructions patch** — appended to AGENTS.md / CLAUDE.md:
+   ```markdown
+   ## Screenshot Protocol (generated by aisync)
+   - Use ./capture-screen.sh instead of raw simctl + sips
+   - After reading a screenshot, describe what you see in 2-3 sentences of text
+   - Never re-read a screenshot you already described in the last 10 messages
+   - Prefer JPEG over PNG for all screenshots
+   - Target resolution: 500px max dimension (not 1000px)
+   ```
+
+3. **OpenCode skill** (if provider is `opencode`):
+   ```
+   .opencode/skills/screenshot-capture/
+     SKILL.md      — instructions for the agent
+     capture.sh    — the optimized script
+   ```
+
+4. **Claude Code command** (if provider is `claude-code`):
+   ```
+   .claude/commands/capture-screenshot.md
+   ```
+
+**Fix: `verbose-command-output`**
+
+Generated artefacts:
+- Agent instructions: "Pipe long command output through `head -100` or `tail -50`. Never run
+  unbounded `cat` on files > 500 lines."
+- For detected commands: specific alternatives (e.g. `pnpm test 2>&1 | tail -30` instead of
+  bare `pnpm test`).
+
+**Fix: `frequent-compaction`**
+
+Generated artefacts:
+- Agent instructions: "When context exceeds 150K tokens, proactively summarize the current state
+  and start a new sub-task."
+- Session splitting guide for the user.
+
+**Output modes:**
+
+| Flag | Behaviour |
+|------|-----------|
+| `--generate-fix` | Print fixes to stdout (review mode) |
+| `--generate-fix --apply` | Write fixes to disk (creates files, appends to AGENTS.md) |
+| `--generate-fix --json` | Structured JSON with file paths + content |
+
+**Effort:** L, 6-8h across all generators. **Priority:** HIGH. **Status:** ✅ DONE.
+
+### 9.4 Provider Documentation Links
+
+**Problem:** Fix artefacts reference provider-specific concepts (skills, commands, config) but
+users may not know how to install them.
+
+**What we'd build:**
+
+Each generated fix includes a **"Learn more"** section with links to the provider's documentation:
+
+- OpenCode skills: link to OpenCode docs on skills directory structure
+- Claude Code commands: link to Anthropic docs on `.claude/commands/`
+- Cursor rules: link to Cursor docs on `.cursorrules`
+- General: link to aisync's own docs on `inspect --generate-fix`
+
+The links are provider-version-aware (fetched from a simple registry in
+`internal/diagnostic/provider_docs.go`).
+
+**Effort:** S, 1h. **Priority:** LOW — nice-to-have polish.
+
+### 9.5 Historical Trend Detection
+
+**Problem:** A single `inspect` is a snapshot. Users need to know if problems are **getting worse**
+(e.g. screenshot count growing session over session) or **already fixed**.
+
+**What we'd build:**
+
+Compare current session's diagnostic data against the project's historical baseline:
+
+```
+Image cost: $81 (this session) vs $12 avg (project last 30 days) — 6.75× above baseline
+Compaction rate: 0.152/user_msg vs 0.089 avg — 1.71× above baseline
+Command output: 0 B (this session) vs 45KB avg — below baseline (good)
+```
+
+Uses the existing `session_events` and `session_analytics` tables. Only triggers problem
+detectors when current session is **significantly above baseline** (>2× for images/commands,
+>1.5× for compaction rate).
+
+**Effort:** M, 3h. **Priority:** MEDIUM.
+
+### 9.6 MCP Tool: `inspect_session`
+
+**Problem:** When an agent (Claude Code, OpenCode) is analyzing sessions via MCP, it currently
+calls multiple separate tools. A single `inspect_session` MCP tool would give the agent the
+complete diagnostic in one call, including detected problems.
+
+**What we'd build:**
+
+New MCP tool `inspect_session` that returns the same JSON as `aisync inspect --json`, plus
+the detected problems from 9.2. The agent can then:
+1. Read the diagnostic
+2. Identify the problems
+3. Generate or apply fixes from its own context
+
+This closes the loop: aisync provides the data, the agent acts on it.
+
+**Effort:** S, 2h (wiring existing code to MCP handler). **Priority:** MEDIUM.
+
+### Rollout
+
+**Phase 1 — Foundation (9.1 ✅ + 9.2 ✅):** Inspect CLI + problem detectors.
+- 9.1 `aisync inspect` CLI — ✅ DONE
+- 9.2 Problem detectors — ✅ DONE (16 detectors)
+
+**Phase 2 — Fixes (9.3 ✅):** Fix generators for each detected problem × provider.
+- 12 fix generators covering images, compaction, commands, tokens, tool errors, patterns — ✅ DONE
+- Provider-specific artefacts: OpenCode (AGENTS.md + skills), Claude Code (CLAUDE.md + commands), Cursor (.cursorrules)
+- `--generate-fix` (review mode) + `--apply` (write to disk) + `--json` (structured output)
+
+**Phase 3 — Intelligence (9.4 + 9.5):** Provider docs links + historical trend comparison.
+
+**Phase 4 — Agent integration (9.6):** MCP tool for in-agent diagnostics.
+
+**Total estimated effort: ~15-18h across 4 phases.** Phase 1-2 deliver immediate actionable value.
 
 ---
 
@@ -666,9 +1041,9 @@ breakdown, first 5 user messages, last 10 messages, errors, files, capabilities 
 
 **Priority Matrix (Sections 1–6): ✅ 100% COMPLETE** — all 22 features delivered through Sprint H.
 
-**Next focus → Section 8 (Investigation Tooling)** — new backlog triggered by cycloplan session
-analysis (2026-04-05). See [Section 8](#8-investigation-tooling--agent-support) for the 8 new
-features and suggested phased rollout (Phase 1 = critical fixes, Phase 4 = alerts).
+**Next focus → Section 8 (Investigation Tooling) + Section 9 (Actionable Diagnostics):**
+- Section 8: 8 features for investigation tooling. Phase 1 (8.1 + 8.2) ✅ DONE. See [Section 8](#8-investigation-tooling--agent-support).
+- Section 9: 6 features for actionable diagnostics & token economy. 9.1 ✅ + 9.2 ✅ + 9.3 ✅ DONE. See [Section 9](#9-actionable-diagnostics--token-economy).
 
 ### Completed Sprints
 

@@ -28,6 +28,7 @@ func newTestHandlers(t *testing.T) (*handlers, *service.SessionService) {
 
 	h := &handlers{
 		sessionSvc: sessionSvc,
+		store:      store,
 	}
 	return h, sessionSvc
 }
@@ -691,6 +692,8 @@ func TestNewServerRegistersAllTools(t *testing.T) {
 		"aisync_push", "aisync_pull", "aisync_sync", "aisync_index",
 		"aisync_errors",
 		"aisync_session_events", "aisync_session_event_summary", "aisync_event_buckets",
+		"aisync_inspect_session",
+		"aisync_recommendations", "aisync_diagnose", "aisync_skill_observation",
 	}
 
 	for _, name := range expectedTools {

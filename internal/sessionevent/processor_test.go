@@ -1363,3 +1363,149 @@ func TestProcessor_Compaction_CacheNotInvalidated(t *testing.T) {
 		t.Error("expected CacheInvalidated=false (cache_read is 50% of input)")
 	}
 }
+
+// ── Section 8.2: Command output tracking ──
+
+func TestProcessor_CommandOutputBytes(t *testing.T) {
+	p := NewProcessor()
+	// Simulate a bash tool call with a large output (e.g. test output).
+	output := "line1\nline2\nline3\nline4\nline5\n"
+	sess := &session.Session{
+		ID:       "test-cmd-output",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{
+						ID:     "tc-1",
+						Name:   "bash",
+						Input:  `{"command": "go test ./..."}`,
+						Output: output,
+						State:  session.ToolStateCompleted,
+					},
+				},
+			},
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	var cmdEvents []Event
+	for _, e := range events {
+		if e.Type == EventCommand {
+			cmdEvents = append(cmdEvents, e)
+		}
+	}
+	if len(cmdEvents) != 1 {
+		t.Fatalf("expected 1 command event, got %d", len(cmdEvents))
+	}
+
+	cmd := cmdEvents[0].Command
+	if cmd.OutputBytes != len(output) {
+		t.Errorf("OutputBytes: want %d, got %d", len(output), cmd.OutputBytes)
+	}
+	expectedTokens := len(output) / 4
+	if cmd.OutputTokens != expectedTokens {
+		t.Errorf("OutputTokens: want %d, got %d", expectedTokens, cmd.OutputTokens)
+	}
+}
+
+func TestProcessor_CommandOutputBytes_Empty(t *testing.T) {
+	p := NewProcessor()
+	// Command with no output (e.g. mkdir, cd).
+	sess := &session.Session{
+		ID:       "test-cmd-no-output",
+		Provider: session.ProviderClaudeCode,
+		Agent:    "claude",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{
+						ID:    "tc-1",
+						Name:  "bash",
+						Input: `{"command": "mkdir -p /tmp/test"}`,
+						State: session.ToolStateCompleted,
+						// No Output
+					},
+				},
+			},
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	var cmdEvents []Event
+	for _, e := range events {
+		if e.Type == EventCommand {
+			cmdEvents = append(cmdEvents, e)
+		}
+	}
+	if len(cmdEvents) != 1 {
+		t.Fatalf("expected 1 command event, got %d", len(cmdEvents))
+	}
+
+	cmd := cmdEvents[0].Command
+	if cmd.OutputBytes != 0 {
+		t.Errorf("OutputBytes: want 0, got %d", cmd.OutputBytes)
+	}
+	if cmd.OutputTokens != 0 {
+		t.Errorf("OutputTokens: want 0, got %d", cmd.OutputTokens)
+	}
+}
+
+func TestProcessor_CommandOutputBytes_LargeOutput(t *testing.T) {
+	p := NewProcessor()
+	// Simulate a large test output (100KB) — common with verbose test runs.
+	largeOutput := make([]byte, 100_000)
+	for i := range largeOutput {
+		largeOutput[i] = 'x'
+	}
+	sess := &session.Session{
+		ID:       "test-cmd-large",
+		Provider: session.ProviderOpenCode,
+		Agent:    "opencode",
+		Messages: []session.Message{
+			{
+				ID:        "msg-1",
+				Timestamp: time.Now(),
+				Role:      session.RoleAssistant,
+				ToolCalls: []session.ToolCall{
+					{
+						ID:     "tc-1",
+						Name:   "bash",
+						Input:  `{"command": "go test -v ./..."}`,
+						Output: string(largeOutput),
+						State:  session.ToolStateCompleted,
+					},
+				},
+			},
+		},
+	}
+
+	events, _ := p.ExtractAll(sess)
+
+	var cmdEvents []Event
+	for _, e := range events {
+		if e.Type == EventCommand {
+			cmdEvents = append(cmdEvents, e)
+		}
+	}
+	if len(cmdEvents) != 1 {
+		t.Fatalf("expected 1 command event, got %d", len(cmdEvents))
+	}
+
+	cmd := cmdEvents[0].Command
+	if cmd.OutputBytes != 100_000 {
+		t.Errorf("OutputBytes: want 100000, got %d", cmd.OutputBytes)
+	}
+	if cmd.OutputTokens != 25_000 {
+		t.Errorf("OutputTokens: want 25000 (100000/4), got %d", cmd.OutputTokens)
+	}
+}

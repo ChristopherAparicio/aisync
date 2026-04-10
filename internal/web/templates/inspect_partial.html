@@ -1,0 +1,204 @@
+{{define "inspect_partial"}}
+<div class="inspect-report">
+  {{if not .HasProblems}}
+  <div class="inspect-clean">
+    <span class="inspect-clean-icon">&#x2705;</span>
+    <span>No significant token economy problems detected in this session.</span>
+  </div>
+  {{end}}
+
+  {{if .HasProblems}}
+  <!-- ── Detected Problems ── -->
+  <div class="inspect-problems">
+    <h3 class="inspect-section-title">Detected Problems <span class="badge">{{.ProblemCount}}</span></h3>
+    {{range .Problems}}
+    <div class="inspect-problem inspect-problem--{{.SeverityClass}}">
+      <div class="inspect-problem-header">
+        <span class="inspect-problem-icon">{{.SeverityIcon}}</span>
+        <span class="inspect-problem-severity badge badge-{{.SeverityClass}}">{{.SeverityLabel}}</span>
+        <span class="inspect-problem-title">{{.Title}}</span>
+        <span class="inspect-problem-category badge">{{.Category}}</span>
+      </div>
+      <div class="inspect-problem-body">
+        <p class="inspect-problem-observation">{{.Observation}}</p>
+        <p class="inspect-problem-impact"><strong>Impact:</strong> {{.Impact}}</p>
+      </div>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
+  <!-- ── Section Summaries ── -->
+  <div class="inspect-sections">
+
+    <!-- Tokens -->
+    {{if .Tokens}}
+    <div class="inspect-section">
+      <h3 class="inspect-section-title">Token Economy</h3>
+      <div class="inspect-grid inspect-grid--3">
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Input</span>
+          <span class="inspect-stat-value font-mono">{{.Tokens.InputStr}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Output</span>
+          <span class="inspect-stat-value font-mono">{{.Tokens.OutputStr}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">I/O Ratio</span>
+          <span class="inspect-stat-value font-mono">{{.Tokens.RatioStr}}</span>
+        </div>
+        {{if gt .Tokens.CacheRead 0}}
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Cache Read</span>
+          <span class="inspect-stat-value font-mono">{{.Tokens.CacheReadStr}}</span>
+          <span class="inspect-stat-sub">{{.Tokens.CachePctStr}} of input</span>
+        </div>
+        {{end}}
+      </div>
+      {{if .Tokens.Models}}
+      <table class="inspect-table">
+        <thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Msgs</th></tr></thead>
+        <tbody>
+          {{range .Tokens.Models}}
+          <tr><td class="font-mono">{{.Model}}</td><td class="font-mono">{{.InputStr}}</td><td class="font-mono">{{.OutputStr}}</td><td class="font-mono">{{.Msgs}}</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{end}}
+    </div>
+    {{end}}
+
+    <!-- Images -->
+    {{if and .Images (gt .Images.Total 0)}}
+    <div class="inspect-section">
+      <h3 class="inspect-section-title">Images / Screenshots</h3>
+      <div class="inspect-grid inspect-grid--3">
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Tool-Read</span>
+          <span class="inspect-stat-value font-mono">{{.Images.ToolReadImages}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Captures</span>
+          <span class="inspect-stat-value font-mono">{{.Images.SimctlCaptures}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Resizes</span>
+          <span class="inspect-stat-value font-mono">{{.Images.SipsResizes}}</span>
+        </div>
+        {{if gt .Images.ToolReadImages 0}}
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Avg Context Turns</span>
+          <span class="inspect-stat-value font-mono">{{.Images.AvgTurnsStr}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Billed Tokens</span>
+          <span class="inspect-stat-value font-mono">{{.Images.BilledTokStr}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Est. Image Cost</span>
+          <span class="inspect-stat-value font-mono">${{.Images.CostStr}}</span>
+        </div>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+
+    <!-- Tool Errors -->
+    {{if and .ToolErrors (gt .ToolErrors.ErrorCount 0)}}
+    <div class="inspect-section">
+      <h3 class="inspect-section-title">Tool Errors</h3>
+      <div class="inspect-grid inspect-grid--3">
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Total Calls</span>
+          <span class="inspect-stat-value font-mono">{{.ToolErrors.TotalToolCalls}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Errors</span>
+          <span class="inspect-stat-value font-mono inspect-stat--error">{{.ToolErrors.ErrorCount}}</span>
+          <span class="inspect-stat-sub">{{.ToolErrors.ErrorRateStr}} rate</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Error Loops</span>
+          <span class="inspect-stat-value font-mono">{{.ToolErrors.LoopCount}}</span>
+        </div>
+      </div>
+      {{if .ToolErrors.TopTools}}
+      <table class="inspect-table">
+        <thead><tr><th>Tool</th><th>Calls</th><th>Errors</th><th>Rate</th></tr></thead>
+        <tbody>
+          {{range .ToolErrors.TopTools}}
+          <tr><td class="font-mono">{{.Name}}</td><td class="font-mono">{{.Calls}}</td><td class="font-mono">{{.Errors}}</td><td class="font-mono">{{.RateStr}}</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{end}}
+    </div>
+    {{end}}
+
+    <!-- Behavioral Patterns -->
+    {{if .Patterns}}
+    <div class="inspect-section">
+      <h3 class="inspect-section-title">Behavioral Patterns</h3>
+      <div class="inspect-grid inspect-grid--3">
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Edit w/o Read</span>
+          <span class="inspect-stat-value font-mono">{{.Patterns.WriteWithoutRead}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">User Corrections</span>
+          <span class="inspect-stat-value font-mono">{{.Patterns.UserCorrections}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Glob Storms</span>
+          <span class="inspect-stat-value font-mono">{{.Patterns.GlobStorms}}</span>
+        </div>
+        <div class="inspect-stat">
+          <span class="inspect-stat-label">Long Runs</span>
+          <span class="inspect-stat-value font-mono">{{.Patterns.LongRuns}}</span>
+          {{if gt .Patterns.LongestRun 0}}
+          <span class="inspect-stat-sub">longest: {{.Patterns.LongestRun}} msgs</span>
+          {{end}}
+        </div>
+      </div>
+    </div>
+    {{end}}
+
+  </div>
+</div>
+
+<style>
+.inspect-report { margin-top: 0.5rem; }
+.inspect-clean { padding: 1rem; background: var(--bg-card); border-radius: 8px; display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); }
+.inspect-clean-icon { font-size: 1.2rem; }
+.inspect-problems { margin-bottom: 1.5rem; }
+.inspect-section-title { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
+.inspect-problem { background: var(--bg-card); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 0.5rem; border-left: 3px solid var(--border); }
+.inspect-problem--high { border-left-color: var(--error, #ef4444); }
+.inspect-problem--medium { border-left-color: var(--warning, #f59e0b); }
+.inspect-problem--low { border-left-color: var(--info, #3b82f6); }
+.inspect-problem-header { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.inspect-problem-icon { font-size: 1rem; }
+.inspect-problem-title { font-weight: 600; font-size: 0.85rem; }
+.inspect-problem-category { font-size: 0.7rem; }
+.inspect-problem-body { margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-secondary); }
+.inspect-problem-observation { margin: 0 0 0.25rem; }
+.inspect-problem-impact { margin: 0; }
+.inspect-sections { display: flex; flex-direction: column; gap: 1.25rem; }
+.inspect-section { background: var(--bg-card); border-radius: 8px; padding: 1rem; }
+.inspect-grid { display: grid; gap: 0.75rem; }
+.inspect-grid--3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 600px) { .inspect-grid--3 { grid-template-columns: repeat(2, 1fr); } }
+.inspect-stat { display: flex; flex-direction: column; }
+.inspect-stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+.inspect-stat-value { font-size: 1.1rem; font-weight: 600; }
+.inspect-stat--error { color: var(--error, #ef4444); }
+.inspect-stat-sub { font-size: 0.7rem; color: var(--text-secondary); }
+.inspect-table { width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.8rem; }
+.inspect-table th { text-align: left; font-weight: 600; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); font-size: 0.7rem; text-transform: uppercase; color: var(--text-secondary); }
+.inspect-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border-subtle, var(--border)); }
+.badge-high { background: var(--error, #ef4444); color: #fff; }
+.badge-medium { background: var(--warning, #f59e0b); color: #000; }
+.badge-low { background: var(--info, #3b82f6); color: #fff; }
+</style>
+{{end}}

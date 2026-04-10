@@ -46,16 +46,17 @@ func (t *DashboardWarmTask) Name() string {
 	return "dashboard_warm"
 }
 
-// Run pre-computes stats, forecast, and trends (global first, then per-project).
+// Run pre-computes stats and trends (global first, then per-project).
+// NOTE: Forecast warming was removed — the Forecast handler now reads from
+// pre-computed session_analytics rows and completes in <100ms.
 func (t *DashboardWarmTask) Run(ctx context.Context) error {
 	// 1. Global stats (warm this first — used by every page).
 	t.warmStats(ctx, "", true)
 
-	// 2. Global forecast + trends (used by dashboard).
-	t.warmForecast(ctx, "")
+	// 2. Global trends (used by dashboard).
 	t.warmTrends(ctx, "")
 
-	// 3. Per-project (stats + forecast + trends).
+	// 3. Per-project (stats + trends).
 	projects, err := t.sessionSvc.ListProjects(ctx)
 	if err != nil {
 		t.logger.Printf("[dashboard_warm] list projects failed: %v (global caches still valid)", err)
@@ -67,11 +68,10 @@ func (t *DashboardWarmTask) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 		t.warmStats(ctx, p.ProjectPath, false)
-		t.warmForecast(ctx, p.ProjectPath)
 		t.warmTrends(ctx, p.ProjectPath)
 	}
 
-	t.logger.Printf("[dashboard_warm] warmed stats + forecast + trends for %d projects", len(projects))
+	t.logger.Printf("[dashboard_warm] warmed stats + trends for %d projects", len(projects))
 	return nil
 }
 
@@ -85,24 +85,6 @@ func (t *DashboardWarmTask) warmStats(ctx context.Context, project string, all b
 	}
 
 	cacheKey := "stats:" + project + ":"
-	data, err := json.Marshal(result)
-	if err != nil {
-		return
-	}
-	_ = t.store.SetCache(cacheKey, data)
-}
-
-// warmForecast computes and caches the forecast for a project (or global if empty).
-func (t *DashboardWarmTask) warmForecast(ctx context.Context, project string) {
-	req := service.ForecastRequest{Period: "weekly", Days: 90, ProjectPath: project}
-	cacheKey := "forecast:" + project + ":" + req.Period
-
-	result, err := t.sessionSvc.Forecast(ctx, req)
-	if err != nil {
-		t.logger.Printf("[dashboard_warm] forecast %q failed: %v", project, err)
-		return
-	}
-
 	data, err := json.Marshal(result)
 	if err != nil {
 		return

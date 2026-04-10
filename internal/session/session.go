@@ -515,6 +515,11 @@ type CompactionEvent struct {
 
 	// Cost estimation.
 	RebuildCost float64 `json:"rebuild_cost"` // estimated cost to rebuild context ($)
+
+	// 2-pass cascade detection: when two consecutive drops arrive within a short
+	// message window, they are merged into a single compaction event.
+	IsCascade  bool `json:"is_cascade,omitempty"`  // true if this event was merged from multiple drops
+	MergedLegs int  `json:"merged_legs,omitempty"` // number of individual drops merged (2 or 3)
 }
 
 // CompactionSummary aggregates compaction events for a session or set of sessions.
@@ -528,6 +533,15 @@ type CompactionSummary struct {
 	SawtoothCycles    int               `json:"sawtooth_cycles"`      // fill→compact→rebuild cycles
 	AvgRecoveryTokens int               `json:"avg_recovery_tokens"`  // avg tokens rebuilt after compaction
 	AvgMessagesToFill int               `json:"avg_messages_to_fill"` // avg messages before hitting compaction
+
+	// Per-user-message compaction rate (Section 8.1).
+	CompactionsPerUserMessage  float64 `json:"compactions_per_user_message"`  // total_compactions / user_messages
+	LastQuartileCompactionRate float64 `json:"last_quartile_compaction_rate"` // rate over last 25% of user messages
+	CascadeCount               int     `json:"cascade_count"`                 // how many merged 2-pass events
+
+	// Detection coverage — distinguishes "no compactions found" from "no data to analyze".
+	MessagesWithTokenData int    `json:"messages_with_token_data"` // messages where InputTokens > 0
+	DetectionCoverage     string `json:"detection_coverage"`       // "full", "partial", "none"
 }
 
 // FileChange records a file touched during a session.

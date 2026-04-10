@@ -154,11 +154,13 @@ type ErrorDetail struct {
 
 // CommandDetail captures a bash/shell command execution.
 type CommandDetail struct {
-	BaseCommand string            `json:"base_command"`           // e.g. "git", "npm", "ls"
-	FullCommand string            `json:"full_command,omitempty"` // full command string (truncated)
-	ToolCallID  string            `json:"tool_call_id,omitempty"`
-	State       session.ToolState `json:"state"` // completed, error
-	DurationMs  int               `json:"duration_ms,omitempty"`
+	BaseCommand  string            `json:"base_command"`           // e.g. "git", "npm", "ls"
+	FullCommand  string            `json:"full_command,omitempty"` // full command string (truncated)
+	ToolCallID   string            `json:"tool_call_id,omitempty"`
+	State        session.ToolState `json:"state"` // completed, error
+	DurationMs   int               `json:"duration_ms,omitempty"`
+	OutputBytes  int               `json:"output_bytes,omitempty"`  // raw byte length of tool output (Section 8.2)
+	OutputTokens int               `json:"output_tokens,omitempty"` // estimated tokens (bytes/4) consumed by output
 }
 
 // ImageDetail captures an image usage event.
@@ -172,9 +174,12 @@ type ImageDetail struct {
 // CompactionDetail captures a context window compaction event.
 //
 // Compaction occurs when the AI provider summarizes the conversation to free
-// context window space. It is detected via token-drop heuristic: a >50% drop
-// in input tokens between consecutive assistant messages, confirmed by cache
-// invalidation (cache_read_tokens drops to ~0).
+// context window space. It is detected via a two-tier token-drop heuristic:
+//   - Primary: drop ratio < 0.55 with baseline > 10K tokens
+//   - Secondary: drop ratio < 0.65, absolute delta > 40K, cache invalidated
+//
+// Consecutive detected drops within 3 messages are merged into cascade events
+// when no recovery is observed between them (Section 8.1).
 type CompactionDetail struct {
 	// Positions in the message stream where compaction was detected.
 	BeforeMessageIdx int `json:"before_message_idx"` // last message before compaction

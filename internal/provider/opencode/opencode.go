@@ -314,6 +314,153 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 	return result, nil
 }
 
+// ExportIncremental reads only messages added after the given offset.
+// This avoids re-reading the full message set for large sessions.
+// Implements provider.IncrementalExporter.
+func (p *Provider) ExportIncremental(sessionID session.ID, messageOffset int, mode session.StorageMode) (*provider.IncrementalResult, error) {
+	// Only the DB reader supports offset queries.
+	dbr, ok := p.reader.(*dbReader)
+	if !ok {
+		return nil, provider.ErrIncrementalNotPossible
+	}
+
+	// Summary mode doesn't benefit from incremental — always full.
+	if mode == session.StorageModeSummary {
+		return nil, provider.ErrIncrementalNotPossible
+	}
+
+	// Verify the offset is valid (not more messages than exist).
+	currentCount := dbr.countMessages(string(sessionID))
+	if currentCount <= messageOffset {
+		// No new messages — caller should skip.
+		return nil, provider.ErrIncrementalNotPossible
+	}
+
+	// Read session metadata for UpdatedAt.
+	sess, err := dbr.readSession(string(sessionID))
+	if err != nil {
+		return nil, fmt.Errorf("reading session metadata: %w", err)
+	}
+
+	// Read only new messages.
+	newOCMsgs, err := dbr.loadMessagesFrom(string(sessionID), messageOffset)
+	if err != nil {
+		return nil, fmt.Errorf("loading incremental messages: %w", err)
+	}
+
+	if len(newOCMsgs) == 0 {
+		return nil, provider.ErrIncrementalNotPossible
+	}
+
+	// Sort new messages by creation time.
+	sort.Slice(newOCMsgs, func(i, j int) bool {
+		return newOCMsgs[i].Time.Created < newOCMsgs[j].Time.Created
+	})
+
+	// Load parts only for the new messages.
+	msgIDs := make([]string, len(newOCMsgs))
+	for i, m := range newOCMsgs {
+		msgIDs[i] = m.ID
+	}
+	newParts, err := dbr.loadPartsForMessages(msgIDs)
+	if err != nil {
+		newParts = nil // fallback: no parts (tools won't be populated)
+	}
+
+	// Convert new messages to domain format.
+	var newMessages []session.Message
+	for _, msg := range newOCMsgs {
+		parts := newParts[msg.ID]
+
+		providerID := msg.ProviderID
+		if providerID == "" {
+			providerID = msg.Model.ProviderID
+		}
+
+		domainMsg := session.Message{
+			ID:           msg.ID,
+			Model:        msg.ModelID,
+			ProviderID:   providerID,
+			ProviderCost: msg.Cost,
+			Timestamp:    time.UnixMilli(msg.Time.Created),
+		}
+
+		switch msg.Role {
+		case "user":
+			domainMsg.Role = session.RoleUser
+		case "assistant":
+			domainMsg.Role = session.RoleAssistant
+		default:
+			domainMsg.Role = session.RoleSystem
+		}
+
+		var textParts []string
+		for _, part := range parts {
+			switch part.Type {
+			case "text":
+				textParts = append(textParts, part.Text)
+			case "tool":
+				if mode == session.StorageModeFull || mode == session.StorageModeCompact {
+					tc := convertToolPart(part)
+					domainMsg.ToolCalls = append(domainMsg.ToolCalls, tc)
+				}
+			case "reasoning":
+				if mode == session.StorageModeFull {
+					domainMsg.Thinking = part.Text
+				}
+			case "image", "file":
+				if part.MediaType != "" && isImageMediaType(part.MediaType) {
+					img := session.ImageMeta{
+						MediaType: part.MediaType,
+						Source:    part.Type,
+						FileName:  part.FileName,
+					}
+					if part.DataLen > 0 {
+						img.SizeBytes = part.DataLen
+						img.TokensEstimate = part.DataLen / 750
+						if img.TokensEstimate < 85 {
+							img.TokensEstimate = 85
+						}
+					}
+					domainMsg.Images = append(domainMsg.Images, img)
+				}
+			}
+		}
+
+		domainMsg.Content = strings.Join(textParts, "\n")
+
+		if msg.Tokens.Input > 0 || msg.Tokens.Output > 0 {
+			rawInput := msg.Tokens.Input
+			cacheRead := msg.Tokens.Cache.Read
+			cacheWrite := msg.Tokens.Cache.Write
+			domainMsg.InputTokens = rawInput + cacheRead + cacheWrite
+			domainMsg.OutputTokens = msg.Tokens.Output
+			domainMsg.CacheReadTokens = cacheRead
+			domainMsg.CacheWriteTokens = cacheWrite
+		}
+
+		newMessages = append(newMessages, domainMsg)
+	}
+
+	// Recompute full token totals from ALL messages (cheap query).
+	allMsgs, _ := dbr.loadMessages(string(sessionID))
+	tokenUsage := sumTokens(allMsgs)
+
+	// Extract errors only from new messages — existing session already has old errors.
+	sessionErrors := ExtractErrors(sessionID, newOCMsgs, newMessages)
+
+	// Load children (always full — they're typically small).
+	children, _ := p.loadChildSessionsFull(string(sessionID), mode)
+
+	return &provider.IncrementalResult{
+		NewMessages: newMessages,
+		UpdatedAt:   sess.Time.Updated,
+		TokenUsage:  tokenUsage,
+		Errors:      sessionErrors,
+		Children:    children,
+	}, nil
+}
+
 // loadChildSessionsFull recursively exports child sessions.
 func (p *Provider) loadChildSessionsFull(parentID string, mode session.StorageMode) ([]session.Session, error) {
 	childSessions, err := p.reader.findChildSessions(parentID)

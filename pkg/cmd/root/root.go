@@ -24,11 +24,14 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/hooks"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/importcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/initcmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/inspectcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/linkcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/listcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/mcpcmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/modulecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/pricescmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/projectcmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/recommendcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/replaycmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/restore"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd"
@@ -38,6 +41,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/setupcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/show"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/skillobservecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/skillscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/statscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/status"
@@ -110,6 +114,10 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(projectcmd.NewCmdProject(f))
 	cmd.AddCommand(userscmd.NewCmdUsers(f))
 	cmd.AddCommand(diagnosecmd.NewCmdDiagnose(f))
+	cmd.AddCommand(inspectcmd.NewCmdInspect(f))
+	cmd.AddCommand(modulecmd.NewCmdModule(f))
+	cmd.AddCommand(recommendcmd.NewCmdRecommend(f))
+	cmd.AddCommand(skillobservecmd.NewCmdSkillObserve(f))
 
 	return cmd
 }

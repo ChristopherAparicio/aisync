@@ -92,6 +92,13 @@ type MockStore struct {
 
 	// SnoozedRecs tracks snoozed recommendation IDs → snooze-until time.
 	SnoozedRecs map[string]time.Time
+
+	// Analytics holds materialized session_analytics rows keyed by session ID.
+	// Populated by UpsertSessionAnalytics and read by GetSessionAnalytics /
+	// QueryAnalytics. Mirrors the Phase 4 CQRS read model in memory so tests
+	// can exercise the stampAnalytics() write-path hook and the hot-path
+	// handlers that read through it without touching SQLite.
+	Analytics map[session.ID]session.Analytics
 }
 
 // NewMockStore creates a MockStore, optionally pre-populated with sessions.
@@ -102,6 +109,7 @@ func NewMockStore(sessions ...*session.Session) *MockStore {
 		Links:      make(map[string][]session.Summary),
 		Analyses:   make(map[string]*analysis.SessionAnalysis),
 		PRSessions: make(map[string][]session.Summary),
+		Analytics:  make(map[session.ID]session.Analytics),
 	}
 	for _, s := range sessions {
 		m.Sessions[s.ID] = s
@@ -785,6 +793,143 @@ func (m *MockStore) ListSessionsWithZeroCosts(limit int) ([]session.ID, error) {
 			if limit > 0 && len(ids) >= limit {
 				break
 			}
+		}
+	}
+	return ids, nil
+}
+
+// ListSessionsNeedingAnalytics returns session IDs that have no analytics row
+// or have a row with stale schema_version. Mirrors the SQLite LEFT JOIN logic.
+func (m *MockStore) ListSessionsNeedingAnalytics(minSchemaVersion int, limit int) ([]session.ID, error) {
+	var ids []session.ID
+	for id := range m.Sessions {
+		a, ok := m.Analytics[id]
+		if !ok || a.SchemaVersion < minSchemaVersion {
+			ids = append(ids, id)
+			if limit > 0 && len(ids) >= limit {
+				break
+			}
+		}
+	}
+	return ids, nil
+}
+
+// ── Materialized analytics (Phase 4 CQRS read model) ──
+
+// UpsertSessionAnalytics stores or replaces the materialized analytics row
+// for a session. Mirrors the SQLite semantics: a second call for the same
+// SessionID fully overwrites the previous value, and AgentUsage is carried
+// on the payload itself rather than in a separate map (the sibling
+// session_agent_usage table is modeled as the embedded slice).
+func (m *MockStore) UpsertSessionAnalytics(a session.Analytics) error {
+	if m.Analytics == nil {
+		m.Analytics = make(map[session.ID]session.Analytics)
+	}
+	m.Analytics[a.SessionID] = a
+	return nil
+}
+
+// GetSessionAnalytics retrieves the materialized analytics for a session.
+// Returns (nil, nil) — not an error — when no row exists, so service-layer
+// callers can fall back to live computation via session.ComputeAnalytics.
+func (m *MockStore) GetSessionAnalytics(id session.ID) (*session.Analytics, error) {
+	a, ok := m.Analytics[id]
+	if !ok {
+		return nil, nil
+	}
+	// Return a copy so callers can't mutate the stored row.
+	out := a
+	return &out, nil
+}
+
+// QueryAnalytics returns all analytics rows matching the filter, hydrated
+// with ProjectPath / CreatedAt / Branch from the sibling Sessions map.
+// Rows whose parent session has been deleted are skipped (defensive: mirrors
+// the SQLite JOIN which would drop them as well).
+//
+// Ordering matches the SQLite implementation contract: sessions.created_at
+// DESC. Zero-valued filter fields are treated as "no filter on this
+// dimension" — identical to the port's documented semantics.
+func (m *MockStore) QueryAnalytics(filter session.AnalyticsFilter) ([]session.AnalyticsRow, error) {
+	var rows []session.AnalyticsRow
+	for id, a := range m.Analytics {
+		s, ok := m.Sessions[id]
+		if !ok {
+			continue // orphaned analytics row, skip
+		}
+		if filter.ProjectPath != "" && s.ProjectPath != filter.ProjectPath {
+			continue
+		}
+		if !filter.Since.IsZero() && s.CreatedAt.Before(filter.Since) {
+			continue
+		}
+		if !filter.Until.IsZero() && s.CreatedAt.After(filter.Until) {
+			continue
+		}
+		if filter.Backend != "" && a.Backend != filter.Backend {
+			continue
+		}
+		if filter.MinSchemaVersion > 0 && a.SchemaVersion < filter.MinSchemaVersion {
+			continue
+		}
+		rows = append(rows, session.AnalyticsRow{
+			Analytics:    a,
+			ProjectPath:  s.ProjectPath,
+			CreatedAt:    s.CreatedAt,
+			Branch:       s.Branch,
+			Summary:      s.Summary,
+			Agent:        s.Agent,
+			MessageCount: len(s.Messages),
+			TotalTokens:  s.TokenUsage.TotalTokens,
+			ToolCallCount: func() int {
+				var n int
+				for mi := range s.Messages {
+					n += len(s.Messages[mi].ToolCalls)
+				}
+				return n
+			}(),
+			ErrorCount: func() int {
+				var n int
+				for mi := range s.Messages {
+					for tj := range s.Messages[mi].ToolCalls {
+						if s.Messages[mi].ToolCalls[tj].State == session.ToolStateError {
+							n++
+						}
+					}
+				}
+				return n
+			}(),
+			SessionType: s.SessionType,
+			Status:      s.Status,
+		})
+	}
+	// Sort by CreatedAt DESC to match SQLite ordering.
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+	})
+	return rows, nil
+}
+
+// ── HotspotStore ──
+
+// GetHotspots retrieves pre-computed hot-spots for a session.
+func (m *MockStore) GetHotspots(id session.ID) (*session.SessionHotspots, error) {
+	// Not implemented in mock — return nil, nil (not yet computed).
+	return nil, nil
+}
+
+// SetHotspots persists hot-spots for a session (upsert).
+func (m *MockStore) SetHotspots(id session.ID, h session.SessionHotspots, schemaVersion int) error {
+	return nil
+}
+
+// ListSessionsNeedingHotspots returns session IDs that have no hotspots.
+func (m *MockStore) ListSessionsNeedingHotspots(minSchemaVersion int, limit int) ([]session.ID, error) {
+	var ids []session.ID
+	for id := range m.Sessions {
+		ids = append(ids, id)
+		if len(ids) >= limit {
+			break
 		}
 	}
 	return ids, nil

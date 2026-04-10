@@ -135,7 +135,10 @@ func (s *Service) detectSessions(req Request) ([]session.Summary, provider.Provi
 
 	// Auto-detect: use DetectAll to get all sessions across providers
 	all, err := s.registry.DetectAll(req.ProjectPath, req.Branch)
-	if err != nil || len(all) == 0 {
+	if err != nil {
+		return nil, nil, fmt.Errorf("detecting sessions: %w", err)
+	}
+	if len(all) == 0 {
 		return nil, nil, fmt.Errorf("no active AI sessions found: %w", session.ErrProviderNotDetected)
 	}
 
@@ -150,7 +153,11 @@ func (s *Service) detectSessions(req Request) ([]session.Summary, provider.Provi
 	return []session.Summary{*best}, prov, nil
 }
 
-// captureOne exports, processes, and stores a single session.
+// captureOne exports and processes a single session without persisting it.
+// The caller (service layer) is responsible for calling store.Save() after
+// enriching the session with costs and analytics — this avoids redundant
+// marshal → compress → UPSERT cycles.
+//
 // If the provider supports FreshnessChecker, it compares the source's
 // message count + updated-at with the stored values to skip unchanged sessions.
 func (s *Service) captureOne(prov provider.Provider, summary *session.Summary, req Request) (*Result, error) {
@@ -165,9 +172,22 @@ func (s *Service) captureOne(prov provider.Provider, summary *session.Summary, r
 		}
 	}
 
-	sess, err := prov.Export(summary.ID, req.Mode)
+	// Try incremental export first — reads only new messages.
+	// Falls back to full Export() if the provider doesn't support it or if it fails.
+	sess, err := s.exportSession(prov, summary.ID, req.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("exporting session from %s: %w", prov.Name(), err)
+	}
+
+	// Safety net: if the provider's Export() forgot to set SourceUpdatedAt,
+	// fetch it from the freshness checker so that skip-if-unchanged and
+	// DetectSessionStatus work correctly on subsequent captures.
+	if sess.SourceUpdatedAt == 0 {
+		if checker, ok := prov.(provider.FreshnessChecker); ok {
+			if fresh, freshErr := checker.SessionFreshness(summary.ID); freshErr == nil {
+				sess.SourceUpdatedAt = fresh.UpdatedAt
+			}
+		}
 	}
 
 	if req.Message != "" {
@@ -214,15 +234,73 @@ func (s *Service) captureOne(prov provider.Provider, summary *session.Summary, r
 		sess.OwnerID = req.OwnerID
 	}
 
-	if err := s.store.Save(sess); err != nil {
-		return nil, fmt.Errorf("storing session: %w", err)
-	}
+	// NOTE: No store.Save() here — the caller (session service) handles
+	// persistence after stampCosts + stampAnalytics to avoid redundant writes.
 
 	return &Result{
 		Session:      sess,
 		Provider:     prov.Name(),
 		SecretsFound: secretsFound,
 	}, nil
+}
+
+// exportSession tries incremental export first, then falls back to full Export().
+// Incremental export reads only new messages since the last capture, avoiding
+// re-reading hundreds of already-captured messages from the provider's storage.
+func (s *Service) exportSession(prov provider.Provider, sessionID session.ID, mode session.StorageMode) (*session.Session, error) {
+	inc, ok := prov.(provider.IncrementalExporter)
+	if !ok {
+		return prov.Export(sessionID, mode) // provider doesn't support incremental
+	}
+
+	// Check what we already have stored.
+	storedCount, _, storeErr := s.store.GetFreshness(sessionID)
+	if storeErr != nil || storedCount == 0 {
+		return prov.Export(sessionID, mode) // first capture or store error
+	}
+
+	// Try incremental: read only messages after storedCount.
+	incResult, incErr := inc.ExportIncremental(sessionID, storedCount, mode)
+	if incErr != nil {
+		// Incremental failed — fall back to full export.
+		return prov.Export(sessionID, mode)
+	}
+
+	// Load the existing session from store and merge new messages.
+	existing, getErr := s.store.Get(sessionID)
+	if getErr != nil {
+		// Can't load existing session — fall back to full export.
+		return prov.Export(sessionID, mode)
+	}
+
+	// Merge: append new messages to existing session.
+	existing.Messages = append(existing.Messages, incResult.NewMessages...)
+	existing.TokenUsage = incResult.TokenUsage
+	existing.SourceUpdatedAt = incResult.UpdatedAt
+	existing.StorageMode = mode
+
+	// Merge errors: combine existing errors with new ones (dedup by message ID).
+	if len(incResult.Errors) > 0 {
+		existingErrMsgIDs := make(map[string]bool)
+		for _, e := range existing.Errors {
+			existingErrMsgIDs[e.MessageID] = true
+		}
+		for _, e := range incResult.Errors {
+			if !existingErrMsgIDs[e.MessageID] {
+				existing.Errors = append(existing.Errors, e)
+			}
+		}
+	}
+
+	// Replace children entirely (incremental child export is not supported).
+	if len(incResult.Children) > 0 {
+		existing.Children = incResult.Children
+	}
+
+	// Re-detect lifecycle status with updated timestamp.
+	existing.Status = session.DetectSessionStatus(existing.SourceUpdatedAt, existing.CreatedAt)
+
+	return existing, nil
 }
 
 // skipIfUnchanged checks if a session has changed since the last capture

@@ -86,8 +86,9 @@ func newMockAnthropicServer(t *testing.T, responseText string, statusCode int) *
 			Content: []contentBlock{
 				{Type: "text", Text: responseText},
 			},
-			Model: req.Model,
-			Usage: usage{InputTokens: 1000, OutputTokens: 500},
+			Model:      req.Model,
+			StopReason: "end_turn",
+			Usage:      usage{InputTokens: 1000, OutputTokens: 500},
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -290,6 +291,212 @@ func TestAnalyze_ContextCancelled(t *testing.T) {
 	_, err := a.Analyze(ctx, analysis.AnalyzeRequest{Session: testSession()})
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
+	}
+}
+
+// ── Agentic tool use tests ──
+
+// newAgenticMockServer creates a server that simulates tool_use → tool_result → final response.
+// On the first call, it responds with a tool_use block. On the second call (with tool_result),
+// it responds with the final text analysis report.
+func newAgenticMockServer(t *testing.T, finalReport string) *httptest.Server {
+	t.Helper()
+	callCount := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+
+		if callCount == 1 {
+			// First call: respond with tool_use.
+			resp := messagesResponse{
+				ID:   "msg_1",
+				Type: "message",
+				Role: "assistant",
+				Content: []contentBlock{
+					{Type: "text", Text: "Let me investigate the error details."},
+					{
+						Type:  "tool_use",
+						ID:    "toolu_01",
+						Name:  "query_session",
+						Input: json.RawMessage(`{"action": "get_error_details", "limit": 5}`),
+					},
+				},
+				StopReason: "tool_use",
+				Usage:      usage{InputTokens: 2000, OutputTokens: 100},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Second call: respond with final text.
+		resp := messagesResponse{
+			ID:   "msg_2",
+			Type: "message",
+			Role: "assistant",
+			Content: []contentBlock{
+				{Type: "text", Text: finalReport},
+			},
+			StopReason: "end_turn",
+			Usage:      usage{InputTokens: 3000, OutputTokens: 500},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+}
+
+func TestAnalyze_AgenticToolUse(t *testing.T) {
+	reportJSON, _ := json.Marshal(validReport)
+	srv := newAgenticMockServer(t, string(reportJSON))
+	defer srv.Close()
+
+	a, _ := NewAnalyzer(Config{
+		APIKey:     "test-key",
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+	})
+
+	sess := testSession()
+	sess.Messages = append(sess.Messages, session.Message{
+		ID:   "msg-3",
+		Role: session.RoleAssistant,
+		ToolCalls: []session.ToolCall{
+			{ID: "tc-1", Name: "Bash", State: session.ToolStateError, Input: "go test", Output: "FAIL"},
+		},
+	})
+
+	report, err := a.Analyze(context.Background(), analysis.AnalyzeRequest{
+		Session:      sess,
+		ToolExecutor: analysis.NewSessionToolExecutor(&sess),
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if report.Score != 82 {
+		t.Errorf("Score = %d, want 82", report.Score)
+	}
+}
+
+// newMaxIterationsServer always responds with tool_use, never end_turn.
+func newMaxIterationsServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := messagesResponse{
+			ID:   "msg_loop",
+			Type: "message",
+			Role: "assistant",
+			Content: []contentBlock{
+				{
+					Type:  "tool_use",
+					ID:    "toolu_loop",
+					Name:  "query_session",
+					Input: json.RawMessage(`{"action": "get_messages", "from": 0, "to": 1}`),
+				},
+			},
+			StopReason: "tool_use",
+			Usage:      usage{InputTokens: 100, OutputTokens: 50},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+}
+
+func TestAnalyze_MaxIterationsSafety(t *testing.T) {
+	srv := newMaxIterationsServer(t)
+	defer srv.Close()
+
+	a, _ := NewAnalyzer(Config{
+		APIKey:        "test-key",
+		BaseURL:       srv.URL,
+		HTTPClient:    srv.Client(),
+		MaxIterations: 3, // Low cap for testing.
+	})
+
+	sess := testSession()
+	_, err := a.Analyze(context.Background(), analysis.AnalyzeRequest{
+		Session:      sess,
+		ToolExecutor: analysis.NewSessionToolExecutor(&sess),
+	})
+
+	// Should error because the model never produces a final text response.
+	if err == nil {
+		t.Fatal("expected error when max iterations reached without final response")
+	}
+	t.Logf("got expected error: %v", err)
+}
+
+func TestAnalyze_NoToolExecutor_NoTools(t *testing.T) {
+	// When ToolExecutor is nil, no tools should be sent to the API.
+	reportJSON, _ := json.Marshal(validReport)
+	var receivedTools bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req messagesRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Tools) > 0 {
+			receivedTools = true
+		}
+
+		resp := messagesResponse{
+			ID:         "msg_no_tools",
+			Type:       "message",
+			Role:       "assistant",
+			Content:    []contentBlock{{Type: "text", Text: string(reportJSON)}},
+			StopReason: "end_turn",
+			Usage:      usage{InputTokens: 1000, OutputTokens: 500},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	a, _ := NewAnalyzer(Config{APIKey: "test", BaseURL: srv.URL, HTTPClient: srv.Client()})
+	_, err := a.Analyze(context.Background(), analysis.AnalyzeRequest{
+		Session: testSession(),
+		// No ToolExecutor.
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if receivedTools {
+		t.Error("tools should NOT be sent when ToolExecutor is nil")
+	}
+}
+
+func TestAnalyze_WithToolExecutor_SendsTools(t *testing.T) {
+	reportJSON, _ := json.Marshal(validReport)
+	var receivedToolCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req messagesRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		receivedToolCount = len(req.Tools)
+
+		resp := messagesResponse{
+			ID:         "msg_with_tools",
+			Type:       "message",
+			Role:       "assistant",
+			Content:    []contentBlock{{Type: "text", Text: string(reportJSON)}},
+			StopReason: "end_turn",
+			Usage:      usage{InputTokens: 1000, OutputTokens: 500},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	sess := testSession()
+	a, _ := NewAnalyzer(Config{APIKey: "test", BaseURL: srv.URL, HTTPClient: srv.Client()})
+	_, err := a.Analyze(context.Background(), analysis.AnalyzeRequest{
+		Session:      sess,
+		ToolExecutor: analysis.NewSessionToolExecutor(&sess),
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if receivedToolCount != 1 {
+		t.Errorf("received %d tools, want 1 (single polymorphic query_session)", receivedToolCount)
 	}
 }
 

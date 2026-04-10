@@ -14,19 +14,33 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/session"
 )
 
-// systemPrompt is the system instruction for the analysis LLM call.
-const systemPrompt = `You are a senior AI coding session analyst. Given detailed statistics about an AI coding session
-(tool usage, error rates, message patterns, capabilities, MCP servers), produce a structured JSON analysis report.
+// SystemPrompt is the system instruction for the analysis LLM call.
+// Exported so other adapters (anthropic, ollama) can reuse the same prompt
+// to ensure consistent output format across all analysis backends.
+const SystemPrompt = `You are a senior AI coding session analyst. You receive two types of data:
+
+1. RAW SESSION DATA: Message samples, tool call breakdowns, file changes, capabilities.
+2. DETERMINISTIC DIAGNOSTIC REPORT: Pre-computed by aisync's diagnostic pipeline with threshold-based
+   problem detection. This includes token economy stats, image costs, compaction rates, tool error
+   patterns, and named problems with quantified impact.
+
+Your job is to SYNTHESIZE both data sources into an actionable analysis:
+- Use the diagnostic report as grounding facts — do NOT contradict its numbers.
+- Add context the deterministic pipeline cannot: WHY patterns occurred, whether the user's intent
+  was achieved despite waste, and what workflow changes would prevent recurrence.
+- For each detected problem, provide a concrete, provider-aware recommendation.
+- Identify problems the deterministic pipeline may have missed (e.g., semantic issues like
+  the agent misunderstanding requirements, or strategic issues like wrong decomposition approach).
 
 Your response must be a valid JSON object with these fields:
 
 {
   "score": <integer 0-100>,
-  "summary": "<one-paragraph assessment>",
+  "summary": "<one-paragraph assessment that references key diagnostic findings>",
   "problems": [
     {
       "severity": "<low|medium|high>",
-      "description": "<what went wrong>",
+      "description": "<what went wrong — reference diagnostic problem IDs when applicable>",
       "message_start": <optional 1-based message index>,
       "message_end": <optional 1-based message index>,
       "tool_name": "<optional tool name>"
@@ -36,7 +50,7 @@ Your response must be a valid JSON object with these fields:
     {
       "category": "<skill|config|workflow|tool>",
       "title": "<short heading>",
-      "description": "<detailed explanation>",
+      "description": "<detailed, concrete explanation — include specific commands, config changes, or skill content>",
       "priority": <1-5, 1=highest>
     }
   ],
@@ -45,23 +59,23 @@ Your response must be a valid JSON object with these fields:
       "name": "<proposed skill identifier>",
       "description": "<what it would do>",
       "trigger": "<when to activate>",
-      "content": "<optional draft content>"
+      "content": "<draft skill content or agent instructions that would prevent the detected problems>"
     }
   ]
 }
 
-Scoring guidelines:
-- 80-100: Excellent. Minimal wasted tokens, focused tool usage, clean conversation flow.
-- 60-79: Good. Minor inefficiencies but generally well-structured.
-- 40-59: Fair. Noticeable waste — retry loops, excessive reads, or bloated contexts.
-- 20-39: Poor. Significant token waste from retries, hallucination recovery, or unfocused exploration.
-- 0-19: Very poor. Most tokens wasted on failed attempts or circular conversation.
+Scoring guidelines (adjusted by diagnostic findings):
+- 80-100: Excellent. No high-severity diagnostic problems. Minimal wasted tokens.
+- 60-79: Good. Only low-severity diagnostic problems. Minor inefficiencies.
+- 40-59: Fair. Medium-severity problems detected. Noticeable token waste.
+- 20-39: Poor. High-severity problems (e.g., expensive-screenshots, tool-error-loops). Significant waste.
+- 0-19: Very poor. Multiple high-severity problems. Most tokens wasted.
 
-Focus on actionable findings:
-- Identify retry loops, repeated file reads, unused tool calls, error cascades
-- Suggest skills that could automate repetitive patterns
-- Recommend configuration changes (e.g., adjusting context size, enabling caching)
-- Flag workflow improvements (e.g., breaking tasks into smaller commits)
+Recommendation priorities:
+- Priority 1: Addresses high-severity diagnostic problems (e.g., $80+ image waste).
+- Priority 2: Addresses medium-severity problems or multiple low-severity ones.
+- Priority 3: Workflow improvements not captured by diagnostics.
+- Priority 4-5: Nice-to-have optimizations.
 
 Respond ONLY with valid JSON, no markdown fences, no explanation.`
 
@@ -108,7 +122,7 @@ func (a *Analyzer) Analyze(ctx context.Context, req analysis.AnalyzeRequest) (*a
 
 	model := a.model
 	resp, err := a.client.Complete(ctx, llm.CompletionRequest{
-		SystemPrompt: systemPrompt,
+		SystemPrompt: SystemPrompt,
 		UserPrompt:   prompt,
 		Model:        model,
 		MaxTokens:    4096,
@@ -323,6 +337,99 @@ func BuildAnalysisPrompt(req analysis.AnalyzeRequest) string {
 			b.WriteString(fmt.Sprintf("  %s (%s, %s)\n", srv.Name, srv.Type, status))
 		}
 		b.WriteString("\n")
+	}
+
+	// ── Deterministic diagnostic results ──
+	// Pre-computed by the diagnostic pipeline (internal/diagnostic). These are
+	// factual, threshold-based findings that the LLM should use as grounding
+	// data for its analysis — not re-derive from raw messages.
+	if d := req.Diagnostic; d != nil {
+		b.WriteString("=== DETERMINISTIC DIAGNOSTIC REPORT ===\n")
+		b.WriteString("(Pre-computed by aisync's diagnostic pipeline. Use these as grounding facts.)\n\n")
+
+		// Token economy.
+		b.WriteString("Token economy:\n")
+		b.WriteString(fmt.Sprintf("  Input: %d  Output: %d  Image: %d\n", d.InputTokens, d.OutputTokens, d.ImageTokens))
+		b.WriteString(fmt.Sprintf("  Cache read: %.1f%%  I/O ratio: %.1f:1\n", d.CacheReadPct, d.InputOutputRatio))
+		if d.EstimatedCost > 0 {
+			b.WriteString(fmt.Sprintf("  Estimated cost: $%.2f\n", d.EstimatedCost))
+		}
+		b.WriteString("\n")
+
+		// Images (only if present).
+		if d.ToolReadImages > 0 || d.InlineImages > 0 {
+			b.WriteString("Image analysis:\n")
+			b.WriteString(fmt.Sprintf("  Inline images: %d  Tool-read images: %d\n", d.InlineImages, d.ToolReadImages))
+			if d.SimctlCaptures > 0 {
+				b.WriteString(fmt.Sprintf("  Simulator captures: %d  Sips resizes: %d\n", d.SimctlCaptures, d.SipsResizes))
+			}
+			if d.ImageBilledTok > 0 {
+				b.WriteString(fmt.Sprintf("  Billed image tokens: %d  Est. image cost: $%.2f\n", d.ImageBilledTok, d.ImageCost))
+				b.WriteString(fmt.Sprintf("  Avg turns in context before compaction: %.1f\n", d.AvgTurnsInCtx))
+			}
+			b.WriteString("\n")
+		}
+
+		// Compaction.
+		if d.CompactionCount > 0 {
+			b.WriteString("Compaction analysis:\n")
+			b.WriteString(fmt.Sprintf("  Compactions: %d  Cascades: %d\n", d.CompactionCount, d.CascadeCount))
+			b.WriteString(fmt.Sprintf("  Rate: %.3f per user message\n", d.CompactionsPerUser))
+			if d.MedianInterval > 0 {
+				b.WriteString(fmt.Sprintf("  Median interval: %d messages\n", d.MedianInterval))
+			}
+			if d.AvgBeforeTokens > 0 {
+				b.WriteString(fmt.Sprintf("  Avg tokens before compaction: %d\n", d.AvgBeforeTokens))
+			}
+			b.WriteString("\n")
+		}
+
+		// Tool errors.
+		if d.TotalToolCalls > 0 {
+			b.WriteString("Tool error analysis:\n")
+			b.WriteString(fmt.Sprintf("  Total tool calls: %d  Errors: %d  Rate: %.1f%%\n",
+				d.TotalToolCalls, d.ErrorToolCalls, d.ToolErrorRate))
+			if d.MaxConsecErrors > 1 {
+				b.WriteString(fmt.Sprintf("  Max consecutive errors: %d\n", d.MaxConsecErrors))
+			}
+			b.WriteString("\n")
+		}
+
+		// Behavioral patterns.
+		hasPatterns := d.CorrectionCount > 0 || d.WriteWithoutReadCount > 0 || d.GlobStormCount > 0 || d.LongestUnguided > 5
+		if hasPatterns {
+			b.WriteString("Behavioral patterns:\n")
+			if d.CorrectionCount > 0 {
+				b.WriteString(fmt.Sprintf("  User corrections: %d\n", d.CorrectionCount))
+			}
+			if d.WriteWithoutReadCount > 0 {
+				b.WriteString(fmt.Sprintf("  Write-without-read (yolo edits): %d\n", d.WriteWithoutReadCount))
+			}
+			if d.GlobStormCount > 0 {
+				b.WriteString(fmt.Sprintf("  Glob/search storms (>5 consecutive): %d\n", d.GlobStormCount))
+			}
+			if d.LongestUnguided > 5 {
+				b.WriteString(fmt.Sprintf("  Longest unguided assistant run: %d messages\n", d.LongestUnguided))
+			}
+			b.WriteString("\n")
+		}
+
+		// Detected problems — the key section.
+		if len(d.Problems) > 0 {
+			b.WriteString(fmt.Sprintf("DETECTED PROBLEMS (%d):\n", len(d.Problems)))
+			for i, p := range d.Problems {
+				b.WriteString(fmt.Sprintf("  %d. [%s/%s] %s\n", i+1, p.Severity, p.Category, p.Title))
+				b.WriteString(fmt.Sprintf("     Observation: %s\n", p.Observation))
+				if p.Impact != "" {
+					b.WriteString(fmt.Sprintf("     Impact: %s\n", p.Impact))
+				}
+			}
+			b.WriteString("\n")
+		} else {
+			b.WriteString("No deterministic problems detected.\n\n")
+		}
+
+		b.WriteString("=== END DIAGNOSTIC REPORT ===\n\n")
 	}
 
 	return b.String()

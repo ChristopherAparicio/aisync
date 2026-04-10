@@ -2,6 +2,278 @@
 
 > Last updated: 2026-04-05
 
+## 🔥 Active: Phase 4 — CQRS Read Models (no cache)
+
+**Mandate**: user rejected the TTL-based `stats_cache` as non-sense. Target is
+sub-50ms page latency for 10-20 concurrent devs, directly from SQLite, via
+materialized read models updated on-write (CQRS).
+
+### Bottleneck benchmark — 2026-04-05 (prod DB, 1764 sessions, cache disabled)
+
+Run via: `AISYNC_BENCH_DB=~/.aisync/sessions.db go test -tags=bench_bottlenecks -run=TestBottleneckHotPaths -v ./internal/service/...`
+
+| Function (90d window, all projects) | Cold | Warm | Self-project cold | Verdict |
+|---|---:|---:|---:|---|
+| `Stats` | 210ms | 142ms | 39ms | 🟢 **No CQRS needed** |
+| `Trends` (7d) | 234ms | 237ms | 107ms | 🟢 **No CQRS needed** |
+| `SkillROI` | 211ms | 264ms | 283ms | 🟢 Fix #8 already solved |
+| `Forecast` | **12.7s** | **14.5s** | 4.9s | 🔴 **CRITICAL** |
+| `CacheEfficiency` | **14.0s** | **12.8s** | 4.3s | 🔴 **CRITICAL** |
+| `ContextSaturation` | **12.1s** | **12.1s** | 3.8s | 🔴 **CRITICAL** |
+| `AgentROI` | **12.4s** | **12.6s** | 5.0s | 🔴 **CRITICAL** |
+| `CacheEfficiency` (7d) | 4.0s | 4.1s | — | 🟠 Bad |
+
+**Root cause (confirmed by warm ≈ cold):** the 12s is NOT disk I/O (SQLite page
+cache would make warm fast). It is **CPU-bound per-message work on loaded
+session bodies** — JSON decode of messages arrays + walking each message for
+compaction detection, cache-miss gap analysis, peak-input tracking, model
+attribution, per-message cost calc. `GetBatch()` already batched the fetch; the
+remaining cost is deterministic post-processing.
+
+**Design implication:** we do NOT need row-level aggregate tables keyed by
+project. The unit of caching is **one row per session** — because each
+session's analytics are immutable once the session is finalized, and the
+expensive work is identical call after call. Computing it **once at write time**
+(or once in a backfill) and reading it back eliminates ALL of the 12s.
+
+### CQRS design — `session_analytics` sidecar table
+
+One new table, one row per `sessions.id`, written in the same transaction as
+`Save()` and `UpdateCosts()`. All fields below are derived from `session.Session`
++ pricing calculator.
+
+```sql
+CREATE TABLE session_analytics (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+
+    -- ContextSaturation fields (per-session outputs, aggregated in handler)
+    peak_input_tokens       INTEGER NOT NULL DEFAULT 0,
+    dominant_model          TEXT    NOT NULL DEFAULT '',
+    max_context_window      INTEGER NOT NULL DEFAULT 0,
+    peak_saturation_pct     REAL    NOT NULL DEFAULT 0,
+    has_compaction          INTEGER NOT NULL DEFAULT 0,  -- bool
+    compaction_count        INTEGER NOT NULL DEFAULT 0,
+    compaction_drop_pct     REAL    NOT NULL DEFAULT 0,
+    compaction_wasted_tokens INTEGER NOT NULL DEFAULT 0,
+
+    -- CacheEfficiency fields
+    cache_read_tokens       INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens      INTEGER NOT NULL DEFAULT 0,
+    input_tokens            INTEGER NOT NULL DEFAULT 0,
+    cache_miss_count        INTEGER NOT NULL DEFAULT 0,
+    cache_wasted_tokens     INTEGER NOT NULL DEFAULT 0,
+    longest_gap_mins        INTEGER NOT NULL DEFAULT 0,
+    session_avg_gap_mins    REAL    NOT NULL DEFAULT 0,
+
+    -- Forecast / Cost breakdown fields (per-session, rolled up in handler)
+    backend                 TEXT    NOT NULL DEFAULT '',  -- claude, openai, ...
+    estimated_cost          REAL    NOT NULL DEFAULT 0,   -- already in sessions, duped for join-free access
+    actual_cost             REAL    NOT NULL DEFAULT 0,
+    fork_offset             INTEGER NOT NULL DEFAULT 0,   -- messages deduplicated from parent
+    deduplicated_cost       REAL    NOT NULL DEFAULT 0,   -- cost of messages AFTER fork_offset
+
+    -- AgentROI fields (per-session aggregates)
+    total_agent_invocations INTEGER NOT NULL DEFAULT 0,
+    unique_agents_used      INTEGER NOT NULL DEFAULT 0,
+    agent_tokens            INTEGER NOT NULL DEFAULT 0,
+    agent_cost              REAL    NOT NULL DEFAULT 0,
+
+    -- Token waste + freshness + fitness — small denormalized summaries,
+    -- details remain in events if needed.
+    total_wasted_tokens     INTEGER NOT NULL DEFAULT 0,
+    freshness_score         REAL    NOT NULL DEFAULT 0,
+    fitness_score           REAL    NOT NULL DEFAULT 0,
+
+    -- Housekeeping
+    schema_version          INTEGER NOT NULL DEFAULT 1,
+    computed_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_session_analytics_project
+    ON sessions(project_path, created_at)
+    WHERE id IN (SELECT session_id FROM session_analytics);
+-- (Actually: indexes will be on sessions.project_path + sessions.created_at,
+--  joined to session_analytics. No extra index on session_analytics itself
+--  beyond the PK.)
+```
+
+**Per-agent rollup** is handled via a second small table to avoid blowing up
+columns:
+
+```sql
+CREATE TABLE session_agent_usage (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL,
+    invocations INTEGER NOT NULL DEFAULT 0,
+    tokens      INTEGER NOT NULL DEFAULT 0,
+    cost        REAL    NOT NULL DEFAULT 0,
+    errors      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, agent_name)
+);
+CREATE INDEX idx_session_agent_usage_agent ON session_agent_usage(agent_name);
+```
+
+### How each hot function becomes fast
+
+1. **`Forecast`** — no more `GetBatch`. Query is:
+   ```sql
+   SELECT s.project_path, s.created_at, sa.backend, sa.estimated_cost,
+          sa.actual_cost, sa.deduplicated_cost, sa.fork_offset
+   FROM sessions s
+   JOIN session_analytics sa ON sa.session_id = s.id
+   WHERE s.created_at >= :since
+     AND (:project = '' OR s.project_path = :project);
+   ```
+   Then bucket + linear-regress in Go. Expected: **<100ms** for 90d / all projects.
+
+2. **`CacheEfficiency`** — pure SQL aggregation:
+   ```sql
+   SELECT SUM(sa.cache_read_tokens), SUM(sa.input_tokens),
+          SUM(sa.cache_miss_count), SUM(sa.cache_wasted_tokens),
+          AVG(sa.session_avg_gap_mins), MAX(sa.longest_gap_mins)
+   FROM sessions s
+   JOIN session_analytics sa ON sa.session_id = s.id
+   WHERE s.created_at >= :since
+     AND (:project = '' OR s.project_path = :project);
+   ```
+   Expected: **<50ms**.
+
+3. **`ContextSaturation`** — same pattern, plus a second query for per-model
+   groupings. Expected: **<80ms**.
+
+4. **`AgentROI`** — join to `session_agent_usage` + GROUP BY agent_name.
+   Expected: **<100ms**.
+
+### Write-path hook
+
+A new `stampAnalytics(sess *session.Session)` method on `SessionService`,
+called in the SAME places as the existing `stampCosts()`:
+
+- `session_capture.go`: `Capture`, `CaptureAll`, `CaptureByID`
+- `session_ingest.go`: `Ingest`
+- `session_export.go`: `Export`
+- `session_restore.go`: `Rewind`
+
+It computes all fields by walking `sess.Messages` ONCE (merging the work
+currently done by `ContextSaturation`, `CacheEfficiency`, `Forecast` into a
+single pass) and persists via `store.UpsertSessionAnalytics(sess.ID, rec)`.
+
+### Backfill strategy
+
+New scheduler task `AnalyticsBackfillTask` modeled on `CostBackfillTask`:
+- Processes 200 sessions per run every 30min (`*/30 * * * *`)
+- Skips sessions already in `session_analytics` (LEFT JOIN IS NULL)
+- Also runs at daemon WarmUp for quick catch-up
+- First run will backfill all 1764 sessions in ~9 batches (~5 hours), but the
+  read paths will be gated: handlers fall back to live computation for any
+  session not yet in `session_analytics` (ensures zero-downtime migration)
+
+Alternatively: one-shot migration command `aisync debug backfill-analytics`
+for faster local catch-up.
+
+### Deletion list (after CQRS ships)
+
+- [ ] Delete `cachedForecast`, `cachedCacheEfficiency`, `cachedSaturation`,
+      `cachedAgentROI`, `cachedCostsPage`, `cachedFilesForProject` wrappers
+      (handlers.go:45-336)
+- [ ] Delete `cachedStats`, `cachedTrends`, `cachedSidebarGroups`,
+      `cachedSkillROI` wrappers (benchmark showed they were cache-wrapping
+      already-fast functions — ~200ms not worth the complexity)
+- [ ] Drop `stats_cache` table via new migration
+- [ ] Remove `dashboard_warm_task` (no longer needed — everything is live)
+- [ ] Remove `cacheeff_precompute` scheduler task
+
+### Implementation order
+
+1. [x] **Migration + schema** (additive, safe on prod) — migration 031 adds
+   `session_analytics` + `session_agent_usage` tables with 6 JSON blob columns
+2. [x] **Domain type** `session.Analytics` with all fields (flat scalars + 6
+   rich-struct pointer fields for WasteBreakdown/Freshness/Overload/PromptData/
+   FitnessData/ForecastInput)
+3. [x] **Pure function** `session.ComputeAnalytics(sess, pricing, forkOffset)`
+   extracted from ContextSaturation + CacheEfficiency + Forecast per-session
+   loops. Uses narrow `session.AnalyticsPricingLookup` interface to avoid
+   import cycle with `pricing` package.
+4. [x] **Unit tests** for the pure function — 26 tests in
+   `internal/session/analytics_compute_test.go` covering: empty session, schema
+   version stamp, cache field copy, peak/dominant model (skip-first-message
+   behaviour), saturation with and without pricing, 100% cap, compaction,
+   cache-miss gap detection, backend detection, fork dedup (proportional, no
+   fork, zero-shared fallback), rich-struct population, nil-when-missing rules
+   for PromptData/FitnessData, agent rollup (single row + unknown fallback),
+   token growth rate, msg-at-first-compaction, and a purity guard.
+5. [x] **Store port**: `UpsertSessionAnalytics`, `GetSessionAnalytics`,
+   `QueryAnalytics(filter) []AnalyticsRow` added to `SessionWriter` in
+   `internal/storage/store.go` (under a "Materialized analytics (CQRS read
+   model)" section header with full contract docs). Sibling concrete types
+   updated to keep the tree building: `*sqlite.Store` got stub
+   implementations returning `"not yet implemented (phase 4 step 6)"` errors,
+   `service.mockStore` (the fat mock in `session_test.go` used across the
+   whole service package including `analysis_test.go`) got one-line no-op
+   stubs matching the file's existing style, and `testutil.MockStore` got a
+   **real** in-memory implementation (new `Analytics map[ID]Analytics`
+   field, sort-by-CreatedAt-DESC semantics matching the documented SQLite
+   ordering contract, filter-field honoring, defensive skip of orphaned
+   rows). The testutil mock being real means step 8's `stampAnalytics()`
+   write-path hook can be exercised end-to-end against it without waiting
+   for the sqlite implementation. Full `go build` / `go vet` / `go test ./...`
+   all green.
+6. [x] **SQLite impl** + store unit tests — all three methods now real SQL in
+   `internal/storage/sqlite/sqlite.go`: `UpsertSessionAnalytics` uses a
+   transaction (BEGIN/COMMIT) to INSERT OR REPLACE the parent row with 25
+   scalar + 6 JSON blob columns, then DELETE+INSERT the sibling
+   `session_agent_usage` rows atomically. `GetSessionAnalytics` reads the
+   parent row + hydrates `AgentUsage` from the sibling table, returns
+   `(nil, nil)` for missing rows. `QueryAnalytics` does a JOIN against
+   `sessions` for ProjectPath/CreatedAt/Branch, dynamic WHERE from filter,
+   ordered by `created_at DESC`. Helper functions `marshalJSONBlob` (handles
+   typed nil pointers → "" via "null" normalization) and `unmarshalJSONBlob`
+   (empty string → no-op). Reuses existing `boolToInt`. 13 tests in
+   `sqlite_test.go` (5 top-level + 8 subtests): full round-trip with all 6
+   blobs + 2-row AgentUsage, not-found → nil/nil, upsert-update path
+   verifying old agent rows are replaced, nil-blobs round-trip, and
+   QueryAnalytics filter tests (ProjectPath, Backend, Since, Until,
+   MinSchemaVersion, combined, no-match, blobs hydrated in query results).
+7. [x] **Mock updates** — all mocks already satisfy the interface from step 5.
+   `testutil.MockStore` has a real in-memory impl, `service.mockStore` has
+   no-op stubs, scheduler test mocks embed `storage.Store` (nil fallthrough).
+   No additional work needed.
+8. [x] **Write-path hook** `stampAnalytics()` wired into all 9 mutation
+   entry points (matching every `stampCosts` call site): 6 in
+   `session_capture.go` (single capture parent+children, summarization
+   re-save, CaptureAll parent+children, CaptureOne), 1 in
+   `session_export.go` (import/aisync format), 1 in `session_ingest.go`
+   (API ingest), 1 in `session_ai.go` (rewind). The method lives in
+   `session.go` alongside `stampCosts`, calls `GetForkRelations` for fork
+   offset, `session.ComputeAnalytics` for computation, and
+   `UpsertSessionAnalytics` to persist. Errors are logged but non-fatal
+   (backfill task catches missed rows).
+9. [ ] **Backfill task** `AnalyticsBackfillTask`
+10. [ ] **Rewrite** `Forecast`, `CacheEfficiency`, `ContextSaturation`,
+    `AgentROIAnalysis` to read from `session_analytics` (fallback to live
+    computation for missing rows)
+11. [ ] **Delete cache wrappers + stats_cache table** (separate commit for clean
+    revert)
+12. [ ] **Re-run benchmark** to confirm <100ms on all 4 critical paths
+13. [ ] **Production verify**: reload each page, measure latency, tail
+    `~/.aisync/aisync.log` for regressions
+
+### Open questions (to resolve before step 1)
+
+- **Q1**: Should we compute analytics inline on every `Save()` (blocks writer
+  for ~50ms per session) OR enqueue a background job (eventually-consistent,
+  but Save() stays fast)? Recommendation: **inline**, because (a) single-writer
+  model, (b) 50ms is invisible, (c) eventual consistency creates UI surprises.
+- **Q2**: Version the `schema_version` column: when we add new fields, do we
+  force-rebuild all rows or allow mixed versions? Recommendation: force rebuild
+  by marking all rows `schema_version=0` and letting the backfill task
+  reprocess. Cheap at 1764 rows.
+- **Q3**: What about sessions currently open (not finalized)? Their analytics
+  will be recomputed on every append. Recommendation: only stamp analytics on
+  sessions where `sess.FinishedAt != nil` OR `sess.Status == "completed"`. For
+  in-flight sessions, fall back to live computation (rare, bounded to the few
+  open sessions per dev).
+
 ## Recently Completed (2026-04-05)
 
 ### N+1 Query Performance Fixes — Phase 2 ✅

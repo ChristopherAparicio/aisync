@@ -467,6 +467,58 @@ func (c *Calculator) SessionCost(sess *session.Session) *session.CostEstimate {
 	return estimate
 }
 
+// ── session.AnalyticsPricingLookup adapter ──────────────────────────────────
+//
+// These three methods make *Calculator satisfy session.AnalyticsPricingLookup
+// without the session package having to import pricing (which would create a
+// cycle — pricing already depends on session for its domain types).
+//
+// ComputeAnalytics reads only three things from pricing: the context window
+// size, the raw input rate (for compaction rebuild cost), and the session's
+// total/actual cost. Everything else the Calculator can do (tiered pricing,
+// cache-read arbitrage, etc.) stays confined to pricing.SessionCost, which
+// ComputeAnalytics calls as an opaque float via TotalCost/ActualCost.
+
+// LookupPrice implements session.AnalyticsPricingLookup. It projects a
+// pricing.ModelPrice onto the narrow session.AnalyticsModelPrice view that
+// ComputeAnalytics uses.
+func (c *Calculator) LookupPrice(model string) (session.AnalyticsModelPrice, bool) {
+	mp, ok := c.Lookup(model)
+	if !ok {
+		return session.AnalyticsModelPrice{}, false
+	}
+	return session.AnalyticsModelPrice{
+		MaxInputTokens: mp.MaxInputTokens,
+		InputPerMToken: mp.InputPerMToken,
+	}, true
+}
+
+// TotalCost implements session.AnalyticsPricingLookup. It returns the
+// API-equivalent total cost for the session (estimated from token rates).
+func (c *Calculator) TotalCost(sess *session.Session) float64 {
+	if sess == nil {
+		return 0
+	}
+	est := c.SessionCost(sess)
+	if est == nil {
+		return 0
+	}
+	return est.TotalCost.TotalCost
+}
+
+// ActualCost implements session.AnalyticsPricingLookup. It returns the
+// provider-reported cost from per-message billing data.
+func (c *Calculator) ActualCost(sess *session.Session) float64 {
+	if sess == nil {
+		return 0
+	}
+	est := c.SessionCost(sess)
+	if est == nil {
+		return 0
+	}
+	return est.Breakdown.ActualCost.TotalCost
+}
+
 // ── Backward Compatibility ──────────────────────────────────────────────────
 
 // DefaultPrices returns the built-in pricing catalog as a slice.

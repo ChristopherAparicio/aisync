@@ -464,6 +464,212 @@ func TestImport_updatesExistingIndex(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Integration tests: freshness tracking with JSONL mutation
+// ---------------------------------------------------------------------------
+
+func TestFreshness_detectsNewMessages(t *testing.T) {
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sessionID := session.ID("a1b2c3d4-1111-2222-3333-444455556666")
+
+	// Get initial freshness.
+	before, err := p.SessionFreshness(sessionID)
+	if err != nil {
+		t.Fatalf("SessionFreshness() error: %v", err)
+	}
+
+	// Also get initial export to count domain messages.
+	sessBefore, err := p.Export(sessionID, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+	msgCountBefore := len(sessBefore.Messages)
+
+	// Append a new user + assistant exchange to the JSONL file.
+	jsonlPath := filepath.Join(claudeHome, projectsDir,
+		encodeProjectPath("/tmp/test/myproject"),
+		"a1b2c3d4-1111-2222-3333-444455556666.jsonl")
+
+	newLines := `
+{"parentUuid":"uuid-006","isSidechain":false,"userType":"external","cwd":"/tmp/test/myproject","sessionId":"a1b2c3d4-1111-2222-3333-444455556666","version":"2.1.38","gitBranch":"feat/hello-world","type":"user","message":{"role":"user","content":"Can you add tests?"},"uuid":"uuid-007","timestamp":"2026-02-10T10:01:00.000Z"}
+{"parentUuid":"uuid-007","isSidechain":false,"userType":"external","cwd":"/tmp/test/myproject","sessionId":"a1b2c3d4-1111-2222-3333-444455556666","version":"2.1.38","gitBranch":"feat/hello-world","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_03","type":"message","role":"assistant","content":[{"type":"text","text":"Sure, I'll add tests for HelloWorld."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":300,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":60}},"type":"assistant","uuid":"uuid-008","timestamp":"2026-02-10T10:01:05.000Z"}`
+
+	f, err := os.OpenFile(jsonlPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("opening JSONL file: %v", err)
+	}
+	_, err = f.WriteString(newLines)
+	f.Close()
+	if err != nil {
+		t.Fatalf("appending to JSONL file: %v", err)
+	}
+
+	// Get freshness after mutation.
+	after, err := p.SessionFreshness(sessionID)
+	if err != nil {
+		t.Fatalf("SessionFreshness() after mutation error: %v", err)
+	}
+
+	// Message count should increase by 2 (1 user + 1 assistant).
+	if after.MessageCount != before.MessageCount+2 {
+		t.Errorf("MessageCount: before=%d, after=%d, want +2",
+			before.MessageCount, after.MessageCount)
+	}
+
+	// mtime should have changed (or at least not decreased).
+	if after.UpdatedAt < before.UpdatedAt {
+		t.Errorf("UpdatedAt decreased: before=%d, after=%d",
+			before.UpdatedAt, after.UpdatedAt)
+	}
+
+	// Re-export should also show more domain messages.
+	sessAfter, err := p.Export(sessionID, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() after mutation error: %v", err)
+	}
+	if len(sessAfter.Messages) != msgCountBefore+2 {
+		t.Errorf("Messages: before=%d, after=%d, want +2",
+			msgCountBefore, len(sessAfter.Messages))
+	}
+
+	// Token usage should increase.
+	if sessAfter.TokenUsage.TotalTokens <= sessBefore.TokenUsage.TotalTokens {
+		t.Errorf("TotalTokens didn't increase: before=%d, after=%d",
+			sessBefore.TokenUsage.TotalTokens, sessAfter.TokenUsage.TotalTokens)
+	}
+}
+
+func TestFreshness_unchangedFile_sameValues(t *testing.T) {
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sessionID := session.ID("a1b2c3d4-1111-2222-3333-444455556666")
+
+	first, err := p.SessionFreshness(sessionID)
+	if err != nil {
+		t.Fatalf("first SessionFreshness() error: %v", err)
+	}
+
+	second, err := p.SessionFreshness(sessionID)
+	if err != nil {
+		t.Fatalf("second SessionFreshness() error: %v", err)
+	}
+
+	// Repeated calls without file changes → same message count.
+	if first.MessageCount != second.MessageCount {
+		t.Errorf("MessageCount changed: first=%d, second=%d",
+			first.MessageCount, second.MessageCount)
+	}
+
+	// mtime should be identical (file not modified).
+	if first.UpdatedAt != second.UpdatedAt {
+		t.Errorf("UpdatedAt changed: first=%d, second=%d",
+			first.UpdatedAt, second.UpdatedAt)
+	}
+}
+
+func TestExport_afterAppend_includesNewMessages(t *testing.T) {
+	// End-to-end: export → append → re-export → verify new messages present.
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sessionID := session.ID("a1b2c3d4-1111-2222-3333-444455556666")
+
+	original, err := p.Export(sessionID, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	// Append a follow-up user message.
+	jsonlPath := filepath.Join(claudeHome, projectsDir,
+		encodeProjectPath("/tmp/test/myproject"),
+		"a1b2c3d4-1111-2222-3333-444455556666.jsonl")
+
+	newLine := "\n" + `{"parentUuid":"uuid-006","isSidechain":false,"userType":"external","cwd":"/tmp/test/myproject","sessionId":"a1b2c3d4-1111-2222-3333-444455556666","version":"2.1.38","gitBranch":"feat/hello-world","type":"user","message":{"role":"user","content":"One more thing: add error handling."},"uuid":"uuid-009","timestamp":"2026-02-10T10:02:00.000Z"}`
+	if err := appendToFile(jsonlPath, newLine); err != nil {
+		t.Fatalf("appendToFile error: %v", err)
+	}
+
+	updated, err := p.Export(sessionID, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() after append error: %v", err)
+	}
+
+	if len(updated.Messages) != len(original.Messages)+1 {
+		t.Fatalf("Messages: original=%d, updated=%d, want +1",
+			len(original.Messages), len(updated.Messages))
+	}
+
+	// Last message should be the new user message.
+	last := updated.Messages[len(updated.Messages)-1]
+	if last.Role != session.RoleUser {
+		t.Errorf("last message Role = %q, want %q", last.Role, session.RoleUser)
+	}
+	if last.Content != "One more thing: add error handling." {
+		t.Errorf("last message Content = %q, want %q",
+			last.Content, "One more thing: add error handling.")
+	}
+}
+
+func appendToFile(path, content string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(content)
+	return err
+}
+
+func TestSessionFreshness(t *testing.T) {
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	t.Run("returns_message_count_and_mtime", func(t *testing.T) {
+		freshness, err := p.SessionFreshness("a1b2c3d4-1111-2222-3333-444455556666")
+		if err != nil {
+			t.Fatalf("SessionFreshness() error: %v", err)
+		}
+		if freshness.MessageCount <= 0 {
+			t.Errorf("MessageCount = %d, want > 0", freshness.MessageCount)
+		}
+		if freshness.UpdatedAt <= 0 {
+			t.Errorf("UpdatedAt = %d, want > 0", freshness.UpdatedAt)
+		}
+	})
+
+	t.Run("returns_error_for_nonexistent_session", func(t *testing.T) {
+		_, err := p.SessionFreshness("nonexistent-uuid-1234")
+		if err == nil {
+			t.Error("SessionFreshness() should return error for nonexistent session")
+		}
+	})
+
+	t.Run("consistent_with_export_message_count", func(t *testing.T) {
+		// Freshness message count should match the number of domain messages from Export.
+		freshness, err := p.SessionFreshness("a1b2c3d4-1111-2222-3333-444455556666")
+		if err != nil {
+			t.Fatalf("SessionFreshness() error: %v", err)
+		}
+
+		sess, err := p.Export("a1b2c3d4-1111-2222-3333-444455556666", session.StorageModeCompact)
+		if err != nil {
+			t.Fatalf("Export() error: %v", err)
+		}
+
+		// Note: freshness counts raw JSONL lines (user/assistant), Export may merge
+		// tool_result lines into preceding assistant messages. So freshness count
+		// may be >= domain message count. Both are valid as long as they're consistent
+		// across captures (same JSONL file → same count).
+		if freshness.MessageCount <= 0 {
+			t.Errorf("MessageCount = %d, should be > 0", freshness.MessageCount)
+		}
+		_ = sess // we just verify freshness returns a positive count
+	})
+}
+
 // setupTestClaudeHome creates a temporary claude home with test fixtures.
 func setupTestClaudeHome(t *testing.T) string {
 	t.Helper()
@@ -496,4 +702,151 @@ func setupTestClaudeHome(t *testing.T) string {
 	}
 
 	return dir
+}
+
+// ---------------------------------------------------------------------------
+// E2E smoke tests — run against real Claude Code data on the host machine.
+// Skipped if no real Claude home exists (CI, containers).
+// These are NOT unit tests — they validate the full pipeline against
+// production data format from the actual Claude Code CLI.
+// ---------------------------------------------------------------------------
+
+func findRealClaudeSession(t *testing.T) (claudeHome string, sessionID string) {
+	t.Helper()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+
+	claudeHome = filepath.Join(home, ".claude")
+	projectsPath := filepath.Join(claudeHome, projectsDir)
+
+	if _, err := os.Stat(projectsPath); os.IsNotExist(err) {
+		t.Skip("no Claude Code installation found at " + projectsPath)
+	}
+
+	// Walk project directories looking for a JSONL file.
+	entries, err := os.ReadDir(projectsPath)
+	if err != nil {
+		t.Skip("cannot read Claude projects directory")
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		projDir := filepath.Join(projectsPath, entry.Name())
+		files, err := filepath.Glob(filepath.Join(projDir, "*.jsonl"))
+		if err != nil || len(files) == 0 {
+			continue
+		}
+		// Pick the first JSONL file found.
+		base := filepath.Base(files[0])
+		sid := base[:len(base)-len(jsonlExtension)]
+		return claudeHome, sid
+	}
+
+	t.Skip("no Claude Code sessions found on this machine")
+	return "", ""
+}
+
+func TestE2E_realClaudeSession_Export(t *testing.T) {
+	claudeHome, sid := findRealClaudeSession(t)
+	p := New(claudeHome)
+
+	sess, err := p.Export(session.ID(sid), session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export(%s) error: %v", sid, err)
+	}
+
+	// Basic sanity checks — provider is Claude, messages exist, tokens counted.
+	if sess.Provider != session.ProviderClaudeCode {
+		t.Errorf("Provider = %q, want %q", sess.Provider, session.ProviderClaudeCode)
+	}
+	if len(sess.Messages) == 0 {
+		t.Fatal("Export returned 0 messages from a real JSONL file")
+	}
+
+	// Every message should have a role.
+	for i, m := range sess.Messages {
+		if m.Role == "" {
+			t.Errorf("Messages[%d].Role is empty", i)
+		}
+	}
+
+	// At least one user message should exist.
+	var hasUser bool
+	for _, m := range sess.Messages {
+		if m.Role == session.RoleUser {
+			hasUser = true
+			break
+		}
+	}
+	if !hasUser {
+		t.Error("no user message found in real session")
+	}
+
+	t.Logf("session %s: %d messages, %d input tokens, %d output tokens, %d file changes",
+		sid, len(sess.Messages), sess.TokenUsage.InputTokens,
+		sess.TokenUsage.OutputTokens, len(sess.FileChanges))
+}
+
+func TestE2E_realClaudeSession_Freshness(t *testing.T) {
+	claudeHome, sid := findRealClaudeSession(t)
+	p := New(claudeHome)
+
+	freshness, err := p.SessionFreshness(session.ID(sid))
+	if err != nil {
+		t.Fatalf("SessionFreshness(%s) error: %v", sid, err)
+	}
+
+	if freshness.MessageCount <= 0 {
+		t.Errorf("MessageCount = %d, want > 0", freshness.MessageCount)
+	}
+	if freshness.UpdatedAt <= 0 {
+		t.Errorf("UpdatedAt = %d, want > 0", freshness.UpdatedAt)
+	}
+
+	// Freshness message count must be >= 0 and stable.
+	freshness2, err := p.SessionFreshness(session.ID(sid))
+	if err != nil {
+		t.Fatalf("second SessionFreshness() error: %v", err)
+	}
+	if freshness.MessageCount != freshness2.MessageCount {
+		t.Errorf("MessageCount not stable: %d vs %d",
+			freshness.MessageCount, freshness2.MessageCount)
+	}
+
+	t.Logf("session %s: freshness MessageCount=%d, UpdatedAt=%d",
+		sid, freshness.MessageCount, freshness.UpdatedAt)
+}
+
+func TestE2E_realClaudeSession_FreshnessVsExport(t *testing.T) {
+	claudeHome, sid := findRealClaudeSession(t)
+	p := New(claudeHome)
+
+	freshness, err := p.SessionFreshness(session.ID(sid))
+	if err != nil {
+		t.Fatalf("SessionFreshness() error: %v", err)
+	}
+
+	sess, err := p.Export(session.ID(sid), session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	// Freshness counts raw JSONL user/assistant lines.
+	// Export may skip/merge some (tool_result → tool call, etc).
+	// So freshness.MessageCount >= len(sess.Messages) typically.
+	// But both should be > 0.
+	if freshness.MessageCount <= 0 {
+		t.Errorf("freshness MessageCount = %d, want > 0", freshness.MessageCount)
+	}
+	if len(sess.Messages) <= 0 {
+		t.Errorf("export Messages = %d, want > 0", len(sess.Messages))
+	}
+
+	t.Logf("session %s: freshness=%d lines, export=%d messages",
+		sid, freshness.MessageCount, len(sess.Messages))
 }

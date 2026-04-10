@@ -164,6 +164,7 @@ func (s *SessionService) Import(req ImportRequest) (*ImportResult, error) {
 		if err := s.store.Save(sess); err != nil {
 			return nil, fmt.Errorf("storing session: %w", err)
 		}
+		s.stampAnalytics(sess)
 		// Post-capture hook: extract events, classify errors, fire webhooks, etc.
 		// Non-blocking: errors are swallowed (same contract as Capture).
 		if s.postCapture != nil {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/diagnostic"
 	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/skillobs"
@@ -93,6 +94,17 @@ func (s *AnalysisService) Analyze(ctx context.Context, req AnalysisRequest) (*An
 
 	start := time.Now()
 
+	// Build deterministic diagnostic report to enrich the LLM analysis prompt.
+	// This bridges diagnostic/ (deterministic detection) → analysis/ (LLM analysis).
+	// Best-effort: failure here should not block the analysis.
+	var diagSummary *analysis.DiagnosticSummary
+	events, evtErr := s.store.GetSessionEvents(req.SessionID)
+	if evtErr != nil {
+		events = nil // proceed without events
+	}
+	inspectReport := diagnostic.BuildReport(sess, events)
+	diagSummary = toDiagnosticSummary(inspectReport)
+
 	// Build the persisted entity.
 	sa := &analysis.SessionAnalysis{
 		ID:        generateAnalysisID(),
@@ -116,13 +128,23 @@ func (s *AnalysisService) Analyze(ctx context.Context, req AnalysisRequest) (*An
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			report, analyzeErr := s.analyzer.Analyze(ctx, analysis.AnalyzeRequest{
+			analyzeReq := analysis.AnalyzeRequest{
 				Session:        *sess,
 				Capabilities:   req.Capabilities,
 				MCPServers:     req.MCPServers,
 				ErrorThreshold: req.ErrorThreshold,
 				MinToolCalls:   req.MinToolCalls,
-			})
+				Diagnostic:     diagSummary,
+			}
+
+			// Provide a ToolExecutor for adapters that support agentic analysis.
+			// The executor is pre-scoped to this session — the LLM cannot access
+			// other sessions' data. Only the Anthropic adapter uses this today.
+			if s.analyzer.Name() == analysis.AdapterAnthropic {
+				analyzeReq.ToolExecutor = analysis.NewSessionToolExecutor(sess)
+			}
+
+			report, analyzeErr := s.analyzer.Analyze(ctx, analyzeReq)
 			mu.Lock()
 			coreReport = report
 			coreErr = analyzeErr
@@ -294,4 +316,78 @@ func filterModules(requested []analysis.ModuleName, registered map[analysis.Modu
 		}
 	}
 	return result
+}
+
+// toDiagnosticSummary converts a diagnostic.InspectReport (from the diagnostic
+// bounded context) into an analysis.DiagnosticSummary (port-level type).
+// This bridges the deterministic detection pipeline with the LLM analysis
+// without creating a direct dependency from analysis → diagnostic.
+func toDiagnosticSummary(r *diagnostic.InspectReport) *analysis.DiagnosticSummary {
+	if r == nil {
+		return nil
+	}
+
+	ds := &analysis.DiagnosticSummary{}
+
+	// Token economy.
+	if r.Tokens != nil {
+		ds.InputTokens = r.Tokens.Input
+		ds.OutputTokens = r.Tokens.Output
+		ds.ImageTokens = r.Tokens.Image
+		ds.CacheReadPct = r.Tokens.CachePct
+		ds.InputOutputRatio = r.Tokens.InputOutputRatio
+		ds.EstimatedCost = r.Tokens.EstCost
+	}
+
+	// Images.
+	if r.Images != nil {
+		ds.InlineImages = r.Images.InlineImages
+		ds.ToolReadImages = r.Images.ToolReadImages
+		ds.SimctlCaptures = r.Images.SimctlCaptures
+		ds.SipsResizes = r.Images.SipsResizes
+		ds.ImageBilledTok = r.Images.TotalBilledTok
+		ds.ImageCost = r.Images.EstImageCost
+		ds.AvgTurnsInCtx = r.Images.AvgTurnsInCtx
+	}
+
+	// Compaction.
+	if r.Compaction != nil {
+		ds.CompactionCount = r.Compaction.Count
+		ds.CascadeCount = r.Compaction.CascadeCount
+		ds.CompactionsPerUser = r.Compaction.PerUserMsg
+		ds.MedianInterval = r.Compaction.IntervalMedian
+		ds.AvgBeforeTokens = r.Compaction.AvgBeforeTokens
+	}
+
+	// Tool errors.
+	if r.ToolErrors != nil {
+		ds.TotalToolCalls = r.ToolErrors.TotalToolCalls
+		ds.ErrorToolCalls = r.ToolErrors.ErrorCount
+		ds.ToolErrorRate = r.ToolErrors.ErrorRate
+		ds.MaxConsecErrors = r.ToolErrors.ConsecutiveMax
+	}
+
+	// Behavioural patterns.
+	if r.Patterns != nil {
+		ds.CorrectionCount = r.Patterns.UserCorrectionCount
+		ds.WriteWithoutReadCount = r.Patterns.WriteWithoutReadCount
+		ds.GlobStormCount = r.Patterns.GlobStormCount
+		ds.LongestUnguided = r.Patterns.LongestRunLength
+	}
+
+	// Detected problems.
+	for _, p := range r.Problems {
+		ds.Problems = append(ds.Problems, analysis.DiagnosticProblem{
+			ID:          string(p.ID),
+			Severity:    string(p.Severity),
+			Category:    string(p.Category),
+			Title:       p.Title,
+			Observation: p.Observation,
+			Impact:      p.Impact,
+			Metric:      p.Metric,
+			MetricUnit:  p.MetricUnit,
+		})
+	}
+
+	return ds
 }

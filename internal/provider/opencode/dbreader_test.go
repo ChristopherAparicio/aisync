@@ -699,3 +699,363 @@ func TestDBReader_summaryModeIntegration(t *testing.T) {
 		t.Error("TotalTokens should not be 0 in summary mode")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ExportIncremental integration tests — test the real Provider method against
+// an in-memory SQLite database (no mocks).
+// ---------------------------------------------------------------------------
+
+// setupTestDBForIncremental creates a DB with N initial messages for ses_test001.
+// Each message has one text part. Returns the dbReader and a helper to add more
+// messages to the DB after the initial setup.
+func setupTestDBForIncremental(t *testing.T, initialMsgCount int) (*dbReader, func(id, role, text string, ts int64)) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("opening in-memory db: %v", err)
+	}
+
+	schema := `
+		CREATE TABLE project (
+			id TEXT PRIMARY KEY,
+			worktree TEXT NOT NULL,
+			vcs TEXT,
+			name TEXT,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			sandboxes TEXT NOT NULL DEFAULT '[]'
+		);
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			parent_id TEXT,
+			slug TEXT NOT NULL DEFAULT '',
+			directory TEXT NOT NULL,
+			title TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '1.0.0',
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
+		);
+		CREATE INDEX session_project_idx ON session (project_id);
+		CREATE INDEX session_parent_idx ON session (parent_id);
+		CREATE TABLE message (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL,
+			FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE CASCADE
+		);
+		CREATE INDEX message_session_idx ON message (session_id);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY,
+			message_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL,
+			FOREIGN KEY (message_id) REFERENCES message(id) ON DELETE CASCADE
+		);
+		CREATE INDEX part_message_idx ON part (message_id);
+		CREATE INDEX part_session_idx ON part (session_id);
+	`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatalf("creating schema: %v", err)
+	}
+
+	// Insert project and session.
+	db.Exec(`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES (?, ?, ?, ?, ?)`,
+		"proj001", "/tmp/test/incr", 1700000000000, 1700000000000, "[]")
+	db.Exec(`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"ses_test001", "proj001", "incr-test", "/tmp/test/incr", "Incremental test", "1.0.0", 1700000000000, 1700000000000)
+
+	baseTS := int64(1700000001000)
+
+	// addMessage inserts a message + text part into the DB.
+	addMessage := func(id, role, text string, ts int64) {
+		data := mustJSON(t, map[string]interface{}{
+			"role":  role,
+			"agent": "build",
+			"time":  map[string]interface{}{"created": ts},
+			"model": map[string]interface{}{"providerID": "anthropic", "modelID": "claude-opus-4-6"},
+			"tokens": map[string]interface{}{
+				"input": 100, "output": 50, "reasoning": 0,
+				"cache": map[string]interface{}{"read": 0, "write": 0},
+			},
+		})
+		db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+			id, "ses_test001", ts, ts, data)
+
+		partData := mustJSON(t, map[string]interface{}{"type": "text", "text": text})
+		db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			"prt_"+id, id, "ses_test001", ts, ts, partData)
+	}
+
+	// Insert initial messages.
+	for i := 0; i < initialMsgCount; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		ts := baseTS + int64(i*1000)
+		addMessage(
+			"msg_init_"+string(rune('a'+i)),
+			role,
+			"Initial message "+string(rune('A'+i)),
+			ts,
+		)
+	}
+
+	t.Cleanup(func() { db.Close() })
+	return &dbReader{db: db}, addMessage
+}
+
+func TestExportIncremental_returnsOnlyNewMessages(t *testing.T) {
+	r, addMessage := setupTestDBForIncremental(t, 2)
+
+	p := &Provider{
+		dataHome: t.TempDir(),
+		reader:   r,
+	}
+
+	// Add 3 new messages after the initial 2.
+	addMessage("msg_new_1", "user", "New question 1", 1700000010000)
+	addMessage("msg_new_2", "assistant", "New answer 2", 1700000011000)
+	addMessage("msg_new_3", "user", "New question 3", 1700000012000)
+
+	result, err := p.ExportIncremental("ses_test001", 2, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("ExportIncremental() error: %v", err)
+	}
+
+	// Should return exactly 3 new messages.
+	if len(result.NewMessages) != 3 {
+		t.Fatalf("NewMessages count = %d, want 3", len(result.NewMessages))
+	}
+
+	// Verify the new messages content and order.
+	if result.NewMessages[0].Content != "New question 1" {
+		t.Errorf("NewMessages[0].Content = %q, want %q", result.NewMessages[0].Content, "New question 1")
+	}
+	if result.NewMessages[0].Role != session.RoleUser {
+		t.Errorf("NewMessages[0].Role = %q, want %q", result.NewMessages[0].Role, session.RoleUser)
+	}
+	if result.NewMessages[1].Content != "New answer 2" {
+		t.Errorf("NewMessages[1].Content = %q, want %q", result.NewMessages[1].Content, "New answer 2")
+	}
+	if result.NewMessages[1].Role != session.RoleAssistant {
+		t.Errorf("NewMessages[1].Role = %q, want %q", result.NewMessages[1].Role, session.RoleAssistant)
+	}
+	if result.NewMessages[2].Content != "New question 3" {
+		t.Errorf("NewMessages[2].Content = %q, want %q", result.NewMessages[2].Content, "New question 3")
+	}
+
+	// Token totals should reflect ALL 5 messages (not just 3 new).
+	// Each message has 100 input + 50 output = 150 total. 5 messages = 500 input, 250 output.
+	if result.TokenUsage.InputTokens != 500 {
+		t.Errorf("TokenUsage.InputTokens = %d, want 500", result.TokenUsage.InputTokens)
+	}
+	if result.TokenUsage.OutputTokens != 250 {
+		t.Errorf("TokenUsage.OutputTokens = %d, want 250", result.TokenUsage.OutputTokens)
+	}
+}
+
+func TestExportIncremental_offsetZero_returnsAll(t *testing.T) {
+	r, _ := setupTestDBForIncremental(t, 4)
+
+	p := &Provider{
+		dataHome: t.TempDir(),
+		reader:   r,
+	}
+
+	// Offset 0 = first capture → should return all 4 messages.
+	result, err := p.ExportIncremental("ses_test001", 0, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("ExportIncremental() error: %v", err)
+	}
+
+	if len(result.NewMessages) != 4 {
+		t.Fatalf("NewMessages count = %d, want 4", len(result.NewMessages))
+	}
+}
+
+func TestExportIncremental_offsetEqualsCount_returnsError(t *testing.T) {
+	r, _ := setupTestDBForIncremental(t, 3)
+
+	p := &Provider{
+		dataHome: t.TempDir(),
+		reader:   r,
+	}
+
+	// Offset 3 = already have all 3 → no new messages.
+	_, err := p.ExportIncremental("ses_test001", 3, session.StorageModeFull)
+	if err == nil {
+		t.Fatal("ExportIncremental() should return error when no new messages")
+	}
+	if err.Error() != "incremental export not possible" {
+		t.Errorf("error = %q, want %q", err.Error(), "incremental export not possible")
+	}
+}
+
+func TestExportIncremental_summaryMode_returnsError(t *testing.T) {
+	r, _ := setupTestDBForIncremental(t, 2)
+
+	p := &Provider{
+		dataHome: t.TempDir(),
+		reader:   r,
+	}
+
+	_, err := p.ExportIncremental("ses_test001", 0, session.StorageModeSummary)
+	if err == nil {
+		t.Fatal("ExportIncremental() in summary mode should return error")
+	}
+	if err.Error() != "incremental export not possible" {
+		t.Errorf("error = %q, want %q", err.Error(), "incremental export not possible")
+	}
+}
+
+func TestExportIncremental_fileReader_returnsError(t *testing.T) {
+	// File reader does not support incremental — must return ErrIncrementalNotPossible.
+	dataHome := setupTestDataHome(t)
+	p := New(dataHome)
+
+	_, err := p.ExportIncremental("ses_test001", 0, session.StorageModeFull)
+	if err == nil {
+		t.Fatal("ExportIncremental() with file reader should return error")
+	}
+	if err.Error() != "incremental export not possible" {
+		t.Errorf("error = %q, want %q", err.Error(), "incremental export not possible")
+	}
+}
+
+func TestExportIncremental_withToolCalls(t *testing.T) {
+	r, _ := setupTestDBForIncremental(t, 1) // 1 initial user message
+
+	p := &Provider{
+		dataHome: t.TempDir(),
+		reader:   r,
+	}
+
+	// Insert an assistant message with a tool part after the initial message.
+	asstData := mustJSON(t, map[string]interface{}{
+		"role":  "assistant",
+		"agent": "build",
+		"time":  map[string]interface{}{"created": 1700000020000, "completed": 1700000021000},
+		"model": map[string]interface{}{"providerID": "anthropic", "modelID": "claude-opus-4-6"},
+		"tokens": map[string]interface{}{
+			"input": 200, "output": 100, "reasoning": 0,
+			"cache": map[string]interface{}{"read": 50, "write": 0},
+		},
+	})
+	r.db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+		"msg_tool_asst", "ses_test001", 1700000020000, 1700000021000, asstData)
+
+	// Add text part.
+	textData := mustJSON(t, map[string]interface{}{"type": "text", "text": "I'll write that file."})
+	r.db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+		"prt_text_tool", "msg_tool_asst", "ses_test001", 1700000020000, 1700000020000, textData)
+
+	// Add tool part.
+	toolData := mustJSON(t, map[string]interface{}{
+		"type":   "tool",
+		"callID": "call_w01",
+		"tool":   "write",
+		"state": map[string]interface{}{
+			"status": "completed",
+			"input":  map[string]interface{}{"file_path": "hello.go", "content": "package main"},
+			"output": "File written",
+			"time":   map[string]interface{}{"start": 1700000020100, "end": 1700000020600},
+		},
+	})
+	r.db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+		"prt_tool_w01", "msg_tool_asst", "ses_test001", 1700000020100, 1700000020600, toolData)
+
+	// Incremental from offset=1 should get the assistant message with tool call.
+	result, err := p.ExportIncremental("ses_test001", 1, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("ExportIncremental() error: %v", err)
+	}
+
+	if len(result.NewMessages) != 1 {
+		t.Fatalf("NewMessages count = %d, want 1", len(result.NewMessages))
+	}
+
+	msg := result.NewMessages[0]
+	if msg.Role != session.RoleAssistant {
+		t.Errorf("Role = %q, want %q", msg.Role, session.RoleAssistant)
+	}
+	if msg.Content != "I'll write that file." {
+		t.Errorf("Content = %q, want %q", msg.Content, "I'll write that file.")
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls count = %d, want 1", len(msg.ToolCalls))
+	}
+	if msg.ToolCalls[0].Name != "write" {
+		t.Errorf("ToolCall.Name = %q, want %q", msg.ToolCalls[0].Name, "write")
+	}
+	if msg.ToolCalls[0].State != session.ToolStateCompleted {
+		t.Errorf("ToolCall.State = %q, want %q", msg.ToolCalls[0].State, session.ToolStateCompleted)
+	}
+	if msg.ToolCalls[0].DurationMs != 500 {
+		t.Errorf("ToolCall.DurationMs = %d, want 500", msg.ToolCalls[0].DurationMs)
+	}
+
+	// Tokens: initial msg (100 in, 50 out) + assistant (200+50 in, 100 out) = 350 in, 150 out.
+	if result.TokenUsage.InputTokens != 350 {
+		t.Errorf("TokenUsage.InputTokens = %d, want 350", result.TokenUsage.InputTokens)
+	}
+	if result.TokenUsage.OutputTokens != 150 {
+		t.Errorf("TokenUsage.OutputTokens = %d, want 150", result.TokenUsage.OutputTokens)
+	}
+}
+
+func TestExportIncremental_consistentWithFullExport(t *testing.T) {
+	// The critical invariant: full Export messages == incremental(offset=0) messages.
+	r, _ := setupTestDBForIncremental(t, 4)
+
+	p := &Provider{
+		dataHome: t.TempDir(),
+		reader:   r,
+	}
+
+	// Full export.
+	full, err := p.Export("ses_test001", session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	// Incremental from offset 0.
+	incr, err := p.ExportIncremental("ses_test001", 0, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("ExportIncremental() error: %v", err)
+	}
+
+	// Same message count.
+	if len(full.Messages) != len(incr.NewMessages) {
+		t.Fatalf("full messages = %d, incremental = %d", len(full.Messages), len(incr.NewMessages))
+	}
+
+	// Same content for each message.
+	for i := range full.Messages {
+		if full.Messages[i].Content != incr.NewMessages[i].Content {
+			t.Errorf("message[%d] content mismatch: full=%q, incr=%q",
+				i, full.Messages[i].Content, incr.NewMessages[i].Content)
+		}
+		if full.Messages[i].Role != incr.NewMessages[i].Role {
+			t.Errorf("message[%d] role mismatch: full=%q, incr=%q",
+				i, full.Messages[i].Role, incr.NewMessages[i].Role)
+		}
+	}
+
+	// Same token totals.
+	if full.TokenUsage.InputTokens != incr.TokenUsage.InputTokens {
+		t.Errorf("InputTokens mismatch: full=%d, incr=%d",
+			full.TokenUsage.InputTokens, incr.TokenUsage.InputTokens)
+	}
+	if full.TokenUsage.OutputTokens != incr.TokenUsage.OutputTokens {
+		t.Errorf("OutputTokens mismatch: full=%d, incr=%d",
+			full.TokenUsage.OutputTokens, incr.TokenUsage.OutputTokens)
+	}
+}

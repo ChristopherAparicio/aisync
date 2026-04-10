@@ -139,17 +139,18 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 	}
 
 	sess := &session.Session{
-		ID:          sessionID,
-		Version:     1,
-		Provider:    session.ProviderCursor,
-		Agent:       agentFromMode(cd.UnifiedMode),
-		Branch:      cd.activeBranch(),
-		ProjectPath: "", // filled by caller if needed
-		ExportedBy:  exportedByLabel,
-		ExportedAt:  time.Now(),
-		CreatedAt:   cd.createdTime(),
-		Summary:     cd.Name,
-		StorageMode: mode,
+		ID:              sessionID,
+		Version:         1,
+		Provider:        session.ProviderCursor,
+		Agent:           agentFromMode(cd.UnifiedMode),
+		Branch:          cd.activeBranch(),
+		ProjectPath:     "", // filled by caller if needed
+		ExportedBy:      exportedByLabel,
+		ExportedAt:      time.Now(),
+		CreatedAt:       cd.createdTime(),
+		Summary:         cd.Name,
+		StorageMode:     mode,
+		SourceUpdatedAt: cd.LastUpdatedAt,
 		TokenUsage: session.TokenUsage{
 			TotalTokens: cd.ContextTokensUsed,
 		},

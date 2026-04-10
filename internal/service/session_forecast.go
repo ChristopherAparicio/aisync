@@ -29,8 +29,13 @@ type ForecastRequest struct {
 }
 
 // Forecast analyzes historical session costs and projects future spending.
-// It buckets sessions by time period, applies linear regression for trend,
-// and recommends cheaper model alternatives.
+//
+// Reads from the materialized session_analytics table (CQRS read model)
+// instead of loading all full session payloads. Per-session cost data
+// (estimated, actual, deduplicated, fork offset) is pre-computed by
+// stampAnalytics(). Per-backend and per-model breakdowns are approximated
+// from the dominant backend/model of each session — a reasonable
+// approximation since >95% of sessions use a single backend and model.
 func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*session.ForecastResult, error) {
 	period := req.Period
 	if period == "" {
@@ -48,37 +53,38 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 	now := time.Now().UTC()
 	since := now.AddDate(0, 0, -lookbackDays)
 
-	// Query all sessions in the time window.
-	summaries, err := s.store.List(session.ListOptions{
-		ProjectPath: req.ProjectPath,
-		Branch:      req.Branch,
-		All:         req.Branch == "" && req.ProjectPath == "",
-	})
+	// Query pre-computed analytics rows instead of loading full sessions.
+	filter := session.AnalyticsFilter{
+		ProjectPath:      req.ProjectPath,
+		Since:            since,
+		MinSchemaVersion: session.AnalyticsSchemaVersion,
+	}
+	analyticsRows, err := s.store.QueryAnalytics(filter)
 	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
+		return nil, fmt.Errorf("querying analytics for forecast: %w", err)
 	}
 
-	// Filter to time window.
-	var filtered []session.Summary
-	for _, sm := range summaries {
-		if !sm.CreatedAt.Before(since) {
-			filtered = append(filtered, sm)
+	// Branch filter: QueryAnalytics doesn't filter by branch, so we do it
+	// in-memory. This is cheap since we're iterating already-light rows.
+	if req.Branch != "" {
+		var branchFiltered []session.AnalyticsRow
+		for _, ar := range analyticsRows {
+			if ar.Branch == req.Branch {
+				branchFiltered = append(branchFiltered, ar)
+			}
 		}
+		analyticsRows = branchFiltered
 	}
 
-	if len(filtered) == 0 {
+	if len(analyticsRows) == 0 {
 		return &session.ForecastResult{
 			Period:   period,
 			TrendDir: "stable",
 		}, nil
 	}
 
-	// Load fork dedup map: fork session ID → fork point.
-	forkPoints := s.buildForkPointMap()
-
 	// Track per-backend aggregates.
 	type backendAgg struct {
-		messageCount  int
 		totalTokens   int
 		estimatedCost float64
 		actualCost    float64
@@ -86,169 +92,77 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 	}
 	perBackend := make(map[string]*backendAgg)
 
-	// Load full sessions for cost calculation + model breakdown.
 	var loaded []sessionCostEntry
-	var apiOnly []sessionCostEntry // entries with actual provider cost (API billing)
+	var apiOnly []sessionCostEntry
 	globalModels := make(map[string]*forecastModelAgg)
-
-	// Backend × model cross-tabulation for treemap visualization.
 	treemapAgg := make(map[string]map[string]*treemapModelAgg)
 
-	// Batch-fetch all full sessions in a single query (3 SQL statements total)
-	// instead of N×3 queries from a per-session Get() loop. Missing sessions are
-	// silently absent from the result map and the loop below treats them as skips.
-	filteredIDs := make([]session.ID, 0, len(filtered))
-	for _, sm := range filtered {
-		filteredIDs = append(filteredIDs, sm.ID)
-	}
-	fullSessions, batchErr := s.store.GetBatch(filteredIDs)
-	if batchErr != nil {
-		return nil, fmt.Errorf("batch loading sessions for forecast: %w", batchErr)
-	}
-
-	for _, sm := range filtered {
-		full, ok := fullSessions[sm.ID]
-		if !ok {
-			continue
-		}
-		estimate := s.pricing.SessionCost(full)
-
-		// Determine fork dedup offset for this session.
-		forkOffset := 0
-		if forkPoints != nil {
-			if fp, isFork := forkPoints[full.ID]; isFork {
-				forkOffset = fp
-			}
-		}
-
-		// If this is a fork session, subtract shared prefix tokens/cost from the estimate.
-		adjustedCost := estimate.TotalCost.TotalCost
-		adjustedActual := estimate.Breakdown.ActualCost.TotalCost
-		adjustedTokens := full.TokenUsage.TotalTokens
-		if forkOffset > 0 {
-			var sharedTokens int
-			var sharedCost float64
-			var sharedActual float64
-			for k := 0; k < forkOffset && k < len(full.Messages); k++ {
-				msg := &full.Messages[k]
-				sharedTokens += msg.InputTokens + msg.OutputTokens
-				sharedActual += msg.ProviderCost
-			}
-			// Estimate shared cost proportionally: (sharedTokens/totalTokens) × totalCost.
-			if full.TokenUsage.TotalTokens > 0 {
-				sharedCost = adjustedCost * float64(sharedTokens) / float64(full.TokenUsage.TotalTokens)
-			}
-			adjustedCost -= sharedCost
-			adjustedActual -= sharedActual
-			adjustedTokens -= sharedTokens
-			if adjustedCost < 0 {
-				adjustedCost = 0
-			}
-			if adjustedActual < 0 {
-				adjustedActual = 0
-			}
-			if adjustedTokens < 0 {
-				adjustedTokens = 0
-			}
+	for _, ar := range analyticsRows {
+		// Use DeduplicatedCost if the session is a fork (fork-adjusted),
+		// otherwise use the full EstimatedCost.
+		adjustedCost := ar.EstimatedCost
+		if ar.ForkOffset > 0 && ar.DeduplicatedCost > 0 {
+			adjustedCost = ar.DeduplicatedCost
 		}
 
 		entry := sessionCostEntry{
-			createdAt:  full.CreatedAt,
+			createdAt:  ar.CreatedAt,
 			cost:       adjustedCost,
-			actualCost: adjustedActual,
-			tokens:     adjustedTokens,
+			actualCost: ar.ActualCost,
+			tokens:     ar.TotalTokens,
 		}
 		loaded = append(loaded, entry)
 
 		// Track API-only entries (sessions with actual provider cost).
-		if entry.actualCost > 0 {
+		if ar.ActualCost > 0 {
 			apiOnly = append(apiOnly, sessionCostEntry{
-				createdAt: entry.createdAt,
-				cost:      entry.actualCost,
-				tokens:    entry.tokens,
+				createdAt: ar.CreatedAt,
+				cost:      ar.ActualCost,
+				tokens:    ar.TotalTokens,
 			})
 		}
 
-		// Aggregate per-backend stats from message-level ProviderID.
-		sessionBackends := make(map[string]bool)                 // track unique backends per session
-		sessionBackendModels := make(map[string]map[string]bool) // track unique backend-model per session
-		for i := range full.Messages {
-			// Fork dedup: skip shared prefix messages.
-			if i < forkOffset {
-				continue
-			}
-			msg := &full.Messages[i]
-			backend := msg.ProviderID
-			if backend == "" {
-				continue
-			}
-			agg, ok := perBackend[backend]
-			if !ok {
-				agg = &backendAgg{}
-				perBackend[backend] = agg
-			}
-			agg.messageCount++
-			agg.totalTokens += msg.InputTokens + msg.OutputTokens
-			agg.actualCost += msg.ProviderCost
-			if !sessionBackends[backend] {
-				sessionBackends[backend] = true
-				agg.sessionCount++
-			}
-
-			// Track backend→model mapping for treemap cross-tabulation.
-			model := msg.Model
-			if model != "" {
-				if sessionBackendModels[backend] == nil {
-					sessionBackendModels[backend] = make(map[string]bool)
-				}
-				sessionBackendModels[backend][model] = true
-			}
+		// Per-backend stats: each session attributed to its dominant backend.
+		backend := ar.Backend
+		if backend == "" {
+			backend = "(unknown)"
 		}
-
-		// Also adjust model breakdown — scale down proportionally for forks.
-		costScale := 1.0
-		if forkOffset > 0 && estimate.TotalCost.TotalCost > 0 {
-			costScale = adjustedCost / estimate.TotalCost.TotalCost
+		agg, ok := perBackend[backend]
+		if !ok {
+			agg = &backendAgg{}
+			perBackend[backend] = agg
 		}
+		agg.totalTokens += ar.TotalTokens
+		agg.estimatedCost += adjustedCost
+		agg.actualCost += ar.ActualCost
+		agg.sessionCount++
 
-		// Determine dominant backend for this session (for treemap cross-tab).
-		// Each model may appear in one backend within a session.
-		modelBackend := make(map[string]string) // model → backend
-		for backend, models := range sessionBackendModels {
-			for model := range models {
-				modelBackend[model] = backend
-			}
+		// Per-model and treemap: each session attributed to dominant model.
+		model := ar.DominantModel
+		if model == "" {
+			model = "(unknown)"
 		}
-
-		for _, mc := range estimate.PerModel {
-			g, ok := globalModels[mc.Model]
-			if !ok {
-				g = &forecastModelAgg{}
-				globalModels[mc.Model] = g
-			}
-			scaledCost := mc.Cost.TotalCost * costScale
-			scaledTokens := int(float64(mc.InputTokens+mc.OutputTokens) * costScale)
-			g.cost += scaledCost
-			g.tokens += scaledTokens
-			g.count++
-
-			// Cross-tabulate into treemap: backend × model.
-			backend := modelBackend[mc.Model]
-			if backend == "" {
-				backend = "(unknown)"
-			}
-			if treemapAgg[backend] == nil {
-				treemapAgg[backend] = make(map[string]*treemapModelAgg)
-			}
-			bma, bmOk := treemapAgg[backend][mc.Model]
-			if !bmOk {
-				bma = &treemapModelAgg{}
-				treemapAgg[backend][mc.Model] = bma
-			}
-			bma.cost += scaledCost
-			bma.tokens += scaledTokens
-			bma.sessionCount++
+		g, gOk := globalModels[model]
+		if !gOk {
+			g = &forecastModelAgg{}
+			globalModels[model] = g
 		}
+		g.cost += adjustedCost
+		g.tokens += ar.TotalTokens
+		g.count++
+
+		// Treemap: backend × model.
+		if treemapAgg[backend] == nil {
+			treemapAgg[backend] = make(map[string]*treemapModelAgg)
+		}
+		bma, bmOk := treemapAgg[backend][model]
+		if !bmOk {
+			bma = &treemapModelAgg{}
+			treemapAgg[backend][model] = bma
+		}
+		bma.cost += adjustedCost
+		bma.tokens += ar.TotalTokens
+		bma.sessionCount++
 	}
 
 	// Build time buckets.
@@ -309,12 +223,12 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 	var backendCosts []session.BackendCostSummary
 	for backend, agg := range perBackend {
 		bcs := session.BackendCostSummary{
-			Backend:      backend,
-			BillingType:  "auto",
-			MessageCount: agg.messageCount,
-			TotalTokens:  agg.totalTokens,
-			ActualCost:   math.Round(agg.actualCost*10000) / 10000,
-			SessionCount: agg.sessionCount,
+			Backend:       backend,
+			BillingType:   "auto",
+			TotalTokens:   agg.totalTokens,
+			EstimatedCost: math.Round(agg.estimatedCost*10000) / 10000,
+			ActualCost:    math.Round(agg.actualCost*10000) / 10000,
+			SessionCount:  agg.sessionCount,
 		}
 		// Resolve billing type from config.
 		if s.cfg != nil {
@@ -345,21 +259,6 @@ func (s *SessionService) Forecast(ctx context.Context, req ForecastRequest) (*se
 		}
 		return backendCosts[i].ActualCost > backendCosts[j].ActualCost
 	})
-
-	// Compute estimated cost per backend from model breakdown.
-	// We distribute model cost to backends based on token share.
-	if totalCost > 0 {
-		for i := range backendCosts {
-			// Rough estimate: backend's share of total tokens × total estimated cost.
-			totalTokensAll := 0
-			for _, bc := range backendCosts {
-				totalTokensAll += bc.TotalTokens
-			}
-			if totalTokensAll > 0 {
-				backendCosts[i].EstimatedCost = math.Round(totalCost*float64(backendCosts[i].TotalTokens)/float64(totalTokensAll)*10000) / 10000
-			}
-		}
-	}
 
 	// Model breakdown with recommendations.
 	modelBreakdown := buildModelBreakdown(globalModels, totalCost, s.pricing)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	capturesvc "github.com/ChristopherAparicio/aisync/internal/capture"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -73,14 +74,43 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 		Skipped:      result.Skipped,
 	}
 
-	// Stamp denormalized costs on parent session (capture service saved without costs).
-	if !result.Skipped {
-		s.stampCosts(result.Session)
-		_ = s.store.Save(result.Session)
+	// If skipped (unchanged), return immediately — no save, summarization, or hooks needed.
+	if result.Skipped {
+		return captureResult, nil
 	}
+
+	// AI summarization: only if requested, no --message override, and LLM is available.
+	// Priority: --message > AI summary > provider-native summary.
+	// Done BEFORE Save() so the summary is included in the single write.
+	if req.Summarize && req.Message == "" && s.llm != nil {
+		ctx := context.Background()
+		sumResult, sumErr := s.Summarize(ctx, SummarizeRequest{
+			Session: result.Session,
+			Model:   req.Model,
+		})
+		if sumErr == nil {
+			result.Session.Summary = sumResult.OneLine
+			captureResult.Summarized = true
+			captureResult.StructuredSummary = &sumResult.Summary
+		}
+		// On failure: silently keep the provider-native summary (non-blocking).
+	}
+
+	// Stamp denormalized costs, then persist in a single Save().
+	// Previously this was 2-3 Save() calls: capture → stampCosts → summarize.
+	// Now: enrich in-memory → single write → analytics sidecar.
+	s.stampCosts(result.Session)
+	if err := s.store.Save(result.Session); err != nil {
+		return nil, fmt.Errorf("storing session: %w", err)
+	}
+	s.stampAnalytics(result.Session)
+
+	// If summarization was attempted but Save failed above, we already returned the error.
+	// If summarization succeeded but we get here, it was persisted in the single Save.
 
 	// Save child sessions (sub-agents) as separate rows in the store.
 	// This makes them searchable, listable, and visible in the dashboard.
+	// Each child gets a single Save() with costs already stamped.
 	if len(result.Session.Children) > 0 {
 		for i := range result.Session.Children {
 			child := &result.Session.Children[i]
@@ -97,40 +127,12 @@ func (s *SessionService) Capture(req CaptureRequest) (*CaptureResult, error) {
 			}
 			s.stampCosts(child)
 			_ = s.store.Save(child)
+			s.stampAnalytics(child)
 			// Post-capture hook for child: extract events, classify errors, etc.
 			if s.postCapture != nil {
 				s.postCapture(child)
 			}
 		}
-	}
-
-	// If skipped (unchanged), return immediately — no summarization or hooks needed.
-	if result.Skipped {
-		return captureResult, nil
-	}
-
-	// AI summarization: only if requested, no --message override, and LLM is available.
-	// Priority: --message > AI summary > provider-native summary.
-	if req.Summarize && req.Message == "" && s.llm != nil {
-		ctx := context.Background()
-		sumResult, sumErr := s.Summarize(ctx, SummarizeRequest{
-			Session: result.Session,
-			Model:   req.Model,
-		})
-		if sumErr == nil {
-			// Apply the AI-generated summary
-			result.Session.Summary = sumResult.OneLine
-			captureResult.Summarized = true
-			captureResult.StructuredSummary = &sumResult.Summary
-
-			// Re-save with updated summary (session already in store from capture).
-			// Log error but don't fail capture — summary loss is acceptable.
-			s.stampCosts(result.Session)
-			if saveErr := s.store.Save(result.Session); saveErr != nil {
-				captureResult.Summarized = false // summary was not persisted
-			}
-		}
-		// On failure: silently keep the provider-native summary (non-blocking).
 	}
 
 	// Post-capture hook (e.g., auto-analysis). Non-blocking: errors are swallowed.
@@ -176,13 +178,15 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 			r.Session.RemoteURL = resolveRemoteURLForPath(r.Session.ProjectPath)
 		}
 
-		// Stamp denormalized costs on parent session (capture service saved without costs).
+		// Stamp costs and persist in a single Save() (no redundant writes).
 		if !r.Skipped {
 			s.stampCosts(r.Session)
 			_ = s.store.Save(r.Session)
+			s.stampAnalytics(r.Session)
 		}
 
 		// Save child sessions (sub-agents) as separate rows.
+		// Each child gets a single Save() with costs already stamped.
 		if len(r.Session.Children) > 0 {
 			for i := range r.Session.Children {
 				child := &r.Session.Children[i]
@@ -198,6 +202,7 @@ func (s *SessionService) CaptureAll(req CaptureRequest) ([]*CaptureResult, error
 				}
 				s.stampCosts(child)
 				_ = s.store.Save(child)
+				s.stampAnalytics(child)
 				// Post-capture hook for child: extract events, classify errors, etc.
 				if s.postCapture != nil {
 					s.postCapture(child)
@@ -253,17 +258,20 @@ func (s *SessionService) CaptureByID(req CaptureRequest, sessionID session.ID) (
 		result.Session.RemoteURL = resolveRemoteURLForPath(result.Session.ProjectPath)
 	}
 
-	// Stamp denormalized costs and re-save (capture service saved without costs).
-	if !result.Skipped {
-		s.stampCosts(result.Session)
-		_ = s.store.Save(result.Session)
-	}
-
 	captureResult := &CaptureResult{
 		Session:      result.Session,
 		Provider:     result.Provider,
 		SecretsFound: result.SecretsFound,
 		Skipped:      result.Skipped,
+	}
+
+	// Stamp costs and persist in a single Save() (capture service no longer saves).
+	if !result.Skipped {
+		s.stampCosts(result.Session)
+		if err := s.store.Save(result.Session); err != nil {
+			return nil, fmt.Errorf("storing session: %w", err)
+		}
+		s.stampAnalytics(result.Session)
 	}
 
 	// Post-capture hook: fire for non-skipped sessions (same as Capture).

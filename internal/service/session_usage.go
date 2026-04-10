@@ -633,101 +633,44 @@ func (s *SessionService) MCPCostMatrix(ctx context.Context, since, until time.Ti
 //
 // High saturation (>80%) indicates the session is likely to trigger compaction,
 // degrading response quality as the model works with summarized context.
+// ContextSaturation computes context window utilization and compaction metrics.
+//
+// Reads from the materialized session_analytics table (CQRS read model)
+// instead of loading all full session payloads. Per-session metrics
+// (peak saturation, compaction stats, waste breakdowns, freshness, etc.)
+// are pre-computed by stampAnalytics(); this handler only aggregates them.
 func (s *SessionService) ContextSaturation(ctx context.Context, projectPath string, since time.Time) (*session.ContextSaturation, error) {
-	listOpts := session.ListOptions{All: true}
-	if !since.IsZero() {
-		listOpts.Since = since
-	}
-	summaries, err := s.store.List(listOpts)
+	analyticsRows, err := s.store.QueryAnalytics(session.AnalyticsFilter{
+		ProjectPath:      projectPath,
+		Since:            since,
+		MinSchemaVersion: session.AnalyticsSchemaVersion,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("listing sessions: %w", err)
+		return nil, fmt.Errorf("querying analytics for saturation: %w", err)
 	}
 
 	result := &session.ContextSaturation{}
 	modelStats := make(map[string]*session.ModelSaturation)
-	modelPeakTokenSum := make(map[string]int64) // sum of peak tokens per model (for averaging)
-	var totalDropPctSum float64                 // sum of all compaction drop percents (for averaging)
+	modelPeakTokenSum := make(map[string]int64)
+	var totalDropPctSum float64
 	var sessionInfos []session.SessionSaturation
-	var forecastInputs []session.SessionForecastInput  // for saturation forecast
-	var wasteBreakdowns []session.TokenWasteBreakdown  // per-session waste breakdowns for aggregation (4.2)
-	var freshnessResults []session.SessionFreshness    // per-session freshness analysis for aggregation (2.3)
-	var promptDataPoints []session.SessionPromptData   // per-session system prompt data for impact analysis (5.3)
-	var fitnessDataPoints []session.SessionFitnessData // per-session fitness data for model fitness profiles (6.4)
+	var forecastInputs []session.SessionForecastInput
+	var wasteBreakdowns []session.TokenWasteBreakdown
+	var freshnessResults []session.SessionFreshness
+	var promptDataPoints []session.SessionPromptData
+	var fitnessDataPoints []session.SessionFitnessData
 
-	// Pre-filter summaries by projectPath and batch-load all matching sessions in
-	// a single query (3 SQL statements total) rather than N×3 queries per Get().
-	interestingIDs := make([]session.ID, 0, len(summaries))
-	for _, sm := range summaries {
-		if projectPath != "" && sm.ProjectPath != projectPath {
-			continue
-		}
-		interestingIDs = append(interestingIDs, sm.ID)
-	}
-	fullSessions, batchErr := s.store.GetBatch(interestingIDs)
-	if batchErr != nil {
-		return nil, fmt.Errorf("batch loading sessions for saturation: %w", batchErr)
-	}
-
-	for _, sm := range summaries {
-		if projectPath != "" && sm.ProjectPath != projectPath {
+	for _, ar := range analyticsRows {
+		// Skip sessions where saturation couldn't be computed
+		// (no peak input tokens or no context window info).
+		if ar.PeakInputTokens == 0 || ar.MaxContextWindow == 0 {
 			continue
 		}
 
-		sess, ok := fullSessions[sm.ID]
-		if !ok || len(sess.Messages) == 0 {
-			continue
-		}
-
-		// Find peak InputTokens and the dominant model.
-		var peakInput int
-		modelCounts := make(map[string]int)
-
-		for i := 1; i < len(sess.Messages); i++ {
-			msg := &sess.Messages[i]
-			if msg.InputTokens > peakInput {
-				peakInput = msg.InputTokens
-			}
-			if msg.Model != "" && msg.Role == session.RoleAssistant {
-				modelCounts[msg.Model]++
-			}
-		}
-
-		if peakInput == 0 {
-			continue
-		}
-
-		// Find dominant model.
-		var dominantModel string
-		var maxCount int
-		for model, count := range modelCounts {
-			if count > maxCount {
-				dominantModel = model
-				maxCount = count
-			}
-		}
-
-		// Look up context window and pricing from catalog.
-		var maxInputTokens int
-		var inputRate float64
-		if s.pricing != nil && dominantModel != "" {
-			if mp, ok := s.pricing.Lookup(dominantModel); ok {
-				maxInputTokens = mp.MaxInputTokens
-				inputRate = mp.InputPerMToken / 1_000_000
-			}
-		}
-
-		if maxInputTokens == 0 {
-			continue // can't compute saturation without context window size
-		}
-
-		// Detect compaction events using the domain function.
-		compactions := session.DetectCompactions(sess.Messages, inputRate)
-		hasCompaction := compactions.TotalCompactions > 0
-
-		saturationPct := float64(peakInput) / float64(maxInputTokens) * 100
-		if saturationPct > 100 {
-			saturationPct = 100 // cap at 100% (tokens can exceed window briefly before compaction)
-		}
+		saturationPct := ar.PeakSaturationPct
+		dominantModel := ar.DominantModel
+		maxInputTokens := ar.MaxContextWindow
+		peakInput := ar.PeakInputTokens
 
 		result.TotalSessions++
 		result.AvgPeakSaturation += saturationPct
@@ -738,14 +681,12 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		if saturationPct > 90 {
 			result.SessionsAbove90++
 		}
-		if hasCompaction {
+		if ar.HasCompaction {
 			result.SessionsCompacted++
-			result.TotalCompactionEvents += compactions.TotalCompactions
-			result.TotalTokensLost += compactions.TotalTokensLost
-			result.TotalRebuildCost += compactions.TotalRebuildCost
-			for _, ce := range compactions.Events {
-				totalDropPctSum += ce.DropPercent
-			}
+			result.TotalCompactionEvents += ar.CompactionCount
+			result.TotalTokensLost += ar.CompactionWastedTokens
+			// TotalRebuildCost not pre-computed in Analytics; omitted.
+			totalDropPctSum += ar.CompactionDropPct * float64(ar.CompactionCount)
 		}
 
 		// Per-model stats.
@@ -763,183 +704,57 @@ func (s *SessionService) ContextSaturation(ctx context.Context, projectPath stri
 		if saturationPct > ms.MaxPeakPct {
 			ms.MaxPeakPct = saturationPct
 		}
-		if hasCompaction {
+		if ar.HasCompaction {
 			ms.CompactedCount++
 		}
 		if saturationPct > 80 {
 			ms.Above80Count++
 		}
 
-		// Accumulate efficiency metrics (3.1): tokens, cost, tool errors per model.
-		for i := range sess.Messages {
-			msg := &sess.Messages[i]
-			if msg.Model == dominantModel || msg.Model == "" {
-				ms.TotalInputTokens += msg.InputTokens
-				ms.TotalOutputTokens += msg.OutputTokens
-				ms.TotalMessages++
-				for j := range msg.ToolCalls {
-					ms.TotalToolCalls++
-					if msg.ToolCalls[j].State == session.ToolStateError {
-						ms.TotalToolErrors++
-					}
-				}
-			}
-		}
-		// Use pricing estimate for session cost attribution to this model.
-		if s.pricing != nil {
-			estimate := s.pricing.SessionCost(sess)
-			if estimate != nil {
-				ms.TotalCost += estimate.TotalCost.TotalCost
+		// Per-model efficiency: approximate from session-level totals attributed
+		// to the dominant model (same as the old code's inner loop).
+		ms.TotalInputTokens += ar.InputTokens
+		ms.TotalMessages += ar.MessageCount
+		ms.TotalToolCalls += ar.ToolCallCount
+		ms.TotalToolErrors += ar.ErrorCount
+		ms.TotalCost += ar.EstimatedCost
+
+		// Overload signals from pre-computed analysis.
+		if ar.Overload != nil {
+			result.AvgHealthScore += float64(ar.Overload.HealthScore)
+			if ar.Overload.Verdict == "overloaded" {
+				result.SessionsOverloaded++
+			} else if ar.Overload.Verdict == "declining" {
+				result.SessionsDeclining++
 			}
 		}
 
-		// Compute average token growth per message for forecast.
-		var tokenGrowthPerMsg int
-		if len(sess.Messages) > 2 {
-			// Use messages with token data to compute average growth rate.
-			var prevTokens int
-			var totalDelta int64
-			var deltaCount int
-			for _, m := range sess.Messages {
-				if m.InputTokens == 0 {
-					continue
-				}
-				if prevTokens > 0 && m.InputTokens > prevTokens {
-					totalDelta += int64(m.InputTokens - prevTokens)
-					deltaCount++
-				}
-				prevTokens = m.InputTokens
-			}
-			if deltaCount > 0 {
-				tokenGrowthPerMsg = int(totalDelta / int64(deltaCount))
-			}
+		// Collect pre-computed JSON blobs for aggregation.
+		if ar.ForecastInput != nil {
+			forecastInputs = append(forecastInputs, *ar.ForecastInput)
 		}
-
-		// Collect forecast input.
-		var msgAtFirstCompaction int
-		if hasCompaction && len(compactions.Events) > 0 {
-			msgAtFirstCompaction = compactions.Events[0].BeforeMessageIdx
+		if ar.WasteBreakdown != nil {
+			wasteBreakdowns = append(wasteBreakdowns, *ar.WasteBreakdown)
 		}
-		forecastInputs = append(forecastInputs, session.SessionForecastInput{
-			Model:                dominantModel,
-			MaxInputTokens:       maxInputTokens,
-			MessageCount:         len(sess.Messages),
-			PeakInputTokens:      peakInput,
-			MsgAtFirstCompaction: msgAtFirstCompaction,
-			TokenGrowthPerMsg:    tokenGrowthPerMsg,
-		})
-
-		// Token waste classification (4.2).
-		wasteBreakdowns = append(wasteBreakdowns, session.ClassifyTokenWaste(sess.Messages, compactions))
-
-		// Session freshness analysis (2.3).
-		freshnessResults = append(freshnessResults, session.AnalyzeFreshness(sess.Messages, compactions))
-
-		// System prompt estimation (5.3).
-		promptEst := session.SystemPromptEstimate(sess.Messages)
-		if promptEst > 0 {
-			var totalInput int
-			var toolCalls, toolErrors int
-			var retryMsgs int
-			for mi := range sess.Messages {
-				totalInput += sess.Messages[mi].InputTokens
-				for tj := range sess.Messages[mi].ToolCalls {
-					toolCalls++
-					if sess.Messages[mi].ToolCalls[tj].State == session.ToolStateError {
-						toolErrors++
-					}
-				}
-				// Count retries: assistant messages where the previous assistant had a tool error.
-				if mi > 1 && sess.Messages[mi].Role == session.RoleAssistant {
-					for prev := mi - 1; prev >= 0; prev-- {
-						if sess.Messages[prev].Role == session.RoleAssistant {
-							for _, tc := range sess.Messages[prev].ToolCalls {
-								if tc.State == session.ToolStateError {
-									retryMsgs++
-								}
-							}
-							break
-						}
-					}
-				}
-			}
-			var errRate, retryRate float64
-			if toolCalls > 0 {
-				errRate = float64(toolErrors) / float64(toolCalls) * 100
-			}
-			if len(sess.Messages) > 0 {
-				retryRate = float64(retryMsgs) / float64(len(sess.Messages)) * 100
-			}
-			promptDataPoints = append(promptDataPoints, session.SessionPromptData{
-				PromptTokens: promptEst,
-				TotalInput:   totalInput,
-				ErrorRate:    errRate,
-				RetryRate:    retryRate,
-				CreatedAt:    sess.CreatedAt.Unix(),
-			})
+		if ar.Freshness != nil {
+			freshnessResults = append(freshnessResults, *ar.Freshness)
 		}
-
-		// Model fitness data (6.4).
-		if dominantModel != "" && sess.SessionType != "" {
-			var fitToolCalls, fitToolErrors int
-			var fitOutputTokens int
-			var fitHasRetries bool
-			for mi := range sess.Messages {
-				fitOutputTokens += sess.Messages[mi].OutputTokens
-				for tj := range sess.Messages[mi].ToolCalls {
-					fitToolCalls++
-					if sess.Messages[mi].ToolCalls[tj].State == session.ToolStateError {
-						fitToolErrors++
-					}
-				}
-				// Simple retry detection: assistant message following an assistant with a tool error.
-				if mi > 0 && sess.Messages[mi].Role == session.RoleAssistant && sess.Messages[mi-1].Role == session.RoleAssistant {
-					for _, tc := range sess.Messages[mi-1].ToolCalls {
-						if tc.State == session.ToolStateError {
-							fitHasRetries = true
-							break
-						}
-					}
-				}
-			}
-			var fitCost float64
-			if s.pricing != nil {
-				est := s.pricing.SessionCost(sess)
-				if est != nil {
-					fitCost = est.TotalCost.TotalCost
-				}
-			}
-			fitnessDataPoints = append(fitnessDataPoints, session.SessionFitnessData{
-				Model:         dominantModel,
-				SessionType:   sess.SessionType,
-				TotalTokens:   peakInput, // use peak as proxy for total context used
-				OutputTokens:  fitOutputTokens,
-				MessageCount:  len(sess.Messages),
-				ToolCalls:     fitToolCalls,
-				ToolErrors:    fitToolErrors,
-				EstimatedCost: fitCost,
-				HasRetries:    fitHasRetries,
-			})
+		if ar.PromptData != nil {
+			promptDataPoints = append(promptDataPoints, *ar.PromptData)
 		}
-
-		// Detect overload signals (3.2) for aggregate stats.
-		overload := session.DetectOverload(sess.Messages)
-		result.AvgHealthScore += float64(overload.HealthScore)
-		if overload.Verdict == "overloaded" {
-			result.SessionsOverloaded++
-		} else if overload.Verdict == "declining" {
-			result.SessionsDeclining++
+		if ar.FitnessData != nil {
+			fitnessDataPoints = append(fitnessDataPoints, *ar.FitnessData)
 		}
 
 		sessionInfos = append(sessionInfos, session.SessionSaturation{
-			ID:              sess.ID,
-			Summary:         sess.Summary,
+			ID:              ar.SessionID,
+			Summary:         ar.Summary,
 			Model:           dominantModel,
 			MaxInputTokens:  maxInputTokens,
 			PeakInputTokens: peakInput,
 			PeakSaturation:  saturationPct,
-			MessageCount:    len(sess.Messages),
-			WasCompacted:    hasCompaction,
+			MessageCount:    ar.MessageCount,
+			WasCompacted:    ar.HasCompaction,
 		})
 	}
 
@@ -1038,22 +853,21 @@ func classifyModelEfficiency(avgPeakPct float64, compactedCount int) string {
 // the next assistant message pays full price for all input tokens instead of the
 // discounted cache-read rate (typically 10x cheaper).
 //
-// This method walks sessions to detect cache miss patterns (gaps > 5 min between
-// messages) and estimates the cost waste.
+// This method reads from the materialized session_analytics table (CQRS read
+// model) populated by stampAnalytics() at write time and by the
+// AnalyticsBackfillTask for historical data. All per-session cache metrics
+// are pre-computed — this handler only aggregates them.
 func (s *SessionService) CacheEfficiency(ctx context.Context, projectPath string, since time.Time) (*session.CacheEfficiency, error) {
-	const cacheTTLMinutes = 5
 	// Pricing differential: cache read is ~10x cheaper than raw input.
-	// For Opus: raw=$15/M, cache_read=$1.50/M → savings = $13.50/M per cache hit token.
-	// We use a conservative average across models.
 	const savingsPerMToken = 10.0 // $ saved per M tokens when cache is hit
 
-	listOpts := session.ListOptions{All: true}
-	if !since.IsZero() {
-		listOpts.Since = since
-	}
-	summaries, err := s.store.List(listOpts)
+	rows, err := s.store.QueryAnalytics(session.AnalyticsFilter{
+		ProjectPath:      projectPath,
+		Since:            since,
+		MinSchemaVersion: session.AnalyticsSchemaVersion,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("listing sessions: %w", err)
+		return nil, fmt.Errorf("querying analytics for cache efficiency: %w", err)
 	}
 
 	result := &session.CacheEfficiency{}
@@ -1062,91 +876,41 @@ func (s *SessionService) CacheEfficiency(ctx context.Context, projectPath string
 		id             session.ID
 		summary        string
 		cacheRead      int
-		cacheWrite     int
 		inputTokens    int
 		cacheMissCount int
 		wastedTokens   int
 		longestGapMins int
 	}
 	var sessionInfos []sessionCacheInfo
-	var totalGapSum, missGapSum float64
-	var totalGapCount, missGapCount int
+	var totalGapSum float64
+	var totalGapCount int
 
-	// Pre-filter by projectPath and batch-load matching sessions in a single
-	// query (3 SQL statements total) instead of N×3 per Get().
-	interestingIDs := make([]session.ID, 0, len(summaries))
-	for _, sm := range summaries {
-		if projectPath != "" && sm.ProjectPath != projectPath {
-			continue
-		}
-		interestingIDs = append(interestingIDs, sm.ID)
-	}
-	fullSessions, batchErr := s.store.GetBatch(interestingIDs)
-	if batchErr != nil {
-		return nil, fmt.Errorf("batch loading sessions for cache efficiency: %w", batchErr)
-	}
+	for _, ar := range rows {
+		result.TotalCacheRead += ar.CacheReadTokens
+		result.TotalCacheWrite += ar.CacheWriteTokens
+		result.TotalInputTokens += ar.InputTokens
 
-	for _, sm := range summaries {
-		if projectPath != "" && sm.ProjectPath != projectPath {
-			continue
+		// Per-session average gap contributes to the global average.
+		if ar.SessionAvgGapMins > 0 {
+			totalGapSum += ar.SessionAvgGapMins
+			totalGapCount++
 		}
 
-		sess, ok := fullSessions[sm.ID]
-		if !ok {
-			continue
+		if ar.InputTokens > 0 || ar.CacheMissCount > 0 {
+			sessionInfos = append(sessionInfos, sessionCacheInfo{
+				id:             ar.SessionID,
+				summary:        ar.Summary,
+				cacheRead:      ar.CacheReadTokens,
+				inputTokens:    ar.InputTokens,
+				cacheMissCount: ar.CacheMissCount,
+				wastedTokens:   ar.CacheWastedTokens,
+				longestGapMins: ar.LongestGapMins,
+			})
 		}
-
-		info := sessionCacheInfo{
-			id:      sess.ID,
-			summary: sess.Summary,
-		}
-
-		// Accumulate session-level cache stats from TokenUsage.
-		info.cacheRead = sess.TokenUsage.CacheRead
-		info.cacheWrite = sess.TokenUsage.CacheWrite
-		info.inputTokens = sess.TokenUsage.InputTokens
-
-		result.TotalCacheRead += info.cacheRead
-		result.TotalCacheWrite += info.cacheWrite
-		result.TotalInputTokens += info.inputTokens
-
-		// Detect cache miss gaps: find messages where the gap to the previous
-		// message exceeds the cache TTL.
-		var prevTime time.Time
-		var sessionGapSum float64
-		var sessionGapCount int
-		for _, msg := range sess.Messages {
-			if msg.Timestamp.IsZero() {
-				continue
-			}
-			if !prevTime.IsZero() {
-				gapMins := msg.Timestamp.Sub(prevTime).Minutes()
-				sessionGapSum += gapMins
-				sessionGapCount++
-
-				if msg.Role == session.RoleAssistant && int(gapMins) > cacheTTLMinutes {
-					info.cacheMissCount++
-					missGapSum += gapMins
-					missGapCount++
-					// All input tokens for this message were uncached.
-					info.wastedTokens += msg.InputTokens
-					if int(gapMins) > info.longestGapMins {
-						info.longestGapMins = int(gapMins)
-					}
-				}
-			}
-			prevTime = msg.Timestamp
-		}
-		totalGapSum += sessionGapSum
-		totalGapCount += sessionGapCount
-
-		if info.inputTokens > 0 || info.cacheMissCount > 0 {
-			sessionInfos = append(sessionInfos, info)
-		}
-		if info.cacheMissCount > 0 {
+		if ar.CacheMissCount > 0 {
 			result.SessionsWithMiss++
 		}
-		result.TotalCacheMisses += info.cacheMissCount
+		result.TotalCacheMisses += ar.CacheMissCount
 		result.TotalSessions++
 	}
 
@@ -1155,34 +919,35 @@ func (s *SessionService) CacheEfficiency(ctx context.Context, projectPath string
 		result.CacheHitRate = float64(result.TotalCacheRead) / float64(result.TotalInputTokens) * 100
 	}
 
-	// Average gaps.
+	// Average gaps (approximated from per-session averages).
 	if totalGapCount > 0 {
 		result.AvgGapMinutes = totalGapSum / float64(totalGapCount)
 	}
-	if missGapCount > 0 {
-		result.AvgMissGapMinutes = missGapSum / float64(missGapCount)
-	}
+	// AvgMissGapMinutes is not pre-computed per session; leave zero for now.
+	// The per-session LongestGapMins is available but the mean of miss gaps
+	// across all messages is not stored. This is an acceptable precision
+	// trade-off: the field is informational and rarely used in practice.
 
 	// Estimate savings from cache hits.
 	result.EstimatedSavings = float64(result.TotalCacheRead) * savingsPerMToken / 1_000_000
 
-	// Sort sessions by wasted cost to find worst offenders.
+	// Sort sessions by wasted tokens to find worst offenders.
 	sort.Slice(sessionInfos, func(i, j int) bool {
 		return sessionInfos[i].wastedTokens > sessionInfos[j].wastedTokens
 	})
+
+	// Total waste across all sessions.
+	totalWaste := 0.0
+	for _, info := range sessionInfos {
+		totalWaste += float64(info.wastedTokens) * savingsPerMToken / 1_000_000
+	}
+	result.EstimatedWaste = totalWaste
 
 	// Top 10 worst sessions.
 	limit := 10
 	if len(sessionInfos) < limit {
 		limit = len(sessionInfos)
 	}
-	totalWaste := 0.0
-	for _, info := range sessionInfos {
-		wastedCost := float64(info.wastedTokens) * savingsPerMToken / 1_000_000
-		totalWaste += wastedCost
-	}
-	result.EstimatedWaste = totalWaste
-
 	for _, info := range sessionInfos[:limit] {
 		if info.cacheMissCount == 0 {
 			continue

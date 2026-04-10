@@ -421,3 +421,189 @@ func setupTestDataHome(t *testing.T) string {
 
 	return dir
 }
+
+// ---------------------------------------------------------------------------
+// E2E smoke tests — run against real OpenCode data on the host machine.
+// Skipped if no real OpenCode DB exists (CI, containers).
+// These validate the full pipeline against the production DB format.
+// ---------------------------------------------------------------------------
+
+func findRealOpenCodeSession(t *testing.T) (provider *Provider, sessionID string, projectPath string) {
+	t.Helper()
+
+	// Try default data home.
+	p := New("")
+	if p.reader == nil {
+		t.Skip("no OpenCode installation found")
+	}
+
+	// Check if using DB reader (real DB).
+	if _, ok := p.reader.(*dbReader); !ok {
+		t.Skip("OpenCode DB not available, only file reader")
+	}
+
+	// Discover all projects and find one with sessions.
+	projects, err := p.ListAllProjects()
+	if err != nil || len(projects) == 0 {
+		t.Skip("no OpenCode projects found")
+	}
+
+	// Find a project with sessions.
+	for _, proj := range projects {
+		if proj.SessionCount == 0 {
+			continue
+		}
+		summaries, err := p.Detect(proj.Path, "")
+		if err != nil || len(summaries) == 0 {
+			continue
+		}
+		return p, string(summaries[0].ID), proj.Path
+	}
+
+	t.Skip("no OpenCode sessions found")
+	return nil, "", ""
+}
+
+func TestE2E_realOpenCodeSession_Export(t *testing.T) {
+	p, sid, _ := findRealOpenCodeSession(t)
+
+	sess, err := p.Export(session.ID(sid), session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export(%s) error: %v", sid, err)
+	}
+
+	// Basic sanity.
+	if sess.Provider != session.ProviderOpenCode {
+		t.Errorf("Provider = %q, want %q", sess.Provider, session.ProviderOpenCode)
+	}
+	if len(sess.Messages) == 0 {
+		t.Fatal("Export returned 0 messages from a real DB session")
+	}
+
+	// Every message should have a role.
+	for i, m := range sess.Messages {
+		if m.Role == "" {
+			t.Errorf("Messages[%d].Role is empty", i)
+		}
+	}
+
+	// At least one user message.
+	var hasUser bool
+	for _, m := range sess.Messages {
+		if m.Role == session.RoleUser {
+			hasUser = true
+			break
+		}
+	}
+	if !hasUser {
+		t.Error("no user message found in real session")
+	}
+
+	t.Logf("session %s: %d messages, %d input tokens, %d output tokens, %d file changes, %d children",
+		sid, len(sess.Messages), sess.TokenUsage.InputTokens,
+		sess.TokenUsage.OutputTokens, len(sess.FileChanges), len(sess.Children))
+}
+
+func TestE2E_realOpenCodeSession_Freshness(t *testing.T) {
+	p, sid, _ := findRealOpenCodeSession(t)
+
+	freshness, err := p.SessionFreshness(session.ID(sid))
+	if err != nil {
+		t.Fatalf("SessionFreshness(%s) error: %v", sid, err)
+	}
+
+	if freshness.MessageCount <= 0 {
+		t.Errorf("MessageCount = %d, want > 0", freshness.MessageCount)
+	}
+	if freshness.UpdatedAt <= 0 {
+		t.Errorf("UpdatedAt = %d, want > 0", freshness.UpdatedAt)
+	}
+
+	// Stable across calls.
+	freshness2, err := p.SessionFreshness(session.ID(sid))
+	if err != nil {
+		t.Fatalf("second SessionFreshness() error: %v", err)
+	}
+	if freshness.MessageCount != freshness2.MessageCount {
+		t.Errorf("MessageCount not stable: %d vs %d",
+			freshness.MessageCount, freshness2.MessageCount)
+	}
+
+	t.Logf("session %s: freshness MessageCount=%d, UpdatedAt=%d",
+		sid, freshness.MessageCount, freshness.UpdatedAt)
+}
+
+func TestE2E_realOpenCodeSession_ExportIncremental(t *testing.T) {
+	p, sid, _ := findRealOpenCodeSession(t)
+
+	// First: full export to get message count.
+	full, err := p.Export(session.ID(sid), session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+	if len(full.Messages) < 2 {
+		t.Skip("session has fewer than 2 messages, can't test incremental")
+	}
+
+	// Incremental from offset 0 should match full.
+	incr0, err := p.ExportIncremental(session.ID(sid), 0, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("ExportIncremental(offset=0) error: %v", err)
+	}
+	if len(incr0.NewMessages) != len(full.Messages) {
+		t.Errorf("offset=0: got %d messages, full has %d",
+			len(incr0.NewMessages), len(full.Messages))
+	}
+
+	// Incremental from half should return the other half.
+	half := len(full.Messages) / 2
+	incrHalf, err := p.ExportIncremental(session.ID(sid), half, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("ExportIncremental(offset=%d) error: %v", half, err)
+	}
+	expectedNew := len(full.Messages) - half
+	if len(incrHalf.NewMessages) != expectedNew {
+		t.Errorf("offset=%d: got %d messages, want %d",
+			half, len(incrHalf.NewMessages), expectedNew)
+	}
+
+	// Token totals should be the same regardless of offset (full recomputation).
+	if incr0.TokenUsage.InputTokens != incrHalf.TokenUsage.InputTokens {
+		t.Errorf("InputTokens differ: offset0=%d, offsetHalf=%d",
+			incr0.TokenUsage.InputTokens, incrHalf.TokenUsage.InputTokens)
+	}
+
+	// offset == message count → no new messages.
+	_, err = p.ExportIncremental(session.ID(sid), len(full.Messages), session.StorageModeFull)
+	if err == nil {
+		t.Error("ExportIncremental(offset=all) should return error")
+	}
+
+	t.Logf("session %s: full=%d, incr(0)=%d, incr(%d)=%d",
+		sid, len(full.Messages), len(incr0.NewMessages),
+		half, len(incrHalf.NewMessages))
+}
+
+func TestE2E_realOpenCodeSession_FreshnessVsExport(t *testing.T) {
+	p, sid, _ := findRealOpenCodeSession(t)
+
+	freshness, err := p.SessionFreshness(session.ID(sid))
+	if err != nil {
+		t.Fatalf("SessionFreshness() error: %v", err)
+	}
+
+	sess, err := p.Export(session.ID(sid), session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	// For OpenCode, freshness MessageCount should exactly match Export messages
+	// (unlike Claude where JSONL lines may merge).
+	if freshness.MessageCount != len(sess.Messages) {
+		t.Errorf("freshness MessageCount=%d, export Messages=%d — should match for OpenCode",
+			freshness.MessageCount, len(sess.Messages))
+	}
+
+	t.Logf("session %s: freshness=%d, export=%d",
+		sid, freshness.MessageCount, len(sess.Messages))
+}

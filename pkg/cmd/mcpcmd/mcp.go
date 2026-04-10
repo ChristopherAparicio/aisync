@@ -26,20 +26,24 @@ list, export, and manage sessions directly.
 Communication happens over stdin/stdout using JSON-RPC 2.0.
 
 Tools:
-  aisync_capture    Capture the current AI session
-  aisync_restore    Restore an AI session
-  aisync_get        Get session details by ID
-  aisync_list       List captured sessions
-  aisync_delete     Delete a session
-  aisync_export     Export a session
-  aisync_import     Import a session
-  aisync_link       Link session to PR/commit
-  aisync_comment    Post PR comment with session summary
-  aisync_stats      Get session statistics
-  aisync_push       Push sessions to sync branch
-  aisync_pull       Pull sessions from sync branch
-  aisync_sync       Sync sessions (pull + push)
-  aisync_index      Read sync branch index`,
+  aisync_capture            Capture the current AI session
+  aisync_restore            Restore an AI session
+  aisync_get                Get session details by ID
+  aisync_list               List captured sessions
+  aisync_delete             Delete a session
+  aisync_export             Export a session
+  aisync_import             Import a session
+  aisync_link               Link session to PR/commit
+  aisync_comment            Post PR comment with session summary
+  aisync_stats              Get session statistics
+  aisync_push               Push sessions to sync branch
+  aisync_pull               Pull sessions from sync branch
+  aisync_sync               Sync sessions (pull + push)
+  aisync_index              Read sync branch index
+  aisync_inspect_session    Deep diagnostic inspection
+  aisync_recommendations    List rule-based recommendations (offline)
+  aisync_diagnose           Unified session diagnosis quick scan (offline)
+  aisync_skill_observation  Observe skill usage vs recommendations (offline)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sessionSvc, err := f.SessionService()
 			if err != nil {
@@ -50,12 +54,16 @@ Tools:
 			syncSvc, _ := f.SyncService()
 			errorSvc, _ := f.ErrorService()
 			sessionEventSvc, _ := f.SessionEventService()
+			registrySvc, _ := f.RegistryService()
+			store, _ := f.Store()
 
 			s := aisyncmcp.NewServer(aisyncmcp.Config{
 				SessionService:      sessionSvc,
 				SyncService:         syncSvc,
 				ErrorService:        errorSvc,
 				SessionEventService: sessionEventSvc,
+				RegistryService:     registrySvc,
+				Store:               store,
 				Version:             cmd.Root().Version,
 			})
 

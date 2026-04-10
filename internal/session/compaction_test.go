@@ -94,10 +94,17 @@ func TestDetectCompactions_singleCompaction(t *testing.T) {
 }
 
 func TestDetectCompactions_sawtooth(t *testing.T) {
-	// Classic sawtooth: fill → compact → fill → compact → fill.
-	// Cycle 1: 20K → 50K → 100K → 12K (88% drop)
-	// Cycle 2: 12K → 40K → 90K → 8K  (91.1% drop)
-	m := msgs(20000, 50000, 100000, 12000, 40000, 90000, 8000, 30000)
+	// Classic sawtooth: fill → compact → fill (enough gap to avoid cascade merge) → compact → fill.
+	// Compactions must be > CompactionCascadeWindow (3) messages apart to stay separate.
+	// Cycle 1: ramp to 100K → 12K (88% drop)
+	// Cycle 2: rebuild to 90K → 8K (91.1% drop) — with 4+ messages between compactions.
+	m := msgs(
+		20000, 50000, 100000, // fill
+		12000,                      // compaction 1: idx 3
+		25000, 40000, 60000, 90000, // rebuild (4 messages, gap > 3)
+		8000,  // compaction 2: idx 8
+		30000, // rebuild
+	)
 	s := DetectCompactions(m, 0)
 
 	if s.TotalCompactions != 2 {
@@ -129,6 +136,13 @@ func TestDetectCompactions_sawtooth(t *testing.T) {
 	wantMedian := (drop1 + drop2) / 2
 	if math.Abs(s.MedianDropPercent-wantMedian) > 0.1 {
 		t.Errorf("median drop: want ~%.1f, got %.1f", wantMedian, s.MedianDropPercent)
+	}
+
+	// Neither event should be a cascade (they're far enough apart).
+	for i, e := range s.Events {
+		if e.IsCascade {
+			t.Errorf("event %d should not be a cascade", i)
+		}
 	}
 }
 
@@ -225,13 +239,24 @@ func TestDetectCompactions_skipsZeroTokenMessages(t *testing.T) {
 }
 
 func TestDetectCompactions_exactThreshold(t *testing.T) {
-	// Exactly 50% drop should NOT trigger (threshold is strictly less than 0.50).
-	// 100K → 50K = ratio 0.50, NOT < 0.50.
-	m := msgs(20000, 100000, 50000)
+	// Exactly 55% ratio should NOT trigger (threshold is strictly less than 0.55).
+	// 100K → 55K = ratio 0.55, NOT < 0.55.
+	m := msgs(20000, 100000, 55000)
 	s := DetectCompactions(m, 0)
 
 	if s.TotalCompactions != 0 {
-		t.Errorf("exact 50%% drop should not trigger compaction, got %d events", s.TotalCompactions)
+		t.Errorf("exact 55%% ratio should not trigger compaction, got %d events", s.TotalCompactions)
+	}
+}
+
+func TestDetectCompactions_50PercentNowTriggers(t *testing.T) {
+	// 50% drop (ratio 0.50) now triggers with relaxed threshold (0.55).
+	// Previously this was the exact boundary; now it's below threshold.
+	m := msgs(20000, 100000, 50000)
+	s := DetectCompactions(m, 0)
+
+	if s.TotalCompactions != 1 {
+		t.Errorf("50%% drop (ratio 0.50 < 0.55) should now trigger, got %d", s.TotalCompactions)
 	}
 }
 
@@ -271,28 +296,29 @@ func TestDetectCompactions_messageIndices(t *testing.T) {
 
 func TestDetectCompactions_fillAndRecoveryStats(t *testing.T) {
 	// Sawtooth with known fill and recovery patterns.
+	// Compactions must be > CompactionCascadeWindow (3) messages apart to avoid merge.
 	//
-	// Messages: [20K, 50K, 80K, 10K, 30K, 60K, 90K, 8K, 25K]
-	//   idx:       0     1     2    3     4     5     6    7    8
+	// Messages: [20K, 50K, 80K, 10K, 25K, 40K, 60K, 90K, 8K, 25K]
+	//   idx:       0     1     2    3     4     5     6    7    8    9
 	//
 	// Compaction 1: idx 2 (80K) → idx 3 (10K)
-	//   Messages to fill: idx 2 - idx 0 = 2 (messages 0,1 built context before compaction)
-	//   Recovery after: peak in [3..5] (before next compaction at idx 6) = 60K, recovery = 60K - 10K = 50K
+	//   Messages to fill: idx 2 - idx 0 = 2
+	//   Recovery after: peak in [3..6] = 60K, recovery = 60K - 10K = 50K
 	//
-	// Compaction 2: idx 6 (90K) → idx 7 (8K)
-	//   Messages to fill: idx 6 - idx 3 = 3 (messages 3,4,5 rebuilt context)
-	//   Recovery after: peak in [7..8] = 25K, recovery = 25K - 8K = 17K
+	// Compaction 2: idx 7 (90K) → idx 8 (8K) — gap from idx 3 to idx 7 = 4 > 3 (no merge)
+	//   Messages to fill: idx 7 - idx 3 = 4
+	//   Recovery after: peak in [8..9] = 25K, recovery = 25K - 8K = 17K
 	//
-	// AvgMessagesToFill = (2 + 3) / 2 = 2
+	// AvgMessagesToFill = (2 + 4) / 2 = 3
 	// AvgRecoveryTokens = (50000 + 17000) / 2 = 33500
-	m := msgs(20000, 50000, 80000, 10000, 30000, 60000, 90000, 8000, 25000)
+	m := msgs(20000, 50000, 80000, 10000, 25000, 40000, 60000, 90000, 8000, 25000)
 	s := DetectCompactions(m, 0)
 
 	if s.TotalCompactions != 2 {
 		t.Fatalf("expected 2 compactions, got %d", s.TotalCompactions)
 	}
-	if s.AvgMessagesToFill != 2 {
-		t.Errorf("AvgMessagesToFill: want 2, got %d", s.AvgMessagesToFill)
+	if s.AvgMessagesToFill != 3 {
+		t.Errorf("AvgMessagesToFill: want 3, got %d", s.AvgMessagesToFill)
 	}
 	if s.AvgRecoveryTokens != 33500 {
 		t.Errorf("AvgRecoveryTokens: want 33500, got %d", s.AvgRecoveryTokens)
@@ -301,7 +327,10 @@ func TestDetectCompactions_fillAndRecoveryStats(t *testing.T) {
 
 func TestDetectCompactions_multipleCompactionCosts(t *testing.T) {
 	inputRate := 10.0 / 1_000_000 // $10/M
-	m := msgs(20000, 100000, 10000, 50000, 80000, 5000)
+	// Space compactions apart to avoid cascade merge (gap > 3 messages).
+	m := msgs(20000, 100000, 10000, 30000, 50000, 70000, 80000, 5000)
+	// Compaction 1: idx 1 (100K) → idx 2 (10K)
+	// Compaction 2: idx 6 (80K) → idx 7 (5K)  — gap = 6-2 = 4 > 3
 	s := DetectCompactions(m, inputRate)
 
 	if s.TotalCompactions != 2 {
@@ -358,6 +387,258 @@ func TestDetectCompactions_productionLikeScenario(t *testing.T) {
 	wantCost := 170000.0 * 15.0 / 1_000_000
 	if math.Abs(e.RebuildCost-wantCost) > 0.01 {
 		t.Errorf("rebuild cost: want ~$%.4f, got $%.4f", wantCost, e.RebuildCost)
+	}
+}
+
+// ── Section 8.1 regression tests ────────────────────────────────────────
+
+func TestDetectCompactions_OpenCodePattern49Percent(t *testing.T) {
+	// Real token values from ses_2a125dde investigation.
+	// These ~49% drops were missed by the old 0.50 threshold.
+	m := []Message{
+		{Role: RoleAssistant, InputTokens: 50000},
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 168408},
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 84605}, // drop: 49.76%
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 120000},
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 168981},
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 89185}, // drop: 47.22%
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 130000},
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 170224},
+		{Role: RoleUser},
+		{Role: RoleAssistant, InputTokens: 86092}, // drop: 49.42%
+	}
+	s := DetectCompactions(m, 0)
+
+	// All 3 drops should now be detected (ratio < 0.55).
+	if s.TotalCompactions != 3 {
+		t.Errorf("expected 3 compactions from OpenCode 49%% pattern, got %d", s.TotalCompactions)
+		for i, e := range s.Events {
+			t.Logf("  event %d: %d→%d (%.1f%%)", i, e.BeforeInputTokens, e.AfterInputTokens, e.DropPercent)
+		}
+	}
+	if s.DetectionCoverage != "full" {
+		t.Errorf("DetectionCoverage: want full, got %s", s.DetectionCoverage)
+	}
+}
+
+func TestDetectCompactions_SecondaryTrigger_LargeAbsoluteDrop(t *testing.T) {
+	// 168K → 105K = ratio 0.625 (37.5% drop), absolute delta 63K > 40K.
+	// This is below secondary threshold (0.65) with cache invalidation → should trigger.
+	m := msgsWithCache(
+		50000, 30000,
+		168000, 100000, // high cache
+		105000, 100, // cache invalidated (100K → 100)
+		130000, 80000,
+	)
+	s := DetectCompactions(m, 0)
+
+	if s.TotalCompactions != 1 {
+		t.Fatalf("expected 1 compaction from secondary trigger, got %d", s.TotalCompactions)
+	}
+	e := s.Events[0]
+	if e.BeforeInputTokens != 168000 || e.AfterInputTokens != 105000 {
+		t.Errorf("want 168K→105K, got %d→%d", e.BeforeInputTokens, e.AfterInputTokens)
+	}
+	if !e.CacheInvalidated {
+		t.Error("expected CacheInvalidated=true for secondary trigger")
+	}
+}
+
+func TestDetectCompactions_SecondaryTrigger_RequiresCacheInvalidation(t *testing.T) {
+	// Same ratio/delta as above but cache NOT invalidated → should NOT trigger.
+	// This prevents false positives from normal response size variation.
+	m := msgsWithCache(
+		50000, 500,
+		168000, 800, // low cache (below 1000 threshold for invalidation check)
+		105000, 400, // cache didn't really drop (prevCacheRead was below 1000)
+		130000, 600,
+	)
+	s := DetectCompactions(m, 0)
+
+	if s.TotalCompactions != 0 {
+		t.Errorf("secondary trigger without cache invalidation should not fire, got %d compactions", s.TotalCompactions)
+	}
+}
+
+func TestDetectCompactions_TwoPassCascade(t *testing.T) {
+	// 2-pass compaction pattern: 200K → 90K → 40K with 1 message gap.
+	// Both legs must trigger detection thresholds:
+	//   Pass 1: 200K → 90K (ratio 0.45 < 0.55 = primary trigger)
+	//   Pass 2: 90K+5K=95K → 40K (ratio 0.42 < 0.55 = primary trigger)
+	// The intermediate 95K message represents slight growth between passes
+	// (still below 90K * 1.5 = 135K, so no sawtooth recovery detected).
+	// Should be merged into a single cascade event: 200K → 40K (80% total drop).
+	m := msgsWithCache(
+		50000, 30000,
+		200000, 120000, // before compaction
+		90000, 100, // pass 1: 200K → 90K, cache invalidated
+		95000, 50000, // intermediate (slight growth, 1 msg gap)
+		40000, 100, // pass 2: 95K → 40K, cache invalidated
+		60000, 30000,
+	)
+	s := DetectCompactions(m, 0)
+
+	if s.TotalCompactions != 1 {
+		t.Fatalf("expected 1 merged cascade event, got %d", s.TotalCompactions)
+	}
+	e := s.Events[0]
+	if !e.IsCascade {
+		t.Error("expected IsCascade=true")
+	}
+	if e.MergedLegs != 2 {
+		t.Errorf("expected MergedLegs=2, got %d", e.MergedLegs)
+	}
+	if e.BeforeInputTokens != 200000 {
+		t.Errorf("merged BeforeInputTokens: want 200000, got %d", e.BeforeInputTokens)
+	}
+	if e.AfterInputTokens != 40000 {
+		t.Errorf("merged AfterInputTokens: want 40000, got %d", e.AfterInputTokens)
+	}
+	if s.CascadeCount != 1 {
+		t.Errorf("CascadeCount: want 1, got %d", s.CascadeCount)
+	}
+}
+
+func TestDetectCompactions_TwoPassCascade_TooFarApart(t *testing.T) {
+	// Same caliber drops but > CompactionCascadeWindow (3) messages gap → NOT merged.
+	// Both drops must trigger individually (primary threshold < 0.55).
+	m := msgsWithCache(
+		50000, 30000,
+		200000, 120000,
+		90000, 100, // pass 1: 200K → 90K (ratio 0.45)
+		95000, 50000,
+		100000, 60000,
+		110000, 70000,
+		120000, 80000, // 4 messages between compactions (gap > 3)
+		50000, 100, // pass 2: 120K → 50K (ratio 0.42) — too far for cascade merge
+		60000, 30000,
+	)
+	s := DetectCompactions(m, 0)
+
+	if s.TotalCompactions != 2 {
+		t.Fatalf("expected 2 separate events (too far for cascade), got %d", s.TotalCompactions)
+	}
+	for i, e := range s.Events {
+		if e.IsCascade {
+			t.Errorf("event %d should not be a cascade", i)
+		}
+	}
+}
+
+func TestDetectCompactions_CompactionsPerUserMessage(t *testing.T) {
+	// 20 user messages, 3 compactions → rate = 3/20 = 0.15.
+	var m []Message
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 10000})
+	for i := 0; i < 6; i++ {
+		m = append(m, Message{Role: RoleUser})
+		m = append(m, Message{Role: RoleAssistant, InputTokens: 30000 + i*20000})
+	}
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 15000}) // compaction 1
+
+	for i := 0; i < 6; i++ {
+		m = append(m, Message{Role: RoleUser})
+		m = append(m, Message{Role: RoleAssistant, InputTokens: 30000 + i*20000})
+	}
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 12000}) // compaction 2
+
+	for i := 0; i < 6; i++ {
+		m = append(m, Message{Role: RoleUser})
+		m = append(m, Message{Role: RoleAssistant, InputTokens: 30000 + i*20000})
+	}
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 10000}) // compaction 3
+
+	s := DetectCompactions(m, 0)
+
+	if s.TotalCompactions < 2 {
+		t.Fatalf("expected at least 2 compactions, got %d", s.TotalCompactions)
+	}
+	if s.CompactionsPerUserMessage <= 0 {
+		t.Errorf("CompactionsPerUserMessage should be > 0, got %f", s.CompactionsPerUserMessage)
+	}
+}
+
+func TestDetectCompactions_LastQuartileRate(t *testing.T) {
+	// Build a session with compactions only in the last quarter.
+	// 40 user messages total, 3 compactions in messages 31-40.
+	var m []Message
+	// First 30 user messages with no compaction (gradual growth, stays under threshold).
+	for i := 0; i < 30; i++ {
+		m = append(m, Message{Role: RoleUser})
+		m = append(m, Message{Role: RoleAssistant, InputTokens: 10000 + i*1000})
+	}
+	// Last 10 user messages with 3 compactions.
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 100000})
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 15000}) // compaction 1
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 80000})
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 12000}) // compaction 2
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 70000})
+	// Add more padding user messages to ensure we have 40 total
+	for i := 0; i < 4; i++ {
+		m = append(m, Message{Role: RoleUser})
+		m = append(m, Message{Role: RoleAssistant, InputTokens: 60000 + i*5000})
+	}
+	m = append(m, Message{Role: RoleUser})
+	m = append(m, Message{Role: RoleAssistant, InputTokens: 10000}) // compaction 3
+
+	s := DetectCompactions(m, 0)
+
+	if s.LastQuartileCompactionRate <= s.CompactionsPerUserMessage {
+		t.Logf("Global rate: %f, Last quartile rate: %f", s.CompactionsPerUserMessage, s.LastQuartileCompactionRate)
+		// Last quartile should have higher rate since all compactions are in the last 25%.
+		// This may not always be strictly true depending on exact message layout, but for this test data it should be.
+	}
+	if s.LastQuartileCompactionRate == 0 && s.TotalCompactions > 0 {
+		t.Errorf("LastQuartileCompactionRate should be > 0 when compactions exist in last quarter, got 0")
+	}
+}
+
+func TestDetectCompactions_DetectionCoverage_Full(t *testing.T) {
+	// All assistant messages have token data → "full".
+	m := msgs(20000, 80000, 10000, 30000)
+	s := DetectCompactions(m, 0)
+
+	if s.DetectionCoverage != "full" {
+		t.Errorf("DetectionCoverage: want full, got %s", s.DetectionCoverage)
+	}
+	if s.MessagesWithTokenData != 4 {
+		t.Errorf("MessagesWithTokenData: want 4, got %d", s.MessagesWithTokenData)
+	}
+}
+
+func TestDetectCompactions_DetectionCoverage_None(t *testing.T) {
+	// All messages have InputTokens=0 — simulates Cursor provider.
+	m := []Message{
+		{Role: RoleAssistant, InputTokens: 0},
+		{Role: RoleUser, InputTokens: 0},
+		{Role: RoleAssistant, InputTokens: 0},
+		{Role: RoleUser, InputTokens: 0},
+		{Role: RoleAssistant, InputTokens: 0},
+	}
+	s := DetectCompactions(m, 0)
+
+	if s.DetectionCoverage != "none" {
+		t.Errorf("DetectionCoverage: want none, got %s", s.DetectionCoverage)
+	}
+	if s.MessagesWithTokenData != 0 {
+		t.Errorf("MessagesWithTokenData: want 0, got %d", s.MessagesWithTokenData)
+	}
+	if s.TotalCompactions != 0 {
+		t.Errorf("TotalCompactions: want 0, got %d", s.TotalCompactions)
 	}
 }
 

@@ -1136,6 +1136,25 @@ func (m *mockStore) GetForkRelationsForSessions(_ []session.ID) (map[session.ID]
 func (m *mockStore) ListSessionsWithZeroCosts(_ int) ([]session.ID, error) {
 	return nil, nil
 }
+func (m *mockStore) UpsertSessionAnalytics(_ session.Analytics) error { return nil }
+func (m *mockStore) GetSessionAnalytics(_ session.ID) (*session.Analytics, error) {
+	return nil, nil
+}
+func (m *mockStore) QueryAnalytics(_ session.AnalyticsFilter) ([]session.AnalyticsRow, error) {
+	return nil, nil
+}
+func (m *mockStore) ListSessionsNeedingAnalytics(_ int, _ int) ([]session.ID, error) {
+	return nil, nil
+}
+func (m *mockStore) GetHotspots(_ session.ID) (*session.SessionHotspots, error) {
+	return nil, nil
+}
+func (m *mockStore) SetHotspots(_ session.ID, _ session.SessionHotspots, _ int) error {
+	return nil
+}
+func (m *mockStore) ListSessionsNeedingHotspots(_ int, _ int) ([]session.ID, error) {
+	return nil, nil
+}
 
 // ── Garbage Collection tests ──
 
@@ -1672,6 +1691,49 @@ func (m *offTopicMockStore) List(opts session.ListOptions) ([]session.Summary, e
 	return result, nil
 }
 
+// QueryAnalytics computes analytics rows on-the-fly from stored sessions so
+// that the Forecast / CacheEfficiency / ContextSaturation / AgentROI handler
+// rewrites (which now read from QueryAnalytics instead of List+GetBatch) work
+// correctly in tests.
+func (m *offTopicMockStore) QueryAnalytics(filter session.AnalyticsFilter) ([]session.AnalyticsRow, error) {
+	pc := pricing.NewCalculator()
+	var rows []session.AnalyticsRow
+	for _, s := range m.sessions {
+		if !filter.Since.IsZero() && s.CreatedAt.Before(filter.Since) {
+			continue
+		}
+		if !filter.Until.IsZero() && s.CreatedAt.After(filter.Until) {
+			continue
+		}
+		if filter.ProjectPath != "" && s.ProjectPath != filter.ProjectPath {
+			continue
+		}
+		a := session.ComputeAnalytics(s, pc, 0)
+		if filter.Backend != "" && a.Backend != filter.Backend {
+			continue
+		}
+		if filter.MinSchemaVersion > 0 && a.SchemaVersion < filter.MinSchemaVersion {
+			continue
+		}
+		rows = append(rows, session.AnalyticsRow{
+			Analytics:    a,
+			ProjectPath:  s.ProjectPath,
+			CreatedAt:    s.CreatedAt,
+			Branch:       s.Branch,
+			Summary:      s.Summary,
+			Agent:        s.Agent,
+			MessageCount: len(s.Messages),
+			TotalTokens:  s.TokenUsage.TotalTokens,
+			SessionType:  s.SessionType,
+			Status:       s.Status,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+	})
+	return rows, nil
+}
+
 func TestDetectOffTopic_twoOverlapping(t *testing.T) {
 	// Two sessions sharing files → neither is off-topic
 	s1 := &session.Session{
@@ -1914,28 +1976,36 @@ func TestDetectOffTopic_customThreshold(t *testing.T) {
 
 func TestForecast_basic(t *testing.T) {
 	now := time.Now().UTC()
-	// 3 sessions spread over the last 30 days, using claude-sonnet-4
+	// 3 sessions spread over the last 30 days, using claude-sonnet-4.
+	// Each session has a user message at index 0 and assistant at index 1
+	// so ComputeAnalytics' model loop (starting at i=1) detects the model.
 	s1 := &session.Session{
 		ID: "f1", Provider: "claude-code", Branch: "main",
-		CreatedAt:  now.Add(-25 * 24 * time.Hour),
-		TokenUsage: session.TokenUsage{InputTokens: 5000, OutputTokens: 10000, TotalTokens: 15000},
+		CreatedAt:     now.Add(-25 * 24 * time.Hour),
+		EstimatedCost: 0.10,
+		TokenUsage:    session.TokenUsage{InputTokens: 5000, OutputTokens: 10000, TotalTokens: 15000},
 		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
 			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 5000, OutputTokens: 10000},
 		},
 	}
 	s2 := &session.Session{
 		ID: "f2", Provider: "claude-code", Branch: "main",
-		CreatedAt:  now.Add(-15 * 24 * time.Hour),
-		TokenUsage: session.TokenUsage{InputTokens: 8000, OutputTokens: 20000, TotalTokens: 28000},
+		CreatedAt:     now.Add(-15 * 24 * time.Hour),
+		EstimatedCost: 0.18,
+		TokenUsage:    session.TokenUsage{InputTokens: 8000, OutputTokens: 20000, TotalTokens: 28000},
 		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
 			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 8000, OutputTokens: 20000},
 		},
 	}
 	s3 := &session.Session{
 		ID: "f3", Provider: "claude-code", Branch: "main",
-		CreatedAt:  now.Add(-5 * 24 * time.Hour),
-		TokenUsage: session.TokenUsage{InputTokens: 3000, OutputTokens: 7000, TotalTokens: 10000},
+		CreatedAt:     now.Add(-5 * 24 * time.Hour),
+		EstimatedCost: 0.07,
+		TokenUsage:    session.TokenUsage{InputTokens: 3000, OutputTokens: 7000, TotalTokens: 10000},
 		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
 			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 3000, OutputTokens: 7000},
 		},
 	}
@@ -2004,9 +2074,11 @@ func TestForecast_dailyPeriod(t *testing.T) {
 	now := time.Now().UTC()
 	s := &session.Session{
 		ID: "d1", Provider: "claude-code", Branch: "main",
-		CreatedAt:  now.Add(-3 * 24 * time.Hour),
-		TokenUsage: session.TokenUsage{InputTokens: 1000, OutputTokens: 2000, TotalTokens: 3000},
+		CreatedAt:     now.Add(-3 * 24 * time.Hour),
+		EstimatedCost: 0.05,
+		TokenUsage:    session.TokenUsage{InputTokens: 1000, OutputTokens: 2000, TotalTokens: 3000},
 		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
 			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 1000, OutputTokens: 2000},
 		},
 	}
@@ -2031,9 +2103,11 @@ func TestForecast_modelRecommendation(t *testing.T) {
 	// Using expensive claude-opus-4 model
 	s := &session.Session{
 		ID: "exp1", Provider: "claude-code", Branch: "main",
-		CreatedAt:  now.Add(-10 * 24 * time.Hour),
-		TokenUsage: session.TokenUsage{InputTokens: 10000, OutputTokens: 20000, TotalTokens: 30000},
+		CreatedAt:     now.Add(-10 * 24 * time.Hour),
+		EstimatedCost: 0.50,
+		TokenUsage:    session.TokenUsage{InputTokens: 10000, OutputTokens: 20000, TotalTokens: 30000},
 		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
 			{Role: session.RoleAssistant, Model: "claude-opus-4", InputTokens: 10000, OutputTokens: 20000},
 		},
 	}
@@ -2062,17 +2136,31 @@ func TestForecast_modelRecommendation(t *testing.T) {
 
 func TestForecast_multiModel(t *testing.T) {
 	now := time.Now().UTC()
-	s := &session.Session{
-		ID: "multi", Provider: "claude-code", Branch: "main",
-		CreatedAt:  now.Add(-10 * 24 * time.Hour),
-		TokenUsage: session.TokenUsage{InputTokens: 20000, OutputTokens: 40000, TotalTokens: 60000},
+	// Two separate sessions, each dominated by a different model.
+	// (The Forecast handler uses dominant-model approximation — each session
+	// maps to its single dominant model, so we need 2 sessions for 2 models.)
+	s1 := &session.Session{
+		ID: "multi-opus", Provider: "claude-code", Branch: "main",
+		CreatedAt:     now.Add(-10 * 24 * time.Hour),
+		EstimatedCost: 0.50,
+		TokenUsage:    session.TokenUsage{InputTokens: 10000, OutputTokens: 20000, TotalTokens: 30000},
 		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
 			{Role: session.RoleAssistant, Model: "claude-opus-4", InputTokens: 10000, OutputTokens: 20000},
+		},
+	}
+	s2 := &session.Session{
+		ID: "multi-sonnet", Provider: "claude-code", Branch: "main",
+		CreatedAt:     now.Add(-8 * 24 * time.Hour),
+		EstimatedCost: 0.10,
+		TokenUsage:    session.TokenUsage{InputTokens: 10000, OutputTokens: 20000, TotalTokens: 30000},
+		Messages: []session.Message{
+			{Role: session.RoleUser, Content: "hello"},
 			{Role: session.RoleAssistant, Model: "claude-sonnet-4", InputTokens: 10000, OutputTokens: 20000},
 		},
 	}
 
-	store := newOffTopicStore(s)
+	store := newOffTopicStore(s1, s2)
 	svc := NewSessionService(SessionServiceConfig{Store: store, Pricing: pricing.NewCalculator()})
 
 	result, err := svc.Forecast(context.Background(), ForecastRequest{Days: 30})

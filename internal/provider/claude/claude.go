@@ -93,6 +93,63 @@ func (p *Provider) Detect(projectPath string, branch string) ([]session.Summary,
 	return matches, nil
 }
 
+// SessionFreshness returns the message count and last-updated timestamp
+// for a Claude Code session, enabling the skip-if-unchanged optimization.
+// Uses the JSONL file's modification time and counts message lines.
+// Implements provider.FreshnessChecker.
+func (p *Provider) SessionFreshness(sessionID session.ID) (*provider.Freshness, error) {
+	jsonlPath, err := p.findSessionFile(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(jsonlPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat session file: %w", err)
+	}
+
+	// Count message lines (user/assistant) — skip summary/metadata lines.
+	msgCount, err := countJSONLMessages(jsonlPath)
+	if err != nil {
+		return nil, fmt.Errorf("counting messages: %w", err)
+	}
+
+	return &provider.Freshness{
+		MessageCount: msgCount,
+		UpdatedAt:    info.ModTime().UnixMilli(),
+	}, nil
+}
+
+// countJSONLMessages counts lines in a JSONL file that represent actual
+// messages (type "user" or "assistant"). This is a fast scan that only
+// unmarshals the "type" field, not the full message content.
+func countJSONLMessages(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	var count int
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+		// Fast path: only unmarshal the type field.
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+			continue
+		}
+		if header.Type == "user" || header.Type == "assistant" {
+			count++
+		}
+	}
+
+	return count, scanner.Err()
+}
+
 // Export reads a session JSONL file and converts it to the unified Session model.
 func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error) {
 	// Find the JSONL file for this session
@@ -106,7 +163,18 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		return nil, fmt.Errorf("reading session file: %w", err)
 	}
 
-	return parseSession(sessionID, lines, mode)
+	sess, err := parseSession(sessionID, lines, mode)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set SourceUpdatedAt from JSONL file modification time so that the
+	// skip-if-unchanged optimization can compare stored vs source timestamps.
+	if info, statErr := os.Stat(jsonlPath); statErr == nil {
+		sess.SourceUpdatedAt = info.ModTime().UnixMilli()
+	}
+
+	return sess, nil
 }
 
 // CanImport reports that Claude Code supports session import.
@@ -182,7 +250,7 @@ func MarshalJSONL(sess *session.Session) ([]byte, error) {
 		lines = append(lines, string(data))
 	}
 
-	for i, msg := range sess.Messages {
+	for _, msg := range sess.Messages {
 		msgUUID := msg.ID
 		if msgUUID == "" {
 			msgUUID = uuid.New().String()
@@ -338,7 +406,6 @@ func MarshalJSONL(sess *session.Session) ([]byte, error) {
 			prevUUID = resultUUID
 		}
 
-		_ = i // used in original for fallback uuid generation
 	}
 
 	result := strings.Join(lines, "\n") + "\n"

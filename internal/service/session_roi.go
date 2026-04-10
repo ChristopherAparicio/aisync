@@ -11,12 +11,16 @@ import (
 )
 
 // AgentROIAnalysis computes per-agent ROI metrics for a project.
+//
+// Reads from the materialized session_analytics table (CQRS read model)
+// instead of loading all sessions. The per-agent saturation is computed
+// inline from PeakSaturationPct — no recursive ContextSaturation() call.
 func (s *SessionService) AgentROIAnalysis(ctx context.Context, projectPath string, since time.Time) (*session.AgentROI, error) {
-	listOpts := session.ListOptions{All: true}
-	if !since.IsZero() {
-		listOpts.Since = since
-	}
-	summaries, err := s.store.List(listOpts)
+	rows, err := s.store.QueryAnalytics(session.AnalyticsFilter{
+		ProjectPath:      projectPath,
+		Since:            since,
+		MinSchemaVersion: session.AnalyticsSchemaVersion,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -33,12 +37,8 @@ func (s *SessionService) AgentROIAnalysis(ctx context.Context, projectPath strin
 	}
 	byAgent := make(map[string]*agentAcc)
 
-	for _, sm := range summaries {
-		if projectPath != "" && sm.ProjectPath != projectPath {
-			continue
-		}
-
-		agent := sm.Agent
+	for _, ar := range rows {
+		agent := ar.Agent
 		if agent == "" {
 			agent = "unknown"
 		}
@@ -48,31 +48,20 @@ func (s *SessionService) AgentROIAnalysis(ctx context.Context, projectPath strin
 			byAgent[agent] = acc
 		}
 		acc.sessions++
-		acc.messages += sm.MessageCount
-		acc.tokens += sm.TotalTokens
-		acc.toolCalls += sm.ToolCallCount
-		acc.errors += sm.ErrorCount
+		acc.messages += ar.MessageCount
+		acc.tokens += ar.TotalTokens
+		acc.toolCalls += ar.ToolCallCount
+		acc.errors += ar.ErrorCount
 
-		// Completion detection from status or summary prefix.
-		if sm.Status == "completed" || sm.Status == "review" {
+		// Completion detection from status.
+		if ar.Status == "completed" || ar.Status == "review" {
 			acc.completed++
 		}
-	}
 
-	// Optional: compute per-agent saturation (lightweight — use session-level peak).
-	// We reuse the same data from ContextSaturation to avoid double loading.
-	satResult, satErr := s.ContextSaturation(ctx, projectPath, since)
-	agentSaturation := make(map[string][]float64) // agent → list of peak %
-	if satErr == nil && satResult != nil {
-		for _, ws := range satResult.WorstSessions {
-			// We don't have agent on SessionSaturation, so skip for now.
-			_ = ws
-		}
-		// Use model average as fallback.
-		for agent, acc := range byAgent {
-			if acc.sessions > 0 {
-				agentSaturation[agent] = append(agentSaturation[agent], satResult.AvgPeakSaturation)
-			}
+		// Per-agent saturation from pre-computed PeakSaturationPct.
+		if ar.PeakSaturationPct > 0 {
+			acc.satPeakSum += ar.PeakSaturationPct
+			acc.satCount++
 		}
 	}
 
@@ -104,13 +93,9 @@ func (s *SessionService) AgentROIAnalysis(ctx context.Context, projectPath strin
 			entry.ErrorRate = float64(acc.errors) / float64(acc.toolCalls) * 100
 		}
 
-		// Saturation average for this agent.
-		if peaks, ok := agentSaturation[agent]; ok && len(peaks) > 0 {
-			var sum float64
-			for _, p := range peaks {
-				sum += p
-			}
-			entry.AvgPeakSaturation = sum / float64(len(peaks))
+		// Saturation average for this agent (computed inline, no recursive call).
+		if acc.satCount > 0 {
+			entry.AvgPeakSaturation = acc.satPeakSum / float64(acc.satCount)
 		}
 
 		// Composite ROI score (0-100).

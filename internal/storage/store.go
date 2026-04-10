@@ -153,6 +153,64 @@ type SessionWriter interface {
 	// ListSessionsWithZeroCosts returns session IDs that have estimated_cost = 0.
 	// Used by the cost backfill task to find sessions needing cost computation.
 	ListSessionsWithZeroCosts(limit int) ([]session.ID, error)
+
+	// ── Materialized analytics (CQRS read model) ───────────────────
+	//
+	// The three methods below persist and query the session_analytics table
+	// (migration 031), which is the materialized read model that replaces the
+	// old stats_cache / dashboard_warm_task layer. Analytics are computed once
+	// per session by session.ComputeAnalytics() and stamped via the
+	// service-layer stampAnalytics() hook in the same write path as Save() —
+	// see the UpdateCosts + cost_backfill_task precedent above for the same
+	// pattern applied to cost columns.
+	//
+	// Hot-path handlers (Forecast, CacheEfficiency, ContextSaturation,
+	// AgentROIAnalysis) read rows via QueryAnalytics() and aggregate them in
+	// memory, turning a ~12-14s cold path into a ~50-100ms indexed scan.
+	// When a handler hits a session whose row is missing or stale (older
+	// schema version), it falls back to session.ComputeAnalytics() on the
+	// live session payload; the AnalyticsBackfillTask then upserts the fresh
+	// row on the next cron tick so the fallback is self-healing.
+
+	// UpsertSessionAnalytics stores or replaces the materialized analytics
+	// row for a session, including its sibling session_agent_usage rows.
+	// The entire operation runs in a single transaction: the parent row in
+	// session_analytics is upserted, all existing session_agent_usage rows
+	// for the session are deleted, and the AgentUsage slice from the payload
+	// is inserted fresh. This guarantees the per-agent rollup is always
+	// consistent with the parent row and never partially updated.
+	//
+	// Called from the service-layer stampAnalytics() hook, the cost backfill
+	// task, and the new AnalyticsBackfillTask.
+	UpsertSessionAnalytics(a session.Analytics) error
+
+	// GetSessionAnalytics retrieves the materialized analytics for a single
+	// session, with its AgentUsage slice hydrated from session_agent_usage.
+	// Returns (nil, nil) — not an error — when no row exists for the session;
+	// callers (typically the hot-path handlers) interpret this as "not yet
+	// computed" and fall back to session.ComputeAnalytics() on the live
+	// payload. This is the intentional CQRS safety net: readers never fail
+	// just because the write model hasn't caught up.
+	GetSessionAnalytics(id session.ID) (*session.Analytics, error)
+
+	// QueryAnalytics returns all analytics rows matching the filter, joined
+	// with the parent sessions table to populate AnalyticsRow.ProjectPath,
+	// CreatedAt, and Branch in a single query. AgentUsage is NOT hydrated
+	// by this call — the hot paths that use QueryAnalytics aggregate at the
+	// parent-row level and read per-agent rollups separately when needed.
+	//
+	// Results are ordered by sessions.created_at DESC. When filter.Since or
+	// filter.Until are zero, the corresponding bound is omitted. When
+	// filter.MinSchemaVersion is zero, rows of any schema version are
+	// returned (the backfill task relies on this to find stale rows).
+	QueryAnalytics(filter session.AnalyticsFilter) ([]session.AnalyticsRow, error)
+
+	// ListSessionsNeedingAnalytics returns session IDs that either have no row
+	// in session_analytics at all, or have a row with schema_version < the
+	// provided minSchemaVersion. Used by the analytics backfill task to find
+	// sessions needing (re)computation. Results are ordered by created_at DESC
+	// so that the most recent sessions are processed first.
+	ListSessionsNeedingAnalytics(minSchemaVersion int, limit int) ([]session.ID, error)
 }
 
 // LinkStore manages associations between sessions and git objects (branches, commits, PRs)
@@ -448,6 +506,24 @@ type RecommendationStore interface {
 	DeleteRecommendationsByProject(projectPath string) (int, error)
 }
 
+// HotspotStore persists pre-computed session hot-spots (Section 8.3).
+// Hot-spots are computed by the nightly HotspotsTask and read by the
+// session detail "Hot Spots" tab and investigation API.
+type HotspotStore interface {
+	// GetHotspots retrieves pre-computed hot-spots for a session.
+	// Returns (nil, nil) when no row exists (not yet computed).
+	GetHotspots(id session.ID) (*session.SessionHotspots, error)
+
+	// SetHotspots persists hot-spots for a session (upsert).
+	// The payload is compressed (gzip) before storage.
+	SetHotspots(id session.ID, h session.SessionHotspots, schemaVersion int) error
+
+	// ListSessionsNeedingHotspots returns session IDs that either have no
+	// row in session_hotspots or have schema_version < minSchemaVersion.
+	// Results are ordered by created_at DESC. Used by the backfill task.
+	ListSessionsNeedingHotspots(minSchemaVersion int, limit int) ([]session.ID, error)
+}
+
 // ── Composed Interface ──
 
 // Store composes all role interfaces into a single persistence contract.
@@ -470,6 +546,7 @@ type Store interface {
 	RegistryStore
 	PullRequestStore
 	RecommendationStore
+	HotspotStore
 
 	// Close releases any resources held by the store.
 	Close() error

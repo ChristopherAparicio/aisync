@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ChristopherAparicio/aisync/internal/session"
 
@@ -228,6 +229,87 @@ func (r *dbReader) loadParts(messageID string) ([]ocPart, error) {
 		parts = append(parts, part)
 	}
 	return parts, rows.Err()
+}
+
+// loadMessagesFrom returns messages starting at the given offset (0-based).
+// This enables incremental captures by reading only new messages.
+func (r *dbReader) loadMessagesFrom(sessionID string, offset int) ([]ocMessage, error) {
+	rows, err := r.db.Query(
+		`SELECT id, data FROM message
+		 WHERE session_id = ?
+		 ORDER BY time_created ASC
+		 LIMIT -1 OFFSET ?`,
+		sessionID, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying messages from offset %d: %w", offset, err)
+	}
+	defer rows.Close()
+
+	var messages []ocMessage
+	for rows.Next() {
+		var (
+			id      string
+			dataStr string
+		)
+		if err := rows.Scan(&id, &dataStr); err != nil {
+			continue
+		}
+
+		var msg ocMessage
+		if err := json.Unmarshal([]byte(dataStr), &msg); err != nil {
+			continue
+		}
+		msg.ID = id
+		messages = append(messages, msg)
+	}
+	return messages, rows.Err()
+}
+
+// loadPartsForMessages loads parts for a specific set of message IDs.
+// Used by incremental export to avoid loading parts for already-captured messages.
+func (r *dbReader) loadPartsForMessages(messageIDs []string) (map[string][]ocPart, error) {
+	if len(messageIDs) == 0 {
+		return make(map[string][]ocPart), nil
+	}
+
+	// Build IN clause with placeholders.
+	placeholders := make([]string, len(messageIDs))
+	args := make([]interface{}, len(messageIDs))
+	for i, id := range messageIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(
+		`SELECT id, message_id, session_id, data FROM part
+		 WHERE message_id IN (%s)
+		 ORDER BY message_id, time_created ASC`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying parts for messages: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]ocPart)
+	for rows.Next() {
+		var id, msgID, sessID, dataStr string
+		if err := rows.Scan(&id, &msgID, &sessID, &dataStr); err != nil {
+			continue
+		}
+		var part ocPart
+		if err := json.Unmarshal([]byte(dataStr), &part); err != nil {
+			continue
+		}
+		part.ID = id
+		part.SessionID = sessID
+		part.MessageID = msgID
+		result[msgID] = append(result[msgID], part)
+	}
+	return result, rows.Err()
 }
 
 func (r *dbReader) countMessages(sessionID string) int {

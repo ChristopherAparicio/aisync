@@ -1,0 +1,91 @@
+{{define "command_patterns.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}aisync — Command Patterns{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4AC;</span> Sessions</a></li>
+      <li><a href="/usage" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4CA;</span> Usage</a></li>
+      <li><a href="/costs" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4B0;</span> Costs</a></li>
+    </ul>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-title">Investigate</div>
+    <ul class="sidebar-nav">
+      <li><a href="/investigate/command-patterns" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x1F50D;</span> Command Patterns</a></li>
+    </ul>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-title">Filters</div>
+    <form method="GET" action="/investigate/command-patterns" class="sidebar-form">
+      <label class="sidebar-label">Min Length
+        <input type="number" name="min_length" value="{{.MinLength}}" class="sidebar-input" min="10" max="1000" style="width:80px;">
+      </label>
+      <label class="sidebar-label">Min Count
+        <input type="number" name="min_count" value="{{.MinCount}}" class="sidebar-input" min="2" max="100" style="width:80px;">
+      </label>
+      <button type="submit" class="btn btn-sm btn-primary" style="margin-top:0.5rem;">Apply</button>
+    </form>
+  </div>
+</aside>
+{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <h1>&#x1F50D; Repeated Command Patterns</h1>
+  <p class="text-muted">
+    Normalized commands with {{.MinCount}}+ occurrences and {{.MinLength}}+ character length, across the last 90 days.
+    {{.Total}} patterns found.
+  </p>
+</div>
+
+{{if .Patterns}}
+<div class="section">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="max-width:400px;">Normalized Pattern</th>
+          <th class="text-right">Runs</th>
+          <th class="text-right">Sessions</th>
+          <th class="text-right">Projects</th>
+          <th class="text-right">Avg Len</th>
+          <th class="text-right">Max Len</th>
+          <th class="text-right">Total Chars</th>
+          <th class="text-right">Total Output</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Patterns}}
+        <tr>
+          <td class="font-mono" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{.Normalized}}">{{.Normalized}}</td>
+          <td class="text-right">{{.Occurrences}}</td>
+          <td class="text-right">{{.SessionCount}}</td>
+          <td class="text-right">{{.ProjectCount}}</td>
+          <td class="text-right text-muted">{{.AvgLength}}</td>
+          <td class="text-right text-muted">{{.MaxLength}}</td>
+          <td class="text-right font-mono">{{.TotalChars}}</td>
+          <td class="text-right font-mono">{{.TotalOutput}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{else}}
+<div class="section">
+  <div class="empty-state">
+    <p>No repeated command patterns found matching the current filters.</p>
+    <p class="text-muted">Try lowering the minimum length or count thresholds.</p>
+  </div>
+</div>
+{{end}}
+{{end}}

@@ -19,6 +19,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
 	"github.com/ChristopherAparicio/aisync/internal/benchmark"
 	"github.com/ChristopherAparicio/aisync/internal/config"
+	"github.com/ChristopherAparicio/aisync/internal/diagnostic"
 	"github.com/ChristopherAparicio/aisync/internal/gittree"
 	"github.com/ChristopherAparicio/aisync/internal/registry"
 	"github.com/ChristopherAparicio/aisync/internal/service"
@@ -27,18 +28,16 @@ import (
 )
 
 // Cache TTLs for dashboard statistics.
+// NOTE: forecastCacheTTL, saturationCacheTTL, cacheEfficiencyCTTL, agentROICacheTTL
+// were removed — those handlers now read from pre-computed session_analytics rows.
 const (
-	statsCacheTTL       = 2 * time.Minute
-	forecastCacheTTL    = 5 * time.Minute
-	saturationCacheTTL  = 2 * time.Hour
-	cacheEfficiencyCTTL = 2 * time.Hour
-	costPageCacheTTL    = 60 * time.Second
-	trendsCacheTTL      = 5 * time.Minute
-	sidebarCacheTTL     = 2 * time.Minute
-	agentROICacheTTL    = 2 * time.Hour
-	skillROICacheTTL    = 2 * time.Hour
-	securityCacheTTL    = 2 * time.Hour
-	fileCacheTTL        = 60 * time.Second
+	statsCacheTTL    = 2 * time.Minute
+	costPageCacheTTL = 60 * time.Second
+	trendsCacheTTL   = 5 * time.Minute
+	sidebarCacheTTL  = 2 * time.Minute
+	skillROICacheTTL = 2 * time.Hour
+	securityCacheTTL = 2 * time.Hour
+	fileCacheTTL     = 60 * time.Second
 )
 
 // cachedStats returns Stats from cache if fresh, otherwise computes and caches.
@@ -71,99 +70,12 @@ func (s *Server) cachedStats(req service.StatsRequest) (*service.StatsResult, er
 	return result, nil
 }
 
-// cachedForecast returns Forecast from cache if fresh, otherwise computes and caches.
-func (s *Server) cachedForecast(ctx context.Context, req service.ForecastRequest) (*session.ForecastResult, error) {
-	cacheKey := "forecast:" + req.ProjectPath + ":" + req.Period
-
-	// 1. Try cache
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, forecastCacheTTL); data != nil {
-			var result session.ForecastResult
-			if err := json.Unmarshal(data, &result); err == nil {
-				return &result, nil
-			}
-		}
-	}
-
-	// 2. Compute
-	result, err := s.sessionSvc.Forecast(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Cache
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return result, nil
-}
-
-// cachedSaturation returns ContextSaturation from cache if fresh, otherwise computes and caches.
-// The background SaturationTask pre-warms this cache every 2 hours, so most requests
-// are instant cache hits. On first startup (cold cache), the handler computes on demand.
-func (s *Server) cachedSaturation(ctx context.Context, project string, since time.Time) (*session.ContextSaturation, error) {
-	cacheKey := "saturation:" + project
-
-	// 1. Try cache.
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, saturationCacheTTL); data != nil {
-			var result session.ContextSaturation
-			if err := json.Unmarshal(data, &result); err == nil {
-				return &result, nil
-			}
-		}
-	}
-
-	// 2. Compute (cold cache fallback).
-	result, err := s.sessionSvc.ContextSaturation(ctx, project, since)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Cache for next request.
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return result, nil
-}
-
-// cachedCacheEfficiency returns CacheEfficiency from cache if fresh, otherwise computes on demand.
-// The background CacheEfficiencyTask pre-warms this cache every 2 hours for both 7d and 90d windows.
-// sinceLabel is "7d" or "90d" to select the correct cache key.
-func (s *Server) cachedCacheEfficiency(ctx context.Context, project string, since time.Time, sinceLabel string) (*session.CacheEfficiency, error) {
-	cacheKey := "cacheeff:" + sinceLabel + ":" + project
-
-	// 1. Try cache.
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, cacheEfficiencyCTTL); data != nil {
-			var result session.CacheEfficiency
-			if err := json.Unmarshal(data, &result); err == nil {
-				return &result, nil
-			}
-		}
-	}
-
-	// 2. Compute (cold cache fallback).
-	result, err := s.sessionSvc.CacheEfficiency(ctx, project, since)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Cache for next request.
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return result, nil
-}
+// NOTE: cachedForecast, cachedSaturation, cachedCacheEfficiency, cachedAgentROI
+// were removed as part of Phase 4 CQRS migration. These four hot-path handlers
+// now read from pre-computed session_analytics rows (50-100ms) and no longer
+// need a JSON cache layer. Callers invoke s.sessionSvc.Forecast(),
+// s.sessionSvc.ContextSaturation(), s.sessionSvc.CacheEfficiency(),
+// s.sessionSvc.AgentROIAnalysis() directly.
 
 // cachedTrends returns Trends from cache if fresh, otherwise computes and caches.
 // Trends compare current vs previous period and are moderately expensive (2 full scans).
@@ -281,35 +193,6 @@ func (s *Server) cachedFilesForProject(projectPath, dirPrefix string, limit int)
 		}
 	}
 	return entries, nil
-}
-
-// cachedAgentROI returns AgentROI from cache if fresh, otherwise computes and caches.
-// AgentROI is very expensive: it loads all session payloads to compute context saturation.
-// The scheduler should pre-warm this cache periodically.
-func (s *Server) cachedAgentROI(ctx context.Context, projectPath string, since time.Time) (*session.AgentROI, error) {
-	cacheKey := "agent_roi:" + projectPath
-
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, agentROICacheTTL); data != nil {
-			var result session.AgentROI
-			if err := json.Unmarshal(data, &result); err == nil {
-				return &result, nil
-			}
-		}
-	}
-
-	result, err := s.sessionSvc.AgentROIAnalysis(ctx, projectPath, since)
-	if err != nil {
-		return nil, err
-	}
-
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return result, nil
 }
 
 // cachedSkillROI returns SkillROI from cache if fresh, otherwise computes and caches.
@@ -790,7 +673,7 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		forecast, fErr := s.cachedForecast(ctx, service.ForecastRequest{
+		forecast, fErr := s.sessionSvc.Forecast(ctx, service.ForecastRequest{
 			Period: "weekly",
 			Days:   90,
 		})
@@ -818,7 +701,7 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 	go func() {
 		defer wg.Done()
 		since7d := time.Now().AddDate(0, 0, -7)
-		cacheEff, cacheErr := s.cachedCacheEfficiency(ctx, project, since7d, "7d")
+		cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(ctx, project, since7d)
 		if cacheErr != nil || cacheEff == nil || cacheEff.TotalInputTokens == 0 {
 			return
 		}
@@ -1488,6 +1371,11 @@ type sessionDetailPage struct {
 	CompactionRebuildCost string // formatted "$0.68"
 	CompactionAvgDrop     string // "92%"
 	CompactionEvents      []compactionEventView
+	// Section 8.1: enhanced compaction metrics.
+	CompactionRate            string // compactions per user message, e.g. "0.15"
+	CompactionLastQuartile    string // last-quartile rate, e.g. "0.30"
+	CompactionCascadeCount    int    // number of multi-pass cascade events
+	CompactionDetectionStatus string // "full", "partial", "none" — data coverage indicator
 
 	// Cache miss timeline: breaks exceeding the 5-minute cache TTL.
 	HasCacheMisses        bool
@@ -1495,6 +1383,17 @@ type sessionDetailPage struct {
 	CacheMissWastedTokens string // formatted "20K"
 	CacheMissLongestGap   int    // minutes
 	CacheMissEvents       []cacheMissEventView
+
+	// Section 8.2: Top commands by output size.
+	HasCommandOutput     bool
+	TopCommandsByOutput  []commandOutputEntry
+	TotalCommandOutput   string // formatted total output bytes across all commands
+	TotalCommandOutBytes int    // raw total for sorting
+
+	// Section 8.3: Investigation hot-spots.
+	HasHotspots         bool
+	Hotspots            *hotspotView
+	HotspotsPrecomputed bool // true if loaded from cache, false if computed on demand
 
 	// Message pagination: only first PageSize messages are rendered initially.
 	// The rest are loaded via HTMX "Load More".
@@ -1529,6 +1428,68 @@ type compactionEventView struct {
 	TokensLost  string // formatted "45K"
 	DropPercent string // "92%"
 	CacheReset  bool   // true if cache was invalidated
+	IsCascade   bool   // true if this is a merged multi-pass cascade event
+	MergedLegs  int    // number of legs merged (0 if not a cascade)
+}
+
+// hotspotView is a template-friendly view of pre-computed investigation hot-spots (Section 8.3).
+type hotspotView struct {
+	// Command hot-spots.
+	TopByOutput []commandHotspotView
+	TopByReuse  []commandHotspotView
+	TotalCmds   int
+	UniqueCmds  int
+	ErrorCount  int
+	TotalOutput string // formatted bytes
+
+	// Skill footprints.
+	HasSkills bool
+	Skills    []skillFootprintView
+
+	// Expensive messages.
+	ExpensiveMessages []expensiveMessageView
+
+	// Compaction summary (already shown elsewhere, included for completeness).
+	CompactionCount int
+	TotalTokensLost string
+}
+
+// commandHotspotView is a template-friendly view of a single command hot-spot.
+type commandHotspotView struct {
+	BaseCommand string
+	Invocations int
+	TotalOutput string // formatted bytes
+	AvgOutput   string // formatted bytes
+	ErrorCount  int
+	TokenImpact string // formatted tokens
+}
+
+// skillFootprintView is a template-friendly view of a skill's context cost.
+type skillFootprintView struct {
+	Name            string
+	LoadCount       int
+	TotalBytes      string // formatted
+	EstimatedTokens string // formatted
+}
+
+// expensiveMessageView is a template-friendly view of an expensive message.
+type expensiveMessageView struct {
+	Index        int    // 1-based for display
+	Role         string // "user", "assistant"
+	InputTokens  string // formatted
+	OutputTokens string // formatted
+	TotalTokens  string // formatted
+	Model        string
+}
+
+// commandOutputEntry is a template-friendly view of a command's output footprint (Section 8.2).
+type commandOutputEntry struct {
+	BaseCommand string // e.g. "go", "npm", "git"
+	Invocations int    // how many times this command was run
+	TotalOutput string // formatted total output bytes (e.g. "1.2M")
+	TotalBytes  int    // raw bytes for sorting
+	AvgOutput   string // formatted average output per invocation
+	TokenImpact string // formatted estimated tokens (bytes/4)
 }
 
 // fileChangeView is a template-friendly view of a file operation.
@@ -1536,6 +1497,65 @@ type fileChangeView struct {
 	FilePath   string
 	ChangeType string // created, modified, read, deleted
 	ToolName   string // e.g. "Write", "Edit", "Bash"
+}
+
+// buildHotspotView converts a SessionHotspots into a template-friendly hotspotView.
+func buildHotspotView(h *session.SessionHotspots) *hotspotView {
+	v := &hotspotView{
+		TotalCmds:       h.TotalCommands,
+		UniqueCmds:      h.UniqueCommands,
+		ErrorCount:      h.CommandErrorCount,
+		TotalOutput:     formatBytes(h.TotalOutputBytes),
+		CompactionCount: h.CompactionCount,
+		TotalTokensLost: formatTokens(h.TotalTokensLost),
+	}
+
+	for _, c := range h.TopCommandsByOutput {
+		v.TopByOutput = append(v.TopByOutput, commandHotspotView{
+			BaseCommand: c.BaseCommand,
+			Invocations: c.Invocations,
+			TotalOutput: formatBytes(c.TotalOutput),
+			AvgOutput:   formatBytes(c.AvgOutput),
+			ErrorCount:  c.ErrorCount,
+			TokenImpact: formatTokens(c.TokenImpact),
+		})
+	}
+
+	for _, c := range h.TopCommandsByReuse {
+		v.TopByReuse = append(v.TopByReuse, commandHotspotView{
+			BaseCommand: c.BaseCommand,
+			Invocations: c.Invocations,
+			TotalOutput: formatBytes(c.TotalOutput),
+			AvgOutput:   formatBytes(c.AvgOutput),
+			ErrorCount:  c.ErrorCount,
+			TokenImpact: formatTokens(c.TokenImpact),
+		})
+	}
+
+	if len(h.SkillFootprints) > 0 {
+		v.HasSkills = true
+		for _, sf := range h.SkillFootprints {
+			v.Skills = append(v.Skills, skillFootprintView{
+				Name:            sf.Name,
+				LoadCount:       sf.LoadCount,
+				TotalBytes:      formatBytes(sf.TotalBytes),
+				EstimatedTokens: formatTokens(sf.EstimatedTokens),
+			})
+		}
+	}
+
+	for _, em := range h.ExpensiveMessages {
+		v.ExpensiveMessages = append(v.ExpensiveMessages, expensiveMessageView{
+			Index:        em.Index + 1, // 1-based for display
+			Role:         string(em.Role),
+			InputTokens:  formatTokens(em.InputTokens),
+			OutputTokens: formatTokens(em.OutputTokens),
+			TotalTokens:  formatTokens(em.TotalTokens),
+			Model:        em.Model,
+		})
+	}
+
+	return v
 }
 
 // objectiveView is a template-friendly view of a session's work objective.
@@ -1759,12 +1779,20 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		inputRate = estimate.TotalCost.InputCost / float64(sess.TokenUsage.InputTokens)
 	}
 	compSummary := session.DetectCompactions(sess.Messages, inputRate)
+	data.CompactionDetectionStatus = compSummary.DetectionCoverage
 	if compSummary.TotalCompactions > 0 {
 		data.HasCompactions = true
 		data.CompactionCount = compSummary.TotalCompactions
 		data.CompactionTokensLost = formatTokens(compSummary.TotalTokensLost)
 		data.CompactionRebuildCost = fmt.Sprintf("$%.2f", compSummary.TotalRebuildCost)
 		data.CompactionAvgDrop = fmt.Sprintf("%.0f%%", compSummary.AvgDropPercent)
+		data.CompactionCascadeCount = compSummary.CascadeCount
+		if compSummary.CompactionsPerUserMessage > 0 {
+			data.CompactionRate = fmt.Sprintf("%.2f", compSummary.CompactionsPerUserMessage)
+		}
+		if compSummary.LastQuartileCompactionRate > 0 {
+			data.CompactionLastQuartile = fmt.Sprintf("%.2f", compSummary.LastQuartileCompactionRate)
+		}
 		for _, e := range compSummary.Events {
 			data.CompactionEvents = append(data.CompactionEvents, compactionEventView{
 				BeforeMsg:   e.BeforeMessageIdx + 1, // 1-based for display
@@ -1772,6 +1800,8 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 				TokensLost:  formatTokens(e.TokensLost),
 				DropPercent: fmt.Sprintf("%.0f%%", e.DropPercent),
 				CacheReset:  e.CacheInvalidated,
+				IsCascade:   e.IsCascade,
+				MergedLegs:  e.MergedLegs,
 			})
 		}
 	}
@@ -1879,6 +1909,65 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Section 8.2: Top commands by output size.
+	// Scan tool calls for bash/shell commands and aggregate output bytes per base command.
+	{
+		type cmdAgg struct {
+			count      int
+			totalBytes int
+		}
+		cmdMap := make(map[string]*cmdAgg)
+		var totalBytes int
+		for _, msg := range sess.Messages {
+			for _, tc := range msg.ToolCalls {
+				baseCmd := session.ExtractBaseCommand(tc.Name, tc.Input)
+				if baseCmd == "" {
+					continue
+				}
+				outBytes := len(tc.Output)
+				totalBytes += outBytes
+				if agg, ok := cmdMap[baseCmd]; ok {
+					agg.count++
+					agg.totalBytes += outBytes
+				} else {
+					cmdMap[baseCmd] = &cmdAgg{count: 1, totalBytes: outBytes}
+				}
+			}
+		}
+		if len(cmdMap) > 0 && totalBytes > 0 {
+			data.HasCommandOutput = true
+			data.TotalCommandOutput = formatBytes(totalBytes)
+			data.TotalCommandOutBytes = totalBytes
+			// Build sorted list (top 10 by output bytes).
+			type kv struct {
+				key string
+				val *cmdAgg
+			}
+			var pairs []kv
+			for k, v := range cmdMap {
+				pairs = append(pairs, kv{k, v})
+			}
+			sort.Slice(pairs, func(i, j int) bool {
+				return pairs[i].val.totalBytes > pairs[j].val.totalBytes
+			})
+			limit := 10
+			if len(pairs) < limit {
+				limit = len(pairs)
+			}
+			for _, p := range pairs[:limit] {
+				avg := p.val.totalBytes / p.val.count
+				data.TopCommandsByOutput = append(data.TopCommandsByOutput, commandOutputEntry{
+					BaseCommand: p.key,
+					Invocations: p.val.count,
+					TotalOutput: formatBytes(p.val.totalBytes),
+					TotalBytes:  p.val.totalBytes,
+					AvgOutput:   formatBytes(avg),
+					TokenImpact: formatTokens(p.val.totalBytes / 4),
+				})
+			}
+		}
+	}
+
 	// Session-to-session links (delegation, continuation, etc.)
 	links, linksErr := s.sessionSvc.GetLinkedSessions(r.Context(), sess.ID)
 	if linksErr == nil && len(links) > 0 {
@@ -1982,6 +2071,23 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 			data.Analysis = buildAnalysisView(sa)
 			data.AnalysisData.HasAnalysis = true
 			data.AnalysisData.Analysis = data.Analysis
+		}
+	}
+
+	// Section 8.3: Investigation hot-spots.
+	// Try pre-computed cache first, fall back to on-demand computation.
+	if s.store != nil {
+		cached, hsErr := s.store.GetHotspots(sess.ID)
+		if hsErr == nil && cached != nil {
+			data.HasHotspots = true
+			data.Hotspots = buildHotspotView(cached)
+			data.HotspotsPrecomputed = true
+		} else {
+			// On-demand computation for sessions not yet processed by the nightly task.
+			h := session.ComputeHotspots(sess, 0)
+			data.HasHotspots = true
+			data.Hotspots = buildHotspotView(&h)
+			data.HotspotsPrecomputed = false
 		}
 	}
 
@@ -3411,7 +3517,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 
 	// Forecast for trend + model breakdown + time buckets (cached).
-	forecast, fErr := s.cachedForecast(r.Context(), service.ForecastRequest{
+	forecast, fErr := s.sessionSvc.Forecast(r.Context(), service.ForecastRequest{
 		Period: "weekly",
 		Days:   90,
 	})
@@ -3596,7 +3702,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 
 	// Cache efficiency analysis.
-	cacheEff, cacheErr := s.cachedCacheEfficiency(r.Context(), project, since90d, "90d")
+	cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(r.Context(), project, since90d)
 
 	// Cross-project MCP matrix (only when no project filter — global view).
 	if project == "" {
@@ -3726,7 +3832,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 
 	// Context saturation analysis.
-	saturation, satErr := s.cachedSaturation(r.Context(), project, since90d)
+	saturation, satErr := s.sessionSvc.ContextSaturation(r.Context(), project, since90d)
 	if satErr == nil && saturation != nil && saturation.TotalSessions > 0 {
 		data.HasSaturation = true
 		data.SatAvgPeak = saturation.AvgPeakSaturation
@@ -5916,7 +6022,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		forecast, fErr := s.cachedForecast(ctx, service.ForecastRequest{
+		forecast, fErr := s.sessionSvc.Forecast(ctx, service.ForecastRequest{
 			Period:      "weekly",
 			Days:        90,
 			ProjectPath: projectPath,
@@ -5944,7 +6050,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		cacheEff, cacheErr := s.cachedCacheEfficiency(ctx, projectPath, since7d, "7d")
+		cacheEff, cacheErr := s.sessionSvc.CacheEfficiency(ctx, projectPath, since7d)
 		if cacheErr != nil || cacheEff == nil || cacheEff.TotalInputTokens == 0 {
 			return
 		}
@@ -6072,7 +6178,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		satResult, satErr := s.cachedSaturation(ctx, projectPath, since90d)
+		satResult, satErr := s.sessionSvc.ContextSaturation(ctx, projectPath, since90d)
 		if satErr != nil || satResult == nil || satResult.TotalSessions == 0 {
 			return
 		}
@@ -6090,7 +6196,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		agentROI, roiErr := s.cachedAgentROI(ctx, projectPath, since90d)
+		agentROI, roiErr := s.sessionSvc.AgentROIAnalysis(ctx, projectPath, since90d)
 		if roiErr != nil || agentROI == nil || len(agentROI.Agents) == 0 {
 			return
 		}
@@ -8496,6 +8602,167 @@ func linkTypeCSS(linkType string) string {
 	}
 }
 
+// ── Command Patterns (Section 8.5) ──
+
+// commandPatternsPage is the template data for /investigate/command-patterns.
+type commandPatternsPage struct {
+	Nav       string
+	Patterns  []commandPatternView
+	Total     int // total patterns found
+	MinLength int // filter: minimum command length
+	MinCount  int // filter: minimum occurrence count
+}
+
+// commandPatternView is a template-friendly view of a normalized command pattern.
+type commandPatternView struct {
+	Normalized   string
+	Occurrences  int
+	SessionCount int
+	ProjectCount int
+	AvgLength    int
+	TotalChars   string // formatted
+	MaxLength    int
+	TotalOutput  string // formatted bytes
+	AvgOutput    string // formatted bytes
+}
+
+// handleCommandPatterns renders the cross-session command pattern analysis page.
+func (s *Server) handleCommandPatterns(w http.ResponseWriter, r *http.Request) {
+	// Parse filter params with defaults.
+	minLength := 100
+	minCount := 3
+	if v := r.URL.Query().Get("min_length"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			minLength = n
+		}
+	}
+	if v := r.URL.Query().Get("min_count"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			minCount = n
+		}
+	}
+
+	// Try cache first.
+	cacheKey := fmt.Sprintf("command_patterns:%d:%d", minLength, minCount)
+	if s.store != nil {
+		if cached, cErr := s.store.GetCache(cacheKey, 2*time.Hour); cErr == nil && cached != nil {
+			var patterns []session.CommandPattern
+			if json.Unmarshal(cached, &patterns) == nil {
+				data := s.buildCommandPatternsData(patterns, minLength, minCount)
+				s.render(w, "command_patterns.html", data)
+				return
+			}
+		}
+	}
+
+	// Compute: load all sessions and filter recent ones (last 90 days).
+	summaries, err := s.sessionSvc.List(service.ListRequest{All: true})
+	if err != nil {
+		http.Error(w, "Failed to load sessions", http.StatusInternalServerError)
+		return
+	}
+	since := time.Now().AddDate(0, 0, -90)
+	var recentSummaries []session.Summary
+	for _, sum := range summaries {
+		if sum.CreatedAt.After(since) {
+			recentSummaries = append(recentSummaries, sum)
+		}
+		if len(recentSummaries) >= 500 {
+			break
+		}
+	}
+	summaries = recentSummaries
+
+	var inputs []session.CommandPatternInput
+	for _, sum := range summaries {
+		sess, gErr := s.sessionSvc.Get(string(sum.ID))
+		if gErr != nil {
+			continue
+		}
+		for i := range sess.Messages {
+			for j := range sess.Messages[i].ToolCalls {
+				tc := &sess.Messages[i].ToolCalls[j]
+				cmd := extractFullCommand(tc.Name, tc.Input)
+				if cmd == "" {
+					continue
+				}
+				inputs = append(inputs, session.CommandPatternInput{
+					FullCommand: cmd,
+					SessionID:   sess.ID,
+					ProjectPath: sess.ProjectPath,
+					OutputBytes: len(tc.Output),
+				})
+			}
+		}
+	}
+
+	patterns := session.FindCommandPatterns(inputs, minLength, minCount)
+
+	// Cache for 2 hours.
+	if s.store != nil {
+		if raw, mErr := json.Marshal(patterns); mErr == nil {
+			_ = s.store.SetCache(cacheKey, raw)
+		}
+	}
+
+	data := s.buildCommandPatternsData(patterns, minLength, minCount)
+	s.render(w, "command_patterns.html", data)
+}
+
+// buildCommandPatternsData converts raw patterns into template data.
+func (s *Server) buildCommandPatternsData(patterns []session.CommandPattern, minLength, minCount int) commandPatternsPage {
+	data := commandPatternsPage{
+		Nav:       "investigate",
+		Total:     len(patterns),
+		MinLength: minLength,
+		MinCount:  minCount,
+	}
+	// Cap at 50 for display.
+	limit := 50
+	if len(patterns) < limit {
+		limit = len(patterns)
+	}
+	for _, p := range patterns[:limit] {
+		data.Patterns = append(data.Patterns, commandPatternView{
+			Normalized:   p.Normalized,
+			Occurrences:  p.Occurrences,
+			SessionCount: p.SessionCount,
+			ProjectCount: p.ProjectCount,
+			AvgLength:    p.AvgLength,
+			TotalChars:   formatBytes(p.TotalChars),
+			MaxLength:    p.MaxLength,
+			TotalOutput:  formatBytes(p.TotalOutput),
+			AvgOutput:    formatBytes(p.AvgOutput),
+		})
+	}
+	return data
+}
+
+// extractFullCommand extracts the full command string from a tool call
+// (not just the base command, but the entire invocation line).
+func extractFullCommand(toolName, toolInput string) string {
+	lower := strings.ToLower(toolName)
+	if lower != "bash" && lower != "shell" && lower != "terminal" && lower != "execute_command" {
+		return ""
+	}
+	// Try JSON format: {"command": "..."}.
+	input := strings.TrimSpace(toolInput)
+	if strings.HasPrefix(input, "{") {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(input), &obj); err == nil {
+			if cmd, ok := obj["command"].(string); ok {
+				return strings.TrimSpace(cmd)
+			}
+			if cmd, ok := obj["cmd"].(string); ok {
+				return strings.TrimSpace(cmd)
+			}
+			return ""
+		}
+	}
+	// Plain string — treat as command directly.
+	return input
+}
+
 // shortLinkType returns a short display label for a link type.
 func shortLinkType(linkType string) string {
 	switch linkType {
@@ -8511,5 +8778,407 @@ func shortLinkType(linkType string) string {
 		return "replay"
 	default:
 		return linkType
+	}
+}
+
+// ── HTMX: Session Inspect Partial ──
+
+// inspectProblemView is the template-friendly view of a detected problem.
+type inspectProblemView struct {
+	SeverityIcon  string
+	SeverityLabel string
+	SeverityClass string
+	Title         string
+	Category      string
+	Observation   string
+	Impact        string
+}
+
+// inspectTokenView is the template-friendly token section data.
+type inspectTokenView struct {
+	InputStr     string
+	OutputStr    string
+	RatioStr     string
+	CacheRead    int
+	CacheReadStr string
+	CachePctStr  string
+	Models       []inspectModelView
+}
+
+// inspectModelView is a single model's usage.
+type inspectModelView struct {
+	Model     string
+	InputStr  string
+	OutputStr string
+	Msgs      int
+}
+
+// inspectImageView is the template-friendly image section data.
+type inspectImageView struct {
+	Total          int
+	ToolReadImages int
+	SimctlCaptures int
+	SipsResizes    int
+	AvgTurnsStr    string
+	BilledTokStr   string
+	CostStr        string
+}
+
+// inspectToolErrorView is the template-friendly tool error section data.
+type inspectToolErrorView struct {
+	TotalToolCalls int
+	ErrorCount     int
+	ErrorRateStr   string
+	LoopCount      int
+	TopTools       []inspectToolEntry
+}
+
+// inspectToolEntry is a single tool's error stats.
+type inspectToolEntry struct {
+	Name    string
+	Calls   int
+	Errors  int
+	RateStr string
+}
+
+// inspectPatternView is the template-friendly pattern section data.
+type inspectPatternView struct {
+	WriteWithoutRead int
+	UserCorrections  int
+	GlobStorms       int
+	LongRuns         int
+	LongestRun       int
+}
+
+// inspectPartialData is the data passed to the inspect_partial template.
+type inspectPartialData struct {
+	HasProblems  bool
+	ProblemCount int
+	Problems     []inspectProblemView
+	Tokens       *inspectTokenView
+	Images       *inspectImageView
+	ToolErrors   *inspectToolErrorView
+	Patterns     *inspectPatternView
+}
+
+// handleInspectPartial renders the diagnostic inspect partial for a session.
+// GET /partials/inspect/{id}
+func (s *Server) handleInspectPartial(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "session id required", http.StatusBadRequest)
+		return
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil {
+		s.logger.Printf("inspect partial: session %q: %v", id, err)
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	var events []sessionevent.Event
+	if s.sessionEventSvc != nil {
+		events, _ = s.sessionEventSvc.GetSessionEvents(sess.ID)
+	}
+
+	report := diagnostic.BuildReport(sess, events)
+
+	// Build template data
+	data := inspectPartialData{
+		HasProblems:  len(report.Problems) > 0,
+		ProblemCount: len(report.Problems),
+	}
+
+	// Map problems
+	for _, p := range report.Problems {
+		data.Problems = append(data.Problems, inspectProblemView{
+			SeverityIcon:  severityIcon(p.Severity),
+			SeverityLabel: strings.ToUpper(string(p.Severity)),
+			SeverityClass: string(p.Severity),
+			Title:         p.Title,
+			Category:      string(p.Category),
+			Observation:   p.Observation,
+			Impact:        p.Impact,
+		})
+	}
+
+	// Tokens
+	if report.Tokens != nil {
+		t := report.Tokens
+		tv := &inspectTokenView{
+			InputStr:     formatTokens(t.Input),
+			OutputStr:    formatTokens(t.Output),
+			RatioStr:     fmt.Sprintf("%.0f:1", t.InputOutputRatio),
+			CacheRead:    t.CacheRead,
+			CacheReadStr: formatTokens(t.CacheRead),
+			CachePctStr:  fmt.Sprintf("%.1f%%", t.CachePct),
+		}
+		for _, m := range t.Models {
+			tv.Models = append(tv.Models, inspectModelView{
+				Model:     m.Model,
+				InputStr:  formatTokens(m.Input),
+				OutputStr: formatTokens(m.Output),
+				Msgs:      m.Msgs,
+			})
+		}
+		data.Tokens = tv
+	}
+
+	// Images
+	if report.Images != nil {
+		img := report.Images
+		total := img.InlineImages + img.ToolReadImages
+		if total > 0 {
+			data.Images = &inspectImageView{
+				Total:          total,
+				ToolReadImages: img.ToolReadImages,
+				SimctlCaptures: img.SimctlCaptures,
+				SipsResizes:    img.SipsResizes,
+				AvgTurnsStr:    fmt.Sprintf("%.1f", img.AvgTurnsInCtx),
+				BilledTokStr:   formatTokens(int(img.TotalBilledTok)),
+				CostStr:        fmt.Sprintf("%.2f", img.EstImageCost),
+			}
+		}
+	}
+
+	// Tool errors
+	if report.ToolErrors != nil && report.ToolErrors.ErrorCount > 0 {
+		te := report.ToolErrors
+		tev := &inspectToolErrorView{
+			TotalToolCalls: te.TotalToolCalls,
+			ErrorCount:     te.ErrorCount,
+			ErrorRateStr:   fmt.Sprintf("%.1f%%", te.ErrorRate*100),
+			LoopCount:      len(te.ErrorLoops),
+		}
+		for _, t := range te.TopErrorTools {
+			tev.TopTools = append(tev.TopTools, inspectToolEntry{
+				Name:    t.Name,
+				Calls:   t.TotalCalls,
+				Errors:  t.Errors,
+				RateStr: fmt.Sprintf("%.1f%%", t.ErrorRate*100),
+			})
+		}
+		data.ToolErrors = tev
+	}
+
+	// Patterns
+	if report.Patterns != nil {
+		data.Patterns = &inspectPatternView{
+			WriteWithoutRead: report.Patterns.WriteWithoutReadCount,
+			UserCorrections:  report.Patterns.UserCorrectionCount,
+			GlobStorms:       report.Patterns.GlobStormCount,
+			LongRuns:         report.Patterns.LongRunCount,
+			LongestRun:       report.Patterns.LongestRunLength,
+		}
+	}
+
+	s.renderPartial(w, "inspect_partial", data)
+}
+
+func severityIcon(s diagnostic.Severity) string {
+	switch s {
+	case diagnostic.SeverityHigh:
+		return "\U0001F534" // 🔴
+	case diagnostic.SeverityMedium:
+		return "\U0001F7E0" // 🟠
+	case diagnostic.SeverityLow:
+		return "\U0001F7E1" // 🟡
+	default:
+		return "\u26AA" // ⚪
+	}
+}
+
+// ── API: Session Inspect ──
+
+// handleAPISessionInspect returns a full diagnostic InspectReport for a single session.
+// GET /api/sessions/{id}/inspect
+func (s *Server) handleAPISessionInspect(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, `{"error":"session id required"}`, http.StatusBadRequest)
+		return
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil {
+		s.logger.Printf("api inspect: session %q: %v", id, err)
+		http.Error(w, `{"error":"session not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Load session events for richer command data (optional).
+	var events []sessionevent.Event
+	if s.sessionEventSvc != nil {
+		events, _ = s.sessionEventSvc.GetSessionEvents(sess.ID)
+	}
+
+	report := diagnostic.BuildReport(sess, events)
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(report); err != nil {
+		s.logger.Printf("api inspect: encode: %v", err)
+	}
+}
+
+// ── API: Project Inspect ──
+
+// ProjectInspectReport aggregates diagnostic data across multiple sessions.
+type ProjectInspectReport struct {
+	ProjectPath  string                    `json:"project_path"`
+	SessionCount int                       `json:"session_count"`
+	TotalCost    float64                   `json:"total_estimated_cost"`
+	TotalInput   int64                     `json:"total_input_tokens"`
+	TotalOutput  int64                     `json:"total_output_tokens"`
+	Sessions     []ProjectSessionSummary   `json:"sessions"`
+	TopProblems  []ProjectProblemAggregate `json:"top_problems"`
+}
+
+// ProjectSessionSummary is a lightweight per-session entry in the project inspect report.
+type ProjectSessionSummary struct {
+	SessionID    string               `json:"session_id"`
+	Provider     string               `json:"provider"`
+	Agent        string               `json:"agent"`
+	Messages     int                  `json:"messages"`
+	EstCost      float64              `json:"estimated_cost"`
+	ProblemCount int                  `json:"problem_count"`
+	TopSeverity  diagnostic.Severity  `json:"top_severity"`
+	Problems     []diagnostic.Problem `json:"problems"`
+}
+
+// ProjectProblemAggregate counts how many sessions exhibit each problem ID.
+type ProjectProblemAggregate struct {
+	ID          diagnostic.ProblemID `json:"id"`
+	Title       string               `json:"title"`
+	Category    diagnostic.Category  `json:"category"`
+	Occurrences int                  `json:"occurrences"`
+	MaxSeverity diagnostic.Severity  `json:"max_severity"`
+}
+
+// handleAPIProjectInspect returns aggregated diagnostic data for the last N sessions of a project.
+// GET /api/inspect/project?path=/Users/foo/myproject&limit=10
+func (s *Server) handleAPIProjectInspect(w http.ResponseWriter, r *http.Request) {
+	projectPath := r.URL.Query().Get("path")
+	if projectPath == "" {
+		http.Error(w, `{"error":"path query parameter required"}`, http.StatusBadRequest)
+		return
+	}
+
+	limit := 10
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if n, err := strconv.Atoi(lStr); err == nil && n > 0 && n <= 50 {
+			limit = n
+		}
+	}
+
+	// List sessions for this project.
+	summaries, err := s.sessionSvc.List(service.ListRequest{
+		ProjectPath: projectPath,
+		All:         true,
+	})
+	if err != nil {
+		s.logger.Printf("api project inspect: list: %v", err)
+		http.Error(w, `{"error":"failed to list sessions"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Cap to limit (summaries are typically sorted newest-first).
+	if len(summaries) > limit {
+		summaries = summaries[:limit]
+	}
+
+	report := ProjectInspectReport{
+		ProjectPath:  projectPath,
+		SessionCount: len(summaries),
+	}
+
+	// Aggregate problem counts across sessions.
+	problemCounts := make(map[diagnostic.ProblemID]*ProjectProblemAggregate)
+
+	for _, sm := range summaries {
+		sess, err := s.sessionSvc.Get(string(sm.ID))
+		if err != nil {
+			continue
+		}
+
+		var events []sessionevent.Event
+		if s.sessionEventSvc != nil {
+			events, _ = s.sessionEventSvc.GetSessionEvents(sess.ID)
+		}
+
+		ir := diagnostic.BuildReport(sess, events)
+
+		topSev := diagnostic.Severity("")
+		if len(ir.Problems) > 0 {
+			topSev = ir.Problems[0].Severity // already sorted by severity
+		}
+
+		entry := ProjectSessionSummary{
+			SessionID:    ir.SessionID,
+			Provider:     ir.Provider,
+			Agent:        ir.Agent,
+			Messages:     ir.Messages,
+			EstCost:      ir.Tokens.EstCost,
+			ProblemCount: len(ir.Problems),
+			TopSeverity:  topSev,
+			Problems:     ir.Problems,
+		}
+		report.Sessions = append(report.Sessions, entry)
+		report.TotalCost += ir.Tokens.EstCost
+		report.TotalInput += int64(ir.Tokens.Input)
+		report.TotalOutput += int64(ir.Tokens.Output)
+
+		// Aggregate problems.
+		for _, p := range ir.Problems {
+			agg, ok := problemCounts[p.ID]
+			if !ok {
+				agg = &ProjectProblemAggregate{
+					ID:          p.ID,
+					Title:       p.Title,
+					Category:    p.Category,
+					MaxSeverity: p.Severity,
+				}
+				problemCounts[p.ID] = agg
+			}
+			agg.Occurrences++
+			if severityRank(p.Severity) < severityRank(agg.MaxSeverity) {
+				agg.MaxSeverity = p.Severity
+			}
+		}
+	}
+
+	// Sort aggregated problems by occurrence count descending.
+	for _, agg := range problemCounts {
+		report.TopProblems = append(report.TopProblems, *agg)
+	}
+	sort.Slice(report.TopProblems, func(i, j int) bool {
+		si, sj := severityRank(report.TopProblems[i].MaxSeverity), severityRank(report.TopProblems[j].MaxSeverity)
+		if si != sj {
+			return si < sj
+		}
+		return report.TopProblems[i].Occurrences > report.TopProblems[j].Occurrences
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(report); err != nil {
+		s.logger.Printf("api project inspect: encode: %v", err)
+	}
+}
+
+// severityRank maps severity to sort order (lower = more severe).
+func severityRank(s diagnostic.Severity) int {
+	switch s {
+	case diagnostic.SeverityHigh:
+		return 0
+	case diagnostic.SeverityMedium:
+		return 1
+	case diagnostic.SeverityLow:
+		return 2
+	default:
+		return 3
 	}
 }

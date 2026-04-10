@@ -586,37 +586,25 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		})
 		logger.Println("scheduled task: token_usage_compute (30 3 * * *)")
 
-		// Context saturation pre-compute task — runs every 2 hours.
-		// Pre-computes the expensive ContextSaturation analysis in the background
-		// so web handlers serve cached results instantly instead of scanning all sessions.
+		// NOTE: SaturationTask and CacheEfficiencyTask were removed — those handlers
+		// now read from pre-computed session_analytics rows (<100ms) and no longer
+		// need a JSON cache layer.
+
+		// Hot-spots pre-compute task — runs nightly at 03:15.
+		// Pre-computes investigation hot-spots (command aggregation, skill footprints,
+		// expensive messages) and persists them in session_hotspots for instant reads.
 		if storeSched, storeErr := f.Store(); storeErr == nil {
 			entries = append(entries, scheduler.Entry{
-				Schedule: "15 */2 * * *", // every 2 hours at :15
-				Task: scheduler.NewSaturationTask(scheduler.SaturationTaskConfig{
-					SessionService: sessionSvc,
-					Store:          storeSched,
-					Logger:         logger,
+				Schedule: "15 3 * * *", // daily at 03:15
+				Task: scheduler.NewHotspotsTask(scheduler.HotspotsTaskConfig{
+					Store:  storeSched,
+					Logger: logger,
 				}),
 			})
-			logger.Println("scheduled task: saturation_precompute (15 */2 * * *)")
+			logger.Println("scheduled task: hotspots_compute (15 3 * * *)")
 		}
 
-		// Cache efficiency pre-compute task — runs every 2 hours (offset from saturation).
-		// Pre-computes the expensive CacheEfficiency analysis (7d + 90d windows) in the background
-		// so web handlers serve cached results instantly.
-		if storeSched, storeErr := f.Store(); storeErr == nil {
-			entries = append(entries, scheduler.Entry{
-				Schedule: "45 */2 * * *", // every 2 hours at :45 (offset from saturation at :15)
-				Task: scheduler.NewCacheEfficiencyTask(scheduler.CacheEfficiencyTaskConfig{
-					SessionService: sessionSvc,
-					Store:          storeSched,
-					Logger:         logger,
-				}),
-			})
-			logger.Println("scheduled task: cacheeff_precompute (45 */2 * * *)")
-		}
-
-		// Dashboard warm task — pre-computes forecast and trends caches.
+		// Dashboard warm task — pre-computes stats and trends caches.
 		// Runs every 5 minutes to keep the dashboard snappy; also runs at startup via WarmUp.
 		if storeSched, storeErr := f.Store(); storeErr == nil {
 			entries = append(entries, scheduler.Entry{
@@ -656,15 +644,30 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		// Runs every 30 minutes and at startup via WarmUp. Each run processes up to 200 sessions.
 		// Once all sessions are backfilled, the task becomes a no-op.
 		if storeSched, storeErr := f.Store(); storeErr == nil {
+			pricingSched := pricing.NewCalculator()
+
 			entries = append(entries, scheduler.Entry{
 				Schedule: "*/30 * * * *", // every 30 minutes
 				Task: scheduler.NewCostBackfillTask(scheduler.CostBackfillConfig{
 					Store:   storeSched,
-					Pricing: pricing.NewCalculator(),
+					Pricing: pricingSched,
 					Logger:  logger,
 				}),
 			})
 			logger.Println("scheduled task: cost_backfill (*/30 * * * *)")
+
+			// Analytics backfill task — populates session_analytics materialized
+			// read-model for sessions ingested before migration 031 or with a stale
+			// schema_version. Runs every 30 minutes and at startup via WarmUp.
+			entries = append(entries, scheduler.Entry{
+				Schedule: "*/30 * * * *", // every 30 minutes
+				Task: scheduler.NewAnalyticsBackfillTask(scheduler.AnalyticsBackfillConfig{
+					Store:   storeSched,
+					Pricing: pricingSched,
+					Logger:  logger,
+				}),
+			})
+			logger.Println("scheduled task: analytics_backfill (*/30 * * * *)")
 		}
 
 		// Registry scan task — periodically scans all projects for capability changes.
@@ -954,13 +957,12 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 				logger.Printf("scheduler started with %d task(s)", len(entries))
 
 				// Pre-warm expensive caches on startup so the first page load is fast.
-				// dashboard_warm covers stats + forecast + trends.
-				// saturation + cacheeff are separate heavy tasks.
+				// dashboard_warm covers stats + trends.
+				// saturation + cacheeff removed — handlers now read from session_analytics.
 				sched.WarmUp(
 					"dashboard_warm",
-					"saturation_precompute",
-					"cacheeff_precompute",
 					"cost_backfill",
+					"analytics_backfill",
 				)
 			}
 		}

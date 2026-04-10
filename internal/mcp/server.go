@@ -13,15 +13,18 @@ import (
 
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
+	"github.com/ChristopherAparicio/aisync/internal/storage"
 )
 
 // Config holds the configuration for creating an MCP server.
 type Config struct {
 	SessionService      service.SessionServicer
-	SyncService         *service.SyncService  // optional — nil when git sync is unavailable
-	ErrorService        service.ErrorServicer // optional — nil when error service is unavailable
-	SessionEventService *sessionevent.Service // optional — nil when event analytics is unavailable
-	Version             string                // aisync version string
+	SyncService         *service.SyncService     // optional — nil when git sync is unavailable
+	ErrorService        service.ErrorServicer    // optional — nil when error service is unavailable
+	SessionEventService *sessionevent.Service    // optional — nil when event analytics is unavailable
+	RegistryService     *service.RegistryService // optional — nil when registry unavailable (needed for skill observation)
+	Store               storage.Store            // optional — nil when store is unavailable (needed for inspect + stored recommendations)
+	Version             string                   // aisync version string
 }
 
 // NewServer creates a new MCP server with all aisync tools registered.
@@ -42,12 +45,16 @@ func NewServer(cfg Config) *server.MCPServer {
 		syncSvc:         cfg.SyncService,
 		errorSvc:        cfg.ErrorService,
 		sessionEventSvc: cfg.SessionEventService,
+		registrySvc:     cfg.RegistryService,
+		store:           cfg.Store,
 	}
 
 	registerSessionTools(s, h)
 	registerSyncTools(s, h)
 	registerErrorTools(s, h)
 	registerEventTools(s, h)
+	registerInspectTools(s, h)
+	registerObservabilityTools(s, h)
 
 	return s
 }
@@ -58,6 +65,8 @@ type handlers struct {
 	syncSvc         *service.SyncService
 	errorSvc        service.ErrorServicer
 	sessionEventSvc *sessionevent.Service
+	registrySvc     *service.RegistryService // optional — needed for skill observation
+	store           storage.Store            // optional — needed for inspect diagnostics + stored recommendations
 }
 
 // registerSessionTools registers all session-related MCP tools.
