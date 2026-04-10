@@ -921,6 +921,38 @@ a:hover { text-decoration: underline; }
   gap: 0.5rem;
 }
 
+/* ── Section Accordions ── */
+
+.section-accordion {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+.section-accordion summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  user-select: none;
+}
+.section-accordion summary::-webkit-details-marker { display: none; }
+.section-accordion summary .section-title {
+  margin-bottom: 0;
+}
+.section-accordion summary .section-chevron {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+.section-accordion[open] summary .section-chevron {
+  transform: rotate(90deg);
+}
+.section-accordion .section-body {
+  margin-top: 0.75rem;
+}
+
 /* ── Tables ── */
 
 .table-wrap {

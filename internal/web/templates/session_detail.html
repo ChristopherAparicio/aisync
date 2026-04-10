@@ -304,263 +304,278 @@
 <!-- ── Tool Usage Breakdown ── -->
 {{if .HasToolUsage}}
 <div class="section">
-  <h2 class="section-title">Tool Usage</h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Tool</th>
-          <th class="text-right">Calls</th>
-          <th class="text-right">Tokens</th>
-          <th class="text-right">Avg Duration</th>
-          <th class="text-right">Errors</th>
-          <th class="text-right">Share</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .ToolUsage}}
-        <tr>
-          <td class="font-mono">{{.Name}}</td>
-          <td class="text-right">{{.Calls}}</td>
-          <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
-          <td class="text-right text-muted">{{if gt .AvgDuration 0}}{{formatDuration .AvgDuration}}{{else}}—{{end}}</td>
-          <td class="text-right{{if gt .ErrorCount 0}} tool-usage-error{{end}}">{{.ErrorCount}}</td>
-          <td class="text-right">
-            <div class="tool-share">
-              <div class="tool-share-bar" style="width: {{printf "%.0f" .Percentage}}%"></div>
-              <span class="tool-share-label">{{formatPercentage .Percentage}}</span>
-            </div>
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
+  <details class="section-accordion">
+    <summary>
+      <h2 class="section-title">Tool Usage <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .ToolUsage}} tools · {{.ToolCallCount}} calls</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Tool</th>
+              <th class="text-right">Calls</th>
+              <th class="text-right">Tokens</th>
+              <th class="text-right">Avg Duration</th>
+              <th class="text-right">Errors</th>
+              <th class="text-right">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .ToolUsage}}
+            <tr>
+              <td class="font-mono">{{.Name}}</td>
+              <td class="text-right">{{.Calls}}</td>
+              <td class="text-right font-mono">{{formatTokens .TotalTokens}}</td>
+              <td class="text-right text-muted">{{if gt .AvgDuration 0}}{{formatDuration .AvgDuration}}{{else}}—{{end}}</td>
+              <td class="text-right{{if gt .ErrorCount 0}} tool-usage-error{{end}}">{{.ErrorCount}}</td>
+              <td class="text-right">
+                <div class="tool-share">
+                  <div class="tool-share-bar" style="width: {{printf "%.0f" .Percentage}}%"></div>
+                  <span class="tool-share-label">{{formatPercentage .Percentage}}</span>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
 </div>
 {{end}}
 
 <!-- ── Command Output Footprint (Section 8.2) ── -->
 {{if .HasCommandOutput}}
 <div class="section">
-  <h2 class="section-title">Command Output Footprint <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">total {{.TotalCommandOutput}}</span></h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Command</th>
-          <th class="text-right">Runs</th>
-          <th class="text-right">Total Output</th>
-          <th class="text-right">Avg / Run</th>
-          <th class="text-right">Est. Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .TopCommandsByOutput}}
-        <tr>
-          <td class="font-mono">{{.BaseCommand}}</td>
-          <td class="text-right">{{.Invocations}}</td>
-          <td class="text-right font-mono">{{.TotalOutput}}</td>
-          <td class="text-right font-mono text-muted">{{.AvgOutput}}</td>
-          <td class="text-right font-mono">{{.TokenImpact}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
+  <details class="section-accordion">
+    <summary>
+      <h2 class="section-title">Command Output Footprint <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .TopCommandsByOutput}} commands · {{.TotalCommandOutput}} total</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th class="text-right">Runs</th>
+              <th class="text-right">Total Output</th>
+              <th class="text-right">Avg / Run</th>
+              <th class="text-right">Est. Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .TopCommandsByOutput}}
+            <tr>
+              <td class="font-mono">{{.BaseCommand}}</td>
+              <td class="text-right">{{.Invocations}}</td>
+              <td class="text-right font-mono">{{.TotalOutput}}</td>
+              <td class="text-right font-mono text-muted">{{.AvgOutput}}</td>
+              <td class="text-right font-mono">{{.TokenImpact}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
 </div>
 {{end}}
 
 <!-- ── Investigation Hot Spots (Section 8.3) ── -->
 {{if .HasHotspots}}
 <div class="section">
-  <h2 class="section-title">🔥 Investigation Hot Spots
-    {{if not .HotspotsPrecomputed}}<span class="badge badge-muted" title="Computed on demand; will be cached after nightly task">live</span>{{end}}
-  </h2>
+  <details class="section-accordion">
+    <summary>
+      <h2 class="section-title">🔥 Hot Spots
+        <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{.Hotspots.TotalCmds}} cmds · {{.Hotspots.UniqueCmds}} unique · {{.Hotspots.TotalOutput}} output{{if gt .Hotspots.ErrorCount 0}} · <span class="text-danger">{{.Hotspots.ErrorCount}} errors</span>{{end}}</span>
+        {{if not .HotspotsPrecomputed}}<span class="badge badge-muted" title="Computed on demand; will be cached after nightly task">live</span>{{end}}
+      </h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <!-- Top commands by output -->
+      {{if .Hotspots.TopByOutput}}
+      <h3 class="subsection-title">Top Commands by Output Volume</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th class="text-right">Runs</th>
+              <th class="text-right">Total Output</th>
+              <th class="text-right">Avg / Run</th>
+              <th class="text-right">Errors</th>
+              <th class="text-right">Est. Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Hotspots.TopByOutput}}
+            <tr>
+              <td class="font-mono">{{.BaseCommand}}</td>
+              <td class="text-right">{{.Invocations}}</td>
+              <td class="text-right font-mono">{{.TotalOutput}}</td>
+              <td class="text-right font-mono text-muted">{{.AvgOutput}}</td>
+              <td class="text-right">{{if gt .ErrorCount 0}}<span class="text-danger">{{.ErrorCount}}</span>{{else}}0{{end}}</td>
+              <td class="text-right font-mono">{{.TokenImpact}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
 
-  <!-- Command summary row -->
-  <div class="stat-grid" style="margin-bottom:1rem;">
-    <div class="stat-card">
-      <div class="stat-value">{{.Hotspots.TotalCmds}}</div>
-      <div class="stat-label">Total Commands</div>
+      <!-- Top commands by reuse count -->
+      {{if .Hotspots.TopByReuse}}
+      <h3 class="subsection-title">Top Commands by Frequency</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th class="text-right">Runs</th>
+              <th class="text-right">Total Output</th>
+              <th class="text-right">Errors</th>
+              <th class="text-right">Est. Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Hotspots.TopByReuse}}
+            <tr>
+              <td class="font-mono">{{.BaseCommand}}</td>
+              <td class="text-right">{{.Invocations}}</td>
+              <td class="text-right font-mono">{{.TotalOutput}}</td>
+              <td class="text-right">{{if gt .ErrorCount 0}}<span class="text-danger">{{.ErrorCount}}</span>{{else}}0{{end}}</td>
+              <td class="text-right font-mono">{{.TokenImpact}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
+
+      <!-- Skill footprints -->
+      {{if .Hotspots.HasSkills}}
+      <h3 class="subsection-title">Skill Footprints</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Skill</th>
+              <th class="text-right">Loads</th>
+              <th class="text-right">Total Bytes</th>
+              <th class="text-right">Est. Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Hotspots.Skills}}
+            <tr>
+              <td class="font-mono">{{.Name}}</td>
+              <td class="text-right">{{.LoadCount}}</td>
+              <td class="text-right font-mono">{{.TotalBytes}}</td>
+              <td class="text-right font-mono">{{.EstimatedTokens}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
+
+      <!-- Expensive messages -->
+      {{if .Hotspots.ExpensiveMessages}}
+      <h3 class="subsection-title">Highest-Cost Messages</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Msg #</th>
+              <th>Role</th>
+              <th class="text-right">Input</th>
+              <th class="text-right">Output</th>
+              <th class="text-right">Total</th>
+              <th>Model</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Hotspots.ExpensiveMessages}}
+            <tr>
+              <td class="text-right">{{.Index}}</td>
+              <td>{{.Role}}</td>
+              <td class="text-right font-mono">{{.InputTokens}}</td>
+              <td class="text-right font-mono">{{.OutputTokens}}</td>
+              <td class="text-right font-mono"><strong>{{.TotalTokens}}</strong></td>
+              <td class="font-mono text-muted">{{.Model}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
     </div>
-    <div class="stat-card">
-      <div class="stat-value">{{.Hotspots.UniqueCmds}}</div>
-      <div class="stat-label">Unique Commands</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">{{.Hotspots.TotalOutput}}</div>
-      <div class="stat-label">Total Output</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">{{.Hotspots.ErrorCount}}</div>
-      <div class="stat-label">Errors</div>
-    </div>
-  </div>
-
-  <!-- Top commands by output -->
-  {{if .Hotspots.TopByOutput}}
-  <h3 class="subsection-title">Top Commands by Output Volume</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Command</th>
-          <th class="text-right">Runs</th>
-          <th class="text-right">Total Output</th>
-          <th class="text-right">Avg / Run</th>
-          <th class="text-right">Errors</th>
-          <th class="text-right">Est. Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Hotspots.TopByOutput}}
-        <tr>
-          <td class="font-mono">{{.BaseCommand}}</td>
-          <td class="text-right">{{.Invocations}}</td>
-          <td class="text-right font-mono">{{.TotalOutput}}</td>
-          <td class="text-right font-mono text-muted">{{.AvgOutput}}</td>
-          <td class="text-right">{{if gt .ErrorCount 0}}<span class="text-danger">{{.ErrorCount}}</span>{{else}}0{{end}}</td>
-          <td class="text-right font-mono">{{.TokenImpact}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  {{end}}
-
-  <!-- Top commands by reuse count -->
-  {{if .Hotspots.TopByReuse}}
-  <h3 class="subsection-title">Top Commands by Frequency</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Command</th>
-          <th class="text-right">Runs</th>
-          <th class="text-right">Total Output</th>
-          <th class="text-right">Errors</th>
-          <th class="text-right">Est. Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Hotspots.TopByReuse}}
-        <tr>
-          <td class="font-mono">{{.BaseCommand}}</td>
-          <td class="text-right">{{.Invocations}}</td>
-          <td class="text-right font-mono">{{.TotalOutput}}</td>
-          <td class="text-right">{{if gt .ErrorCount 0}}<span class="text-danger">{{.ErrorCount}}</span>{{else}}0{{end}}</td>
-          <td class="text-right font-mono">{{.TokenImpact}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  {{end}}
-
-  <!-- Skill footprints -->
-  {{if .Hotspots.HasSkills}}
-  <h3 class="subsection-title">Skill Footprints</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Skill</th>
-          <th class="text-right">Loads</th>
-          <th class="text-right">Total Bytes</th>
-          <th class="text-right">Est. Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Hotspots.Skills}}
-        <tr>
-          <td class="font-mono">{{.Name}}</td>
-          <td class="text-right">{{.LoadCount}}</td>
-          <td class="text-right font-mono">{{.TotalBytes}}</td>
-          <td class="text-right font-mono">{{.EstimatedTokens}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  {{end}}
-
-  <!-- Expensive messages -->
-  {{if .Hotspots.ExpensiveMessages}}
-  <h3 class="subsection-title">Highest-Cost Messages</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Msg #</th>
-          <th>Role</th>
-          <th class="text-right">Input</th>
-          <th class="text-right">Output</th>
-          <th class="text-right">Total</th>
-          <th>Model</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Hotspots.ExpensiveMessages}}
-        <tr>
-          <td class="text-right">{{.Index}}</td>
-          <td>{{.Role}}</td>
-          <td class="text-right font-mono">{{.InputTokens}}</td>
-          <td class="text-right font-mono">{{.OutputTokens}}</td>
-          <td class="text-right font-mono"><strong>{{.TotalTokens}}</strong></td>
-          <td class="font-mono text-muted">{{.Model}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  {{end}}
+  </details>
 </div>
 {{end}}
 
 <!-- ── Cost Breakdown ── -->
 {{if .CostBreakdown}}
 <div class="section">
-  <h2 class="section-title">Cost Breakdown</h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Model</th>
-          <th class="text-right">Messages</th>
-          <th class="text-right">Input</th>
-          <th class="text-right">Output</th>
-          <th class="text-right">Cost</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .CostBreakdown}}
-        <tr>
-          <td class="font-mono">{{.Model}}</td>
-          <td class="text-right">{{.MessageCount}}</td>
-          <td class="text-right font-mono">{{formatTokens .InputTokens}}</td>
-          <td class="text-right font-mono">{{formatTokens .OutputTokens}}</td>
-          <td class="text-right font-mono">{{formatCost .Cost.TotalCost}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
+  <details class="section-accordion">
+    <summary>
+      <h2 class="section-title">Cost Breakdown <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .CostBreakdown}} model{{if gt (len .CostBreakdown) 1}}s{{end}} · {{formatCost .TotalCost}}</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th class="text-right">Messages</th>
+              <th class="text-right">Input</th>
+              <th class="text-right">Output</th>
+              <th class="text-right">Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .CostBreakdown}}
+            <tr>
+              <td class="font-mono">{{.Model}}</td>
+              <td class="text-right">{{.MessageCount}}</td>
+              <td class="text-right font-mono">{{formatTokens .InputTokens}}</td>
+              <td class="text-right font-mono">{{formatTokens .OutputTokens}}</td>
+              <td class="text-right font-mono">{{formatCost .Cost.TotalCost}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
 </div>
 {{end}}
 
 <!-- ── File Changes ── -->
 {{if .HasFileChanges}}
 <div class="section">
-  <h2 class="section-title">File Changes <span class="text-muted">({{len .FileChanges}})</span></h2>
-  <div class="file-list">
-    {{range .FileChanges}}
-    <div class="file-entry">
-      <span class="file-badge file-{{.ChangeType}}">{{.ChangeType}}</span>
-      <span class="font-mono">{{.FilePath}}</span>
-      {{if .ToolName}}<span class="text-muted file-tool">{{.ToolName}}</span>{{end}}
+  <details class="section-accordion">
+    <summary>
+      <h2 class="section-title">File Changes <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .FileChanges}} files</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <div class="file-list">
+        {{range .FileChanges}}
+        <div class="file-entry">
+          <span class="file-badge file-{{.ChangeType}}">{{.ChangeType}}</span>
+          <span class="font-mono">{{.FilePath}}</span>
+          {{if .ToolName}}<span class="text-muted file-tool">{{.ToolName}}</span>{{end}}
+        </div>
+        {{end}}
+      </div>
     </div>
-    {{end}}
-  </div>
+  </details>
 </div>
 {{end}}
 
@@ -618,36 +633,48 @@
 <!-- ── Session Links (delegation, continuation, etc.) ── -->
 {{if .HasSessionLinks}}
 <div class="section">
-  <h2 class="section-title">Session Links <span class="text-muted">({{len .SessionLinks}})</span></h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th>Direction</th>
-          <th>Linked Session</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .SessionLinks}}
-        <tr>
-          <td><span class="badge badge-link-{{.LinkTypeClass}}">{{.LinkType}}</span></td>
-          <td>{{if eq .Direction "outgoing"}}<span class="text-muted">&rarr; outgoing</span>{{else}}<span class="text-muted">&larr; incoming</span>{{end}}</td>
-          <td class="font-mono"><a href="/sessions/{{.TargetSessionID}}">{{truncate .TargetSessionID 12}}</a></td>
-          <td>{{if .Description}}{{.Description}}{{else}}<span class="text-muted">—</span>{{end}}</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
+  <details class="section-accordion">
+    <summary>
+      <h2 class="section-title">Session Links <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .SessionLinks}} link{{if gt (len .SessionLinks) 1}}s{{end}}</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Direction</th>
+              <th>Linked Session</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .SessionLinks}}
+            <tr>
+              <td><span class="badge badge-link-{{.LinkTypeClass}}">{{.LinkType}}</span></td>
+              <td>{{if eq .Direction "outgoing"}}<span class="text-muted">&rarr; outgoing</span>{{else}}<span class="text-muted">&larr; incoming</span>{{end}}</td>
+              <td class="font-mono"><a href="/sessions/{{.TargetSessionID}}">{{truncate .TargetSessionID 12}}</a></td>
+              <td>{{if .Description}}{{.Description}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
 </div>
 {{end}}
 
 <!-- ── Conversation ── -->
 {{if .Session.Messages}}
 <div class="section">
-  <h2 class="section-title">Conversation <span class="text-muted">({{len .Session.Messages}} messages)</span></h2>
+  <details class="section-accordion" open>
+    <summary>
+      <h2 class="section-title">Conversation <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .Session.Messages}} messages{{if gt .ErrorCount 0}} · <span class="text-danger">{{.ErrorCount}} errors</span>{{end}}</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
 
   {{if .ActivitySegments}}
   <div class="activity-bar" title="Message flow: each segment = 1 message, width = relative token usage">
@@ -758,6 +785,8 @@
     <span class="conv-page-info" id="conv-page-info-bottom"></span>
     <button class="conv-btn" onclick="nextPage()">Next →</button>
   </div>
+    </div>
+  </details>
 </div>
 
 <script>
