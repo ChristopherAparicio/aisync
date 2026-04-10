@@ -10,7 +10,7 @@
     {{if $skills}}{{range $skills}}<span class="badge badge-skill" onclick="filterMessages('skill:{{.}}', null)">{{.}}</span>{{end}}{{end}}
     <span class="chat-time text-muted">{{timeAgo $msg.Timestamp}}</span>
     {{if or $msg.InputTokens $msg.OutputTokens}}
-    <span class="chat-tokens text-muted font-mono">{{formatTokens $msg.InputTokens}}→{{formatTokens $msg.OutputTokens}}</span>
+    <span class="chat-tokens text-muted font-mono">{{formatTokens $msg.InputTokens}} in → {{formatTokens $msg.OutputTokens}} out</span>
     {{end}}
   </div>
 
