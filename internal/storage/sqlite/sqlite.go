@@ -3268,7 +3268,6 @@ func runMigrations(db *sql.DB) error {
 		// Check if the PK still lacks llm_backend by inspecting table_info.
 		pkRows, pkErr := db.Query("PRAGMA table_info(token_usage_buckets)")
 		if pkErr == nil {
-			defer func() { _ = pkRows.Close() }()
 			pkCols := make(map[string]bool)
 			for pkRows.Next() {
 				var cid int

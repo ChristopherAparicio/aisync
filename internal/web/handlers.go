@@ -9120,15 +9120,17 @@ func (s *Server) handleAPIProjectInspect(w http.ResponseWriter, r *http.Request)
 			Provider:     ir.Provider,
 			Agent:        ir.Agent,
 			Messages:     ir.Messages,
-			EstCost:      ir.Tokens.EstCost,
 			ProblemCount: len(ir.Problems),
 			TopSeverity:  topSev,
 			Problems:     ir.Problems,
 		}
+		if ir.Tokens != nil {
+			entry.EstCost = ir.Tokens.EstCost
+			report.TotalCost += ir.Tokens.EstCost
+			report.TotalInput += int64(ir.Tokens.Input)
+			report.TotalOutput += int64(ir.Tokens.Output)
+		}
 		report.Sessions = append(report.Sessions, entry)
-		report.TotalCost += ir.Tokens.EstCost
-		report.TotalInput += int64(ir.Tokens.Input)
-		report.TotalOutput += int64(ir.Tokens.Output)
 
 		// Aggregate problems.
 		for _, p := range ir.Problems {

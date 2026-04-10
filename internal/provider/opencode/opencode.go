@@ -7,6 +7,7 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -364,6 +365,7 @@ func (p *Provider) ExportIncremental(sessionID session.ID, messageOffset int, mo
 	}
 	newParts, err := dbr.loadPartsForMessages(msgIDs)
 	if err != nil {
+		log.Printf("opencode: failed to load parts for session %s: %v (continuing without tool data)", sessionID, err)
 		newParts = nil // fallback: no parts (tools won't be populated)
 	}
 
@@ -443,7 +445,10 @@ func (p *Provider) ExportIncremental(sessionID session.ID, messageOffset int, mo
 	}
 
 	// Recompute full token totals from ALL messages (cheap query).
-	allMsgs, _ := dbr.loadMessages(string(sessionID))
+	allMsgs, loadErr := dbr.loadMessages(string(sessionID))
+	if loadErr != nil {
+		log.Printf("opencode: failed to load all messages for token recount in session %s: %v", sessionID, loadErr)
+	}
 	tokenUsage := sumTokens(allMsgs)
 
 	// Extract errors only from new messages — existing session already has old errors.
@@ -472,6 +477,7 @@ func (p *Provider) loadChildSessionsFull(parentID string, mode session.StorageMo
 	for _, cs := range childSessions {
 		child, exportErr := p.Export(session.ID(cs.ID), mode)
 		if exportErr != nil {
+			log.Printf("opencode: skipping child session %s of parent %s: %v", cs.ID, parentID, exportErr)
 			continue
 		}
 		child.ParentID = session.ID(parentID)

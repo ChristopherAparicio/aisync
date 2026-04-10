@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,7 @@ func (r *dbReader) listSessions(projectID string) ([]ocSession, error) {
 			&s.ID, &s.ProjectID, &s.ParentID, &s.Directory, &s.Title,
 			&s.Time.Created, &s.Time.Updated,
 		); err != nil {
+			log.Printf("opencode: dbreader: scan session row: %v", err)
 			continue
 		}
 		sessions = append(sessions, s)
@@ -152,11 +154,13 @@ func (r *dbReader) loadMessages(sessionID string) ([]ocMessage, error) {
 			dataStr string
 		)
 		if err := rows.Scan(&id, &dataStr); err != nil {
+			log.Printf("opencode: dbreader: scan message row: %v", err)
 			continue
 		}
 
 		var msg ocMessage
 		if err := json.Unmarshal([]byte(dataStr), &msg); err != nil {
+			log.Printf("opencode: dbreader: unmarshal message %s: %v", id, err)
 			continue
 		}
 		// The id is a table column, not in the JSON data.
@@ -182,10 +186,12 @@ func (r *dbReader) loadAllPartsForSession(sessionID string) (map[string][]ocPart
 	for rows.Next() {
 		var id, msgID, sessID, dataStr string
 		if err := rows.Scan(&id, &msgID, &sessID, &dataStr); err != nil {
+			log.Printf("opencode: dbreader: scan part row (all for session): %v", err)
 			continue
 		}
 		var part ocPart
 		if err := json.Unmarshal([]byte(dataStr), &part); err != nil {
+			log.Printf("opencode: dbreader: unmarshal part %s: %v", id, err)
 			continue
 		}
 		part.ID = id
@@ -215,11 +221,13 @@ func (r *dbReader) loadParts(messageID string) ([]ocPart, error) {
 			dataStr           string
 		)
 		if err := rows.Scan(&id, &msgID, &sessID, &dataStr); err != nil {
+			log.Printf("opencode: dbreader: scan part row: %v", err)
 			continue
 		}
 
 		var part ocPart
 		if err := json.Unmarshal([]byte(dataStr), &part); err != nil {
+			log.Printf("opencode: dbreader: unmarshal part %s: %v", id, err)
 			continue
 		}
 		// Table columns take precedence — they're authoritative.
@@ -253,11 +261,13 @@ func (r *dbReader) loadMessagesFrom(sessionID string, offset int) ([]ocMessage, 
 			dataStr string
 		)
 		if err := rows.Scan(&id, &dataStr); err != nil {
+			log.Printf("opencode: dbreader: scan message row (from offset): %v", err)
 			continue
 		}
 
 		var msg ocMessage
 		if err := json.Unmarshal([]byte(dataStr), &msg); err != nil {
+			log.Printf("opencode: dbreader: unmarshal message %s (from offset): %v", id, err)
 			continue
 		}
 		msg.ID = id
@@ -298,10 +308,12 @@ func (r *dbReader) loadPartsForMessages(messageIDs []string) (map[string][]ocPar
 	for rows.Next() {
 		var id, msgID, sessID, dataStr string
 		if err := rows.Scan(&id, &msgID, &sessID, &dataStr); err != nil {
+			log.Printf("opencode: dbreader: scan part row (for messages): %v", err)
 			continue
 		}
 		var part ocPart
 		if err := json.Unmarshal([]byte(dataStr), &part); err != nil {
+			log.Printf("opencode: dbreader: unmarshal part %s (for messages): %v", id, err)
 			continue
 		}
 		part.ID = id
@@ -345,6 +357,7 @@ func (r *dbReader) findChildSessions(parentID string) ([]ocSession, error) {
 			&s.ID, &s.ProjectID, &s.ParentID, &s.Directory, &s.Title,
 			&s.Time.Created, &s.Time.Updated,
 		); err != nil {
+			log.Printf("opencode: dbreader: scan child session row: %v", err)
 			continue
 		}
 		children = append(children, s)
@@ -381,6 +394,7 @@ func (r *dbReader) listAllProjects() ([]ocProjectInfo, error) {
 	for rows.Next() {
 		var p ocProjectInfo
 		if err := rows.Scan(&p.ID, &p.Worktree, &p.SessionCount); err != nil {
+			log.Printf("opencode: dbreader: scan project row: %v", err)
 			continue
 		}
 		projects = append(projects, p)
