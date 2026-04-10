@@ -74,7 +74,7 @@
 <!-- ── Compaction Alert ── -->
 <div class="detail-compaction-alert">
   <div class="compaction-header">
-    <span class="compaction-icon">\U0001F4A5</span>
+    <span class="compaction-icon">💥</span>
     <span class="compaction-title">{{.CompactionCount}} Compaction{{if gt .CompactionCount 1}}s{{end}} Detected</span>
     <span class="compaction-summary text-muted">{{.CompactionTokensLost}} tokens lost · {{.CompactionRebuildCost}} rebuild cost · avg {{.CompactionAvgDrop}} drop</span>
   </div>
@@ -101,7 +101,7 @@
 <!-- ── Compaction Detection Not Available ── -->
 <div class="detail-compaction-alert" style="opacity:0.6;">
   <div class="compaction-header">
-    <span class="compaction-icon" style="filter:grayscale(1);">\U0001F4A5</span>
+    <span class="compaction-icon" style="filter:grayscale(1);">💥</span>
     <span class="compaction-title text-muted">Compaction detection not available</span>
     <span class="compaction-summary text-muted">No messages with input token data — provider may not report token counts.</span>
   </div>
@@ -112,7 +112,7 @@
 <!-- ── Cache Miss Timeline ── -->
 <div class="detail-cachemiss-alert">
   <div class="cachemiss-header">
-    <span class="cachemiss-icon">\U000023F1</span>
+    <span class="cachemiss-icon">⏱</span>
     <span class="cachemiss-title">{{.CacheMissCount}} Cache Miss{{if gt .CacheMissCount 1}}es{{end}}</span>
     <span class="cachemiss-summary text-muted">{{.CacheMissWastedTokens}} re-sent at full price · longest break {{.CacheMissLongestGap}}min</span>
   </div>
@@ -353,7 +353,7 @@
 <!-- ── Investigation Hot Spots (Section 8.3) ── -->
 {{if .HasHotspots}}
 <div class="section">
-  <h2 class="section-title">\U0001F525 Investigation Hot Spots
+  <h2 class="section-title">🔥 Investigation Hot Spots
     {{if not .HotspotsPrecomputed}}<span class="badge badge-muted" title="Computed on demand; will be cached after nightly task">live</span>{{end}}
   </h2>
 
