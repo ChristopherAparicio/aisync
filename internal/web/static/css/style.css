@@ -1055,12 +1055,22 @@ tr:hover td { background: var(--bg-hover); }
   border-radius: 8px;
   margin-bottom: 1rem;
 }
+.cachemiss-accordion { }
+.cachemiss-accordion summary { list-style: none; cursor: pointer; }
+.cachemiss-accordion summary::-webkit-details-marker { display: none; }
+.cachemiss-accordion summary::after {
+  content: "▸";
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+.cachemiss-accordion[open] summary::after { transform: rotate(90deg); }
 .cachemiss-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
-  margin-bottom: 0.5rem;
 }
 .cachemiss-icon { font-size: 1.1rem; }
 .cachemiss-title {
@@ -1069,6 +1079,9 @@ tr:hover td { background: var(--bg-hover); }
   font-size: 0.9rem;
 }
 .cachemiss-summary { font-size: 0.8rem; }
+.cachemiss-body {
+  margin-top: 0.5rem;
+}
 .cachemiss-events {
   display: flex;
   flex-direction: column;
@@ -1093,6 +1106,44 @@ tr:hover td { background: var(--bg-hover); }
 }
 .cachemiss-event-tokens {
   font-size: 0.8rem;
+}
+/* Distribution chart (>10 events) */
+.cachemiss-distribution {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.cachemiss-bucket {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+.cachemiss-bucket-label {
+  min-width: 9ch;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.cachemiss-bucket-bar-track {
+  flex: 1;
+  height: 18px;
+  background: var(--bg-card);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.cachemiss-bucket-bar {
+  height: 100%;
+  background: var(--warning);
+  border-radius: 3px;
+  min-width: 2px;
+  transition: width 0.3s ease;
+}
+.cachemiss-bucket-count {
+  min-width: 3ch;
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
 }
 
 /* ── Saturation chart ── */

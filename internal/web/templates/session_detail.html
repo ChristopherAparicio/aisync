@@ -111,22 +111,42 @@
 {{if .HasCacheMisses}}
 <!-- ── Cache Miss Timeline ── -->
 <div class="detail-cachemiss-alert">
-  <div class="cachemiss-header">
-    <span class="cachemiss-icon">⏱</span>
-    <span class="cachemiss-title">{{.CacheMissCount}} Cache Miss{{if gt .CacheMissCount 1}}es{{end}}</span>
-    <span class="cachemiss-summary text-muted">{{.CacheMissWastedTokens}} re-sent at full price · longest break {{.CacheMissLongestGap}}min</span>
-  </div>
-  <div class="cachemiss-events">
-    {{range .CacheMissEvents}}
-    <div class="cachemiss-event">
-      <span class="cachemiss-event-time font-mono">{{.TimeStr}}</span>
-      <span class="cachemiss-event-loc font-mono">msg #{{.MessageIdx}}</span>
-      <span class="cachemiss-event-gap"><span class="badge badge-warning">{{.GapMinutes}}min break</span></span>
-      <span class="cachemiss-event-tokens text-muted font-mono">{{.WastedTokens}} re-sent</span>
+  <details class="cachemiss-accordion">
+    <summary class="cachemiss-header">
+      <span class="cachemiss-icon">⏱</span>
+      <span class="cachemiss-title">{{.CacheMissCount}} Cache Miss{{if gt .CacheMissCount 1}}es{{end}}</span>
+      <span class="cachemiss-summary text-muted">{{.CacheMissWastedTokens}} re-sent at full price · longest break {{.CacheMissLongestGap}}min</span>
+    </summary>
+    <div class="cachemiss-body">
+      {{if .CacheMissShowList}}
+      <!-- ≤10 events: individual list -->
+      <div class="cachemiss-events">
+        {{range .CacheMissEvents}}
+        <div class="cachemiss-event">
+          <span class="cachemiss-event-time font-mono">{{.TimeStr}}</span>
+          <span class="cachemiss-event-loc font-mono">msg #{{.MessageIdx}}</span>
+          <span class="cachemiss-event-gap"><span class="badge badge-warning">{{.GapMinutes}}min break</span></span>
+          <span class="cachemiss-event-tokens text-muted font-mono">{{.WastedTokens}} re-sent</span>
+        </div>
+        {{end}}
+      </div>
+      {{else}}
+      <!-- >10 events: gap distribution chart -->
+      <div class="cachemiss-distribution">
+        {{range .CacheMissBuckets}}
+        <div class="cachemiss-bucket">
+          <span class="cachemiss-bucket-label font-mono">{{.Label}}</span>
+          <div class="cachemiss-bucket-bar-track">
+            <div class="cachemiss-bucket-bar" style="width: {{.Percent}}%"></div>
+          </div>
+          <span class="cachemiss-bucket-count font-mono">{{.Count}}</span>
+        </div>
+        {{end}}
+      </div>
+      {{end}}
+      <p class="text-muted" style="font-size: 0.75rem; margin: 0.5rem 0 0;">Anthropic's prompt cache TTL is ~5 minutes. Breaks longer than this force the entire context to be re-sent at full price instead of the discounted cache-read rate.</p>
     </div>
-    {{end}}
-  </div>
-  <p class="text-muted" style="font-size: 0.75rem; margin: 0.5rem 0 0;">Anthropic's prompt cache TTL is ~5 minutes. Breaks longer than this force the entire context to be re-sent at full price instead of the discounted cache-read rate.</p>
+  </details>
 </div>
 {{end}}
 

@@ -1383,6 +1383,8 @@ type sessionDetailPage struct {
 	CacheMissWastedTokens string // formatted "20K"
 	CacheMissLongestGap   int    // minutes
 	CacheMissEvents       []cacheMissEventView
+	CacheMissShowList     bool                  // true when ≤10 events (show list), false = show distribution
+	CacheMissBuckets      []cacheMissBucketView // gap distribution buckets for chart
 
 	// Section 8.2: Top commands by output size.
 	HasCommandOutput     bool
@@ -1419,6 +1421,13 @@ type cacheMissEventView struct {
 	GapMinutes   int    // gap duration in minutes
 	WastedTokens string // formatted "20K"
 	TimeStr      string // time of the miss "14:30"
+}
+
+// cacheMissBucketView is a gap-duration distribution bucket for the chart view.
+type cacheMissBucketView struct {
+	Label   string // e.g. "5–15 min", "15–30 min", "30–60 min", "1–2 h", "2 h+"
+	Count   int    // number of misses in this bucket
+	Percent int    // percentage of total misses (for bar width)
 }
 
 // compactionEventView is a template-friendly view of a single compaction event.
@@ -1820,6 +1829,50 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 				WastedTokens: formatTokens(e.InputTokens),
 				TimeStr:      e.Timestamp.Format("15:04"),
 			})
+		}
+
+		// Display mode: list for ≤10, distribution chart for >10.
+		const cacheMissListThreshold = 10
+		data.CacheMissShowList = cacheMissTimeline.TotalMisses <= cacheMissListThreshold
+
+		if !data.CacheMissShowList {
+			// Build gap-duration distribution buckets.
+			type bucket struct {
+				label   string
+				minMins int
+				maxMins int
+				count   int
+			}
+			buckets := []bucket{
+				{"5–15 min", 5, 15, 0},
+				{"15–30 min", 15, 30, 0},
+				{"30–60 min", 30, 60, 0},
+				{"1–2 h", 60, 120, 0},
+				{"2–6 h", 120, 360, 0},
+				{"6 h+", 360, 1<<31 - 1, 0},
+			}
+			for _, e := range cacheMissTimeline.Events {
+				for i := range buckets {
+					if e.GapMinutes >= buckets[i].minMins && e.GapMinutes < buckets[i].maxMins {
+						buckets[i].count++
+						break
+					}
+				}
+			}
+			total := cacheMissTimeline.TotalMisses
+			for _, b := range buckets {
+				if b.count > 0 {
+					pct := b.count * 100 / total
+					if pct == 0 {
+						pct = 1 // ensure at least 1% for visibility
+					}
+					data.CacheMissBuckets = append(data.CacheMissBuckets, cacheMissBucketView{
+						Label:   b.label,
+						Count:   b.count,
+						Percent: pct,
+					})
+				}
+			}
 		}
 	}
 
