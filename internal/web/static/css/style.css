@@ -1877,8 +1877,44 @@ code {
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 400px;
-  overflow-y: auto;
+}
+
+/* ── Click-to-expand (clamped) ── */
+
+.chat-content--clamped,
+.chat-thinking-content--clamped,
+.tool-pre--clamped {
+  max-height: 12rem;
+  overflow: hidden;
+  position: relative;
+}
+.chat-content--clamped::after,
+.chat-thinking-content--clamped::after,
+.tool-pre--clamped::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2.5rem;
+  background: linear-gradient(transparent, var(--bg-card));
+  pointer-events: none;
+}
+.chat-expand-btn {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.chat-expand-btn:hover {
+  background: var(--accent);
+  color: #fff;
 }
 
 /* ── Thinking ── */
@@ -3977,24 +4013,7 @@ pre {
   min-width: 2.5rem;
 }
 
-/* Truncate long message content */
-.chat-content {
-  max-height: 200px;
-  overflow: hidden;
-  position: relative;
-  line-height: 1.5;
-}
-
-.chat-content::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 2rem;
-  background: linear-gradient(transparent, var(--bg));
-  pointer-events: none;
-}
+/* (click-to-expand styles live in the chat section above) */
 
 /* ── Project Detail Page ── */
 

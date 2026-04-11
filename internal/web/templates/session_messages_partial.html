@@ -15,13 +15,23 @@
   </div>
 
   {{if $msg.Content}}
-  <div class="chat-content">{{truncate $msg.Content 500}}</div>
+  {{if gt (len $msg.Content) 500}}
+  <div class="chat-content chat-content--clamped">{{$msg.Content}}</div>
+  <button class="chat-expand-btn" onclick="toggleExpand(this)">Show more</button>
+  {{else}}
+  <div class="chat-content">{{$msg.Content}}</div>
+  {{end}}
   {{end}}
 
   {{if $msg.Thinking}}
   <details class="chat-thinking">
     <summary>Thinking</summary>
-    <div class="chat-thinking-content">{{truncate $msg.Thinking 1000}}</div>
+    {{if gt (len $msg.Thinking) 600}}
+    <div class="chat-thinking-content chat-thinking-content--clamped">{{$msg.Thinking}}</div>
+    <button class="chat-expand-btn" onclick="toggleExpand(this)">Show more</button>
+    {{else}}
+    <div class="chat-thinking-content">{{$msg.Thinking}}</div>
+    {{end}}
   </details>
   {{end}}
 
@@ -39,13 +49,23 @@
         {{if .Input}}
         <div class="tool-section">
           <div class="tool-section-label">Input{{if .InputTokens}} <span class="text-muted font-mono">({{formatTokens .InputTokens}} tokens)</span>{{end}}</div>
-          <pre class="tool-pre">{{truncate .Input 1000}}</pre>
+          {{if gt (len .Input) 600}}
+          <pre class="tool-pre tool-pre--clamped">{{.Input}}</pre>
+          <button class="chat-expand-btn" onclick="toggleExpand(this)">Show more</button>
+          {{else}}
+          <pre class="tool-pre">{{.Input}}</pre>
+          {{end}}
         </div>
         {{end}}
         {{if .Output}}
         <div class="tool-section">
           <div class="tool-section-label">Output{{if .OutputTokens}} <span class="text-muted font-mono">({{formatTokens .OutputTokens}} tokens)</span>{{end}}</div>
-          <pre class="tool-pre">{{truncate .Output 1000}}</pre>
+          {{if gt (len .Output) 600}}
+          <pre class="tool-pre tool-pre--clamped">{{.Output}}</pre>
+          <button class="chat-expand-btn" onclick="toggleExpand(this)">Show more</button>
+          {{else}}
+          <pre class="tool-pre">{{.Output}}</pre>
+          {{end}}
         </div>
         {{end}}
       </div>
