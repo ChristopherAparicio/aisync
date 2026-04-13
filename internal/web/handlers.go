@@ -1261,8 +1261,14 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 				cell.Value = formatTokens(sess.TotalTokens)
 				cell.Class = "text-right font-mono"
 			case "cost":
-				cost := estimateTokenCost(sess.TotalTokens)
-				cell.Value = "~" + formatCost(cost)
+				if sess.ActualCost > 0 {
+					cell.Value = formatCost(sess.ActualCost)
+				} else if sess.EstimatedCost > 0 {
+					cell.Value = formatCost(sess.EstimatedCost)
+				} else {
+					cost := estimateTokenCost(sess.TotalTokens)
+					cell.Value = "~" + formatCost(cost)
+				}
 				cell.Class = "text-right font-mono"
 			case "tools":
 				cell.Value = strconv.Itoa(sess.ToolCallCount)

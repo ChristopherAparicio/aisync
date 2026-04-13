@@ -459,7 +459,7 @@ var ValidDashboardColumns = map[string]bool{
 
 // DefaultDashboardColumns is the default column set.
 var DefaultDashboardColumns = []string{
-	"id", "project", "provider", "branch", "summary", "health", "messages", "tokens", "errors", "when",
+	"id", "project", "provider", "branch", "summary", "health", "messages", "tokens", "cost", "errors", "when",
 }
 
 func defaultConfig() configData {

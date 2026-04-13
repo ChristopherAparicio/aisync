@@ -316,6 +316,16 @@ a:hover { text-decoration: underline; }
   color: #fff;
 }
 
+/* ── On-demand drilldown row ── */
+.drilldown-row {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.drilldown-item {
+  flex: 1;
+}
+
 /* ── Compact KPI strip (for home page) ── */
 
 .kpi-strip {
@@ -1078,6 +1088,32 @@ tr:hover td { background: var(--bg-hover); }
   color: var(--text-muted);
   font-size: 0.75rem;
 }
+.compaction-event--hidden {
+  display: none;
+}
+.compaction-accordion {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+.compaction-accordion summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.compaction-accordion summary::-webkit-details-marker { display: none; }
+.compaction-accordion summary .section-chevron {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+.compaction-accordion[open] summary .section-chevron {
+  transform: rotate(90deg);
+}
+.compaction-body {
+  margin-top: 0.5rem;
+}
 
 /* ── Cache miss alert (session detail) ── */
 .detail-cachemiss-alert {
@@ -1669,6 +1705,33 @@ code {
 }
 
 /* ── Session Detail ── */
+
+/* ── Section quick-nav (sticky) ── */
+.detail-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  gap: 0.125rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  margin: 0 -1.5rem 1rem;
+  overflow-x: auto;
+}
+.detail-nav a {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.detail-nav a:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 
 .detail-header {
   background: var(--bg-card);

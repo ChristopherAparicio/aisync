@@ -46,6 +46,17 @@
   {{end}}
 </div>
 
+<!-- ── Section Nav (sticky) ── -->
+<nav class="detail-nav" id="detail-nav">
+  <a href="#" onclick="window.scrollTo({top:0,behavior:'smooth'});return false">Top</a>
+  {{if .HasCompactions}}<a href="#compaction-section" onclick="document.getElementById('compaction-section').scrollIntoView({behavior:'smooth'});return false">Compactions</a>{{end}}
+  <a href="#kpi-section" onclick="document.getElementById('kpi-section').scrollIntoView({behavior:'smooth'});return false">KPIs</a>
+  {{if .HasToolUsage}}<a href="#tool-usage-section" onclick="document.getElementById('tool-usage-section').scrollIntoView({behavior:'smooth'});return false">Tools</a>{{end}}
+  {{if .HasHotspots}}<a href="#hotspots-section" onclick="document.getElementById('hotspots-section').scrollIntoView({behavior:'smooth'});return false">Hot Spots</a>{{end}}
+  {{if .CostBreakdown}}<a href="#cost-section" onclick="document.getElementById('cost-section').scrollIntoView({behavior:'smooth'});return false">Cost</a>{{end}}
+  {{if .Session.Messages}}<a href="#conversation-section" onclick="document.getElementById('conversation-section').scrollIntoView({behavior:'smooth'});return false">Conversation</a>{{end}}
+</nav>
+
 <!-- ── Token Stats ── -->
 <div class="detail-token-stats">
   <div class="token-stat">
@@ -72,30 +83,38 @@
 
 {{if .HasCompactions}}
 <!-- ── Compaction Alert ── -->
-<div class="detail-compaction-alert">
-  <div class="compaction-header">
-    <span class="compaction-icon">💥</span>
-    <span class="compaction-title">{{.CompactionCount}} Compaction{{if gt .CompactionCount 1}}s{{end}} Detected</span>
-    <span class="compaction-summary text-muted">{{.CompactionTokensLost}} tokens lost · {{.CompactionRebuildCost}} rebuild cost · avg {{.CompactionAvgDrop}} drop</span>
-  </div>
-  {{if or .CompactionRate .CompactionLastQuartile (gt .CompactionCascadeCount 0)}}
-  <div class="compaction-metrics" style="display:flex;gap:1.5rem;margin:0.5rem 0 0.25rem;font-size:0.8rem;">
-    {{if .CompactionRate}}<span title="Compactions per user message">Rate: <span class="font-mono">{{.CompactionRate}}</span>/msg</span>{{end}}
-    {{if .CompactionLastQuartile}}<span title="Rate over last 25% of user messages — detects end-of-session acceleration">Last-quartile: <span class="font-mono">{{.CompactionLastQuartile}}</span>/msg</span>{{end}}
-    {{if gt .CompactionCascadeCount 0}}<span title="Multi-pass compaction events (incremental drops merged)">{{.CompactionCascadeCount}} cascade{{if gt .CompactionCascadeCount 1}}s{{end}}</span>{{end}}
-  </div>
-  {{end}}
-  <div class="compaction-events">
-    {{range .CompactionEvents}}
-    <div class="compaction-event">
-      <span class="compaction-event-loc">msg #{{.BeforeMsg}} → #{{.AfterMsg}}</span>
-      <span class="compaction-event-drop text-error">-{{.TokensLost}}</span>
-      <span class="compaction-event-pct">({{.DropPercent}})</span>
-      {{if .CacheReset}}<span class="badge badge-poor" title="Cache invalidated — entire context re-sent at full price">cache reset</span>{{end}}
-      {{if .IsCascade}}<span class="badge badge-warning" title="Multi-pass incremental compaction ({{.MergedLegs}} legs merged)">cascade ×{{.MergedLegs}}</span>{{end}}
+<div class="detail-compaction-alert" id="compaction-section">
+  <details class="compaction-accordion"{{if le .CompactionCount 5}} open{{end}}>
+    <summary class="compaction-header">
+      <span class="compaction-icon">💥</span>
+      <span class="compaction-title">{{.CompactionCount}} Compaction{{if gt .CompactionCount 1}}s{{end}} Detected</span>
+      <span class="compaction-summary text-muted">{{.CompactionTokensLost}} tokens lost · {{.CompactionRebuildCost}} rebuild cost · avg {{.CompactionAvgDrop}} drop</span>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="compaction-body">
+      {{if or .CompactionRate .CompactionLastQuartile (gt .CompactionCascadeCount 0)}}
+      <div class="compaction-metrics" style="display:flex;gap:1.5rem;margin:0.5rem 0 0.25rem;font-size:0.8rem;">
+        {{if .CompactionRate}}<span title="Compactions per user message">Rate: <span class="font-mono">{{.CompactionRate}}</span>/msg</span>{{end}}
+        {{if .CompactionLastQuartile}}<span title="Rate over last 25% of user messages — detects end-of-session acceleration">Last-quartile: <span class="font-mono">{{.CompactionLastQuartile}}</span>/msg</span>{{end}}
+        {{if gt .CompactionCascadeCount 0}}<span title="Multi-pass compaction events (incremental drops merged)">{{.CompactionCascadeCount}} cascade{{if gt .CompactionCascadeCount 1}}s{{end}}</span>{{end}}
+      </div>
+      {{end}}
+      <div class="compaction-events">
+        {{range $i, $e := .CompactionEvents}}
+        <div class="compaction-event{{if ge $i 5}} compaction-event--hidden{{end}}">
+          <span class="compaction-event-loc">msg #{{$e.BeforeMsg}} → #{{$e.AfterMsg}}</span>
+          <span class="compaction-event-drop text-error">-{{$e.TokensLost}}</span>
+          <span class="compaction-event-pct">({{$e.DropPercent}})</span>
+          {{if $e.CacheReset}}<span class="badge badge-poor" title="Cache invalidated — entire context re-sent at full price">cache reset</span>{{end}}
+          {{if $e.IsCascade}}<span class="badge badge-warning" title="Multi-pass incremental compaction ({{$e.MergedLegs}} legs merged)">cascade ×{{$e.MergedLegs}}</span>{{end}}
+        </div>
+        {{end}}
+        {{if gt .CompactionCount 5}}
+        <button class="chat-expand-btn" onclick="this.parentElement.querySelectorAll('.compaction-event--hidden').forEach(function(e){e.classList.remove('compaction-event--hidden')});this.remove();">Show all {{.CompactionCount}} compactions</button>
+        {{end}}
+      </div>
     </div>
-    {{end}}
-  </div>
+  </details>
 </div>
 {{else if eq .CompactionDetectionStatus "none"}}
 <!-- ── Compaction Detection Not Available ── -->
@@ -170,40 +189,8 @@
   </button>
 </div>
 
-<!-- ── Restore Panel ── -->
-<div class="restore-panel" id="restore-panel">
-  <div class="restore-header">
-    <h2 class="restore-title">Restore Session</h2>
-    <span class="text-muted">Run this command in your project directory</span>
-  </div>
-  <div class="restore-controls">
-    <label class="restore-label" for="restore-provider">Provider</label>
-    <select id="restore-provider" name="provider" class="restore-select"
-      hx-get="/partials/restore-command/{{.Session.ID}}"
-      hx-target="#restore-cmd-wrap"
-      hx-swap="innerHTML"
-      hx-include="[name='provider'],[name='context']">
-      <option value="">Same ({{.Session.Provider}})</option>
-      <option value="claude-code">Claude Code</option>
-      <option value="opencode">OpenCode</option>
-      <option value="context">CONTEXT.md</option>
-    </select>
-    <label class="restore-check">
-      <input type="checkbox" name="context" value="true"
-        hx-get="/partials/restore-command/{{.Session.ID}}"
-        hx-target="#restore-cmd-wrap"
-        hx-swap="innerHTML"
-        hx-include="[name='provider'],[name='context']">
-      As CONTEXT.md
-    </label>
-  </div>
-  <div id="restore-cmd-wrap">
-    {{template "restore_command" .RestoreCmd}}
-  </div>
-</div>
-
 <!-- ── KPI Row ── -->
-<div class="kpi-grid detail-kpis">
+<div class="kpi-grid detail-kpis" id="kpi-section">
   <div class="kpi-card">
     <div class="label">Messages</div>
     <div class="value">{{len .Session.Messages}}</div>
@@ -228,28 +215,22 @@
   </div>
 </div>
 
-<!-- ── Session Events (HTMX drill-down) ── -->
-<div class="section" style="margin-top:1rem">
-  <h2 class="section-title">
-    Events
-    <button class="action-btn action-btn--primary" style="margin-left:0.5rem;font-size:0.75rem"
+<!-- ── On-demand drill-downs (Events / Diagnostics) ── -->
+<div class="drilldown-row">
+  <div class="drilldown-item" id="events-drilldown">
+    <button class="action-btn action-btn--primary"
             hx-get="/partials/session-events/{{.Session.ID}}"
             hx-target="#session-events-panel"
             hx-swap="innerHTML">Load Events</button>
-  </h2>
-  <div id="session-events-panel"></div>
-</div>
-
-<!-- ── Session Diagnostics (HTMX drill-down) ── -->
-<div class="section" style="margin-top:1rem">
-  <h2 class="section-title">
-    Diagnostics
-    <button class="action-btn action-btn--primary" style="margin-left:0.5rem;font-size:0.75rem"
+    <div id="session-events-panel"></div>
+  </div>
+  <div class="drilldown-item" id="diagnostics-drilldown">
+    <button class="action-btn action-btn--primary"
             hx-get="/partials/inspect/{{.Session.ID}}"
             hx-target="#inspect-panel"
             hx-swap="innerHTML">Run Inspection</button>
-  </h2>
-  <div id="inspect-panel"></div>
+    <div id="inspect-panel"></div>
+  </div>
 </div>
 
 <!-- ── Work Objective ── -->
@@ -303,7 +284,7 @@
 
 <!-- ── Tool Usage Breakdown ── -->
 {{if .HasToolUsage}}
-<div class="section">
+<div class="section" id="tool-usage-section">
   <details class="section-accordion">
     <summary>
       <h2 class="section-title">Tool Usage <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .ToolUsage}} tools · {{.ToolCallCount}} calls</span></h2>
@@ -386,7 +367,7 @@
 
 <!-- ── Investigation Hot Spots (Section 8.3) ── -->
 {{if .HasHotspots}}
-<div class="section">
+<div class="section" id="hotspots-section">
   <details class="section-accordion">
     <summary>
       <h2 class="section-title">🔥 Hot Spots
@@ -520,7 +501,7 @@
 
 <!-- ── Cost Breakdown ── -->
 {{if .CostBreakdown}}
-<div class="section">
+<div class="section" id="cost-section">
   <details class="section-accordion">
     <summary>
       <h2 class="section-title">Cost Breakdown <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .CostBreakdown}} model{{if gt (len .CostBreakdown) 1}}s{{end}} · {{formatCost .TotalCost}}</span></h2>
@@ -666,9 +647,47 @@
 </div>
 {{end}}
 
+<!-- ── Restore Panel ── -->
+<div class="section">
+  <details class="section-accordion">
+    <summary>
+      <h2 class="section-title">Restore Session <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">run in your project directory</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <div class="restore-panel" id="restore-panel">
+        <div class="restore-controls">
+          <label class="restore-label" for="restore-provider">Provider</label>
+          <select id="restore-provider" name="provider" class="restore-select"
+            hx-get="/partials/restore-command/{{.Session.ID}}"
+            hx-target="#restore-cmd-wrap"
+            hx-swap="innerHTML"
+            hx-include="[name='provider'],[name='context']">
+            <option value="">Same ({{.Session.Provider}})</option>
+            <option value="claude-code">Claude Code</option>
+            <option value="opencode">OpenCode</option>
+            <option value="context">CONTEXT.md</option>
+          </select>
+          <label class="restore-check">
+            <input type="checkbox" name="context" value="true"
+              hx-get="/partials/restore-command/{{.Session.ID}}"
+              hx-target="#restore-cmd-wrap"
+              hx-swap="innerHTML"
+              hx-include="[name='provider'],[name='context']">
+            As CONTEXT.md
+          </label>
+        </div>
+        <div id="restore-cmd-wrap">
+          {{template "restore_command" .RestoreCmd}}
+        </div>
+      </div>
+    </div>
+  </details>
+</div>
+
 <!-- ── Conversation ── -->
 {{if .Session.Messages}}
-<div class="section">
+<div class="section" id="conversation-section">
   <details class="section-accordion" open>
     <summary>
       <h2 class="section-title">Conversation <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .Session.Messages}} messages{{if gt .ErrorCount 0}} · <span class="text-danger">{{.ErrorCount}} errors</span>{{end}}</span></h2>

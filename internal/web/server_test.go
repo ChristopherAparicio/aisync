@@ -1499,7 +1499,7 @@ func TestBuildColumnDefs_default(t *testing.T) {
 	srv := newTestServer(t) // srv.cfg is nil
 	cols := srv.buildColumnDefs()
 
-	want := []string{"id", "project", "provider", "branch", "summary", "health", "messages", "tokens", "errors", "when"}
+	want := []string{"id", "project", "provider", "branch", "summary", "health", "messages", "tokens", "cost", "errors", "when"}
 	if len(cols) != len(want) {
 		t.Fatalf("got %d columns, want %d", len(cols), len(want))
 	}
@@ -1605,7 +1605,7 @@ func TestSessionsList_dynamicColumnsInHTML(t *testing.T) {
 
 	body := w.Body.String()
 	// Should contain default column headers.
-	for _, label := range []string{"ID", "Provider", "Branch", "Summary", "Msgs", "Tokens", "Errs", "When"} {
+	for _, label := range []string{"ID", "Provider", "Branch", "Summary", "Msgs", "Tokens", "Cost", "Errs", "When"} {
 		if !strings.Contains(body, label) {
 			t.Errorf("expected column header %q in HTML", label)
 		}
