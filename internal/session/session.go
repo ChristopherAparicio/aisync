@@ -10,34 +10,74 @@ import "time"
 
 // Session represents a captured AI coding session.
 type Session struct {
-	ExportedAt      time.Time      `json:"exported_at"`
-	CreatedAt       time.Time      `json:"created_at"`
-	ProjectPath     string         `json:"project_path"`
-	RemoteURL       string         `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
-	ExportedBy      string         `json:"exported_by,omitempty"`
-	ParentID        ID             `json:"parent_id,omitempty"`
-	OwnerID         ID             `json:"owner_id,omitempty"`
-	StorageMode     StorageMode    `json:"storage_mode"`
-	Summary         string         `json:"summary,omitempty"`
-	ID              ID             `json:"id"`
-	Provider        ProviderName   `json:"provider"`
-	Agent           string         `json:"agent"`
-	Branch          string         `json:"branch,omitempty"`
-	CommitSHA       string         `json:"commit_sha,omitempty"`
-	Messages        []Message      `json:"messages,omitempty"`
-	Children        []Session      `json:"children,omitempty"`
-	Links           []Link         `json:"links,omitempty"`
-	FileChanges     []FileChange   `json:"file_changes,omitempty"`
-	TokenUsage      TokenUsage     `json:"token_usage"`
-	SessionType     string         `json:"session_type,omitempty"`      // classification tag: feature, bug, refactor, etc.
-	ProjectCategory string         `json:"project_category,omitempty"`  // project-level category: backend, frontend, ops, etc.
-	ForkedAtMessage int            `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
-	Status          SessionStatus  `json:"status,omitempty"`            // lifecycle status: active, idle, archived
-	Errors          []SessionError `json:"errors,omitempty"`            // structured errors extracted from the session
-	Version         int            `json:"version"`
-	SourceUpdatedAt int64          `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
-	EstimatedCost   float64        `json:"-"` // API-equivalent cost in USD; set by service layer before Save, not serialized in payload
-	ActualCost      float64        `json:"-"` // actual provider-reported cost; computed from messages at Save time, not serialized
+	ExportedAt      time.Time       `json:"exported_at"`
+	CreatedAt       time.Time       `json:"created_at"`
+	ProjectPath     string          `json:"project_path"`
+	RemoteURL       string          `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
+	ExportedBy      string          `json:"exported_by,omitempty"`
+	ParentID        ID              `json:"parent_id,omitempty"`
+	OwnerID         ID              `json:"owner_id,omitempty"`
+	StorageMode     StorageMode     `json:"storage_mode"`
+	Summary         string          `json:"summary,omitempty"`
+	ID              ID              `json:"id"`
+	Provider        ProviderName    `json:"provider"`
+	Agent           string          `json:"agent"`
+	Branch          string          `json:"branch,omitempty"`
+	CommitSHA       string          `json:"commit_sha,omitempty"`
+	Messages        []Message       `json:"messages,omitempty"`
+	Children        []Session       `json:"children,omitempty"`
+	Links           []Link          `json:"links,omitempty"`
+	FileChanges     []FileChange    `json:"file_changes,omitempty"`
+	TokenUsage      TokenUsage      `json:"token_usage"`
+	SessionType     string          `json:"session_type,omitempty"`      // classification tag: feature, bug, refactor, etc.
+	ProjectCategory string          `json:"project_category,omitempty"`  // project-level category: backend, frontend, ops, etc.
+	ForkedAtMessage int             `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
+	Status          SessionStatus   `json:"status,omitempty"`            // lifecycle status: active, idle, archived
+	Errors          []SessionError  `json:"errors,omitempty"`            // structured errors extracted from the session
+	Context         *SessionContext `json:"context,omitempty"`           // agent environment context (tools, skills, hooks, version)
+	Version         int             `json:"version"`
+	SourceUpdatedAt int64           `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
+	EstimatedCost   float64         `json:"-"` // API-equivalent cost in USD; set by service layer before Save, not serialized in payload
+	ActualCost      float64         `json:"-"` // actual provider-reported cost; computed from messages at Save time, not serialized
+}
+
+// SessionContext captures the agent environment context that was active during
+// the session. This includes available tools, loaded skills, hook configuration,
+// and agent metadata. Populated from JSONL attachment/system/metadata lines.
+//
+// This is NOT the full system prompt (which includes proprietary agent internals),
+// but it captures the observable/reconstructible parts: tools, skills, hooks.
+type SessionContext struct {
+	// ToolsAvailable lists tools the agent had access to (builtin + MCP).
+	// Populated from deferred_tools_delta attachment lines.
+	ToolsAvailable []string `json:"tools_available,omitempty"`
+
+	// SkillsListing is the raw skill listing text injected into the system prompt.
+	// Populated from skill_listing attachment lines.
+	SkillsListing string `json:"skills_listing,omitempty"`
+
+	// Hooks records the stop hooks that ran after agent messages.
+	// Populated from system/stop_hook_summary lines.
+	Hooks []HookExecution `json:"hooks,omitempty"`
+
+	// AgentVersion is the agent binary version (e.g. "2.1.101").
+	// Populated from the "version" field on JSONL lines.
+	AgentVersion string `json:"agent_version,omitempty"`
+
+	// Entrypoint is how the agent was launched (e.g. "claude-desktop", "cli").
+	// Populated from the "entrypoint" field on JSONL lines.
+	Entrypoint string `json:"entrypoint,omitempty"`
+
+	// PermissionMode is the permission mode (e.g. "default", "plan").
+	// Populated from permission-mode lines.
+	PermissionMode string `json:"permission_mode,omitempty"`
+}
+
+// HookExecution records a single hook that ran after an agent message.
+type HookExecution struct {
+	Command    string `json:"command"`
+	DurationMs int    `json:"duration_ms,omitempty"`
+	HasError   bool   `json:"has_error,omitempty"`
 }
 
 // Summary is a lightweight representation of a session for listings.
