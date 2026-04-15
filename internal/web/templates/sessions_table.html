@@ -24,7 +24,7 @@
         {{range .Rows}}
         <tr>
           {{range .Cells}}
-          <td class="{{.Class}}">
+          <td class="{{.Class}}"{{if .Tooltip}} data-tippy-content="{{.Tooltip}}"{{end}}>
             {{if and .IsLink .LinkHref}}<a href="{{.LinkHref}}">{{.Value}}</a>
             {{else if .IsLink}}<a href="/sessions/{{.LinkID}}">{{.Value}}</a>
             {{else if .IsBadge}}<span class="badge badge-provider">{{.Value}}</span>

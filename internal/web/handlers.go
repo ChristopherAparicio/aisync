@@ -873,6 +873,7 @@ type sessionCell struct {
 	IsBadge  bool   // wrap in <span class="badge badge-provider">
 	LinkID   string // session ID for the link target (used when LinkHref is empty)
 	LinkHref string // explicit link URL (takes precedence over LinkID)
+	Tooltip  string // if set, rendered as data-tippy-content on the <td>
 }
 
 type sessionsPage struct {
@@ -1112,20 +1113,20 @@ func (s *Server) getDashboardSortOrder() string {
 
 // allColumnDefs maps column IDs to their display definitions.
 var allColumnDefs = map[string]columnDef{
-	"id":         {ID: "id", Label: "ID", Class: ""},
-	"project":    {ID: "project", Label: "Project", Class: ""},
-	"provider":   {ID: "provider", Label: "Provider", Class: ""},
-	"agent":      {ID: "agent", Label: "Agent", Class: ""},
-	"branch":     {ID: "branch", Label: "Branch", Class: ""},
-	"summary":    {ID: "summary", Label: "Summary", Class: ""},
-	"health":     {ID: "health", Label: "Health", Class: ""},
-	"messages":   {ID: "messages", Label: "Msgs", Class: "text-right"},
-	"tokens":     {ID: "tokens", Label: "Tokens", Class: "text-right"},
-	"cost":       {ID: "cost", Label: "Cost", Class: "text-right"},
-	"tools":      {ID: "tools", Label: "Tools", Class: "text-right"},
-	"errors":     {ID: "errors", Label: "Errs", Class: "text-right"},
-	"error_rate": {ID: "error_rate", Label: "Errs", Class: "text-right"}, // alias for "errors"
-	"when":       {ID: "when", Label: "When", Class: ""},
+	"id":         {ID: "id", Label: "ID", Class: "col-id"},
+	"project":    {ID: "project", Label: "Project", Class: "col-project"},
+	"provider":   {ID: "provider", Label: "Provider", Class: "col-provider"},
+	"agent":      {ID: "agent", Label: "Agent", Class: "col-agent"},
+	"branch":     {ID: "branch", Label: "Branch", Class: "col-branch"},
+	"summary":    {ID: "summary", Label: "Summary", Class: "col-summary"},
+	"health":     {ID: "health", Label: "Health", Class: "col-health"},
+	"messages":   {ID: "messages", Label: "Msgs", Class: "text-right col-num"},
+	"tokens":     {ID: "tokens", Label: "Tokens", Class: "text-right col-num"},
+	"cost":       {ID: "cost", Label: "Cost", Class: "text-right col-num"},
+	"tools":      {ID: "tools", Label: "Tools", Class: "text-right col-num"},
+	"errors":     {ID: "errors", Label: "Errs", Class: "text-right col-num-sm"},
+	"error_rate": {ID: "error_rate", Label: "Errs", Class: "text-right col-num-sm"}, // alias for "errors"
+	"when":       {ID: "when", Label: "When", Class: "col-when"},
 }
 
 // providerShortName returns a compact display label for provider names.
@@ -1193,10 +1194,12 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 			cell := sessionCell{}
 			switch col.ID {
 			case "id":
-				cell.Value = truncate(string(sess.ID), 12)
+				fullID := string(sess.ID)
+				cell.Value = fullID
 				cell.IsLink = true
-				cell.LinkID = string(sess.ID)
-				cell.Class = "font-mono text-muted"
+				cell.LinkID = fullID
+				cell.Class = "font-mono text-muted cell-id"
+				cell.Tooltip = fullID
 			case "project":
 				name := projectBaseName(sess.ProjectPath)
 				if name == "" || name == "." {
@@ -1206,6 +1209,7 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 					cell.IsLink = true
 					cell.LinkHref = "/projects" + sess.ProjectPath
 					cell.Class = "cell-project"
+					cell.Tooltip = sess.ProjectPath
 				}
 				cell.Value = name
 			case "provider":
@@ -1220,20 +1224,22 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 				}
 			case "branch":
 				if sess.Branch != "" {
-					cell.Value = truncate(sess.Branch, 30)
+					cell.Value = sess.Branch
 					cell.Class = "cell-branch"
+					cell.Tooltip = sess.Branch
 				} else {
 					cell.Value = "—"
 					cell.Class = "text-muted"
 				}
 			case "summary":
 				if sess.Summary != "" {
-					cell.Value = truncate(sess.Summary, 90)
+					cell.Value = sess.Summary
 					cell.IsLink = true
 					cell.LinkID = string(sess.ID)
 					cell.Class = "cell-summary"
+					cell.Tooltip = sess.Summary
 				} else {
-					cell.Value = truncate(string(sess.ID), 16)
+					cell.Value = string(sess.ID)
 					cell.IsLink = true
 					cell.LinkID = string(sess.ID)
 					cell.Class = "text-muted font-mono cell-summary"
