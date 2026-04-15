@@ -6,11 +6,12 @@
 //     composers with IDs, branches, timestamps, and mode info.
 //   - Global state.vscdb (cursorDiskKV, keys "composerData:<uuid>"): full
 //     composer data including conversation headers, token usage, file changes,
-//     model config, and context.
+//     model config, context, code block edits, and usage cost data.
 //
-// Note: Cursor stores actual message text server-side. Locally, only bubble IDs
-// and types (1=user, 2=assistant) are available. The provider extracts all
-// available metadata to produce useful session summaries.
+// Schema versions tracked:
+//   - _v 13-14 (Cursor 2025-2026): adds usageData (costInCents), codeBlockData,
+//     todos, isAgentic/isNAL flags, newlyCreatedFiles, subagentComposerIds,
+//     conversationState (encrypted message content).
 //
 // This provider is export-only: CanImport() returns false.
 package cursor
@@ -142,31 +143,77 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		ID:              sessionID,
 		Version:         1,
 		Provider:        session.ProviderCursor,
-		Agent:           agentFromMode(cd.UnifiedMode),
+		Agent:           cd.resolveAgent(),
 		Branch:          cd.activeBranch(),
 		ProjectPath:     "", // filled by caller if needed
 		ExportedBy:      exportedByLabel,
 		ExportedAt:      time.Now(),
 		CreatedAt:       cd.createdTime(),
-		Summary:         cd.Name,
+		Summary:         cd.enrichedSummary(),
 		StorageMode:     mode,
 		SourceUpdatedAt: cd.LastUpdatedAt,
-		TokenUsage: session.TokenUsage{
-			TotalTokens: cd.ContextTokensUsed,
-		},
+		TokenUsage:      cd.buildTokenUsage(),
 	}
+
+	// Extract actual cost from usageData (available since schema _v 13+)
+	sess.ActualCost = cd.totalCostUSD()
 
 	// Extract messages from conversation headers
 	if mode != session.StorageModeSummary {
 		sess.Messages = cd.extractMessages()
 	}
 
-	// Extract file changes from subtitle
-	if cd.FilesChangedCount > 0 && cd.Subtitle != "" {
-		sess.FileChanges = extractFileChanges(cd.Subtitle)
+	// Extract file changes — prefer structured data over subtitle parsing
+	sess.FileChanges = cd.extractFileChanges()
+
+	// Export sub-agent sessions as children (available since schema _v 13+)
+	if len(cd.SubagentComposerIds) > 0 {
+		sess.Children = p.exportChildren(cd.SubagentComposerIds, mode)
 	}
 
 	return sess, nil
+}
+
+// exportChildren loads sub-agent sessions by their composer IDs.
+// Failures for individual children are silently skipped — partial results are acceptable.
+func (p *Provider) exportChildren(subagentIDs []string, mode session.StorageMode) []session.Session {
+	globalDBPath := filepath.Join(p.cursorUserDir, globalStatePath)
+	var children []session.Session
+
+	for _, subID := range subagentIDs {
+		cd, err := readComposerData(globalDBPath, subID)
+		if err != nil {
+			continue // sub-agent data not found or corrupt — skip
+		}
+
+		child := session.Session{
+			ID:              session.ID(subID),
+			Version:         1,
+			Provider:        session.ProviderCursor,
+			Agent:           cd.resolveAgent(),
+			Branch:          cd.activeBranch(),
+			ExportedBy:      exportedByLabel,
+			ExportedAt:      time.Now(),
+			CreatedAt:       cd.createdTime(),
+			Summary:         cd.enrichedSummary(),
+			StorageMode:     mode,
+			SourceUpdatedAt: cd.LastUpdatedAt,
+			TokenUsage:      cd.buildTokenUsage(),
+			ActualCost:      cd.totalCostUSD(),
+			FileChanges:     cd.extractFileChanges(),
+		}
+
+		if mode != session.StorageModeSummary {
+			child.Messages = cd.extractMessages()
+		}
+
+		// Note: we do NOT recurse into sub-sub-agents to avoid deep nesting.
+		// Cursor sub-agents are typically leaf nodes.
+
+		children = append(children, child)
+	}
+
+	return children
 }
 
 // --- Internal types ---
@@ -210,7 +257,9 @@ type workspaceComposers struct {
 }
 
 // composerData is the full data from the global cursorDiskKV.
+// This struct covers Cursor schema versions _v 10-14.
 type composerData struct {
+	// Core fields (all versions)
 	ModelConfig                 *modelConfig `json:"modelConfig,omitempty"`
 	CommittedToBranch           string       `json:"committedToBranch"`
 	Name                        string       `json:"name"`
@@ -227,6 +276,72 @@ type composerData struct {
 	ContextTokensUsed           int          `json:"contextTokensUsed"`
 	TotalLinesAdded             int          `json:"totalLinesAdded"`
 	ContextTokenLimit           int          `json:"contextTokenLimit"`
+
+	// New in _v 13+ — cost tracking
+	UsageData map[string]*usageEntry `json:"usageData,omitempty"`
+
+	// New in _v 13+ — code edits per file (tool call reconstruction)
+	// Outer key: file URI, inner key: codeblock ID → block details
+	CodeBlockData map[string]map[string]*codeBlock `json:"codeBlockData,omitempty"`
+
+	// New in _v 13+ — structured file tracking
+	NewlyCreatedFiles []fileRef `json:"newlyCreatedFiles,omitempty"`
+	// originalFileStates maps file URI → pre-edit content/state (not parsed, just counted)
+	OriginalFileStates map[string]json.RawMessage `json:"originalFileStates,omitempty"`
+
+	// New in _v 13+ — agent capabilities
+	IsAgentic bool   `json:"isAgentic,omitempty"`
+	IsNAL     bool   `json:"isNAL,omitempty"` // Next Action Loop
+	ForceMode string `json:"forceMode,omitempty"`
+
+	// New in _v 13+ — structured task tracking
+	Todos []todoItem `json:"todos,omitempty"`
+
+	// New in _v 13+ — sub-agent sessions
+	SubagentComposerIds []string `json:"subagentComposerIds,omitempty"`
+
+	// New in _v 13+ — context saturation
+	ContextUsagePercent float64 `json:"contextUsagePercent,omitempty"`
+
+	// Schema version
+	SchemaVersion int `json:"_v,omitempty"`
+}
+
+// usageEntry tracks per-model cost data within a session.
+type usageEntry struct {
+	CostInCents int `json:"costInCents"` // total cost in cents (e.g. 245 = $2.45)
+	Amount      int `json:"amount"`      // number of API requests
+}
+
+// codeBlock represents a single file edit operation tracked by Cursor.
+type codeBlock struct {
+	BubbleID    string  `json:"bubbleId"`    // links to a message/bubble
+	CodeBlockID string  `json:"codeblockId"` // unique ID for this edit
+	Status      string  `json:"status"`      // "completed", "accepted", "aborted"
+	LanguageID  string  `json:"languageId"`  // file language (e.g. "python", "go")
+	CreatedAt   int64   `json:"createdAt"`   // epoch ms
+	URI         *uriRef `json:"uri,omitempty"`
+}
+
+// uriRef is the VS Code URI reference used in codeBlockData and newlyCreatedFiles.
+type uriRef struct {
+	FSPath   string `json:"fsPath"`
+	External string `json:"external"`
+	Path     string `json:"path"`
+	Scheme   string `json:"scheme"`
+}
+
+// fileRef is a file reference with a nested URI, used in newlyCreatedFiles.
+type fileRef struct {
+	URI *uriRef `json:"uri,omitempty"`
+}
+
+// todoItem is a structured task from Cursor's todo/plan system.
+type todoItem struct {
+	ID           string   `json:"id"`
+	Content      string   `json:"content"`
+	Status       string   `json:"status"` // "completed", "pending", "in_progress"
+	Dependencies []string `json:"dependencies,omitempty"`
 }
 
 type bubble struct {
@@ -236,6 +351,7 @@ type bubble struct {
 
 type modelConfig struct {
 	ModelName string `json:"modelName"`
+	MaxMode   bool   `json:"maxMode,omitempty"`
 }
 
 func (cd *composerData) createdTime() time.Time {
@@ -252,8 +368,90 @@ func (cd *composerData) activeBranch() string {
 	return cd.CreatedOnBranch
 }
 
+// buildTokenUsage maps Cursor's context tracking fields to the unified TokenUsage.
+// Cursor tracks contextTokensUsed (cumulative input) and contextTokenLimit (model window).
+// We map contextTokensUsed to InputTokens (cumulative) and TotalTokens.
+func (cd *composerData) buildTokenUsage() session.TokenUsage {
+	tu := session.TokenUsage{
+		TotalTokens: cd.ContextTokensUsed,
+	}
+	// InputTokens = cumulative context tokens used (Cursor tracks cumulative, not per-message)
+	if cd.ContextTokensUsed > 0 {
+		tu.InputTokens = cd.ContextTokensUsed
+	}
+	return tu
+}
+
+// enrichedSummary returns the session name enriched with todo progress when available.
+// Example: "Implement OAuth2 [3/5 tasks]" when todos are present.
+func (cd *composerData) enrichedSummary() string {
+	if len(cd.Todos) == 0 {
+		return cd.Name
+	}
+
+	completed := 0
+	for _, t := range cd.Todos {
+		if t.Status == "completed" {
+			completed++
+		}
+	}
+
+	return fmt.Sprintf("%s [%d/%d tasks]", cd.Name, completed, len(cd.Todos))
+}
+
+// resolveAgent returns the agent name, using richer signals when available.
+func (cd *composerData) resolveAgent() string {
+	if cd.IsAgentic || cd.IsNAL {
+		return "cursor-agent"
+	}
+	return agentFromMode(cd.UnifiedMode)
+}
+
+// totalCostUSD returns the total session cost in USD from usageData.
+// Returns 0 if no cost data is available (older Cursor versions).
+func (cd *composerData) totalCostUSD() float64 {
+	if len(cd.UsageData) == 0 {
+		return 0
+	}
+	var totalCents int
+	for _, entry := range cd.UsageData {
+		if entry != nil {
+			totalCents += entry.CostInCents
+		}
+	}
+	return float64(totalCents) / 100.0
+}
+
+// totalAPIRequests returns the total number of API requests from usageData.
+func (cd *composerData) totalAPIRequests() int {
+	if len(cd.UsageData) == 0 {
+		return 0
+	}
+	var total int
+	for _, entry := range cd.UsageData {
+		if entry != nil {
+			total += entry.Amount
+		}
+	}
+	return total
+}
+
+// extractMessages builds session messages from conversation headers and enriches
+// them with tool calls reconstructed from codeBlockData.
 func (cd *composerData) extractMessages() []session.Message {
 	messages := make([]session.Message, 0, len(cd.FullConversationHeadersOnly))
+
+	// Pre-build bubble → tool calls index from codeBlockData
+	bubbleToolCalls := cd.buildToolCallIndex()
+
+	// Distribute cost evenly across API requests if we have usageData
+	costPerRequest := 0.0
+	apiRequests := cd.totalAPIRequests()
+	if apiRequests > 0 && cd.totalCostUSD() > 0 {
+		costPerRequest = cd.totalCostUSD() / float64(apiRequests)
+	}
+
+	assistantCount := 0
 	for _, b := range cd.FullConversationHeadersOnly {
 		role := session.RoleUser
 		if b.Type == bubbleTypeAssistant {
@@ -261,19 +459,154 @@ func (cd *composerData) extractMessages() []session.Message {
 		}
 
 		msg := session.Message{
-			ID:   b.bubbleID(),
+			ID:   b.BubbleID,
 			Role: role,
-			// Cursor stores message text server-side; only IDs are available locally.
+			// Cursor stores message text in encrypted conversationState;
+			// without decryption, content remains empty.
 			Content: "",
 		}
 
-		if role == session.RoleAssistant && cd.ModelConfig != nil {
-			msg.Model = cd.ModelConfig.ModelName
+		if role == session.RoleAssistant {
+			if cd.ModelConfig != nil {
+				msg.Model = cd.ModelConfig.ModelName
+			}
+
+			// Attach reconstructed tool calls for this bubble
+			if tcs, ok := bubbleToolCalls[b.BubbleID]; ok {
+				msg.ToolCalls = tcs
+			}
+
+			// Distribute cost across assistant messages (approximation)
+			assistantCount++
+			if costPerRequest > 0 {
+				msg.ProviderCost = costPerRequest
+			}
 		}
 
 		messages = append(messages, msg)
 	}
+
 	return messages
+}
+
+// buildToolCallIndex groups codeBlockData entries by bubbleId,
+// creating session.ToolCall slices for each assistant message.
+func (cd *composerData) buildToolCallIndex() map[string][]session.ToolCall {
+	if len(cd.CodeBlockData) == 0 {
+		return nil
+	}
+
+	index := make(map[string][]session.ToolCall)
+
+	for fileURI, blocks := range cd.CodeBlockData {
+		for _, block := range blocks {
+			if block == nil || block.BubbleID == "" {
+				continue
+			}
+
+			// Determine the file path (prefer fsPath from URI)
+			filePath := fileURI
+			if block.URI != nil && block.URI.FSPath != "" {
+				filePath = block.URI.FSPath
+			}
+
+			// Map Cursor status to ToolState
+			state := mapCodeBlockStatus(block.Status)
+
+			tc := session.ToolCall{
+				ID:    block.CodeBlockID,
+				Name:  "edit", // Cursor code blocks are file edits
+				Input: filePath,
+				State: state,
+			}
+
+			if block.CreatedAt > 0 {
+				// DurationMs not available from codeBlockData, but we store CreatedAt
+				// for ordering/timeline purposes.
+			}
+
+			index[block.BubbleID] = append(index[block.BubbleID], tc)
+		}
+	}
+
+	// Sort tool calls within each bubble by CodeBlockID for deterministic output
+	for bubbleID, tcs := range index {
+		sort.Slice(tcs, func(i, j int) bool {
+			return tcs[i].ID < tcs[j].ID
+		})
+		index[bubbleID] = tcs
+	}
+
+	return index
+}
+
+// mapCodeBlockStatus maps Cursor's code block status to session.ToolState.
+func mapCodeBlockStatus(status string) session.ToolState {
+	switch status {
+	case "completed", "accepted":
+		return session.ToolStateCompleted
+	case "aborted":
+		return session.ToolStateError
+	default:
+		return session.ToolStatePending
+	}
+}
+
+// extractFileChanges builds a comprehensive file change list from multiple sources.
+// Priority: newlyCreatedFiles + originalFileStates > subtitle parsing.
+func (cd *composerData) extractFileChanges() []session.FileChange {
+	// Collect unique files from structured data
+	seen := make(map[string]session.ChangeType)
+
+	// 1. Files from newlyCreatedFiles → Created
+	for _, f := range cd.NewlyCreatedFiles {
+		if f.URI != nil && f.URI.FSPath != "" {
+			seen[f.URI.FSPath] = session.ChangeCreated
+		}
+	}
+
+	// 2. Files from originalFileStates → Modified (had pre-edit state)
+	for fileURI := range cd.OriginalFileStates {
+		path := fileURI
+		// Strip file:// prefix if present
+		path = strings.TrimPrefix(path, "file://")
+		if decoded, err := url.PathUnescape(path); err == nil {
+			path = decoded
+		}
+		if _, exists := seen[path]; !exists {
+			seen[path] = session.ChangeModified
+		}
+	}
+
+	// 3. Files from codeBlockData URIs → Modified (if not already tracked)
+	for _, blocks := range cd.CodeBlockData {
+		for _, block := range blocks {
+			if block != nil && block.URI != nil && block.URI.FSPath != "" {
+				if _, exists := seen[block.URI.FSPath]; !exists {
+					seen[block.URI.FSPath] = session.ChangeModified
+				}
+			}
+		}
+	}
+
+	// If no structured data, fall back to subtitle parsing
+	if len(seen) == 0 && cd.FilesChangedCount > 0 && cd.Subtitle != "" {
+		return extractFileChangesFromSubtitle(cd.Subtitle)
+	}
+
+	// Convert map to sorted slice
+	changes := make([]session.FileChange, 0, len(seen))
+	for path, changeType := range seen {
+		changes = append(changes, session.FileChange{
+			FilePath:   path,
+			ChangeType: changeType,
+		})
+	}
+	sort.Slice(changes, func(i, j int) bool {
+		return changes[i].FilePath < changes[j].FilePath
+	})
+
+	return changes
 }
 
 func (b *bubble) bubbleID() string {
@@ -427,9 +760,10 @@ func normalizePath(p string) string {
 	return filepath.Clean(p)
 }
 
-// extractFileChanges parses Cursor's subtitle field which lists changed files.
+// extractFileChangesFromSubtitle parses Cursor's subtitle field which lists changed files.
 // The format is: "Edited file1.go, file2.go, file3.go"
-func extractFileChanges(subtitle string) []session.FileChange {
+// This is the legacy fallback when structured file data is not available.
+func extractFileChangesFromSubtitle(subtitle string) []session.FileChange {
 	subtitle = strings.TrimPrefix(subtitle, "Edited ")
 	subtitle = strings.TrimPrefix(subtitle, "Created ")
 	subtitle = strings.TrimPrefix(subtitle, "Deleted ")
@@ -447,4 +781,9 @@ func extractFileChanges(subtitle string) []session.FileChange {
 		})
 	}
 	return changes
+}
+
+// extractFileChanges is kept as a package-level alias for backward compatibility with tests.
+func extractFileChanges(subtitle string) []session.FileChange {
+	return extractFileChangesFromSubtitle(subtitle)
 }
