@@ -2261,7 +2261,7 @@ func TestIngest_MinimalPayload(t *testing.T) {
 	svc, store := newIngestService(t)
 
 	result, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider: "parlay",
+		Provider: "ollama",
 		Messages: []IngestMessage{
 			{Role: "user", Content: "Hello"},
 			{Role: "assistant", Content: "Hi there!"},
@@ -2273,8 +2273,8 @@ func TestIngest_MinimalPayload(t *testing.T) {
 	if result.SessionID == "" {
 		t.Fatal("expected non-empty session ID")
 	}
-	if result.Provider != session.ProviderParlay {
-		t.Errorf("provider = %q, want %q", result.Provider, session.ProviderParlay)
+	if result.Provider != session.ProviderOllama {
+		t.Errorf("provider = %q, want %q", result.Provider, session.ProviderOllama)
 	}
 
 	// Verify stored.
@@ -2285,8 +2285,8 @@ func TestIngest_MinimalPayload(t *testing.T) {
 	if len(sess.Messages) != 2 {
 		t.Errorf("messages count = %d, want 2", len(sess.Messages))
 	}
-	if sess.Agent != "parlay" {
-		t.Errorf("agent = %q, want %q (defaulted to provider)", sess.Agent, "parlay")
+	if sess.Agent != "ollama" {
+		t.Errorf("agent = %q, want %q (defaulted to provider)", sess.Agent, "ollama")
 	}
 }
 
@@ -2355,7 +2355,7 @@ func TestIngest_ComputesToolCounts(t *testing.T) {
 	svc, store := newIngestService(t)
 
 	result, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider: "parlay",
+		Provider: "ollama",
 		Messages: []IngestMessage{
 			{Role: "assistant", Content: "Running...", ToolCalls: []IngestToolCall{
 				{Name: "bash", Input: "ls", Output: "file.txt", State: "completed"},
@@ -2394,7 +2394,7 @@ func TestIngest_AutoGeneratesID(t *testing.T) {
 	svc, _ := newIngestService(t)
 
 	result, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider: "parlay",
+		Provider: "ollama",
 		Messages: []IngestMessage{{Role: "user", Content: "Hello"}},
 	})
 	if err != nil {
@@ -2409,7 +2409,7 @@ func TestIngest_PreservesExplicitID(t *testing.T) {
 	svc, _ := newIngestService(t)
 
 	result, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider:  "parlay",
+		Provider:  "ollama",
 		SessionID: "my-custom-id-123",
 		Messages:  []IngestMessage{{Role: "user", Content: "Hello"}},
 	})
@@ -2453,7 +2453,7 @@ func TestIngest_ExplicitDelegatedFrom_CreatesLink(t *testing.T) {
 	store.sessions[parentID] = &session.Session{ID: parentID}
 
 	result, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider:               "parlay",
+		Provider:               "ollama",
 		SessionID:              "child-session-001",
 		DelegatedFromSessionID: string(parentID),
 		Messages: []IngestMessage{
@@ -2487,7 +2487,7 @@ func TestIngest_HeuristicDelegation_ToolCallWithSessionID(t *testing.T) {
 	store.sessions[targetID] = &session.Session{ID: targetID}
 
 	result, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider:  "parlay",
+		Provider:  "ollama",
 		SessionID: "orchestrator-001",
 		Messages: []IngestMessage{
 			{
@@ -2523,7 +2523,7 @@ func TestIngest_HeuristicDelegation_UnknownTool_NoLink(t *testing.T) {
 	svc, store := newIngestService(t)
 
 	_, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider: "parlay",
+		Provider: "ollama",
 		Messages: []IngestMessage{
 			{
 				Role:    "assistant",
@@ -2555,7 +2555,7 @@ func TestIngest_HeuristicDelegation_SelfLink_Skipped(t *testing.T) {
 	svc, store := newIngestService(t)
 
 	result, err := svc.Ingest(context.Background(), IngestRequest{
-		Provider:  "parlay",
+		Provider:  "ollama",
 		SessionID: "self-session",
 		Messages: []IngestMessage{
 			{

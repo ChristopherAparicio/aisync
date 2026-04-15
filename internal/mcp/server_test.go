@@ -496,7 +496,7 @@ func TestHandleIngest(t *testing.T) {
 	messagesJSON := `[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there","model":"qwen3:30b","input_tokens":100,"output_tokens":20}]`
 
 	req := callToolReq("aisync_ingest", map[string]any{
-		"provider":      "parlay",
+		"provider":      "ollama",
 		"messages_json": messagesJSON,
 		"agent":         "jarvis",
 		"summary":       "Test ingest via MCP",
@@ -516,8 +516,8 @@ func TestHandleIngest(t *testing.T) {
 	if ingestResult.SessionID == "" {
 		t.Error("expected non-empty session ID")
 	}
-	if ingestResult.Provider != "parlay" {
-		t.Errorf("expected provider 'parlay', got %q", ingestResult.Provider)
+	if ingestResult.Provider != "ollama" {
+		t.Errorf("expected provider 'ollama', got %q", ingestResult.Provider)
 	}
 
 	// Verify retrievable via get.
@@ -580,7 +580,7 @@ func TestHandleIngest_MissingMessages(t *testing.T) {
 	h, _ := newTestHandlers(t)
 
 	req := callToolReq("aisync_ingest", map[string]any{
-		"provider": "parlay",
+		"provider": "ollama",
 	})
 
 	result, err := h.handleIngest(context.Background(), req)
@@ -598,7 +598,7 @@ func TestHandleIngest_InvalidMessagesJSON(t *testing.T) {
 	h, _ := newTestHandlers(t)
 
 	req := callToolReq("aisync_ingest", map[string]any{
-		"provider":      "parlay",
+		"provider":      "ollama",
 		"messages_json": "not valid json",
 	})
 

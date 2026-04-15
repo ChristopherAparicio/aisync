@@ -679,8 +679,8 @@ func TestLinkSessionsEndpoint(t *testing.T) {
 	handler, svc := newTestServer(t)
 
 	// Create two sessions first via ingest.
-	sess1ID := ingestTestSession(t, handler, "parlay", "session-link-a")
-	sess2ID := ingestTestSession(t, handler, "parlay", "session-link-b")
+	sess1ID := ingestTestSession(t, handler, "ollama", "session-link-a")
+	sess2ID := ingestTestSession(t, handler, "ollama", "session-link-b")
 
 	body := map[string]any{
 		"source_session_id": sess1ID,
@@ -741,8 +741,8 @@ func TestGetSessionLinksEndpoint(t *testing.T) {
 	handler, _ := newTestServer(t)
 
 	// Create two sessions and link them.
-	sess1ID := ingestTestSession(t, handler, "parlay", "get-links-a")
-	sess2ID := ingestTestSession(t, handler, "parlay", "get-links-b")
+	sess1ID := ingestTestSession(t, handler, "ollama", "get-links-a")
+	sess2ID := ingestTestSession(t, handler, "ollama", "get-links-b")
 
 	linkBody := map[string]any{
 		"source_session_id": sess1ID,
@@ -787,8 +787,8 @@ func TestGetSessionLinksEndpoint(t *testing.T) {
 func TestDeleteSessionLinkEndpoint(t *testing.T) {
 	handler, _ := newTestServer(t)
 
-	sess1ID := ingestTestSession(t, handler, "parlay", "del-link-a")
-	sess2ID := ingestTestSession(t, handler, "parlay", "del-link-b")
+	sess1ID := ingestTestSession(t, handler, "ollama", "del-link-a")
+	sess2ID := ingestTestSession(t, handler, "ollama", "del-link-b")
 
 	// Create the link.
 	linkBody := map[string]any{
@@ -824,7 +824,7 @@ func TestTrendsEndpoint(t *testing.T) {
 	handler, _ := newTestServer(t)
 
 	// Ingest a session so there's data.
-	ingestTestSession(t, handler, "parlay", "trend-test-1")
+	ingestTestSession(t, handler, "ollama", "trend-test-1")
 
 	resp := doRequest(t, handler, "GET", "/api/v1/stats/trends?period=7d", nil)
 	if resp.Code != http.StatusOK {
@@ -857,7 +857,7 @@ func TestTrendsEndpoint_WithTypeFilter(t *testing.T) {
 
 func TestPatchSessionEndpoint_TagSession(t *testing.T) {
 	handler, _ := newTestServer(t)
-	sessID := ingestTestSession(t, handler, "parlay", "tag-me")
+	sessID := ingestTestSession(t, handler, "ollama", "tag-me")
 
 	body := map[string]string{"session_type": "bug"}
 	resp := doRequest(t, handler, "PATCH", fmt.Sprintf("/api/v1/sessions/%s", sessID), body)
@@ -883,7 +883,7 @@ func TestListProjectsEndpoint(t *testing.T) {
 
 	// Ingest sessions with different projects and remote URLs.
 	body1 := map[string]any{
-		"provider":     "parlay",
+		"provider":     "ollama",
 		"session_id":   "proj-test-1",
 		"project_path": "/Users/dev/aisync",
 		"remote_url":   "https://github.com/org/aisync.git",
@@ -1008,7 +1008,7 @@ func TestAnalyzeEndpoint(t *testing.T) {
 	handler, _, _ := newTestServerWithAnalysis(t)
 
 	// Create a session to analyze.
-	sessID := ingestTestSession(t, handler, "parlay", "analyze-me")
+	sessID := ingestTestSession(t, handler, "ollama", "analyze-me")
 
 	// Trigger analysis.
 	resp := doRequest(t, handler, "POST", fmt.Sprintf("/api/v1/sessions/%s/analyze", sessID), nil)
@@ -1034,7 +1034,7 @@ func TestAnalyzeEndpoint(t *testing.T) {
 
 func TestAnalyzeEndpoint_WithTriggerAuto(t *testing.T) {
 	handler, _, _ := newTestServerWithAnalysis(t)
-	sessID := ingestTestSession(t, handler, "parlay", "analyze-auto")
+	sessID := ingestTestSession(t, handler, "ollama", "analyze-auto")
 
 	resp := doRequest(t, handler, "POST", fmt.Sprintf("/api/v1/sessions/%s/analyze", sessID),
 		map[string]string{"trigger": "auto"})
@@ -1053,7 +1053,7 @@ func TestGetAnalysisEndpoint(t *testing.T) {
 	handler, _, _ := newTestServerWithAnalysis(t)
 
 	// Ingest and analyze.
-	sessID := ingestTestSession(t, handler, "parlay", "get-analysis-test")
+	sessID := ingestTestSession(t, handler, "ollama", "get-analysis-test")
 	doRequest(t, handler, "POST", fmt.Sprintf("/api/v1/sessions/%s/analyze", sessID), nil)
 
 	// Get the analysis.
@@ -1073,7 +1073,7 @@ func TestGetAnalysisEndpoint_NotFound(t *testing.T) {
 	handler, _, _ := newTestServerWithAnalysis(t)
 
 	// No analysis exists for this session.
-	sessID := ingestTestSession(t, handler, "parlay", "no-analysis-yet")
+	sessID := ingestTestSession(t, handler, "ollama", "no-analysis-yet")
 	resp := doRequest(t, handler, "GET", fmt.Sprintf("/api/v1/sessions/%s/analysis", sessID), nil)
 	if resp.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d: %s", resp.Code, resp.Body.String())
@@ -1083,7 +1083,7 @@ func TestGetAnalysisEndpoint_NotFound(t *testing.T) {
 func TestListAnalysesEndpoint(t *testing.T) {
 	handler, _, _ := newTestServerWithAnalysis(t)
 
-	sessID := ingestTestSession(t, handler, "parlay", "list-analyses-test")
+	sessID := ingestTestSession(t, handler, "ollama", "list-analyses-test")
 
 	// Run analysis twice.
 	doRequest(t, handler, "POST", fmt.Sprintf("/api/v1/sessions/%s/analyze", sessID), nil)
@@ -1104,7 +1104,7 @@ func TestListAnalysesEndpoint(t *testing.T) {
 func TestListAnalysesEndpoint_Empty(t *testing.T) {
 	handler, _, _ := newTestServerWithAnalysis(t)
 
-	sessID := ingestTestSession(t, handler, "parlay", "no-analyses-yet")
+	sessID := ingestTestSession(t, handler, "ollama", "no-analyses-yet")
 	resp := doRequest(t, handler, "GET", fmt.Sprintf("/api/v1/sessions/%s/analyses", sessID), nil)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
@@ -1196,7 +1196,7 @@ func TestSkillResolveEndpoint(t *testing.T) {
 	handler := newTestServerWithSkillResolver(t, resolver)
 
 	// Ingest a session first.
-	sessID := ingestTestSession(t, handler, "parlay", "skill-resolve-test")
+	sessID := ingestTestSession(t, handler, "ollama", "skill-resolve-test")
 
 	body := map[string]any{
 		"dry_run": true,
@@ -1233,7 +1233,7 @@ func TestSkillResolveEndpoint_NoBody(t *testing.T) {
 	}
 
 	handler := newTestServerWithSkillResolver(t, resolver)
-	sessID := ingestTestSession(t, handler, "parlay", "skill-no-body")
+	sessID := ingestTestSession(t, handler, "ollama", "skill-no-body")
 
 	// No body — should default to dry_run=true
 	resp := doRequest(t, handler, "POST", fmt.Sprintf("/api/v1/sessions/%s/skills/resolve", sessID), nil)
@@ -1250,7 +1250,7 @@ func TestSkillResolveEndpoint_WithSkillFilter(t *testing.T) {
 	}
 
 	handler := newTestServerWithSkillResolver(t, resolver)
-	sessID := ingestTestSession(t, handler, "parlay", "skill-filter")
+	sessID := ingestTestSession(t, handler, "ollama", "skill-filter")
 
 	body := map[string]any{
 		"skill_names": []string{"replay-tester"},
@@ -1268,7 +1268,7 @@ func TestSkillResolveEndpoint_ResolverError(t *testing.T) {
 	}
 
 	handler := newTestServerWithSkillResolver(t, resolver)
-	sessID := ingestTestSession(t, handler, "parlay", "skill-error-test")
+	sessID := ingestTestSession(t, handler, "ollama", "skill-error-test")
 
 	resp := doRequest(t, handler, "POST", fmt.Sprintf("/api/v1/sessions/%s/skills/resolve", sessID), nil)
 	if resp.Code != http.StatusNotFound {
@@ -1316,7 +1316,7 @@ func newTestServerWithErrors(t *testing.T) (http.Handler, *service.SessionServic
 // seedSessionWithErrors creates a session via ingest, then processes errors for it.
 func seedSessionWithErrors(t *testing.T, handler http.Handler, errorSvc *service.ErrorService, errors []session.SessionError) string {
 	t.Helper()
-	sessID := ingestTestSession(t, handler, "parlay", "error-test-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	sessID := ingestTestSession(t, handler, "ollama", "error-test-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 
 	// Build a session with errors so ProcessSession can classify and save them.
 	sess := &session.Session{
@@ -1395,7 +1395,7 @@ func TestGetSessionErrors(t *testing.T) {
 
 func TestGetSessionErrors_Empty(t *testing.T) {
 	handler, _, _ := newTestServerWithErrors(t)
-	sessID := ingestTestSession(t, handler, "parlay", "no-errors-session")
+	sessID := ingestTestSession(t, handler, "ollama", "no-errors-session")
 
 	resp := doRequest(t, handler, "GET", fmt.Sprintf("/api/v1/sessions/%s/errors", sessID), nil)
 	if resp.Code != http.StatusOK {

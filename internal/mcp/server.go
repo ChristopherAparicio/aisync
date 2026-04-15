@@ -262,7 +262,7 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 	// ── Ingest ──
 	s.AddTool(mcp.NewTool("aisync_ingest",
 		mcp.WithDescription("Push a session into aisync from an external client (e.g. voice assistant, custom agent, Ollama). This is the simplest path — no provider detection or file-system reads. Requires at least a provider name and one message."),
-		mcp.WithString("provider", mcp.Required(), mcp.Description("Provider name: parlay, ollama, claude-code, opencode, or cursor")),
+		mcp.WithString("provider", mcp.Required(), mcp.Description("Provider name: ollama, claude-code, opencode, or cursor")),
 		mcp.WithString("messages_json", mcp.Required(), mcp.Description("JSON array of messages. Each message: {\"role\":\"user\"|\"assistant\"|\"system\", \"content\":\"...\", \"model\":\"...\", \"tool_calls\":[{\"name\":\"...\",\"input\":\"...\",\"output\":\"...\"}], \"input_tokens\":N, \"output_tokens\":N}")),
 		mcp.WithString("agent", mcp.Description("Agent name (e.g. 'jarvis'). Defaults to provider name.")),
 		mcp.WithString("project_path", mcp.Description("Absolute path to the project directory")),

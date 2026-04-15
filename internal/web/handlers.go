@@ -1138,8 +1138,6 @@ func providerShortName(p session.ProviderName) string {
 		return "OC"
 	case session.ProviderCursor:
 		return "CU"
-	case session.ProviderParlay:
-		return "PA"
 	case session.ProviderOllama:
 		return "OL"
 	default:

@@ -48,7 +48,7 @@ type IngestToolCall struct {
 // This is the simplest path to store a session — no provider detection, no
 // file-system reads, no format parsing.
 type IngestRequest struct {
-	Provider               string          `json:"provider"`                            // REQUIRED: "parlay", "ollama", etc.
+	Provider               string          `json:"provider"`                            // REQUIRED: "ollama", "claude-code", "opencode", or "cursor"
 	Messages               []IngestMessage `json:"messages"`                            // REQUIRED: at least 1 message
 	Agent                  string          `json:"agent,omitempty"`                     // e.g. "jarvis"; defaults to provider name
 	ProjectPath            string          `json:"project_path,omitempty"`              // root of the project

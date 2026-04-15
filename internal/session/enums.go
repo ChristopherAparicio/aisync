@@ -18,7 +18,6 @@ const (
 	ProviderClaudeCode ProviderName = "claude-code"
 	ProviderOpenCode   ProviderName = "opencode"
 	ProviderCursor     ProviderName = "cursor"
-	ProviderParlay     ProviderName = "parlay"
 	ProviderOllama     ProviderName = "ollama"
 )
 
@@ -26,7 +25,6 @@ var allProviders = []ProviderName{
 	ProviderClaudeCode,
 	ProviderOpenCode,
 	ProviderCursor,
-	ProviderParlay,
 	ProviderOllama,
 }
 

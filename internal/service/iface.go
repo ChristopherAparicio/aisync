@@ -182,7 +182,7 @@ type SessionManager interface {
 
 // SessionIngester handles externally-pushed sessions and session-to-session links.
 type SessionIngester interface {
-	// Ingest stores a session pushed by an external client (Parlay, Ollama, etc.)
+	// Ingest stores a session pushed by an external client (Ollama, custom agents, etc.)
 	// without provider detection or file-system reads.
 	Ingest(ctx context.Context, req IngestRequest) (*IngestResult, error)
 
