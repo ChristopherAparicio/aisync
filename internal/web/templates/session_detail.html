@@ -578,36 +578,43 @@
 <!-- ── Fork Tree ── -->
 {{if .HasForks}}
 <div class="section">
-  <h2 class="section-title">Fork Tree <span class="text-muted">({{len .ForkRels}} relation{{if gt (len .ForkRels) 1}}s{{end}})</span></h2>
-  <div class="fork-tree">
-    {{range .ForkRels}}
-    <div class="fork-entry">
-      <div class="fork-entry-icon">
-        {{if eq .Direction "parent"}}
-        <span class="fork-arrow fork-arrow-out" title="This session was forked into another">↳</span>
-        {{else}}
-        <span class="fork-arrow fork-arrow-in" title="This session is a fork">↰</span>
-        {{end}}
-      </div>
-      <div class="fork-entry-content">
-        <div class="fork-entry-header">
-          {{if eq .Direction "parent"}}
-          <span class="text-muted">Forked at msg #{{.ForkPoint}} →</span>
-          <a href="/sessions/{{.LinkedID}}" class="font-mono">{{truncate .LinkedID 12}}</a>
-          {{else}}
-          <span class="text-muted">Fork of</span>
-          <a href="/sessions/{{.LinkedID}}" class="font-mono">{{truncate .LinkedID 12}}</a>
-          <span class="text-muted">at msg #{{.ForkPoint}}</span>
-          {{end}}
-          <span class="badge">{{.OverlapPct}}% shared</span>
+  <details class="section-accordion"{{if le (len .ForkRels) 3}} open{{end}}>
+    <summary>
+      <h2 class="section-title">Fork Tree <span class="text-muted" style="font-size:0.75rem;font-weight:normal;">{{len .ForkRels}} relation{{if gt (len .ForkRels) 1}}s{{end}}</span></h2>
+      <span class="section-chevron">▸</span>
+    </summary>
+    <div class="section-body">
+      <div class="fork-tree">
+        {{range .ForkRels}}
+        <div class="fork-entry">
+          <div class="fork-entry-icon">
+            {{if eq .Direction "parent"}}
+            <span class="fork-arrow fork-arrow-out" title="This session was forked into another">↳</span>
+            {{else}}
+            <span class="fork-arrow fork-arrow-in" title="This session is a fork">↰</span>
+            {{end}}
+          </div>
+          <div class="fork-entry-content">
+            <div class="fork-entry-header">
+              {{if eq .Direction "parent"}}
+              <span class="text-muted">Forked at msg #{{.ForkPoint}} →</span>
+              <a href="/sessions/{{.LinkedID}}" class="font-mono">{{truncate .LinkedID 12}}</a>
+              {{else}}
+              <span class="text-muted">Fork of</span>
+              <a href="/sessions/{{.LinkedID}}" class="font-mono">{{truncate .LinkedID 12}}</a>
+              <span class="text-muted">at msg #{{.ForkPoint}}</span>
+              {{end}}
+              <span class="badge">{{.OverlapPct}}% shared</span>
+            </div>
+            {{if .Reason}}
+            <div class="fork-entry-reason">{{.Reason}}</div>
+            {{end}}
+          </div>
         </div>
-        {{if .Reason}}
-        <div class="fork-entry-reason">{{.Reason}}</div>
         {{end}}
       </div>
     </div>
-    {{end}}
-  </div>
+  </details>
 </div>
 {{end}}
 
@@ -696,7 +703,7 @@
     <div class="section-body">
 
   {{if .ActivitySegments}}
-  <div class="activity-bar" title="Message flow: each segment = 1 message, width = relative token usage">
+  <div class="activity-bar" title="Message flow: each segment = 1 message">
     {{range .ActivitySegments}}<div class="activity-seg activity-seg-{{.Role}}" style="width:{{printf "%.2f" .WidthPct}}%" title="{{.Role}} #{{.Index}} ({{formatTokens .Tokens}} tokens)"></div>{{end}}
   </div>
   <div class="activity-legend">

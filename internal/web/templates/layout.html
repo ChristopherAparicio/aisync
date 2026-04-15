@@ -5,7 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{block "title" .}}aisync{{end}}</title>
   <link rel="stylesheet" href="/static/css/style.css">
+  <!-- uPlot: lightweight time-series charting (used by Grafana) -->
+  <link rel="stylesheet" href="https://unpkg.com/uplot@1.6.31/dist/uPlot.min.css">
+  <script src="https://unpkg.com/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+  <!-- Tippy.js: rich tooltips (replaces native title attributes) -->
+  <script src="https://unpkg.com/@popperjs/core@2"></script>
+  <script src="https://unpkg.com/tippy.js@6"></script>
+  <!-- HTMX: server-driven interactivity -->
   <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+  <!-- Shared chart utilities -->
+  <script src="/static/js/charts.js"></script>
 </head>
 <body>
   <nav class="navbar">

@@ -1896,17 +1896,19 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Activity bar segments
-	if totalTokens := sess.TokenUsage.TotalTokens; totalTokens > 0 && len(sess.Messages) > 0 {
+	// Activity bar segments.
+	// Use equal-width segments so the bar always fills 100%, with a minimum
+	// per-segment width for visibility. Token counts are shown in the tooltip
+	// but don't drive the visual width — many providers (Cursor, older OpenCode)
+	// don't provide per-message tokens, which caused nearly-empty bars.
+	if n := len(sess.Messages); n > 0 {
+		segWidth := 100.0 / float64(n)
 		for i := range sess.Messages {
 			msg := &sess.Messages[i]
 			msgTokens := msg.InputTokens + msg.OutputTokens
-			if msgTokens == 0 {
-				msgTokens = 1 // minimum 1 for visibility
-			}
 			data.ActivitySegments = append(data.ActivitySegments, activitySegment{
 				Role:     string(msg.Role),
-				WidthPct: float64(msgTokens) / float64(totalTokens) * 100,
+				WidthPct: segWidth,
 				Tokens:   msgTokens,
 				Index:    i,
 			})

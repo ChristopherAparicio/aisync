@@ -2152,8 +2152,8 @@ func TestDashboard_sparklines_withStore(t *testing.T) {
 	if !strings.Contains(body, "sparkline-bar") {
 		t.Error("expected sparkline-bar elements in dashboard HTML")
 	}
-	if !strings.Contains(body, "Sessions (14d)") {
-		t.Error("expected 'Sessions (14d)' sparkline title attribute")
+	if !strings.Contains(body, "data-ai5-sparkline") {
+		t.Error("expected data-ai5-sparkline attribute for uPlot upgrade")
 	}
 }
 

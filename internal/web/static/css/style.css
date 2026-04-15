@@ -6439,3 +6439,131 @@ pre {
 
 /* ── Filter hidden ── */
 .sg-filter-hidden { display: none !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   aisync v2 — uPlot / Tippy.js / Smooth Accordion Styles
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Tippy.js dark theme (ai5) ── */
+
+.tippy-box[data-theme~='ai5'] {
+  background: #1e2130;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  font-size: 0.75rem;
+  color: var(--text);
+  padding: 0;
+}
+.tippy-box[data-theme~='ai5'] .tippy-content {
+  padding: 6px 10px;
+}
+.tippy-box[data-theme~='ai5'] .tippy-arrow {
+  color: #1e2130;
+}
+.ai5-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ai5-tip-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ai5-tip-value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* ── uPlot sparkline container ── */
+
+.ai5-sparkline {
+  width: 100%;
+  min-width: 80px;
+  height: 32px;
+  position: relative;
+}
+.ai5-sparkline .u-wrap {
+  /* Remove uPlot default margins */
+  margin: 0 !important;
+}
+.ai5-sparkline .u-over {
+  cursor: crosshair !important;
+}
+
+/* ── Smooth Accordion Animation ── */
+
+details.section-accordion .ai5-accordion-body,
+details.section-accordion .section-accordion-body,
+details.section-accordion .accordion-body {
+  transition: max-height 0.25s ease-out;
+  overflow: hidden;
+}
+
+/* ── KPI Card entry animation ── */
+
+@keyframes ai5-fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.kpi-strip-item {
+  animation: ai5-fadeSlideUp 0.4s ease-out both;
+}
+.kpi-strip-item:nth-child(1) { animation-delay: 0s; }
+.kpi-strip-item:nth-child(2) { animation-delay: 0.06s; }
+.kpi-strip-item:nth-child(3) { animation-delay: 0.12s; }
+.kpi-strip-item:nth-child(4) { animation-delay: 0.18s; }
+.kpi-strip-item:nth-child(5) { animation-delay: 0.24s; }
+.kpi-strip-item:nth-child(6) { animation-delay: 0.30s; }
+
+/* Activity card stagger */
+.activity-card {
+  animation: ai5-fadeSlideUp 0.35s ease-out both;
+}
+.activity-card:nth-child(1) { animation-delay: 0.05s; }
+.activity-card:nth-child(2) { animation-delay: 0.10s; }
+.activity-card:nth-child(3) { animation-delay: 0.15s; }
+.activity-card:nth-child(4) { animation-delay: 0.20s; }
+.activity-card:nth-child(5) { animation-delay: 0.25s; }
+
+/* Home panel stagger */
+.home-panel {
+  animation: ai5-fadeSlideUp 0.4s ease-out both;
+}
+.home-panel:nth-child(1) { animation-delay: 0.08s; }
+.home-panel:nth-child(2) { animation-delay: 0.16s; }
+.home-panel:nth-child(3) { animation-delay: 0.24s; }
+.home-panel:nth-child(4) { animation-delay: 0.32s; }
+
+/* ── Trend chip improvements ── */
+
+.trend-strip {
+  animation: ai5-fadeSlideUp 0.35s ease-out 0.15s both;
+}
+
+/* ── Session card hover lift ── */
+
+.activity-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.activity-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+/* ── KPI value number mono styling ── */
+
+.kpi-strip-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}

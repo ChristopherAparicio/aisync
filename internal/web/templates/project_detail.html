@@ -64,14 +64,14 @@
         <span class="kpi-strip-value">{{.TotalSessions}}</span>
         <span class="kpi-strip-label">sessions</span>
       </div>
-      {{if .HasSparklines}}<div class="sparkline sparkline--sessions" title="Sessions (14d)">{{range .SparklineSessions}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
+      {{if .HasSparklines}}<div class="sparkline sparkline--sessions" data-ai5-sparkline='{"values":[{{range $i, $b := .SparklineSessions}}{{if $i}},{{end}}{{$b.Value}}{{end}}],"labels":[{{range $i, $b := .SparklineSessions}}{{if $i}},{{end}}"{{$b.Label}}"{{end}}],"color":"#6c7ee1","label":"sessions"}'>{{range .SparklineSessions}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
     </div>
     <div class="kpi-strip-item{{if .HasSparklines}} kpi-strip-item--with-sparkline{{end}}">
       <div class="kpi-strip-top">
         <span class="kpi-strip-value">{{formatTokens .TotalTokens}}</span>
         <span class="kpi-strip-label">tokens</span>
       </div>
-      {{if .HasSparklines}}<div class="sparkline sparkline--tokens" title="Tokens (14d)">{{range .SparklineTokens}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
+      {{if .HasSparklines}}<div class="sparkline sparkline--tokens" data-ai5-sparkline='{"values":[{{range $i, $b := .SparklineTokens}}{{if $i}},{{end}}{{$b.Value}}{{end}}],"labels":[{{range $i, $b := .SparklineTokens}}{{if $i}},{{end}}"{{$b.Label}}"{{end}}],"color":"#8b9cf0","label":"tokens"}'>{{range .SparklineTokens}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
     </div>
     <div class="kpi-strip-item{{if .HasSparklines}} kpi-strip-item--with-sparkline{{end}}">
       <div class="kpi-strip-top">
@@ -81,7 +81,7 @@
         <span class="kpi-strip-label">est. cost (API-equiv)</span>
         {{end}}
       </div>
-      {{if .HasSparklines}}<div class="sparkline sparkline--cost" title="Cost (14d)">{{range .SparklineCost}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}"></div>{{end}}</div>{{end}}
+      {{if .HasSparklines}}<div class="sparkline sparkline--cost" data-ai5-sparkline='{"values":[{{range $i, $b := .SparklineCost}}{{if $i}},{{end}}{{$b.Value}}{{end}}],"labels":[{{range $i, $b := .SparklineCost}}{{if $i}},{{end}}"{{$b.Label}}"{{end}}],"color":"#4ade80","label":"cost"}'>{{range .SparklineCost}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}"></div>{{end}}</div>{{end}}
     </div>
     {{if gt .TotalErrors 0}}
     <div class="kpi-strip-item{{if .HasSparklines}} kpi-strip-item--with-sparkline{{end}}">
@@ -89,7 +89,7 @@
         <span class="kpi-strip-value kpi-strip-value--error">{{.TotalErrors}}</span>
         <span class="kpi-strip-label">errors ({{.SessionsWithErrors}} sessions)</span>
       </div>
-      {{if .HasSparklines}}<div class="sparkline sparkline--errors" title="Errors (14d)">{{range .SparklineErrors}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
+      {{if .HasSparklines}}<div class="sparkline sparkline--errors" data-ai5-sparkline='{"values":[{{range $i, $b := .SparklineErrors}}{{if $i}},{{end}}{{$b.Value}}{{end}}],"labels":[{{range $i, $b := .SparklineErrors}}{{if $i}},{{end}}"{{$b.Label}}"{{end}}],"color":"#f87171","label":"errors"}'>{{range .SparklineErrors}}<div class="sparkline-bar" style="height:{{.HeightPct}}%" title="{{.Label}}: {{.Value}}"></div>{{end}}</div>{{end}}
     </div>
     {{end}}
     {{if gt .TotalToolCalls 0}}
