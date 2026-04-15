@@ -113,6 +113,12 @@ func classifyByHTTPStatus(err session.SessionError) session.SessionError {
 }
 
 // classifyBadRequest further classifies 400 errors by examining the message.
+//
+// Order matters: specific patterns (image dimensions, cache point, empty content)
+// must be matched BEFORE the generic "invalid/malformed" fallback, because most
+// provider 400 errors wrap their message in a JSON envelope like
+// {"error":{"type":"invalid_request_error",...}} which would otherwise match
+// the generic "invalid" substring first and lose the specific cause.
 func classifyBadRequest(err session.SessionError) session.SessionError {
 	raw := strings.ToLower(err.RawError)
 
@@ -120,6 +126,20 @@ func classifyBadRequest(err session.SessionError) session.SessionError {
 	case strings.Contains(raw, "context") && (strings.Contains(raw, "length") || strings.Contains(raw, "window") || strings.Contains(raw, "exceed")):
 		err.Category = session.ErrorCategoryContextOverflow
 		err.Message = "Context window exceeded"
+		err.IsRetryable = false
+
+	// Image-specific validation errors (Anthropic: max 8000px per dimension
+	// for single-image requests, 2000px for many-image requests).
+	case strings.Contains(raw, "image") && strings.Contains(raw, "dimension") && strings.Contains(raw, "exceed"):
+		err.Category = session.ErrorCategoryValidation
+		err.Message = "Image exceeds maximum pixel dimensions"
+		err.IsRetryable = false
+
+	// Cache control errors (Anthropic: invalid cache_control placement in
+	// messages, e.g. trying to cache a non-existent content block).
+	case strings.Contains(raw, "cache") && (strings.Contains(raw, "invalid cache point") || strings.Contains(raw, "nothing available to cache")):
+		err.Category = session.ErrorCategoryValidation
+		err.Message = "Invalid cache_control placement"
 		err.IsRetryable = false
 
 	case strings.Contains(raw, "content") && strings.Contains(raw, "empty"):

@@ -114,6 +114,53 @@ func TestClassify_HTTPStatus400_EmptyContent(t *testing.T) {
 	}
 }
 
+// TestClassify_HTTPStatus400_ImageDimensions verifies that the classifier
+// produces a specific message for Anthropic's image-size validation error.
+// Without this pattern, the generic "invalid_request_error" substring in the
+// JSON envelope would match the fallback "Invalid request format" case first.
+// Real example taken from ~/.aisync/sessions.db (ses_29d23e42fffe8XleggzWuMj9DK).
+func TestClassify_HTTPStatus400_ImageDimensions(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		HTTPStatus: 400,
+		RawError:   `{"type":"error","error":{"type":"invalid_request_error","message":"messages.7.content.95.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels"},"request_id":"req_011Ca1aoZcCcKoQkmnA8593z"}`,
+	})
+
+	if err.Category != session.ErrorCategoryValidation {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryValidation)
+	}
+	if err.Source != session.ErrorSourceProvider {
+		t.Errorf("Source = %q, want %q", err.Source, session.ErrorSourceProvider)
+	}
+	if !containsStr(err.Message, "Image exceeds") {
+		t.Errorf("Message = %q, expected mention of image dimensions", err.Message)
+	}
+	if err.IsRetryable {
+		t.Error("expected IsRetryable=false for image dimension error")
+	}
+}
+
+// TestClassify_HTTPStatus400_InvalidCachePoint verifies that the classifier
+// produces a specific message for Anthropic's cache_control validation errors.
+// Real example taken from ~/.aisync/sessions.db (ses_2d9e6b50affeADSfj1QVkViMZk).
+func TestClassify_HTTPStatus400_InvalidCachePoint(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		HTTPStatus: 400,
+		RawError:   `{"message":"There is nothing available to cache. Please remove the invalid cache point and try again."}`,
+	})
+
+	if err.Category != session.ErrorCategoryValidation {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryValidation)
+	}
+	if !containsStr(err.Message, "cache_control") {
+		t.Errorf("Message = %q, expected mention of cache_control", err.Message)
+	}
+	if err.IsRetryable {
+		t.Error("expected IsRetryable=false for invalid cache point")
+	}
+}
+
 func TestClassify_HTTPStatus529_Overloaded(t *testing.T) {
 	c := errorclass.NewDeterministicClassifier()
 	err := c.Classify(session.SessionError{HTTPStatus: 529})
