@@ -623,6 +623,29 @@ type jsonlLine struct {
 	ParentUUID              string          `json:"parentUuid"`
 	Message                 json.RawMessage `json:"message"`
 	IsSidechain             bool            `json:"isSidechain"`
+
+	// Extended fields for non-message line types.
+	Attachment     json.RawMessage `json:"attachment,omitempty"`     // attachment object (deferred_tools_delta, skill_listing, etc.)
+	LastPrompt     string          `json:"lastPrompt,omitempty"`     // last-prompt line
+	Version        string          `json:"version,omitempty"`        // agent version (e.g. "2.1.101")
+	Entrypoint     string          `json:"entrypoint,omitempty"`     // launch context (e.g. "claude-desktop", "cli")
+	PermissionMode string          `json:"permissionMode,omitempty"` // permission mode value (for type=permission-mode)
+	HookCount      int             `json:"hookCount,omitempty"`      // stop_hook_summary: number of hooks
+	HookInfos      json.RawMessage `json:"hookInfos,omitempty"`      // stop_hook_summary: hook details
+	HookErrors     json.RawMessage `json:"hookErrors,omitempty"`     // stop_hook_summary: hook errors
+}
+
+// attachmentPayload is the inner object for attachment lines.
+type attachmentPayload struct {
+	Type       string   `json:"type"`                 // "deferred_tools_delta", "skill_listing", etc.
+	AddedNames []string `json:"addedNames,omitempty"` // deferred_tools_delta: tool names added
+	Content    string   `json:"content,omitempty"`    // skill_listing: raw skill descriptions
+}
+
+// hookInfo is a single hook execution from stop_hook_summary.
+type hookInfo struct {
+	Command    string `json:"command"`
+	DurationMs int    `json:"durationMs"`
 }
 
 // claudeMessage is the inner message object.
@@ -771,6 +794,10 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 		totalImageToks  int
 	)
 
+	// Context accumulator — collects tools, skills, hooks, metadata from
+	// non-message lines (attachment, system, permission-mode, etc.).
+	var ctx sessionContextBuilder
+
 	for _, line := range lines {
 		// Extract metadata from first message
 		if sess.Branch == "" && line.GitBranch != "" {
@@ -779,10 +806,34 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 		if sess.ProjectPath == "" && line.Cwd != "" {
 			sess.ProjectPath = line.Cwd
 		}
+		// Capture agent version and entrypoint from any line that has them.
+		if ctx.agentVersion == "" && line.Version != "" {
+			ctx.agentVersion = line.Version
+		}
+		if ctx.entrypoint == "" && line.Entrypoint != "" {
+			ctx.entrypoint = line.Entrypoint
+		}
 
 		switch line.Type {
 		case "summary":
 			sess.Summary = line.Summary
+
+		case "attachment":
+			ctx.parseAttachment(line)
+
+		case "system":
+			ctx.parseSystem(line)
+
+		case "last-prompt":
+			// last-prompt is informational — no action needed for now.
+
+		case "permission-mode":
+			if line.PermissionMode != "" {
+				ctx.permissionMode = line.PermissionMode
+			}
+
+		case "queue-operation", "file-history-snapshot":
+			// Operational metadata — skip silently.
 
 		case "user", "assistant":
 			if line.IsSidechain {
@@ -892,7 +943,124 @@ func parseSession(sessionID session.ID, lines []jsonlLine, mode session.StorageM
 		})
 	}
 
+	// Set context from accumulated attachment/system/metadata lines.
+	sess.Context = ctx.build()
+
 	return sess, nil
+}
+
+// --- Session context builder ---
+
+// sessionContextBuilder accumulates data from non-message JSONL lines
+// (attachment, system, permission-mode) to build a SessionContext.
+type sessionContextBuilder struct {
+	toolsAvailable []string
+	skillsListing  string
+	hooks          []session.HookExecution
+	agentVersion   string
+	entrypoint     string
+	permissionMode string
+}
+
+// parseAttachment handles lines with type="attachment".
+func (b *sessionContextBuilder) parseAttachment(line jsonlLine) {
+	if len(line.Attachment) == 0 {
+		return
+	}
+
+	var att attachmentPayload
+	if err := json.Unmarshal(line.Attachment, &att); err != nil {
+		return
+	}
+
+	switch att.Type {
+	case "deferred_tools_delta":
+		// Accumulate tool names (delta — each line adds new tools).
+		b.toolsAvailable = append(b.toolsAvailable, att.AddedNames...)
+
+	case "skill_listing":
+		// Overwrite with latest skill listing (last one wins).
+		if att.Content != "" {
+			b.skillsListing = att.Content
+		}
+
+		// async_hook_response, selected_lines_in_ide — skip for now.
+	}
+}
+
+// parseSystem handles lines with type="system".
+func (b *sessionContextBuilder) parseSystem(line jsonlLine) {
+	if line.Subtype != "stop_hook_summary" {
+		return
+	}
+	if len(line.HookInfos) == 0 {
+		return
+	}
+
+	var infos []hookInfo
+	if err := json.Unmarshal(line.HookInfos, &infos); err != nil {
+		return
+	}
+
+	// Check for errors.
+	var hookErrs []string
+	if len(line.HookErrors) > 0 {
+		_ = json.Unmarshal(line.HookErrors, &hookErrs)
+	}
+
+	for i, info := range infos {
+		if info.Command == "" || info.Command == "callback" {
+			continue // skip internal callbacks
+		}
+		he := session.HookExecution{
+			Command:    info.Command,
+			DurationMs: info.DurationMs,
+		}
+		if i < len(hookErrs) && hookErrs[i] != "" {
+			he.HasError = true
+		}
+		b.hooks = append(b.hooks, he)
+	}
+}
+
+// build returns the accumulated SessionContext, or nil if no context was collected.
+func (b *sessionContextBuilder) build() *session.SessionContext {
+	if len(b.toolsAvailable) == 0 &&
+		b.skillsListing == "" &&
+		len(b.hooks) == 0 &&
+		b.agentVersion == "" &&
+		b.entrypoint == "" &&
+		b.permissionMode == "" {
+		return nil
+	}
+
+	// Deduplicate tools (multiple delta lines may repeat names).
+	tools := deduplicateStrings(b.toolsAvailable)
+
+	return &session.SessionContext{
+		ToolsAvailable: tools,
+		SkillsListing:  b.skillsListing,
+		Hooks:          b.hooks,
+		AgentVersion:   b.agentVersion,
+		Entrypoint:     b.entrypoint,
+		PermissionMode: b.permissionMode,
+	}
+}
+
+// deduplicateStrings returns a slice with duplicates removed, preserving order.
+func deduplicateStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 type parsedContent struct {

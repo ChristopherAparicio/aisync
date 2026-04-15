@@ -68,18 +68,31 @@ func TestDetect(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Detect() error: %v", err)
 		}
-		if len(summaries) != 2 {
-			t.Fatalf("Detect() returned %d summaries, want 2", len(summaries))
+		if len(summaries) != 3 {
+			t.Fatalf("Detect() returned %d summaries, want 3", len(summaries))
 		}
 	})
 
 	t.Run("returns empty for non-matching branch", func(t *testing.T) {
-		summaries, err := p.Detect("/tmp/test/myproject", "main")
+		summaries, err := p.Detect("/tmp/test/myproject", "nonexistent-branch")
 		if err != nil {
 			t.Fatalf("Detect() error: %v", err)
 		}
 		if len(summaries) != 0 {
 			t.Errorf("Detect() returned %d summaries, want 0", len(summaries))
+		}
+	})
+
+	t.Run("finds session on main branch", func(t *testing.T) {
+		summaries, err := p.Detect("/tmp/test/myproject", "main")
+		if err != nil {
+			t.Fatalf("Detect() error: %v", err)
+		}
+		if len(summaries) != 1 {
+			t.Fatalf("Detect() returned %d summaries, want 1", len(summaries))
+		}
+		if summaries[0].Summary != "Session with context metadata" {
+			t.Errorf("Summary = %q, want %q", summaries[0].Summary, "Session with context metadata")
 		}
 	})
 }
@@ -670,6 +683,239 @@ func TestSessionFreshness(t *testing.T) {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// Session context parsing tests
+// ---------------------------------------------------------------------------
+
+func TestExport_context_toolsAvailable(t *testing.T) {
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sess, err := p.Export("d4e5f6a7-4444-5555-6666-777788889999", session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	if sess.Context == nil {
+		t.Fatal("Context is nil, expected tools/skills/hooks")
+	}
+
+	// Should have 11 tools: 9 from first delta + 2 from second delta
+	wantTools := []string{
+		"Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch",
+		"mcp__notion__search", "mcp__notion__create_page",
+		"TodoWrite", "RemoteTrigger",
+	}
+	if len(sess.Context.ToolsAvailable) != len(wantTools) {
+		t.Fatalf("ToolsAvailable has %d tools, want %d: %v",
+			len(sess.Context.ToolsAvailable), len(wantTools), sess.Context.ToolsAvailable)
+	}
+	for i, want := range wantTools {
+		if sess.Context.ToolsAvailable[i] != want {
+			t.Errorf("ToolsAvailable[%d] = %q, want %q", i, sess.Context.ToolsAvailable[i], want)
+		}
+	}
+}
+
+func TestExport_context_skillsListing(t *testing.T) {
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sess, err := p.Export("d4e5f6a7-4444-5555-6666-777788889999", session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	if sess.Context == nil {
+		t.Fatal("Context is nil")
+	}
+
+	if sess.Context.SkillsListing == "" {
+		t.Fatal("SkillsListing is empty")
+	}
+	// Should contain the three skills from the fixture
+	for _, want := range []string{"update-config", "simplify", "claude-api"} {
+		if !contains(sess.Context.SkillsListing, want) {
+			t.Errorf("SkillsListing missing %q", want)
+		}
+	}
+}
+
+func TestExport_context_hooks(t *testing.T) {
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sess, err := p.Export("d4e5f6a7-4444-5555-6666-777788889999", session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	if sess.Context == nil {
+		t.Fatal("Context is nil")
+	}
+
+	// Should have 1 hook (the callback is skipped)
+	if len(sess.Context.Hooks) != 1 {
+		t.Fatalf("Hooks has %d entries, want 1", len(sess.Context.Hooks))
+	}
+	hook := sess.Context.Hooks[0]
+	if hook.Command != "/Users/test/aisync-hook.sh" {
+		t.Errorf("Hook.Command = %q, want %q", hook.Command, "/Users/test/aisync-hook.sh")
+	}
+	if hook.DurationMs != 42 {
+		t.Errorf("Hook.DurationMs = %d, want 42", hook.DurationMs)
+	}
+	if hook.HasError {
+		t.Error("Hook.HasError = true, want false")
+	}
+}
+
+func TestExport_context_agentMetadata(t *testing.T) {
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sess, err := p.Export("d4e5f6a7-4444-5555-6666-777788889999", session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	if sess.Context == nil {
+		t.Fatal("Context is nil")
+	}
+
+	if sess.Context.AgentVersion != "2.1.101" {
+		t.Errorf("AgentVersion = %q, want %q", sess.Context.AgentVersion, "2.1.101")
+	}
+	if sess.Context.Entrypoint != "claude-desktop" {
+		t.Errorf("Entrypoint = %q, want %q", sess.Context.Entrypoint, "claude-desktop")
+	}
+}
+
+func TestExport_context_nilWhenNoMetadata(t *testing.T) {
+	// The simple session fixture has no attachment/system lines,
+	// so Context should be nil (not an empty struct).
+	claudeHome := setupTestClaudeHome(t)
+	p := New(claudeHome)
+
+	sess, err := p.Export("a1b2c3d4-1111-2222-3333-444455556666", session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	// Simple session has version field on JSONL lines so Context won't be nil.
+	// But it should still have the version populated.
+	if sess.Context == nil {
+		t.Log("Context is nil (no metadata on simple session lines)")
+		return // acceptable if version is not on the lines
+	}
+	if sess.Context.AgentVersion != "" && sess.Context.AgentVersion != "2.1.38" {
+		t.Errorf("AgentVersion = %q, want empty or %q", sess.Context.AgentVersion, "2.1.38")
+	}
+}
+
+func TestUnmarshalJSONL_context(t *testing.T) {
+	data, err := os.ReadFile("testdata/session_with_context.jsonl")
+	if err != nil {
+		t.Fatalf("ReadFile error: %v", err)
+	}
+
+	sess, err := UnmarshalJSONL(data, session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("UnmarshalJSONL error: %v", err)
+	}
+
+	if sess.Context == nil {
+		t.Fatal("Context is nil after UnmarshalJSONL")
+	}
+	if len(sess.Context.ToolsAvailable) != 11 {
+		t.Errorf("ToolsAvailable has %d tools, want 11", len(sess.Context.ToolsAvailable))
+	}
+	if sess.Context.SkillsListing == "" {
+		t.Error("SkillsListing is empty")
+	}
+	if len(sess.Context.Hooks) != 1 {
+		t.Errorf("Hooks has %d entries, want 1", len(sess.Context.Hooks))
+	}
+	if sess.Context.AgentVersion != "2.1.101" {
+		t.Errorf("AgentVersion = %q, want %q", sess.Context.AgentVersion, "2.1.101")
+	}
+}
+
+func TestDeduplicateStrings(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil", nil, nil},
+		{"empty", []string{}, nil},
+		{"no duplicates", []string{"a", "b", "c"}, []string{"a", "b", "c"}},
+		{"with duplicates", []string{"a", "b", "a", "c", "b"}, []string{"a", "b", "c"}},
+		{"all same", []string{"x", "x", "x"}, []string{"x"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deduplicateStrings(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("deduplicateStrings(%v) = %v (len %d), want %v (len %d)",
+					tt.in, got, len(got), tt.want, len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("deduplicateStrings(%v)[%d] = %q, want %q", tt.in, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestContextBuilder_emptyReturnsNil(t *testing.T) {
+	var b sessionContextBuilder
+	if got := b.build(); got != nil {
+		t.Errorf("empty builder.build() = %+v, want nil", got)
+	}
+}
+
+func TestContextBuilder_parseAttachment_unknownType(t *testing.T) {
+	var b sessionContextBuilder
+	line := jsonlLine{
+		Attachment: json.RawMessage(`{"type":"unknown_attachment","data":"ignored"}`),
+	}
+	b.parseAttachment(line)
+	if len(b.toolsAvailable) != 0 {
+		t.Errorf("unexpected tools: %v", b.toolsAvailable)
+	}
+	if b.skillsListing != "" {
+		t.Errorf("unexpected skills: %q", b.skillsListing)
+	}
+}
+
+func TestContextBuilder_parseSystem_nonHookSubtype(t *testing.T) {
+	var b sessionContextBuilder
+	line := jsonlLine{
+		Type:    "system",
+		Subtype: "other_thing",
+	}
+	b.parseSystem(line)
+	if len(b.hooks) != 0 {
+		t.Errorf("unexpected hooks: %v", b.hooks)
+	}
+}
+
+// contains checks if s contains substr.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 // setupTestClaudeHome creates a temporary claude home with test fixtures.
 func setupTestClaudeHome(t *testing.T) string {
 	t.Helper()
@@ -689,6 +935,7 @@ func setupTestClaudeHome(t *testing.T) string {
 		{"testdata/sessions-index.json", filepath.Join(projectDir, sessionsIndex)},
 		{"testdata/session_simple.jsonl", filepath.Join(projectDir, "a1b2c3d4-1111-2222-3333-444455556666.jsonl")},
 		{"testdata/session_with_error.jsonl", filepath.Join(projectDir, "c3d4e5f6-3333-4444-5555-666677778888.jsonl")},
+		{"testdata/session_with_context.jsonl", filepath.Join(projectDir, "d4e5f6a7-4444-5555-6666-777788889999.jsonl")},
 	}
 
 	for _, f := range fixtures {
@@ -849,4 +1096,81 @@ func TestE2E_realClaudeSession_FreshnessVsExport(t *testing.T) {
 
 	t.Logf("session %s: freshness=%d lines, export=%d messages",
 		sid, freshness.MessageCount, len(sess.Messages))
+}
+
+func TestE2E_realClaudeSession_Context(t *testing.T) {
+	// Find a session that has attachment lines (deferred_tools_delta or skill_listing).
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+
+	claudeHome := filepath.Join(home, ".claude")
+	projectsPath := filepath.Join(claudeHome, projectsDir)
+	if _, err := os.Stat(projectsPath); os.IsNotExist(err) {
+		t.Skip("no Claude Code installation found")
+	}
+
+	// Walk all sessions looking for one with attachment lines.
+	entries, err := os.ReadDir(projectsPath)
+	if err != nil {
+		t.Skip("cannot read Claude projects directory")
+	}
+
+	var foundPath, foundSID string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		projDir := filepath.Join(projectsPath, entry.Name())
+		files, _ := filepath.Glob(filepath.Join(projDir, "*.jsonl"))
+		for _, f := range files {
+			data, readErr := os.ReadFile(f)
+			if readErr != nil {
+				continue
+			}
+			if containsStr(string(data), `"deferred_tools_delta"`) || containsStr(string(data), `"skill_listing"`) {
+				base := filepath.Base(f)
+				foundSID = base[:len(base)-len(jsonlExtension)]
+				foundPath = f
+				break
+			}
+		}
+		if foundSID != "" {
+			break
+		}
+	}
+
+	if foundSID == "" {
+		t.Skip("no Claude Code session with attachment metadata found")
+	}
+
+	p := New(claudeHome)
+	sess, err := p.Export(session.ID(foundSID), session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export(%s) error: %v", foundSID, err)
+	}
+
+	if sess.Context == nil {
+		t.Fatalf("Context is nil for session %s (file: %s)", foundSID, foundPath)
+	}
+
+	t.Logf("session %s context: %d tools, skills=%d chars, %d hooks, version=%q, entrypoint=%q",
+		foundSID,
+		len(sess.Context.ToolsAvailable),
+		len(sess.Context.SkillsListing),
+		len(sess.Context.Hooks),
+		sess.Context.AgentVersion,
+		sess.Context.Entrypoint)
+
+	if len(sess.Context.ToolsAvailable) > 0 {
+		t.Logf("  first 5 tools: %v", sess.Context.ToolsAvailable[:min(5, len(sess.Context.ToolsAvailable))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

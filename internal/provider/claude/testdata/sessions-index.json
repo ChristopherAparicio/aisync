@@ -26,6 +26,20 @@
       "gitBranch": "fix/login-bug",
       "projectPath": "/tmp/test/myproject",
       "isSidechain": false
+    },
+    {
+      "sessionId": "d4e5f6a7-4444-5555-6666-777788889999",
+      "fullPath": "/tmp/test/.claude/projects/-tmp-test-myproject/d4e5f6a7-4444-5555-6666-777788889999.jsonl",
+      "fileMtime": 1774000000000,
+      "firstPrompt": "Hello, do something",
+      "messageCount": 4,
+      "created": "2026-03-15T10:00:01.000Z",
+      "modified": "2026-03-15T10:00:10.000Z",
+      "gitBranch": "main",
+      "projectPath": "/tmp/test/myproject",
+      "isSidechain": false,
+      "leafUuid": "uuid-ctx-006",
+      "summary": "Session with context metadata"
     }
   ]
 }
