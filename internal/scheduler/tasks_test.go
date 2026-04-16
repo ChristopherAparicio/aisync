@@ -472,6 +472,12 @@ func (m *mockErrorService) GetSummary(_ session.ID) (*session.SessionErrorSummar
 func (m *mockErrorService) ListRecent(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
 	return nil, nil
 }
+func (m *mockErrorService) ListUnclassifiedGroups(_ int) ([]session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockErrorService) ClassifyGroup(_ string, _ session.ErrorCategory, _ string, _ string) error {
+	return nil
+}
 
 // mockErrorStore implements storage.ErrorStore for testing reclassify task.
 type mockErrorStore struct {
@@ -491,6 +497,19 @@ func (m *mockErrorStore) GetErrorSummary(_ session.ID) (*session.SessionErrorSum
 }
 func (m *mockErrorStore) ListRecentErrors(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
 	return m.recentErrors, m.listErr
+}
+func (m *mockErrorStore) UpsertFingerprint(_ session.ErrorFingerprintGroup) error { return nil }
+func (m *mockErrorStore) ListFingerprintGroups(_ bool, _ int) ([]session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockErrorStore) GetFingerprintGroup(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockErrorStore) ClassifyFingerprintGroup(_ string, _ session.ErrorCategory, _ string, _ string) error {
+	return nil
+}
+func (m *mockErrorStore) GetFingerprintMatch(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
 }
 
 func TestReclassifyTask_Name(t *testing.T) {

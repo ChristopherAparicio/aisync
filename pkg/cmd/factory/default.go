@@ -744,15 +744,18 @@ func New() *cmdutil.Factory {
 			var classifier session.ErrorClassifier
 			cfg, cfgErr := f.Config()
 			if cfgErr == nil && cfg.GetErrorsClassifier() == "composite" {
-				// Composite: deterministic first, LLM fallback for unknowns.
+				// Composite: deterministic first, fingerprint fallback, then LLM.
 				classifiers := []session.ErrorClassifier{
 					errorclass.NewDeterministicClassifier(),
+					errorclass.NewFingerprintClassifier(errorclass.FingerprintClassifierConfig{
+						Store: store,
+					}),
 				}
 
 				// Create LLM classifier from errors.llm_profile config.
 				llmClient, llmErr := llmfactory.NewClientFromConfig(cfg, cfg.GetErrorsLLMProfile())
 				if llmErr != nil {
-					slog.Warn("composite classifier: LLM client unavailable, using deterministic only",
+					slog.Warn("composite classifier: LLM client unavailable, using deterministic + fingerprint only",
 						"error", llmErr)
 				} else {
 					classifiers = append(classifiers, errorclass.NewLLMClassifier(errorclass.LLMClassifierConfig{
@@ -764,7 +767,15 @@ func New() *cmdutil.Factory {
 					Classifiers: classifiers,
 				})
 			} else {
-				classifier = errorclass.NewDeterministicClassifier()
+				// Non-composite mode: deterministic + fingerprint (no LLM).
+				classifier = errorclass.NewCompositeClassifier(errorclass.CompositeClassifierConfig{
+					Classifiers: []session.ErrorClassifier{
+						errorclass.NewDeterministicClassifier(),
+						errorclass.NewFingerprintClassifier(errorclass.FingerprintClassifierConfig{
+							Store: store,
+						}),
+					},
+				})
 			}
 
 			cachedErrorSvc = service.NewErrorService(service.ErrorServiceConfig{

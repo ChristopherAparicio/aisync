@@ -30,6 +30,12 @@ func (m *mockErrorService) GetSummary(_ session.ID) (*session.SessionErrorSummar
 func (m *mockErrorService) ListRecent(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
 	return m.errors, m.err
 }
+func (m *mockErrorService) ListUnclassifiedGroups(_ int) ([]session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockErrorService) ClassifyGroup(_ string, _ session.ErrorCategory, _ string, _ string) error {
+	return nil
+}
 
 func TestRunSessionErrors_NoErrors(t *testing.T) {
 	var buf bytes.Buffer

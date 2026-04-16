@@ -267,6 +267,12 @@ type ErrorServicer interface {
 
 	// ListRecent returns recent errors across all sessions, optionally filtered by category.
 	ListRecent(limit int, category session.ErrorCategory) ([]session.SessionError, error)
+
+	// ListUnclassifiedGroups returns fingerprint groups not yet classified.
+	ListUnclassifiedGroups(limit int) ([]session.ErrorFingerprintGroup, error)
+
+	// ClassifyGroup sets category + message on a fingerprint group and bulk-updates errors.
+	ClassifyGroup(fingerprint string, category session.ErrorCategory, message string, classifiedBy string) error
 }
 
 // Compile-time check: *ErrorService implements ErrorServicer.

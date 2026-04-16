@@ -127,3 +127,33 @@ func (s *ErrorService) ListRecent(limit int, category session.ErrorCategory) ([]
 	}
 	return s.store.ListRecentErrors(limit, category)
 }
+
+// ── Fingerprint-based grouping (unclassified errors dashboard) ──
+
+// ListUnclassifiedGroups returns fingerprint groups that have not been classified yet.
+// Groups are ordered by occurrence count DESC. Limit 0 uses the store default (100).
+func (s *ErrorService) ListUnclassifiedGroups(limit int) ([]session.ErrorFingerprintGroup, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("no error store configured")
+	}
+	return s.store.ListFingerprintGroups(true, limit)
+}
+
+// ClassifyGroup sets the category and message on a fingerprint group and
+// bulk-updates all session_errors sharing that fingerprint. classifiedBy
+// indicates who classified it ("user" for manual, "auto" for fingerprint match).
+func (s *ErrorService) ClassifyGroup(fingerprint string, category session.ErrorCategory, message string, classifiedBy string) error {
+	if s.store == nil {
+		return fmt.Errorf("no error store configured")
+	}
+	if fingerprint == "" {
+		return fmt.Errorf("fingerprint is required")
+	}
+	if !category.Valid() {
+		return fmt.Errorf("invalid category %q", category)
+	}
+	if category == session.ErrorCategoryUnknown {
+		return fmt.Errorf("cannot classify as unknown")
+	}
+	return s.store.ClassifyFingerprintGroup(fingerprint, category, message, classifiedBy)
+}

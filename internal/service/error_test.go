@@ -11,14 +11,17 @@ import (
 // ── mockErrorStore ──
 
 type mockErrorStore struct {
-	saved   []session.SessionError
-	errors  map[session.ID][]session.SessionError
-	saveErr error
+	saved        []session.SessionError
+	errors       map[session.ID][]session.SessionError
+	saveErr      error
+	fingerprints map[string]session.ErrorFingerprintGroup // fingerprint → group
+	classifyErr  error
 }
 
 func newMockErrorStore() *mockErrorStore {
 	return &mockErrorStore{
-		errors: make(map[session.ID][]session.SessionError),
+		errors:       make(map[session.ID][]session.SessionError),
+		fingerprints: make(map[string]session.ErrorFingerprintGroup),
 	}
 }
 
@@ -57,6 +60,61 @@ func (m *mockErrorStore) ListRecentErrors(limit int, category session.ErrorCateg
 		all = all[:limit]
 	}
 	return all, nil
+}
+
+// ── Fingerprint methods on mockErrorStore ──
+
+func (m *mockErrorStore) UpsertFingerprint(g session.ErrorFingerprintGroup) error {
+	m.fingerprints[g.Fingerprint] = g
+	return nil
+}
+
+func (m *mockErrorStore) ListFingerprintGroups(onlyUnclassified bool, limit int) ([]session.ErrorFingerprintGroup, error) {
+	var result []session.ErrorFingerprintGroup
+	for _, g := range m.fingerprints {
+		if onlyUnclassified && g.Category != "" && g.Category != session.ErrorCategoryUnknown {
+			continue
+		}
+		result = append(result, g)
+	}
+	if limit > 0 && limit < len(result) {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (m *mockErrorStore) GetFingerprintGroup(fp string) (*session.ErrorFingerprintGroup, error) {
+	g, ok := m.fingerprints[fp]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return &g, nil
+}
+
+func (m *mockErrorStore) ClassifyFingerprintGroup(fp string, cat session.ErrorCategory, msg string, by string) error {
+	if m.classifyErr != nil {
+		return m.classifyErr
+	}
+	g, ok := m.fingerprints[fp]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	g.Category = cat
+	g.Message = msg
+	g.ClassifiedBy = by
+	m.fingerprints[fp] = g
+	return nil
+}
+
+func (m *mockErrorStore) GetFingerprintMatch(fp string) (*session.ErrorFingerprintGroup, error) {
+	g, ok := m.fingerprints[fp]
+	if !ok {
+		return nil, nil
+	}
+	if g.Category == "" || g.Category == session.ErrorCategoryUnknown {
+		return nil, nil
+	}
+	return &g, nil
 }
 
 // ── mockClassifier ──
@@ -385,6 +443,120 @@ func TestErrorService_ListRecent(t *testing.T) {
 	}
 	if len(limited) != 1 {
 		t.Errorf("got %d errors with limit=1, want 1", len(limited))
+	}
+}
+
+// ── ListUnclassifiedGroups tests ──
+
+func TestErrorService_ListUnclassifiedGroups(t *testing.T) {
+	store := newMockErrorStore()
+	store.fingerprints["fp-1"] = session.ErrorFingerprintGroup{
+		Fingerprint: "fp-1", SampleRaw: "connection refused", OccurrenceCount: 10,
+		Category: session.ErrorCategoryUnknown,
+	}
+	store.fingerprints["fp-2"] = session.ErrorFingerprintGroup{
+		Fingerprint: "fp-2", SampleRaw: "disk full", OccurrenceCount: 5,
+		Category: "", // unclassified
+	}
+	store.fingerprints["fp-3"] = session.ErrorFingerprintGroup{
+		Fingerprint: "fp-3", SampleRaw: "rate limit", OccurrenceCount: 20,
+		Category: session.ErrorCategoryRateLimit, // classified — should be excluded
+	}
+
+	svc := NewErrorService(ErrorServiceConfig{
+		Store:      store,
+		Classifier: &mockClassifier{},
+	})
+
+	groups, err := svc.ListUnclassifiedGroups(0)
+	if err != nil {
+		t.Fatalf("ListUnclassifiedGroups() error: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Errorf("got %d groups, want 2 (only unclassified)", len(groups))
+	}
+}
+
+func TestErrorService_ListUnclassifiedGroups_nilStore(t *testing.T) {
+	svc := NewErrorService(ErrorServiceConfig{Classifier: &mockClassifier{}})
+	_, err := svc.ListUnclassifiedGroups(0)
+	if err == nil {
+		t.Fatal("expected error for nil store")
+	}
+}
+
+// ── ClassifyGroup tests ──
+
+func TestErrorService_ClassifyGroup(t *testing.T) {
+	store := newMockErrorStore()
+	store.fingerprints["fp-classify"] = session.ErrorFingerprintGroup{
+		Fingerprint:     "fp-classify",
+		SampleRaw:       "Unable to connect",
+		OccurrenceCount: 15,
+		Category:        session.ErrorCategoryUnknown,
+	}
+
+	svc := NewErrorService(ErrorServiceConfig{
+		Store:      store,
+		Classifier: &mockClassifier{},
+	})
+
+	err := svc.ClassifyGroup("fp-classify", session.ErrorCategoryNetworkError, "AWS connectivity issue", "user")
+	if err != nil {
+		t.Fatalf("ClassifyGroup() error: %v", err)
+	}
+
+	// Verify the mock was updated.
+	g := store.fingerprints["fp-classify"]
+	if g.Category != session.ErrorCategoryNetworkError {
+		t.Errorf("Category = %q, want %q", g.Category, session.ErrorCategoryNetworkError)
+	}
+	if g.ClassifiedBy != "user" {
+		t.Errorf("ClassifiedBy = %q, want %q", g.ClassifiedBy, "user")
+	}
+}
+
+func TestErrorService_ClassifyGroup_emptyFingerprint(t *testing.T) {
+	svc := NewErrorService(ErrorServiceConfig{
+		Store:      newMockErrorStore(),
+		Classifier: &mockClassifier{},
+	})
+
+	err := svc.ClassifyGroup("", session.ErrorCategoryNetworkError, "msg", "user")
+	if err == nil {
+		t.Fatal("expected error for empty fingerprint")
+	}
+}
+
+func TestErrorService_ClassifyGroup_invalidCategory(t *testing.T) {
+	svc := NewErrorService(ErrorServiceConfig{
+		Store:      newMockErrorStore(),
+		Classifier: &mockClassifier{},
+	})
+
+	err := svc.ClassifyGroup("fp-1", session.ErrorCategory("bogus"), "msg", "user")
+	if err == nil {
+		t.Fatal("expected error for invalid category")
+	}
+}
+
+func TestErrorService_ClassifyGroup_unknownCategoryRejected(t *testing.T) {
+	svc := NewErrorService(ErrorServiceConfig{
+		Store:      newMockErrorStore(),
+		Classifier: &mockClassifier{},
+	})
+
+	err := svc.ClassifyGroup("fp-1", session.ErrorCategoryUnknown, "msg", "user")
+	if err == nil {
+		t.Fatal("expected error when classifying as unknown")
+	}
+}
+
+func TestErrorService_ClassifyGroup_nilStore(t *testing.T) {
+	svc := NewErrorService(ErrorServiceConfig{Classifier: &mockClassifier{}})
+	err := svc.ClassifyGroup("fp-1", session.ErrorCategoryNetworkError, "msg", "user")
+	if err == nil {
+		t.Fatal("expected error for nil store")
 	}
 }
 
