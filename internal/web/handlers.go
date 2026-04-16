@@ -306,8 +306,13 @@ func (s *Server) buildProjectList(selectedPath string) []projectItem {
 		return nil
 	}
 
+	seen := make(map[string]bool, len(list))
 	items := make([]projectItem, 0, len(list))
 	for _, p := range list {
+		if seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
 		items = append(items, projectItem{
 			Name:     p.Name,
 			Path:     p.RootPath,
@@ -876,6 +881,31 @@ type sessionCell struct {
 	Tooltip  string // if set, rendered as data-tippy-content on the <td>
 }
 
+// sessionListItem is a template-friendly view for the two-line session list layout.
+// Line 1: Summary (link) + badges + stats right-aligned
+// Line 2: metadata (branch, short ID, provider, date) in muted small text
+type sessionListItem struct {
+	ID            string // full session ID
+	ShortID       string // display prefix, e.g. "ses_26fd07a1"
+	Summary       string // full summary text (or fallback to ID)
+	Provider      string // short label, e.g. "OC", "CC"
+	ProviderFull  string // full label, e.g. "opencode", "claude-code"
+	Branch        string // full branch name
+	ProjectName   string // base name of the project
+	ProjectPath   string // link path, e.g. "/projects/cycloplan"
+	Agent         string // agent name (if any)
+	SessionType   string // "feature", "bug", etc.
+	Status        string // "active", "idle", "archived"
+	Messages      string // formatted count
+	Tokens        string // formatted, e.g. "507.1M"
+	Cost          string // formatted, e.g. "$12.34"
+	Tools         string // formatted count
+	Errors        int    // raw count for conditional coloring
+	ErrorsDisplay string // formatted display
+	When          string // relative time, e.g. "just now", "2 hours ago"
+	WhenFull      string // absolute time for tooltip
+}
+
 type sessionsPage struct {
 	Nav string
 
@@ -905,8 +935,12 @@ type sessionsPage struct {
 	// Dynamic columns
 	Columns []columnDef
 
-	// Results (dynamic rows).
-	Rows       []sessionRow
+	// Results (dynamic rows — legacy table layout).
+	Rows []sessionRow
+
+	// Results (two-line list layout).
+	Items []sessionListItem
+
 	TotalCount int
 	Page       int // 1-based
 	PageSize   int
@@ -1004,6 +1038,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 
 	cols := s.buildColumnDefs()
 	rows := s.buildSessionRows(result.Sessions, cols)
+	items := s.buildSessionListItems(result.Sessions)
 
 	// Build facets for sidebar navigation.
 	// Facets use the same filters EXCEPT keyword (so counts show all sessions in the filter context).
@@ -1055,6 +1090,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 		Projects:              s.buildProjectList(project),
 		Columns:               cols,
 		Rows:                  rows,
+		Items:                 items,
 		TotalCount:            result.TotalCount,
 		Page:                  page,
 		PageSize:              pageSize,
@@ -1296,6 +1332,67 @@ func (s *Server) buildSessionRows(sessions []session.Summary, cols []columnDef) 
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// buildSessionListItems converts session summaries into template-friendly
+// two-line list items with all data pre-formatted.
+func (s *Server) buildSessionListItems(sessions []session.Summary) []sessionListItem {
+	items := make([]sessionListItem, 0, len(sessions))
+	for _, sess := range sessions {
+		fullID := string(sess.ID)
+
+		// Short ID: keep prefix up to ~16 chars for readability
+		shortID := fullID
+		if len(shortID) > 16 {
+			shortID = shortID[:16]
+		}
+
+		summary := sess.Summary
+		if summary == "" {
+			summary = fullID
+		}
+
+		// When
+		when := sess.CreatedAt
+		if !sess.UpdatedAt.IsZero() && sess.UpdatedAt.After(when) {
+			when = sess.UpdatedAt
+		}
+
+		// Cost
+		var cost string
+		if sess.ActualCost > 0 {
+			cost = formatCost(sess.ActualCost)
+		} else if sess.EstimatedCost > 0 {
+			cost = formatCost(sess.EstimatedCost)
+		} else {
+			c := estimateTokenCost(sess.TotalTokens)
+			cost = "~" + formatCost(c)
+		}
+
+		item := sessionListItem{
+			ID:            fullID,
+			ShortID:       shortID,
+			Summary:       summary,
+			Provider:      providerShortName(sess.Provider),
+			ProviderFull:  string(sess.Provider),
+			Branch:        sess.Branch,
+			ProjectName:   projectBaseName(sess.ProjectPath),
+			ProjectPath:   "/projects" + sess.ProjectPath,
+			Agent:         sess.Agent,
+			SessionType:   sess.SessionType,
+			Status:        string(sess.Status),
+			Messages:      strconv.Itoa(sess.MessageCount),
+			Tokens:        formatTokens(sess.TotalTokens),
+			Cost:          cost,
+			Tools:         strconv.Itoa(sess.ToolCallCount),
+			Errors:        sess.ErrorCount,
+			ErrorsDisplay: strconv.Itoa(sess.ErrorCount),
+			When:          timeAgo(when),
+			WhenFull:      when.Format("2006-01-02 15:04"),
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 // ── Session Detail ──
@@ -2892,16 +2989,16 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 
 func heatmapColor(intensity float64) string {
 	if intensity <= 0 {
-		return "var(--bg-card)"
+		return "var(--bg-hover)" // visible "empty" cell, distinct from page background
 	}
 	if intensity < 0.25 {
-		return "rgba(108,126,225,0.2)"
+		return "rgba(108,126,225,0.25)"
 	}
 	if intensity < 0.5 {
-		return "rgba(108,126,225,0.4)"
+		return "rgba(108,126,225,0.45)"
 	}
 	if intensity < 0.75 {
-		return "rgba(108,126,225,0.6)"
+		return "rgba(108,126,225,0.65)"
 	}
 	return "rgba(108,126,225,0.9)"
 }
@@ -9247,5 +9344,160 @@ func severityRank(s diagnostic.Severity) int {
 		return 2
 	default:
 		return 3
+	}
+}
+
+// ── Unclassified Errors Dashboard ──
+
+type unclassifiedErrorsPage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+	Groups          []errorGroupView
+	TotalGroups     int
+	TotalErrors     int
+	Categories      []string // all valid categories for the classify form
+}
+
+type errorGroupView struct {
+	Fingerprint     string
+	SampleRaw       string
+	SampleTruncated string // truncated for display
+	OccurrenceCount int
+	ProjectCount    int
+	FirstSeen       string
+	LastSeen        string
+	TimeAgo         string // human-readable "2h ago"
+}
+
+func (s *Server) handleUnclassifiedErrors(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	data := unclassifiedErrorsPage{
+		Nav:        "errors",
+		Categories: classifiableCategories(),
+	}
+
+	data.SidebarProjects = s.buildSidebarProjects(ctx, "")
+
+	if s.errorSvc == nil {
+		s.render(w, "errors_unclassified.html", data)
+		return
+	}
+
+	groups, err := s.errorSvc.ListUnclassifiedGroups(200)
+	if err != nil {
+		s.logger.Printf("[errors] ListUnclassifiedGroups: %v", err)
+		s.render(w, "errors_unclassified.html", data)
+		return
+	}
+
+	now := time.Now()
+	totalErrors := 0
+	for _, g := range groups {
+		totalErrors += g.OccurrenceCount
+		view := errorGroupView{
+			Fingerprint:     g.Fingerprint,
+			SampleRaw:       g.SampleRaw,
+			SampleTruncated: truncateErrorSample(g.SampleRaw, 120),
+			OccurrenceCount: g.OccurrenceCount,
+			ProjectCount:    g.ProjectCount,
+			FirstSeen:       g.FirstSeen.Format("2006-01-02 15:04"),
+			LastSeen:        g.LastSeen.Format("2006-01-02 15:04"),
+			TimeAgo:         humanTimeAgo(now, g.LastSeen),
+		}
+		data.Groups = append(data.Groups, view)
+	}
+	data.TotalGroups = len(groups)
+	data.TotalErrors = totalErrors
+
+	s.render(w, "errors_unclassified.html", data)
+}
+
+func (s *Server) handleClassifyError(w http.ResponseWriter, r *http.Request) {
+	if s.errorSvc == nil {
+		http.Error(w, "error service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	fingerprint := r.FormValue("fingerprint")
+	category := session.ErrorCategory(r.FormValue("category"))
+	message := r.FormValue("message")
+
+	if fingerprint == "" {
+		http.Error(w, "fingerprint is required", http.StatusBadRequest)
+		return
+	}
+	if !category.Valid() || category == session.ErrorCategoryUnknown {
+		http.Error(w, "invalid category", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.errorSvc.ClassifyGroup(fingerprint, category, message, "user"); err != nil {
+		s.logger.Printf("[errors] ClassifyGroup(%s): %v", fingerprint, err)
+		http.Error(w, "classification failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Return a success indicator for HTMX — the row can be removed from the table.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<tr class="classified-success"><td colspan="5" style="text-align:center;color:var(--color-green);padding:0.5rem;">Classified as <strong>%s</strong></td></tr>`, template.HTMLEscapeString(string(category)))
+}
+
+// classifiableCategories returns all error categories except "unknown".
+func classifiableCategories() []string {
+	return []string{
+		string(session.ErrorCategoryProviderError),
+		string(session.ErrorCategoryRateLimit),
+		string(session.ErrorCategoryContextOverflow),
+		string(session.ErrorCategoryAuthError),
+		string(session.ErrorCategoryValidation),
+		string(session.ErrorCategoryToolError),
+		string(session.ErrorCategoryNetworkError),
+		string(session.ErrorCategoryAborted),
+	}
+}
+
+// truncateErrorSample truncates a raw error string for display in the table.
+func truncateErrorSample(s string, max int) string {
+	// Replace newlines with spaces for single-line display.
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	if len(s) > max {
+		return s[:max] + "..."
+	}
+	return s
+}
+
+// humanTimeAgo returns a human-readable relative time string.
+func humanTimeAgo(now, t time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		m := int(d.Minutes())
+		if m == 1 {
+			return "1m ago"
+		}
+		return fmt.Sprintf("%dm ago", m)
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		if h == 1 {
+			return "1h ago"
+		}
+		return fmt.Sprintf("%dh ago", h)
+	case d < 30*24*time.Hour:
+		days := int(d.Hours()) / 24
+		if days == 1 {
+			return "1d ago"
+		}
+		return fmt.Sprintf("%dd ago", days)
+	default:
+		return t.Format("Jan 2")
 	}
 }

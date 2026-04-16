@@ -36,6 +36,7 @@ var staticFS embed.FS
 type Server struct {
 	sessionSvc       service.SessionServicer
 	analysisSvc      service.AnalysisServicer // optional — nil disables analysis features
+	errorSvc         service.ErrorServicer    // optional — nil disables error dashboard features
 	registrySvc      *service.RegistryService // optional — nil disables project/capability features
 	sessionEventSvc  *sessionevent.Service    // optional — nil disables event analytics features
 	benchmarkRec     *benchmark.Recommender   // optional — nil disables model alternatives
@@ -53,6 +54,7 @@ type Server struct {
 type Config struct {
 	SessionService       service.SessionServicer
 	AnalysisService      service.AnalysisServicer // optional — nil disables analysis features
+	ErrorService         service.ErrorServicer    // optional — nil disables error dashboard features
 	RegistryService      *service.RegistryService // optional — nil disables project/capability features
 	SessionEventService  *sessionevent.Service    // optional — nil disables event analytics features
 	BenchmarkRecommender *benchmark.Recommender   // optional — nil disables model alternatives
@@ -96,6 +98,7 @@ func New(cfg Config) (*Server, error) {
 		{"templates/file_tree.html"},
 		{"templates/team.html"},
 		{"templates/session_graph.html"},
+		{"templates/errors_unclassified.html"},
 	}
 
 	pages := make(map[string]*template.Template, len(pageSpecs))
@@ -137,6 +140,7 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		sessionSvc:       cfg.SessionService,
 		analysisSvc:      cfg.AnalysisService,
+		errorSvc:         cfg.ErrorService,
 		registrySvc:      cfg.RegistryService,
 		sessionEventSvc:  cfg.SessionEventService,
 		benchmarkRec:     cfg.BenchmarkRecommender,
@@ -188,6 +192,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /analytics", s.handleAnalytics)
 	mux.HandleFunc("GET /team", s.handleTeam)
 	mux.HandleFunc("GET /graph", s.handleSessionGraph)
+	mux.HandleFunc("GET /errors/unclassified", s.handleUnclassifiedErrors)
+	mux.HandleFunc("POST /api/errors/classify", s.handleClassifyError)
 	mux.HandleFunc("GET /investigate/command-patterns", s.handleCommandPatterns)
 	mux.HandleFunc("GET /settings", s.handleSettings)
 	mux.HandleFunc("POST /api/settings", s.handleSettingsUpdate)

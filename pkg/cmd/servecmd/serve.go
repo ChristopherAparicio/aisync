@@ -398,9 +398,11 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		&securityRules.CodeInjection{},
 	)
 
+	webErrorSvc, _ := f.ErrorService()
 	webSrv, err := web.New(web.Config{
 		SessionService:       sessionSvc,
 		AnalysisService:      analysisSvc,
+		ErrorService:         webErrorSvc,
 		RegistryService:      registrySvc,
 		SessionEventService:  webSessionEventSvc,
 		BenchmarkRecommender: benchRec,

@@ -1604,13 +1604,14 @@ func TestSessionsList_dynamicColumnsInHTML(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	// Should contain default column headers.
-	for _, label := range []string{"ID", "Provider", "Branch", "Summary", "Msgs", "Tokens", "Cost", "Errs", "When"} {
-		if !strings.Contains(body, label) {
-			t.Errorf("expected column header %q in HTML", label)
+	// Two-line list layout: verify session data is present.
+	// The new layout uses sl-item, sl-summary, sl-stats, badges, etc.
+	for _, marker := range []string{"sl-item", "sl-summary", "sl-stats", "sl-row2", "msgs", "tok"} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("expected %q in two-line session list HTML", marker)
 		}
 	}
-	// Should contain session data.
+	// Should contain sessions page.
 	if !strings.Contains(body, "Sessions") && !strings.Contains(body, "sessions") {
 		t.Error("expected sessions content in page")
 	}
@@ -3140,6 +3141,186 @@ func TestClassifySessionPreview(t *testing.T) {
 		})
 	}
 }
+
+// ── Unclassified Errors ──
+
+func TestUnclassifiedErrors_empty(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/errors/unclassified", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Unclassified Errors") {
+		t.Error("expected page title")
+	}
+	if !strings.Contains(body, "No unclassified errors") {
+		t.Error("expected empty state message when no error service")
+	}
+}
+
+func TestUnclassifiedErrors_withErrorService(t *testing.T) {
+	store := testutil.MustOpenStore(t)
+
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+
+	errorSvc := service.NewErrorService(service.ErrorServiceConfig{
+		Store:      store,
+		Classifier: &stubClassifier{},
+	})
+
+	srv, err := New(Config{
+		SessionService: sessionSvc,
+		ErrorService:   errorSvc,
+		Addr:           ":0",
+	})
+	if err != nil {
+		t.Fatalf("new web server: %v", err)
+	}
+
+	// Seed a fingerprint group.
+	store.UpsertFingerprint(session.ErrorFingerprintGroup{
+		Fingerprint:     "fp-web-test",
+		SampleRaw:       "Unable to connect to region us-east-1",
+		Category:        session.ErrorCategoryUnknown,
+		OccurrenceCount: 42,
+		ProjectCount:    3,
+		FirstSeen:       time.Now().Add(-24 * time.Hour),
+		LastSeen:        time.Now().Add(-1 * time.Hour),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/errors/unclassified", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Unable to connect") {
+		t.Error("expected sample error text in page")
+	}
+	if !strings.Contains(body, "42") {
+		t.Error("expected occurrence count in page")
+	}
+}
+
+func TestClassifyError_success(t *testing.T) {
+	store := testutil.MustOpenStore(t)
+
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+
+	errorSvc := service.NewErrorService(service.ErrorServiceConfig{
+		Store:      store,
+		Classifier: &stubClassifier{},
+	})
+
+	srv, err := New(Config{
+		SessionService: sessionSvc,
+		ErrorService:   errorSvc,
+		Addr:           ":0",
+	})
+	if err != nil {
+		t.Fatalf("new web server: %v", err)
+	}
+
+	// Seed a fingerprint group.
+	store.UpsertFingerprint(session.ErrorFingerprintGroup{
+		Fingerprint:     "fp-classify-web",
+		SampleRaw:       "disk full",
+		Category:        session.ErrorCategoryUnknown,
+		OccurrenceCount: 10,
+		ProjectCount:    1,
+		FirstSeen:       time.Now(),
+		LastSeen:        time.Now(),
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/errors/classify",
+		strings.NewReader("fingerprint=fp-classify-web&category=network_error&message=disk+issue"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "network_error") {
+		t.Error("expected success message with category")
+	}
+
+	// Verify the group was actually classified.
+	g, gErr := store.GetFingerprintGroup("fp-classify-web")
+	if gErr != nil {
+		t.Fatalf("GetFingerprintGroup after classify: %v", gErr)
+	}
+	if g.Category != session.ErrorCategoryNetworkError {
+		t.Errorf("Category = %q, want %q", g.Category, session.ErrorCategoryNetworkError)
+	}
+}
+
+func TestClassifyError_invalidCategory(t *testing.T) {
+	store := testutil.MustOpenStore(t)
+
+	sessionSvc := service.NewSessionService(service.SessionServiceConfig{
+		Store:     store,
+		Registry:  provider.NewRegistry(),
+		Converter: converter.New(),
+	})
+
+	errorSvc := service.NewErrorService(service.ErrorServiceConfig{
+		Store:      store,
+		Classifier: &stubClassifier{},
+	})
+
+	srv, err := New(Config{
+		SessionService: sessionSvc,
+		ErrorService:   errorSvc,
+		Addr:           ":0",
+	})
+	if err != nil {
+		t.Fatalf("new web server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/errors/classify",
+		strings.NewReader("fingerprint=fp-test&category=bogus"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid category, got %d", w.Code)
+	}
+}
+
+// stubClassifier is a minimal ErrorClassifier for web tests.
+type stubClassifier struct{}
+
+func (s *stubClassifier) Classify(err session.SessionError) session.SessionError {
+	err.Category = session.ErrorCategoryUnknown
+	err.Source = session.ErrorSourceClient
+	return err
+}
+func (s *stubClassifier) Name() string { return "stub" }
 
 func TestExtractSkillContentNames(t *testing.T) {
 	tests := []struct {
