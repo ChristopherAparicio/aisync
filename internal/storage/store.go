@@ -386,6 +386,29 @@ type ErrorStore interface {
 	// ListRecentErrors returns recent errors across all sessions, ordered by occurred_at DESC.
 	// Limit 0 means use default (50).
 	ListRecentErrors(limit int, category session.ErrorCategory) ([]session.SessionError, error)
+
+	// --- Fingerprint-based grouping (unclassified errors dashboard) ---
+
+	// UpsertFingerprint creates or updates an error fingerprint group.
+	// Called during SaveErrors to maintain running counts.
+	UpsertFingerprint(group session.ErrorFingerprintGroup) error
+
+	// ListFingerprintGroups returns fingerprint groups, optionally filtered.
+	// If onlyUnclassified is true, only groups with empty category are returned.
+	// Results are ordered by occurrence_count DESC.
+	ListFingerprintGroups(onlyUnclassified bool, limit int) ([]session.ErrorFingerprintGroup, error)
+
+	// GetFingerprintGroup returns a single fingerprint group by its fingerprint hash.
+	GetFingerprintGroup(fingerprint string) (*session.ErrorFingerprintGroup, error)
+
+	// ClassifyFingerprintGroup sets the category + message on a fingerprint group
+	// and bulk-updates all session_errors with that fingerprint.
+	ClassifyFingerprintGroup(fingerprint string, category session.ErrorCategory, message string, classifiedBy string) error
+
+	// GetFingerprintMatch looks up a fingerprint in the error_fingerprints table.
+	// Returns the group if classified, nil if not found or not yet classified.
+	// Used by FingerprintClassifier to auto-classify new errors.
+	GetFingerprintMatch(fingerprint string) (*session.ErrorFingerprintGroup, error)
 }
 
 // SessionEventStore manages structured session events and aggregated buckets.

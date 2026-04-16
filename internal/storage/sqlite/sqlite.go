@@ -3665,6 +3665,46 @@ func runMigrations(db *sql.DB) error {
 		return fmt.Errorf("migration 032 (session_hotspots schema_version index): %w", err)
 	}
 
+	// ── Migration 033: error_fingerprints table + fingerprint column on session_errors ──
+	//
+	// error_fingerprints is the lookup table for bulk error classification.
+	// Each row represents a normalized error "shape" (fingerprint = SHA-256 of
+	// the normalised raw_error, scoped by HTTP status + category). When a user
+	// classifies a fingerprint group via the dashboard, new errors matching
+	// that fingerprint are auto-classified on the next ProcessSession call.
+	//
+	// The fingerprint column on session_errors links individual errors to their
+	// group, enabling efficient JOINs for the unclassified dashboard.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS error_fingerprints (
+		fingerprint TEXT PRIMARY KEY,
+		sample_raw TEXT NOT NULL DEFAULT '',
+		category TEXT NOT NULL DEFAULT '',
+		message TEXT NOT NULL DEFAULT '',
+		classified_by TEXT NOT NULL DEFAULT '',
+		classified_at TEXT NOT NULL DEFAULT '',
+		first_seen TEXT NOT NULL DEFAULT '',
+		last_seen TEXT NOT NULL DEFAULT '',
+		occurrence_count INTEGER NOT NULL DEFAULT 0,
+		project_count INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		return fmt.Errorf("migration 033 (error_fingerprints table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_error_fingerprints_category
+		ON error_fingerprints(category)`); err != nil {
+		return fmt.Errorf("migration 033 (error_fingerprints category index): %w", err)
+	}
+
+	// Add fingerprint column to session_errors for JOIN-based grouping.
+	if !columnExists(db, "session_errors", "fingerprint") {
+		if _, err := db.Exec("ALTER TABLE session_errors ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("migration 033 (session_errors.fingerprint): %w", err)
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_errors_fingerprint
+		ON session_errors(fingerprint)`); err != nil {
+		return fmt.Errorf("migration 033 (session_errors fingerprint index): %w", err)
+	}
+
 	return nil
 }
 

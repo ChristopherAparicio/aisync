@@ -1042,6 +1042,19 @@ func (m *mockStore) GetErrorSummary(_ session.ID) (*session.SessionErrorSummary,
 func (m *mockStore) ListRecentErrors(_ int, _ session.ErrorCategory) ([]session.SessionError, error) {
 	return nil, nil
 }
+func (m *mockStore) UpsertFingerprint(_ session.ErrorFingerprintGroup) error { return nil }
+func (m *mockStore) ListFingerprintGroups(_ bool, _ int) ([]session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockStore) GetFingerprintGroup(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockStore) ClassifyFingerprintGroup(_ string, _ session.ErrorCategory, _ string, _ string) error {
+	return nil
+}
+func (m *mockStore) GetFingerprintMatch(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
 
 // Auth store stubs.
 func (m *mockStore) CreateAuthUser(_ *auth.User) error        { return nil }

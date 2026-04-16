@@ -42,6 +42,21 @@ func (m *mockErrorStore) ListRecentErrors(limit int, category session.ErrorCateg
 	return m.saved, nil
 }
 
+// Fingerprint stubs — not exercised in integration tests.
+func (m *mockErrorStore) UpsertFingerprint(_ session.ErrorFingerprintGroup) error { return nil }
+func (m *mockErrorStore) ListFingerprintGroups(_ bool, _ int) ([]session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockErrorStore) GetFingerprintGroup(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *mockErrorStore) ClassifyFingerprintGroup(_ string, _ session.ErrorCategory, _ string, _ string) error {
+	return nil
+}
+func (m *mockErrorStore) GetFingerprintMatch(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+
 // smartLLMMock returns different classifications based on the error content.
 type smartLLMMock struct{}
 

@@ -516,6 +516,22 @@ func (m *MockStore) ListRecentErrors(_ int, _ session.ErrorCategory) ([]session.
 	return nil, nil
 }
 
+// ── Fingerprint Store (stubs) ──
+
+func (m *MockStore) UpsertFingerprint(_ session.ErrorFingerprintGroup) error { return nil }
+func (m *MockStore) ListFingerprintGroups(_ bool, _ int) ([]session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *MockStore) GetFingerprintGroup(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+func (m *MockStore) ClassifyFingerprintGroup(_ string, _ session.ErrorCategory, _ string, _ string) error {
+	return nil
+}
+func (m *MockStore) GetFingerprintMatch(_ string) (*session.ErrorFingerprintGroup, error) {
+	return nil, nil
+}
+
 // ── Auth Store (stubs) ──
 
 func (m *MockStore) CreateAuthUser(_ *auth.User) error        { return nil }

@@ -139,6 +139,7 @@ type SessionError struct {
 	// Classification metadata
 	IsRetryable bool   `json:"is_retryable,omitempty"` // whether the error is retryable
 	Confidence  string `json:"confidence,omitempty"`   // classification confidence: "high", "medium", "low"
+	Fingerprint string `json:"fingerprint,omitempty"`  // normalized hash for grouping similar errors
 }
 
 // IsExternal reports whether this error originated from outside the session
@@ -187,6 +188,24 @@ func NewSessionErrorSummary(sessionID ID, errors []SessionError) SessionErrorSum
 	}
 
 	return s
+}
+
+// ── ErrorFingerprintGroup ──
+
+// ErrorFingerprintGroup represents a group of similar errors identified by their
+// fingerprint. Used by the unclassified errors dashboard to present grouped counts
+// and support bulk classification.
+type ErrorFingerprintGroup struct {
+	Fingerprint     string        `json:"fingerprint"`      // normalized hash
+	SampleRaw       string        `json:"sample_raw"`       // one example raw_error for display
+	Category        ErrorCategory `json:"category"`         // current classification (empty = unclassified)
+	Message         string        `json:"message"`          // classification message (empty = unclassified)
+	ClassifiedBy    string        `json:"classified_by"`    // "user", "auto", or ""
+	ClassifiedAt    time.Time     `json:"classified_at"`    // when it was classified
+	FirstSeen       time.Time     `json:"first_seen"`       // earliest occurrence
+	LastSeen        time.Time     `json:"last_seen"`        // most recent occurrence
+	OccurrenceCount int           `json:"occurrence_count"` // total number of errors in this group
+	ProjectCount    int           `json:"project_count"`    // number of distinct projects affected
 }
 
 // ── ErrorClassifier (port interface) ──
