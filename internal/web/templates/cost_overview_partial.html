@@ -228,6 +228,35 @@
   </div>
 </div>
 
+<!-- ── Fork Deduplication ── -->
+{{if .HasForkDedup}}
+<div class="section">
+  <h2 class="section-title">Fork Deduplication</h2>
+  <div class="kpi-grid">
+    <div class="kpi-card kpi-accent">
+      <div class="label">Deduplicated Cost</div>
+      <div class="value">{{formatCost .DeduplicatedCost}}</div>
+      <div class="sub">actual unique spend (shared tokens removed)</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Fork Savings</div>
+      <div class="value" style="color: var(--green)">&#x2193; {{formatCost .ForkSavings}}</div>
+      <div class="sub">shared tokens not double-counted</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Forks Detected</div>
+      <div class="value">{{.ForkCount}}</div>
+      <div class="sub">sessions sharing message prefixes</div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">Overlap Ratio</div>
+      <div class="value">{{printf "%.0f" .ForkOverlapPct}}%</div>
+      <div class="sub">of total cost was duplicated</div>
+    </div>
+  </div>
+</div>
+{{end}}
+
 <!-- ── Cost Over Time ── -->
 {{if .Buckets}}
 <div class="section">

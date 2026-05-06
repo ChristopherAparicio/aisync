@@ -3064,6 +3064,13 @@ type costDashboardPage struct {
 	TotalSessions   int
 	AvgPerSession   float64
 
+	// Fork deduplication
+	HasForkDedup     bool    `json:"has_fork_dedup"`     // true if there are detected forks
+	ForkCount        int     `json:"fork_count"`         // number of detected fork relationships
+	ForkSavings      float64 `json:"fork_savings"`       // cost removed by deduplication
+	DeduplicatedCost float64 `json:"deduplicated_cost"`  // cost after removing fork overlap
+	ForkOverlapPct   float64 `json:"fork_overlap_pct"`   // percentage of total cost that was duplicated
+
 	// Forecast (API-equivalent — all sessions)
 	HasForecast  bool
 	Projected30d float64
@@ -3660,6 +3667,13 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	data.Savings = stats.Savings
 	data.BillingType = stats.BillingType
 	data.TotalSessions = stats.TotalSessions
+	data.ForkCount = stats.ForkCount
+	data.ForkSavings = stats.ForkSavings
+	data.DeduplicatedCost = stats.DeduplicatedCost
+	data.HasForkDedup = stats.ForkSavings > 0
+	if stats.TotalCost > 0 && stats.ForkSavings > 0 {
+		data.ForkOverlapPct = stats.ForkSavings / stats.TotalCost * 100
+	}
 	if stats.TotalSessions > 0 {
 		data.AvgPerSession = stats.TotalCost / float64(stats.TotalSessions)
 	}

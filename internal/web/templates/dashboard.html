@@ -254,6 +254,16 @@
               {{formatCost .TrendPerDay}}/day
             </span>
           </div>
+          {{if .HasForkDedup}}
+          <div class="home-forecast-row" style="margin-top: 0.25rem; padding-top: 0.25rem; border-top: 1px solid var(--border);">
+            <span class="text-muted">Fork savings</span>
+            <span class="font-mono" style="color: var(--green);">&#x2193; {{formatCost .ForkSavings}}</span>
+          </div>
+          <div class="home-forecast-row">
+            <span class="text-muted">Deduplicated cost</span>
+            <span class="font-mono">{{formatCost .DeduplicatedCost}}</span>
+          </div>
+          {{end}}
         </div>
       </div>
       {{end}}
