@@ -101,10 +101,29 @@ func (s *SessionService) GarbageCollect(ctx context.Context, req GCRequest) (*GC
 }
 
 // parseDuration parses a human-friendly duration string.
-// Supports: "30d" (days), "24h" (hours), "7d12h" (days+hours).
-// Falls back to time.ParseDuration for standard Go durations.
+// Supports: "30d" (days), "24h" (hours), "1w" (weeks), "2mo" (months ≈ 30d each),
+// "1y" (years ≈ 365d), "7d12h" (combined day+hour).
+// Falls back to time.ParseDuration for standard Go durations (s/m/h).
 func parseDuration(s string) (time.Duration, error) {
-	// Check for day notation: "Nd" or "NdMh"
+	// Year notation: "Ny" or "NyMd"
+	if strings.HasSuffix(s, "y") || strings.Contains(s, "y") {
+		if n, ok := parseUnitPrefix(s, "y"); ok {
+			return time.Duration(n) * 365 * 24 * time.Hour, nil
+		}
+	}
+	// Month notation: "Nmo" (must be checked before "m" to avoid minute conflict)
+	if strings.HasSuffix(s, "mo") {
+		if n, ok := parseUnitPrefix(s, "mo"); ok {
+			return time.Duration(n) * 30 * 24 * time.Hour, nil
+		}
+	}
+	// Week notation: "Nw"
+	if strings.HasSuffix(s, "w") {
+		if n, ok := parseUnitPrefix(s, "w"); ok {
+			return time.Duration(n) * 7 * 24 * time.Hour, nil
+		}
+	}
+	// Day notation: "Nd" or "NdMh"
 	if strings.ContainsAny(s, "d") {
 		var days, hours int
 		parts := strings.Split(s, "d")
@@ -128,4 +147,18 @@ func parseDuration(s string) (time.Duration, error) {
 
 	// Fallback to standard Go duration
 	return time.ParseDuration(s)
+}
+
+// parseUnitPrefix extracts the numeric prefix from a duration string ending in `unit`.
+// Returns (number, true) if the prefix is a valid integer, otherwise (0, false).
+func parseUnitPrefix(s, unit string) (int, bool) {
+	prefix := strings.TrimSuffix(s, unit)
+	if prefix == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(prefix)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

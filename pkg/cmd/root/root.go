@@ -36,7 +36,6 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/restore"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/rewindcmd"
-	"github.com/ChristopherAparicio/aisync/pkg/cmd/searchcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/secrets"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/setupcmd"
@@ -83,7 +82,6 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(linkcmd.NewCmdLink(f))
 	cmd.AddCommand(commentcmd.NewCmdComment(f))
 	cmd.AddCommand(statscmd.NewCmdStats(f))
-	cmd.AddCommand(searchcmd.NewCmdSearch(f))
 	cmd.AddCommand(blamecmd.NewCmdBlame(f))
 	cmd.AddCommand(explaincmd.NewCmdExplain(f))
 	cmd.AddCommand(toolusagecmd.NewCmdToolUsage(f))

@@ -3,10 +3,13 @@ package listcmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -24,6 +27,8 @@ type Options struct {
 	Factory *cmdutil.Factory
 
 	All      bool
+	Global   bool   // cross-project: ignore current repo, list/search all projects
+	Branch   string // override the auto-detected current branch
 	Quiet    bool
 	Tree     bool
 	OffTopic bool
@@ -31,6 +36,15 @@ type Options struct {
 	User     string // filter by owner ID
 	Me       bool   // filter by current authenticated user
 	Similar  string // session ID to find similar sessions by file overlap
+
+	// Filters (combinable with any scope).
+	Search      string // FTS5 keyword (matches summary/content/tools)
+	SessionType string // session_type filter (feature, bug, refactor, exploration, review, devops, other)
+	Provider    string // provider filter (claude-code, opencode, cursor)
+	Since       string // RFC3339, YYYY-MM-DD, or relative duration (7d, 24h, 1w, 2mo)
+	Until       string // same formats as --since
+	Limit       int    // max results (0 = no limit)
+	JSON        bool   // machine-readable JSON output
 }
 
 // NewCmdList creates the `aisync list` command.
@@ -42,14 +56,35 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List captured sessions",
-		Long:  "Lists captured sessions for the current branch or all sessions in this project.",
+		Short: "List and search captured sessions",
+		Long: `Lists captured sessions for the current branch (default), all sessions in
+this project (--all), or across every project (--global). Combine with
+--search to filter by keyword (FTS5), --type to filter by classification,
+--since/--until to filter by date, etc.
+
+Examples:
+  aisync list                              # current branch
+  aisync list --all                        # everything in this project
+  aisync list --global                     # all sessions across all projects
+  aisync list --branch feat/auth           # specific branch
+  aisync list --search "OAuth"             # keyword search (FTS5)
+  aisync list --search "CV OR resume"      # FTS5 OR
+  aisync list --type bug                   # classification filter
+  aisync list --since 7d                   # last 7 days (relative)
+  aisync list --since 2026-01-01           # absolute date
+  aisync list --global --search "deploy" --type devops --since 30d
+  aisync list --pr 42                      # sessions linked to PR #42`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runList(opts)
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.All, "all", false, "Show all sessions in this project")
+	// Scope flags
+	cmd.Flags().BoolVar(&opts.All, "all", false, "Show all sessions in this project (ignores branch)")
+	cmd.Flags().BoolVar(&opts.Global, "global", false, "Show sessions across all projects (ignores current repo)")
+	cmd.Flags().StringVar(&opts.Branch, "branch", "", "Override the current branch (e.g. --branch main)")
+
+	// Existing flags
 	cmd.Flags().BoolVarP(&opts.Quiet, "quiet", "q", false, "Only print session IDs (one per line)")
 	cmd.Flags().IntVar(&opts.PRFlag, "pr", 0, "List sessions linked to this PR number")
 	cmd.Flags().BoolVar(&opts.Tree, "tree", false, "Show sessions as a tree (grouped by parent/child forks)")
@@ -58,26 +93,47 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Me, "me", false, "Filter sessions by current authenticated user")
 	cmd.Flags().StringVar(&opts.Similar, "similar", "", "Find sessions with similar file changes to this session ID")
 
+	// New filter flags
+	cmd.Flags().StringVar(&opts.Search, "search", "", "Full-text search keyword (FTS5, supports OR/AND/phrases)")
+	cmd.Flags().StringVar(&opts.SessionType, "type", "", "Filter by session type (feature, bug, refactor, exploration, review, devops, other)")
+	cmd.Flags().StringVar(&opts.Provider, "provider", "", "Filter by provider (claude-code, opencode, cursor)")
+	cmd.Flags().StringVar(&opts.Since, "since", "", "Only sessions after this date or duration (e.g. 2026-01-01, 7d, 24h, 1w)")
+	cmd.Flags().StringVar(&opts.Until, "until", "", "Only sessions before this date or duration")
+	cmd.Flags().IntVar(&opts.Limit, "limit", 0, "Max results (0 = no limit, defaults to 50 when --search is used)")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output results as JSON")
+
 	return cmd
 }
 
 func runList(opts *Options) error {
 	out := opts.IO.Out
 
-	// Git info
-	gitClient, err := opts.Factory.Git()
-	if err != nil {
-		return fmt.Errorf("not a git repository")
-	}
+	// Resolve scope: project path & branch.
+	// --global skips git entirely; otherwise we need the repo to find them.
+	var topLevel, branch string
+	if !opts.Global {
+		gitClient, err := opts.Factory.Git()
+		if err != nil {
+			return fmt.Errorf("not a git repository (use --global to search across all projects)")
+		}
 
-	branch, err := gitClient.CurrentBranch()
-	if err != nil {
-		return fmt.Errorf("could not determine current branch: %w", err)
-	}
+		topLevel, err = gitClient.TopLevel()
+		if err != nil {
+			return fmt.Errorf("could not determine repository root: %w", err)
+		}
 
-	topLevel, err := gitClient.TopLevel()
-	if err != nil {
-		return fmt.Errorf("could not determine repository root: %w", err)
+		// --branch overrides auto-detection.
+		if opts.Branch != "" {
+			branch = opts.Branch
+		} else {
+			branch, err = gitClient.CurrentBranch()
+			if err != nil {
+				return fmt.Errorf("could not determine current branch: %w", err)
+			}
+		}
+	} else if opts.Branch != "" {
+		// --global --branch X: still allow filtering by branch name across projects.
+		branch = opts.Branch
 	}
 
 	// Get service
@@ -96,47 +152,57 @@ func runList(opts *Options) error {
 		}
 	}
 
-	// List sessions
-	summaries, err := svc.List(service.ListRequest{
+	// Validate --type if provided.
+	if opts.SessionType != "" && !session.ValidSessionType(opts.SessionType) {
+		return fmt.Errorf("invalid --type %q (valid: feature, bug, refactor, exploration, review, devops, other)", opts.SessionType)
+	}
+
+	// Off-topic / similar / tree modes preempt the regular list path.
+	if opts.OffTopic {
+		return runListOffTopic(opts, svc, topLevel, branch)
+	}
+	if opts.Similar != "" {
+		return runListSimilar(opts, svc, topLevel)
+	}
+	if opts.Tree {
+		return runListTree(opts, svc, topLevel, branch)
+	}
+
+	// Build the list request honoring all scope/filter flags.
+	req := service.ListRequest{
 		ProjectPath: topLevel,
 		Branch:      branch,
 		OwnerID:     ownerID,
 		PRNumber:    opts.PRFlag,
 		All:         opts.All,
-	})
+		Global:      opts.Global,
+		Provider:    session.ProviderName(opts.Provider),
+		Keyword:     opts.Search,
+		SessionType: opts.SessionType,
+		Since:       opts.Since,
+		Until:       opts.Until,
+		Limit:       opts.Limit,
+	}
+
+	summaries, err := svc.List(req)
 	if err != nil {
 		return err
 	}
 
-	// Off-topic detection mode.
-	if opts.OffTopic {
-		return runListOffTopic(opts, svc, topLevel, branch)
-	}
-
-	// Similar sessions mode.
-	if opts.Similar != "" {
-		return runListSimilar(opts, svc, topLevel)
-	}
-
-	// Tree mode: show sessions as parent/child tree.
-	if opts.Tree {
-		return runListTree(opts, svc, topLevel, branch)
+	// JSON output: dump and return.
+	if opts.JSON {
+		return writeJSON(out, summaries)
 	}
 
 	if len(summaries) == 0 {
 		if opts.Quiet {
 			return nil
 		}
-		if opts.All {
-			fmt.Fprintln(out, "No sessions found in this project.")
-		} else {
-			fmt.Fprintf(out, "No sessions found for branch %q.\n", branch)
-			fmt.Fprintln(out, "Use --all to see all sessions in this project.")
-		}
+		writeEmptyMessage(out, opts, branch)
 		return nil
 	}
 
-	// Quiet mode: print only session IDs, one per line
+	// Quiet mode: print only session IDs, one per line.
 	if opts.Quiet {
 		for _, s := range summaries {
 			fmt.Fprintln(out, s.ID)
@@ -144,7 +210,28 @@ func runList(opts *Options) error {
 		return nil
 	}
 
-	// Print header
+	// Header banner shows the active scope/filters so the user knows what they got.
+	if banner := buildScopeBanner(opts, branch, len(summaries)); banner != "" {
+		fmt.Fprintln(out, banner)
+	}
+
+	// Show project column when scope is global (it carries useful context),
+	// otherwise show the branch column.
+	if opts.Global {
+		fmt.Fprintf(out, "%-12s  %-12s  %-30s  %8s  %8s  %s\n",
+			"ID", "PROVIDER", "PROJECT", "MESSAGES", "TOKENS", "CAPTURED")
+		fmt.Fprintf(out, "%-12s  %-12s  %-30s  %8s  %8s  %s\n",
+			"----", "--------", "-------", "--------", "------", "--------")
+		for _, s := range summaries {
+			id := truncate(string(s.ID), 12)
+			prov := truncate(string(s.Provider), 12)
+			proj := truncate(shortProject(s.ProjectPath), 30)
+			fmt.Fprintf(out, "%-12s  %-12s  %-30s  %8d  %8s  %s\n",
+				id, prov, proj, s.MessageCount, formatTokens(s.TotalTokens), timeAgo(s.CreatedAt))
+		}
+		return nil
+	}
+
 	fmt.Fprintf(out, "%-12s  %-12s  %-24s  %8s  %8s  %s\n",
 		"ID", "PROVIDER", "BRANCH", "MESSAGES", "TOKENS", "CAPTURED")
 	fmt.Fprintf(out, "%-12s  %-12s  %-24s  %8s  %8s  %s\n",
@@ -161,6 +248,84 @@ func runList(opts *Options) error {
 	}
 
 	return nil
+}
+
+// writeEmptyMessage prints a context-aware "no sessions found" message.
+func writeEmptyMessage(out io.Writer, opts *Options, branch string) {
+	switch {
+	case opts.Search != "":
+		fmt.Fprintf(out, "No sessions matched %q.\n", opts.Search)
+	case opts.Global:
+		fmt.Fprintln(out, "No sessions found across any project.")
+	case opts.All:
+		fmt.Fprintln(out, "No sessions found in this project.")
+	default:
+		fmt.Fprintf(out, "No sessions found for branch %q.\n", branch)
+		fmt.Fprintln(out, "Use --all to see all sessions in this project, or --global for everything.")
+	}
+}
+
+// buildScopeBanner returns a one-line summary of the active scope and filters,
+// shown above the result table when filters are non-trivial. Returns "" when
+// the default branch-scoped view is used (to keep the simple case quiet).
+func buildScopeBanner(opts *Options, branch string, count int) string {
+	var scope string
+	switch {
+	case opts.Global:
+		scope = "all projects"
+	case opts.All:
+		scope = "this project (all branches)"
+	case branch != "":
+		scope = fmt.Sprintf("branch %q", branch)
+	}
+
+	var filters []string
+	if opts.Search != "" {
+		filters = append(filters, fmt.Sprintf("search=%q", opts.Search))
+	}
+	if opts.SessionType != "" {
+		filters = append(filters, "type="+opts.SessionType)
+	}
+	if opts.Provider != "" {
+		filters = append(filters, "provider="+opts.Provider)
+	}
+	if opts.Since != "" {
+		filters = append(filters, "since="+opts.Since)
+	}
+	if opts.Until != "" {
+		filters = append(filters, "until="+opts.Until)
+	}
+
+	// Keep silent when nothing interesting to report (default invocation).
+	if len(filters) == 0 && !opts.Global && !opts.All {
+		return ""
+	}
+
+	if len(filters) > 0 {
+		return fmt.Sprintf("# %d session(s) — scope: %s — filters: %s\n",
+			count, scope, strings.Join(filters, ", "))
+	}
+	return fmt.Sprintf("# %d session(s) — scope: %s\n", count, scope)
+}
+
+// shortProject returns a compact representation of a project path for table display:
+// uses the last 2 path components when the path is long, otherwise the full path.
+func shortProject(p string) string {
+	if p == "" {
+		return "-"
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) <= 2 {
+		return p
+	}
+	return ".../" + strings.Join(parts[len(parts)-2:], "/")
+}
+
+// writeJSON emits the summaries as a JSON array.
+func writeJSON(out io.Writer, summaries []session.Summary) error {
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(summaries)
 }
 
 func runListOffTopic(opts *Options, svc service.SessionServicer, projectPath, branch string) error {

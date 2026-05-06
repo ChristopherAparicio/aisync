@@ -97,7 +97,9 @@ func (s *SessionService) Search(req SearchRequest) (*session.SearchResult, error
 	return result, nil
 }
 
-// parseFlexibleTime parses a time string in RFC3339 or date-only format.
+// parseFlexibleTime parses a time string in RFC3339, date-only, or relative
+// duration format (e.g. "7d", "24h", "1w", "2mo"). Relative durations are
+// resolved as `now - duration`.
 func parseFlexibleTime(s string) (time.Time, error) {
 	// Try RFC3339 first
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
@@ -107,7 +109,11 @@ func parseFlexibleTime(s string) (time.Time, error) {
 	if t, err := time.Parse("2006-01-02", s); err == nil {
 		return t, nil
 	}
-	return time.Time{}, fmt.Errorf("expected RFC3339 (2006-01-02T15:04:05Z) or date (2006-01-02)")
+	// Try relative duration (e.g. "7d", "24h", "1w", "2mo", "1y").
+	if dur, err := parseDuration(s); err == nil {
+		return time.Now().Add(-dur), nil
+	}
+	return time.Time{}, fmt.Errorf("expected RFC3339 (2006-01-02T15:04:05Z), date (2006-01-02), or relative duration (7d, 24h, 1w, 2mo)")
 }
 
 // searchViaEngine routes the search through the configured search engine,
