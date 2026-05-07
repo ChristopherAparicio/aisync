@@ -99,6 +99,10 @@ type MockStore struct {
 	// can exercise the stampAnalytics() write-path hook and the hot-path
 	// handlers that read through it without touching SQLite.
 	Analytics map[session.ID]session.Analytics
+
+	// Tags is the in-memory mirror of session_tags: session ID → set of
+	// (lowercase, normalized) tags. Populated by AddTags / RemoveTags.
+	Tags map[session.ID]map[string]struct{}
 }
 
 // NewMockStore creates a MockStore, optionally pre-populated with sessions.
@@ -949,4 +953,160 @@ func (m *MockStore) ListSessionsNeedingHotspots(minSchemaVersion int, limit int)
 		}
 	}
 	return ids, nil
+}
+
+// ── TagStore ──
+//
+// Mock implementation backed by a simple map[session.ID]map[tag]struct{}.
+// Tags are normalized lowercase + trimmed; multi-word inputs are joined
+// with hyphens to mirror sqlite.NormalizeTag behavior.
+
+func mockNormalizeTag(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(s), "-")
+}
+
+func (m *MockStore) ensureTagMap() {
+	if m.Tags == nil {
+		m.Tags = map[session.ID]map[string]struct{}{}
+	}
+}
+
+// AddTags attaches tags to a session in the mock map.
+func (m *MockStore) AddTags(sessionID session.ID, tags []string) (int, error) {
+	if sessionID == "" {
+		return 0, fmt.Errorf("AddTags: empty session id")
+	}
+	m.ensureTagMap()
+	if _, ok := m.Tags[sessionID]; !ok {
+		m.Tags[sessionID] = map[string]struct{}{}
+	}
+	inserted := 0
+	for _, raw := range tags {
+		t := mockNormalizeTag(raw)
+		if t == "" {
+			continue
+		}
+		if _, exists := m.Tags[sessionID][t]; exists {
+			continue
+		}
+		m.Tags[sessionID][t] = struct{}{}
+		inserted++
+	}
+	return inserted, nil
+}
+
+// RemoveTags detaches tags from a session in the mock map.
+func (m *MockStore) RemoveTags(sessionID session.ID, tags []string) (int, error) {
+	if sessionID == "" {
+		return 0, fmt.Errorf("RemoveTags: empty session id")
+	}
+	m.ensureTagMap()
+	cur, ok := m.Tags[sessionID]
+	if !ok {
+		return 0, nil
+	}
+	removed := 0
+	for _, raw := range tags {
+		t := mockNormalizeTag(raw)
+		if t == "" {
+			continue
+		}
+		if _, exists := cur[t]; exists {
+			delete(cur, t)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+// GetTags returns tags for a session in alphabetical order.
+func (m *MockStore) GetTags(sessionID session.ID) ([]string, error) {
+	m.ensureTagMap()
+	cur, ok := m.Tags[sessionID]
+	if !ok || len(cur) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(cur))
+	for t := range cur {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// GetTagsBatch returns tags for many sessions.
+func (m *MockStore) GetTagsBatch(ids []session.ID) (map[session.ID][]string, error) {
+	out := map[session.ID][]string{}
+	for _, id := range ids {
+		tags, _ := m.GetTags(id)
+		if len(tags) > 0 {
+			out[id] = tags
+		}
+	}
+	return out, nil
+}
+
+// ListAllTags returns all tags with their counts, sorted by count DESC then tag ASC.
+func (m *MockStore) ListAllTags() ([]session.TagCount, error) {
+	m.ensureTagMap()
+	counts := map[string]int{}
+	for _, tagSet := range m.Tags {
+		for t := range tagSet {
+			counts[t]++
+		}
+	}
+	out := make([]session.TagCount, 0, len(counts))
+	for t, n := range counts {
+		out = append(out, session.TagCount{Tag: t, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Tag < out[j].Tag
+	})
+	return out, nil
+}
+
+// FilterSessionIDsByTags returns session IDs that have ALL the given tags.
+func (m *MockStore) FilterSessionIDsByTags(ids []session.ID, tags []string) ([]session.ID, error) {
+	clean := []string{}
+	seen := map[string]struct{}{}
+	for _, raw := range tags {
+		t := mockNormalizeTag(raw)
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		clean = append(clean, t)
+	}
+	if len(clean) == 0 || len(ids) == 0 {
+		return ids, nil
+	}
+	m.ensureTagMap()
+	var out []session.ID
+	for _, id := range ids {
+		cur, ok := m.Tags[id]
+		if !ok {
+			continue
+		}
+		hasAll := true
+		for _, t := range clean {
+			if _, exists := cur[t]; !exists {
+				hasAll = false
+				break
+			}
+		}
+		if hasAll {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }

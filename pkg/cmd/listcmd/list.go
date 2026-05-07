@@ -38,13 +38,14 @@ type Options struct {
 	Similar  string // session ID to find similar sessions by file overlap
 
 	// Filters (combinable with any scope).
-	Search      string // FTS5 keyword (matches summary/content/tools)
-	SessionType string // session_type filter (feature, bug, refactor, exploration, review, devops, other)
-	Provider    string // provider filter (claude-code, opencode, cursor)
-	Since       string // RFC3339, YYYY-MM-DD, or relative duration (7d, 24h, 1w, 2mo)
-	Until       string // same formats as --since
-	Limit       int    // max results (0 = no limit)
-	JSON        bool   // machine-readable JSON output
+	Search      string   // FTS5 keyword (matches summary/content/tools)
+	SessionType string   // session_type filter (feature, bug, refactor, exploration, review, devops, other)
+	Tags        []string // manual tags filter (AND); pass --tag multiple times
+	Provider    string   // provider filter (claude-code, opencode, cursor)
+	Since       string   // RFC3339, YYYY-MM-DD, or relative duration (7d, 24h, 1w, 2mo)
+	Until       string   // same formats as --since
+	Limit       int      // max results (0 = no limit)
+	JSON        bool     // machine-readable JSON output
 }
 
 // NewCmdList creates the `aisync list` command.
@@ -96,6 +97,7 @@ Examples:
 	// New filter flags
 	cmd.Flags().StringVar(&opts.Search, "search", "", "Full-text search keyword (FTS5, supports OR/AND/phrases)")
 	cmd.Flags().StringVar(&opts.SessionType, "type", "", "Filter by session type (feature, bug, refactor, exploration, review, devops, other)")
+	cmd.Flags().StringSliceVar(&opts.Tags, "tag", nil, "Filter by manual tag (AND across multiple --tag flags)")
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "Filter by provider (claude-code, opencode, cursor)")
 	cmd.Flags().StringVar(&opts.Since, "since", "", "Only sessions after this date or duration (e.g. 2026-01-01, 7d, 24h, 1w)")
 	cmd.Flags().StringVar(&opts.Until, "until", "", "Only sessions before this date or duration")
@@ -179,6 +181,7 @@ func runList(opts *Options) error {
 		Provider:    session.ProviderName(opts.Provider),
 		Keyword:     opts.Search,
 		SessionType: opts.SessionType,
+		Tags:        opts.Tags,
 		Since:       opts.Since,
 		Until:       opts.Until,
 		Limit:       opts.Limit,

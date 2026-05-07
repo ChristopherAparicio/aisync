@@ -60,11 +60,12 @@ type ListRequest struct {
 	Global      bool   // if true, ignore ProjectPath/Branch and search across all projects
 
 	// Filters (applied via FTS5/search engine when Keyword is set, otherwise via store).
-	Keyword     string // free-text keyword (FTS5 search on summary/content when non-empty)
-	SessionType string // filter by session_type (feature, bug, refactor, …)
-	Since       string // RFC3339, "2006-01-02", or relative duration ("7d", "24h", "1w", "2mo")
-	Until       string // same formats as Since
-	Limit       int    // max results (0 = no limit for store; defaults to 50 when keyword used)
+	Keyword     string   // free-text keyword (FTS5 search on summary/content when non-empty)
+	SessionType string   // filter by session_type (feature, bug, refactor, …)
+	Tags        []string // filter by manual tags; AND semantics (session must have ALL listed tags)
+	Since       string   // RFC3339, "2006-01-02", or relative duration ("7d", "24h", "1w", "2mo")
+	Until       string   // same formats as Since
+	Limit       int      // max results (0 = no limit for store; defaults to 50 when keyword used)
 }
 
 // List returns session summaries matching the given criteria.
@@ -89,6 +90,7 @@ func (s *SessionService) List(req ListRequest) ([]session.Summary, error) {
 	}
 
 	// Route via search engine when a keyword is provided.
+	var summaries []session.Summary
 	if req.Keyword != "" {
 		searchReq := SearchRequest{
 			Keyword:     req.Keyword,
@@ -105,29 +107,71 @@ func (s *SessionService) List(req ListRequest) ([]session.Summary, error) {
 		if err != nil {
 			return nil, err
 		}
-		return result.Sessions, nil
-	}
+		summaries = result.Sessions
+	} else {
+		// No keyword: structured filters only via the store.
+		listOpts := session.ListOptions{
+			ProjectPath: projectPath,
+			Branch:      branch,
+			All:         req.All || req.Global,
+			Provider:    req.Provider,
+			OwnerID:     session.ID(req.OwnerID),
+		}
 
-	// No keyword: structured filters only via the store.
-	listOpts := session.ListOptions{
-		ProjectPath: projectPath,
-		Branch:      branch,
-		All:         req.All || req.Global,
-		Provider:    req.Provider,
-		OwnerID:     session.ID(req.OwnerID),
-	}
-
-	summaries, err := s.store.List(listOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	// Apply Since/Until/SessionType filtering in-memory when no keyword
-	// (store.List doesn't filter on these fields directly).
-	if req.Since != "" || req.Until != "" || req.SessionType != "" {
-		summaries, err = filterSummaries(summaries, req)
+		var err error
+		summaries, err = s.store.List(listOpts)
 		if err != nil {
 			return nil, err
+		}
+
+		// Apply Since/Until/SessionType filtering in-memory when no keyword
+		// (store.List doesn't filter on these fields directly).
+		if req.Since != "" || req.Until != "" || req.SessionType != "" {
+			summaries, err = filterSummaries(summaries, req)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Tag filtering (AND): keep only sessions carrying ALL the requested tags.
+	// Always applied last so it composes with all scopes (Global/All/Branch)
+	// and with both keyword search and structured-only listing.
+	if len(req.Tags) > 0 && len(summaries) > 0 {
+		ids := make([]session.ID, 0, len(summaries))
+		for _, sm := range summaries {
+			ids = append(ids, sm.ID)
+		}
+		matched, err := s.store.FilterSessionIDsByTags(ids, req.Tags)
+		if err != nil {
+			return nil, fmt.Errorf("filter by tags: %w", err)
+		}
+		keep := make(map[session.ID]struct{}, len(matched))
+		for _, id := range matched {
+			keep[id] = struct{}{}
+		}
+		filtered := summaries[:0]
+		for _, sm := range summaries {
+			if _, ok := keep[sm.ID]; ok {
+				filtered = append(filtered, sm)
+			}
+		}
+		summaries = filtered
+	}
+
+	// Decorate summaries with their tags so callers (CLI, web UI, MCP)
+	// can display them without an extra round-trip.
+	if len(summaries) > 0 {
+		ids := make([]session.ID, 0, len(summaries))
+		for _, sm := range summaries {
+			ids = append(ids, sm.ID)
+		}
+		if tagMap, tagErr := s.store.GetTagsBatch(ids); tagErr == nil {
+			for i := range summaries {
+				if tags, ok := tagMap[summaries[i].ID]; ok {
+					summaries[i].Tags = tags
+				}
+			}
 		}
 	}
 

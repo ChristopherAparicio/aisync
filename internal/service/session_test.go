@@ -1169,6 +1169,18 @@ func (m *mockStore) ListSessionsNeedingHotspots(_ int, _ int) ([]session.ID, err
 	return nil, nil
 }
 
+// TagStore stubs (PR2): tag operations are not exercised by these tests.
+func (m *mockStore) AddTags(_ session.ID, _ []string) (int, error)    { return 0, nil }
+func (m *mockStore) RemoveTags(_ session.ID, _ []string) (int, error) { return 0, nil }
+func (m *mockStore) GetTags(_ session.ID) ([]string, error)           { return nil, nil }
+func (m *mockStore) GetTagsBatch(_ []session.ID) (map[session.ID][]string, error) {
+	return map[session.ID][]string{}, nil
+}
+func (m *mockStore) ListAllTags() ([]session.TagCount, error) { return nil, nil }
+func (m *mockStore) FilterSessionIDsByTags(ids []session.ID, _ []string) ([]session.ID, error) {
+	return ids, nil
+}
+
 // ── Garbage Collection tests ──
 
 // gcMockStore is a more functional mock that supports List, Delete, DeleteOlderThan.

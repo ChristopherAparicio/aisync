@@ -45,6 +45,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/statscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/status"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/synccmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/tagcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/toolusagecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/tuicmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/usagecmd"
@@ -74,6 +75,7 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(capture.NewCmdCapture(f))
 	cmd.AddCommand(restore.NewCmdRestore(f))
 	cmd.AddCommand(listcmd.NewCmdList(f))
+	cmd.AddCommand(tagcmd.NewCmdTag(f))
 	cmd.AddCommand(show.NewCmdShow(f))
 	cmd.AddCommand(hooks.NewCmdHooks(f))
 	cmd.AddCommand(secrets.NewCmdSecrets(f))

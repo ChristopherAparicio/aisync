@@ -58,6 +58,29 @@ type SessionCRUD interface {
 
 	// TagSession sets the session_type classification on a session.
 	TagSession(ctx context.Context, id session.ID, sessionType string) error
+
+	// AddTags attaches one or more user-defined tags to a session.
+	// Tags are normalized (lowercased, trimmed); duplicates are ignored.
+	// Returns the number of newly inserted (tag, session) pairs.
+	AddTags(ctx context.Context, id session.ID, tags []string) (int, error)
+
+	// RemoveTags detaches one or more user-defined tags from a session.
+	// Tags absent from the session are silently ignored. Returns the
+	// number of tags actually removed.
+	RemoveTags(ctx context.Context, id session.ID, tags []string) (int, error)
+
+	// GetSessionTags returns the user-defined tags attached to a session,
+	// sorted alphabetically. Empty slice (not nil) when no tags.
+	GetSessionTags(ctx context.Context, id session.ID) ([]string, error)
+
+	// ListAllTags returns every distinct tag across all sessions, with
+	// the count of sessions carrying each one.
+	ListAllTags(ctx context.Context) ([]session.TagCount, error)
+
+	// ResolveCurrentSessionID returns the most-recent session ID for the
+	// given project path + git branch (or any branch if no branch info).
+	// Returns ErrNoCurrentSession when nothing matches.
+	ResolveCurrentSessionID(ctx context.Context, projectPath string) (session.ID, error)
 }
 
 // SessionExporter handles session export (to JSON/Markdown) and import.

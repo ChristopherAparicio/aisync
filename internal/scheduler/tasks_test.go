@@ -218,6 +218,23 @@ func (m *mockSessionService) DetectForksBatch(_ context.Context) (*service.ForkD
 	return &service.ForkDetectionResult{}, nil
 }
 
+// Manual tag stubs (PR2): the scheduler does not exercise tagging.
+func (m *mockSessionService) AddTags(_ context.Context, _ session.ID, _ []string) (int, error) {
+	return 0, nil
+}
+func (m *mockSessionService) RemoveTags(_ context.Context, _ session.ID, _ []string) (int, error) {
+	return 0, nil
+}
+func (m *mockSessionService) GetSessionTags(_ context.Context, _ session.ID) ([]string, error) {
+	return nil, nil
+}
+func (m *mockSessionService) ListAllTags(_ context.Context) ([]session.TagCount, error) {
+	return nil, nil
+}
+func (m *mockSessionService) ResolveCurrentSessionID(_ context.Context, _ string) (session.ID, error) {
+	return "", service.ErrNoCurrentSession
+}
+
 // Compile-time check.
 var _ service.SessionServicer = (*mockSessionService)(nil)
 

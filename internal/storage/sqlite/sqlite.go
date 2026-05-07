@@ -3705,6 +3705,29 @@ func runMigrations(db *sql.DB) error {
 		return fmt.Errorf("migration 033 (session_errors fingerprint index): %w", err)
 	}
 
+	// Migration 034 — Manual session tagging (PR2).
+	//
+	// session_tags is a join table modeling many-to-many between sessions and
+	// arbitrary user-defined tags. Tags are stored lowercase-normalized in
+	// the tag column; uniqueness is enforced by the (session_id, tag) PK so
+	// duplicate add operations are idempotent. ON DELETE CASCADE keeps tags
+	// consistent when a session is removed.
+	//
+	// The (tag) index supports the --tag filter on `aisync list` (find all
+	// sessions for a given tag) and the `aisync tags` aggregate counts.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_tags (
+		session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+		tag        TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		PRIMARY KEY (session_id, tag)
+	)`); err != nil {
+		return fmt.Errorf("migration 034 (session_tags table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_tags_tag
+		ON session_tags(tag)`); err != nil {
+		return fmt.Errorf("migration 034 (session_tags tag index): %w", err)
+	}
+
 	return nil
 }
 

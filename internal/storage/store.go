@@ -547,6 +547,37 @@ type HotspotStore interface {
 	ListSessionsNeedingHotspots(minSchemaVersion int, limit int) ([]session.ID, error)
 }
 
+// TagStore persists and retrieves manual user-defined tags on sessions.
+// Tags are normalized lowercase identifiers; the (session_id, tag) pair
+// is unique. Cascade-deletion follows the parent session.
+type TagStore interface {
+	// AddTags attaches the given tags to a session. Duplicates are
+	// silently ignored (idempotent). Empty tags are filtered out.
+	// Returns the number of newly inserted rows.
+	AddTags(sessionID session.ID, tags []string) (int, error)
+
+	// RemoveTags detaches the given tags from a session. Tags absent
+	// from the session are silently ignored. Returns the number of
+	// rows actually removed.
+	RemoveTags(sessionID session.ID, tags []string) (int, error)
+
+	// GetTags returns all tags attached to a session, sorted alphabetically.
+	GetTags(sessionID session.ID) ([]string, error)
+
+	// GetTagsBatch returns tags for many sessions in one query. Sessions
+	// without tags are absent from the result map.
+	GetTagsBatch(ids []session.ID) (map[session.ID][]string, error)
+
+	// ListAllTags returns all distinct tags across all sessions, with
+	// their counts, sorted by descending count then alphabetical tag.
+	ListAllTags() ([]session.TagCount, error)
+
+	// FilterSessionIDsByTags returns the subset of session IDs that
+	// have ALL the given tags (AND semantics). An empty tag list returns
+	// the input set unchanged.
+	FilterSessionIDsByTags(ids []session.ID, tags []string) ([]session.ID, error)
+}
+
 // ── Composed Interface ──
 
 // Store composes all role interfaces into a single persistence contract.
@@ -570,6 +601,7 @@ type Store interface {
 	PullRequestStore
 	RecommendationStore
 	HotspotStore
+	TagStore
 
 	// Close releases any resources held by the store.
 	Close() error

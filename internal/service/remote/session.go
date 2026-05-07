@@ -144,6 +144,36 @@ func (r *SessionService) TagSession(_ context.Context, id session.ID, sessionTyp
 	return r.c.PatchSession(string(id), sessionType)
 }
 
+// ── Manual tags (PR2) ──
+//
+// The HTTP API does not yet expose tag endpoints (planned for PR2.5).
+// Returning a clear "not implemented" error lets the CLI fall back to
+// requiring the user to run aisync locally for now.
+
+var errTagsNotImplementedRemote = fmt.Errorf("tag operations are not yet available over remote API; run aisync without --server")
+
+func (r *SessionService) AddTags(_ context.Context, _ session.ID, _ []string) (int, error) {
+	return 0, errTagsNotImplementedRemote
+}
+
+func (r *SessionService) RemoveTags(_ context.Context, _ session.ID, _ []string) (int, error) {
+	return 0, errTagsNotImplementedRemote
+}
+
+func (r *SessionService) GetSessionTags(_ context.Context, _ session.ID) ([]string, error) {
+	return nil, errTagsNotImplementedRemote
+}
+
+func (r *SessionService) ListAllTags(_ context.Context) ([]session.TagCount, error) {
+	return nil, errTagsNotImplementedRemote
+}
+
+func (r *SessionService) ResolveCurrentSessionID(_ context.Context, _ string) (session.ID, error) {
+	// Remote callers must always supply an explicit session ID — they
+	// cannot inspect the local cwd/git state from server-side.
+	return "", service.ErrNoCurrentSession
+}
+
 // ── Export / Import ──
 
 func (r *SessionService) Export(req service.ExportRequest) (*service.ExportResult, error) {

@@ -102,6 +102,14 @@ type Summary struct {
 	ErrorCount      int           `json:"error_count"`     // tool calls with state=error
 	EstimatedCost   float64       `json:"estimated_cost"`  // API-equivalent cost in USD (denormalized)
 	ActualCost      float64       `json:"actual_cost"`     // actual provider-reported cost (denormalized)
+	Tags            []string      `json:"tags,omitempty"`  // user-defined manual tags (lowercase normalized)
+}
+
+// TagCount associates a tag with the number of sessions carrying it.
+// Used by `aisync tags` aggregate listings.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
 }
 
 // Message represents a single message in an AI conversation.
