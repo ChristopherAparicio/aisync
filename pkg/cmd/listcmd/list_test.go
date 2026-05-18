@@ -116,7 +116,7 @@ func TestNewCmdList_flags(t *testing.T) {
 	f := &cmdutil.Factory{IOStreams: ios}
 	cmd := NewCmdList(f)
 
-	flags := []string{"all", "quiet", "pr"}
+	flags := []string{"all", "quiet", "pr", "remote", "project", "tag"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected --%s flag", name)
@@ -367,6 +367,133 @@ func TestList_similar(t *testing.T) {
 	}
 	if !strings.Contains(output, "SIMILARITY") {
 		t.Error("expected SIMILARITY header")
+	}
+}
+
+func TestList_filterByRemote(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.Summaries = []session.Summary{
+		{
+			ID:           "ses-anomaly",
+			Provider:     session.ProviderOpenCode,
+			Branch:       "opencode/sunny-cabin",
+			ProjectPath:  "/home/u/.local/share/opencode/worktree/abc/sunny-cabin",
+			RemoteURL:    "github.com/anomalyco/opencode",
+			MessageCount: 10,
+			CreatedAt:    time.Now(),
+		},
+		{
+			ID:           "ses-omogen",
+			Provider:     session.ProviderOpenCode,
+			Branch:       "opencode/feature-x",
+			ProjectPath:  "/home/u/dev/freelance/omogen/monorepo",
+			RemoteURL:    "github.com/Omogen-ai/monorepo",
+			MessageCount: 5,
+			CreatedAt:    time.Now(),
+		},
+		{
+			ID:           "ses-aisync",
+			Provider:     session.ProviderClaudeCode,
+			Branch:       "master",
+			ProjectPath:  "/home/u/dev/aisync",
+			RemoteURL:    "github.com/ChristopherAparicio/aisync",
+			MessageCount: 8,
+			CreatedAt:    time.Now(),
+		},
+	}
+
+	t.Run("matches substring case-insensitively", func(t *testing.T) {
+		f, ios := listTestFactory(t, store)
+		opts := &Options{
+			IO:        ios,
+			Factory:   f,
+			Global:    true,
+			RemoteURL: "omogen-ai",
+		}
+		if err := runList(opts); err != nil {
+			t.Fatalf("runList() error = %v", err)
+		}
+		output := ios.Out.(*bytes.Buffer).String()
+		if !strings.Contains(output, "ses-omogen") {
+			t.Errorf("expected ses-omogen in output, got:\n%s", output)
+		}
+		if strings.Contains(output, "ses-anomaly") {
+			t.Errorf("ses-anomaly should be filtered out, got:\n%s", output)
+		}
+		if strings.Contains(output, "ses-aisync") {
+			t.Errorf("ses-aisync should be filtered out, got:\n%s", output)
+		}
+	})
+
+	t.Run("partial match across renamed orgs", func(t *testing.T) {
+		f, ios := listTestFactory(t, store)
+		opts := &Options{
+			IO:        ios,
+			Factory:   f,
+			Global:    true,
+			RemoteURL: "opencode",
+		}
+		if err := runList(opts); err != nil {
+			t.Fatalf("runList() error = %v", err)
+		}
+		output := ios.Out.(*bytes.Buffer).String()
+		if !strings.Contains(output, "ses-anomaly") {
+			t.Errorf("expected ses-anomaly (anomalyco/opencode) in output, got:\n%s", output)
+		}
+		if strings.Contains(output, "ses-omogen") {
+			t.Errorf("ses-omogen should not match, got:\n%s", output)
+		}
+	})
+}
+
+func TestList_filterByProject(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.Summaries = []session.Summary{
+		{
+			ID:           "ses-wt-sunny",
+			Provider:     session.ProviderOpenCode,
+			Branch:       "opencode/sunny-cabin",
+			ProjectPath:  "/home/u/.local/share/opencode/worktree/abc/sunny-cabin",
+			MessageCount: 10,
+			CreatedAt:    time.Now(),
+		},
+		{
+			ID:           "ses-wt-bold",
+			Provider:     session.ProviderOpenCode,
+			Branch:       "opencode/bold-river",
+			ProjectPath:  "/home/u/.local/share/opencode/worktree/def/bold-river",
+			MessageCount: 7,
+			CreatedAt:    time.Now(),
+		},
+		{
+			ID:           "ses-main",
+			Provider:     session.ProviderClaudeCode,
+			Branch:       "master",
+			ProjectPath:  "/home/u/dev/aisync",
+			MessageCount: 4,
+			CreatedAt:    time.Now(),
+		},
+	}
+
+	f, ios := listTestFactory(t, store)
+	opts := &Options{
+		IO:            ios,
+		Factory:       f,
+		Global:        true,
+		ProjectFilter: "opencode/worktree",
+	}
+	if err := runList(opts); err != nil {
+		t.Fatalf("runList() error = %v", err)
+	}
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "ses-wt-sunny") {
+		t.Errorf("expected ses-wt-sunny in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "ses-wt-bold") {
+		t.Errorf("expected ses-wt-bold in output, got:\n%s", output)
+	}
+	if strings.Contains(output, "ses-main") {
+		t.Errorf("ses-main should be filtered out, got:\n%s", output)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
@@ -60,12 +61,14 @@ type ListRequest struct {
 	Global      bool   // if true, ignore ProjectPath/Branch and search across all projects
 
 	// Filters (applied via FTS5/search engine when Keyword is set, otherwise via store).
-	Keyword     string   // free-text keyword (FTS5 search on summary/content when non-empty)
-	SessionType string   // filter by session_type (feature, bug, refactor, …)
-	Tags        []string // filter by manual tags; AND semantics (session must have ALL listed tags)
-	Since       string   // RFC3339, "2006-01-02", or relative duration ("7d", "24h", "1w", "2mo")
-	Until       string   // same formats as Since
-	Limit       int      // max results (0 = no limit for store; defaults to 50 when keyword used)
+	Keyword       string   // free-text keyword (FTS5 search on summary/content when non-empty)
+	SessionType   string   // filter by session_type (feature, bug, refactor, …)
+	Tags          []string // filter by manual tags; AND semantics (session must have ALL listed tags)
+	RemoteURL     string   // filter by normalized git remote URL (substring match, case-insensitive)
+	ProjectFilter string   // additional client-side substring filter on Summary.ProjectPath
+	Since         string   // RFC3339, "2006-01-02", or relative duration ("7d", "24h", "1w", "2mo")
+	Until         string   // same formats as Since
+	Limit         int      // max results (0 = no limit for store; defaults to 50 when keyword used)
 }
 
 // List returns session summaries matching the given criteria.
@@ -134,6 +137,37 @@ func (s *SessionService) List(req ListRequest) ([]session.Summary, error) {
 		}
 	}
 
+	// Remote URL filter (substring, case-insensitive). Applied in-memory so
+	// it works uniformly across both the FTS5 search path and the store-only
+	// path, and tolerates repository renames (e.g. github.com/old-org/repo vs
+	// github.com/new-org/repo) by matching just a fragment.
+	// We allocate a fresh slice (not summaries[:0]) so we never mutate any
+	// backing array potentially shared with the store (in-memory mocks, caches).
+	if req.RemoteURL != "" && len(summaries) > 0 {
+		needle := strings.ToLower(req.RemoteURL)
+		filtered := make([]session.Summary, 0, len(summaries))
+		for _, sm := range summaries {
+			if strings.Contains(strings.ToLower(sm.RemoteURL), needle) {
+				filtered = append(filtered, sm)
+			}
+		}
+		summaries = filtered
+	}
+
+	// Project path substring filter (case-insensitive). Useful for narrowing
+	// to a worktree subset (e.g. --project "opencode/worktree" matches all
+	// OpenCode worktree-based sessions across repos).
+	if req.ProjectFilter != "" && len(summaries) > 0 {
+		needle := strings.ToLower(req.ProjectFilter)
+		filtered := make([]session.Summary, 0, len(summaries))
+		for _, sm := range summaries {
+			if strings.Contains(strings.ToLower(sm.ProjectPath), needle) {
+				filtered = append(filtered, sm)
+			}
+		}
+		summaries = filtered
+	}
+
 	// Tag filtering (AND): keep only sessions carrying ALL the requested tags.
 	// Always applied last so it composes with all scopes (Global/All/Branch)
 	// and with both keyword search and structured-only listing.
@@ -150,7 +184,7 @@ func (s *SessionService) List(req ListRequest) ([]session.Summary, error) {
 		for _, id := range matched {
 			keep[id] = struct{}{}
 		}
-		filtered := summaries[:0]
+		filtered := make([]session.Summary, 0, len(summaries))
 		for _, sm := range summaries {
 			if _, ok := keep[sm.ID]; ok {
 				filtered = append(filtered, sm)

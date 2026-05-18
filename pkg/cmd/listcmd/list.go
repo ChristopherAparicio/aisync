@@ -38,14 +38,16 @@ type Options struct {
 	Similar  string // session ID to find similar sessions by file overlap
 
 	// Filters (combinable with any scope).
-	Search      string   // FTS5 keyword (matches summary/content/tools)
-	SessionType string   // session_type filter (feature, bug, refactor, exploration, review, devops, other)
-	Tags        []string // manual tags filter (AND); pass --tag multiple times
-	Provider    string   // provider filter (claude-code, opencode, cursor)
-	Since       string   // RFC3339, YYYY-MM-DD, or relative duration (7d, 24h, 1w, 2mo)
-	Until       string   // same formats as --since
-	Limit       int      // max results (0 = no limit)
-	JSON        bool     // machine-readable JSON output
+	Search        string   // FTS5 keyword (matches summary/content/tools)
+	SessionType   string   // session_type filter (feature, bug, refactor, exploration, review, devops, other)
+	Tags          []string // manual tags filter (AND); pass --tag multiple times
+	Provider      string   // provider filter (claude-code, opencode, cursor)
+	RemoteURL     string   // case-insensitive substring match on remote_url
+	ProjectFilter string   // case-insensitive substring match on project_path
+	Since         string   // RFC3339, YYYY-MM-DD, or relative duration (7d, 24h, 1w, 2mo)
+	Until         string   // same formats as --since
+	Limit         int      // max results (0 = no limit)
+	JSON          bool     // machine-readable JSON output
 }
 
 // NewCmdList creates the `aisync list` command.
@@ -99,6 +101,8 @@ Examples:
 	cmd.Flags().StringVar(&opts.SessionType, "type", "", "Filter by session type (feature, bug, refactor, exploration, review, devops, other)")
 	cmd.Flags().StringSliceVar(&opts.Tags, "tag", nil, "Filter by manual tag (AND across multiple --tag flags)")
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "Filter by provider (claude-code, opencode, cursor)")
+	cmd.Flags().StringVar(&opts.RemoteURL, "remote", "", "Filter by remote URL (case-insensitive substring, e.g. --remote Omogen-ai/monorepo)")
+	cmd.Flags().StringVar(&opts.ProjectFilter, "project", "", "Filter by project path (case-insensitive substring, e.g. --project opencode/worktree)")
 	cmd.Flags().StringVar(&opts.Since, "since", "", "Only sessions after this date or duration (e.g. 2026-01-01, 7d, 24h, 1w)")
 	cmd.Flags().StringVar(&opts.Until, "until", "", "Only sessions before this date or duration")
 	cmd.Flags().IntVar(&opts.Limit, "limit", 0, "Max results (0 = no limit, defaults to 50 when --search is used)")
@@ -172,19 +176,21 @@ func runList(opts *Options) error {
 
 	// Build the list request honoring all scope/filter flags.
 	req := service.ListRequest{
-		ProjectPath: topLevel,
-		Branch:      branch,
-		OwnerID:     ownerID,
-		PRNumber:    opts.PRFlag,
-		All:         opts.All,
-		Global:      opts.Global,
-		Provider:    session.ProviderName(opts.Provider),
-		Keyword:     opts.Search,
-		SessionType: opts.SessionType,
-		Tags:        opts.Tags,
-		Since:       opts.Since,
-		Until:       opts.Until,
-		Limit:       opts.Limit,
+		ProjectPath:   topLevel,
+		Branch:        branch,
+		OwnerID:       ownerID,
+		PRNumber:      opts.PRFlag,
+		All:           opts.All,
+		Global:        opts.Global,
+		Provider:      session.ProviderName(opts.Provider),
+		Keyword:       opts.Search,
+		SessionType:   opts.SessionType,
+		Tags:          opts.Tags,
+		RemoteURL:     opts.RemoteURL,
+		ProjectFilter: opts.ProjectFilter,
+		Since:         opts.Since,
+		Until:         opts.Until,
+		Limit:         opts.Limit,
 	}
 
 	summaries, err := svc.List(req)
@@ -291,6 +297,12 @@ func buildScopeBanner(opts *Options, branch string, count int) string {
 	}
 	if opts.Provider != "" {
 		filters = append(filters, "provider="+opts.Provider)
+	}
+	if opts.RemoteURL != "" {
+		filters = append(filters, "remote="+opts.RemoteURL)
+	}
+	if opts.ProjectFilter != "" {
+		filters = append(filters, "project="+opts.ProjectFilter)
 	}
 	if opts.Since != "" {
 		filters = append(filters, "since="+opts.Since)

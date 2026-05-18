@@ -78,6 +78,12 @@ func runShow(opts *Options, idArg string) error {
 	if sess.Branch != "" {
 		fmt.Fprintf(out, "Branch:   %s\n", sess.Branch)
 	}
+	if sess.RemoteURL != "" {
+		fmt.Fprintf(out, "Remote:   %s\n", sess.RemoteURL)
+	}
+	if sess.ProjectPath != "" {
+		fmt.Fprintf(out, "Project:  %s\n", sess.ProjectPath)
+	}
 	if !sess.CreatedAt.IsZero() {
 		fmt.Fprintf(out, "Captured: %s\n", sess.CreatedAt.Format("2006-01-02 15:04:05"))
 	}
