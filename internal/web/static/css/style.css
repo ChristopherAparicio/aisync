@@ -7010,3 +7010,105 @@ details.section-accordion .accordion-body {
   height: 180px;
   animation-delay: 0.4s;
 }
+
+/* ── Tags (manual user-defined labels) ── */
+
+.tag-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(139, 156, 240, 0.12);
+  border: 1px solid rgba(139, 156, 240, 0.25);
+  border-radius: 9999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--accent-light);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.tag-chip:hover {
+  background: rgba(139, 156, 240, 0.2);
+  border-color: rgba(139, 156, 240, 0.45);
+}
+
+.tag-chip-label {
+  color: var(--accent-light);
+  text-decoration: none;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.tag-chip-label:hover {
+  text-decoration: none;
+  color: #fff;
+}
+
+.tag-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 0.1rem;
+  border-radius: 50%;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.tag-chip-remove:hover {
+  color: var(--red);
+  background: rgba(248, 113, 113, 0.15);
+}
+
+.tag-add-form {
+  display: inline-flex;
+  align-items: center;
+}
+
+.tag-add-input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed var(--border);
+  border-radius: 9999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.72rem;
+  color: var(--text);
+  outline: none;
+  min-width: 6rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.tag-add-input::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.tag-add-input:focus {
+  border-color: var(--accent);
+  background: rgba(108, 126, 225, 0.08);
+  border-style: solid;
+}
+
+.detail-tags {
+  margin: 0.75rem 0 1rem;
+  padding: 0.5rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.detail-tags .meta-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}

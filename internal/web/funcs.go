@@ -37,6 +37,22 @@ func templateFuncs() template.FuncMap {
 		"split":       func(s, sep string) []string { return strings.Split(s, sep) },
 		"settingID":   func(key string) string { return strings.ReplaceAll(key, ".", "-") },
 		"mul":         func(a int, b float64) float64 { return float64(a) * b },
+		// dict builds a map from alternating key/value args, useful for passing
+		// structured arguments to {{template}} invocations.
+		"dict": func(values ...any) (map[string]any, error) {
+			if len(values)%2 != 0 {
+				return nil, fmt.Errorf("dict requires an even number of args, got %d", len(values))
+			}
+			out := make(map[string]any, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				key, ok := values[i].(string)
+				if !ok {
+					return nil, fmt.Errorf("dict key at index %d must be a string, got %T", i, values[i])
+				}
+				out[key] = values[i+1]
+			}
+			return out, nil
+		},
 	}
 }
 

@@ -22,6 +22,7 @@ type SearchRequest struct {
 	ProjectCategory string // filter by project category (backend, frontend, etc.)
 	Status          string // filter by lifecycle status: "active", "idle", "archived"
 	HasErrors       string // "true" = has errors, "false" = no errors, "" = no filter
+	Tags            []string // filter by user-defined tags (AND semantics)
 	Since           string // RFC3339 or "2006-01-02" format
 	Until           string // RFC3339 or "2006-01-02" format
 	Limit           int
@@ -76,6 +77,49 @@ func (s *SessionService) Search(req SearchRequest) (*session.SearchResult, error
 	result, err := s.searchViaEngine(query)
 	if err != nil {
 		return nil, err
+	}
+
+	// Tag filter (AND): applied in-memory after the search engine returns,
+	// for consistency with List() and to keep this independent of FTS5 schema.
+	// Caveat: this filter runs after pagination, so result.TotalCount reflects
+	// pre-filter totals. For PR2.5 MVP this is acceptable; future work can push
+	// the join into the store layer for accurate facet counts.
+	if len(req.Tags) > 0 && len(result.Sessions) > 0 {
+		ids := make([]session.ID, 0, len(result.Sessions))
+		for _, sm := range result.Sessions {
+			ids = append(ids, sm.ID)
+		}
+		matched, tagErr := s.store.FilterSessionIDsByTags(ids, req.Tags)
+		if tagErr != nil {
+			return nil, fmt.Errorf("filter by tags: %w", tagErr)
+		}
+		keep := make(map[session.ID]struct{}, len(matched))
+		for _, id := range matched {
+			keep[id] = struct{}{}
+		}
+		filtered := make([]session.Summary, 0, len(result.Sessions))
+		for _, sm := range result.Sessions {
+			if _, ok := keep[sm.ID]; ok {
+				filtered = append(filtered, sm)
+			}
+		}
+		result.Sessions = filtered
+	}
+
+	// Decorate summaries with their tags (best-effort) so the UI can render
+	// them inline without an extra round-trip.
+	if len(result.Sessions) > 0 {
+		ids := make([]session.ID, 0, len(result.Sessions))
+		for _, sm := range result.Sessions {
+			ids = append(ids, sm.ID)
+		}
+		if tagMap, tagErr := s.store.GetTagsBatch(ids); tagErr == nil {
+			for i := range result.Sessions {
+				if tags, ok := tagMap[result.Sessions[i].ID]; ok {
+					result.Sessions[i].Tags = tags
+				}
+			}
+		}
 	}
 
 	// Voice mode: build compact, TTS-friendly voice results.

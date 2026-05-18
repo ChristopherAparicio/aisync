@@ -904,6 +904,7 @@ type sessionListItem struct {
 	ErrorsDisplay string // formatted display
 	When          string // relative time, e.g. "just now", "2 hours ago"
 	WhenFull      string // absolute time for tooltip
+	Tags          []string // user-defined manual tags
 }
 
 type sessionsPage struct {
@@ -924,6 +925,7 @@ type sessionsPage struct {
 	FilterUntil           string
 	FilterStatus          string
 	FilterHasErrors       string
+	FilterTags            []string // active ?tag= filters (echoed for pagination + form state)
 
 	// Sort state
 	SortBy    string
@@ -977,6 +979,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 	hasErrors := q.Get("has_errors")
 	since := q.Get("since")
 	until := q.Get("until")
+	tags := q["tag"] // repeated ?tag=foo&tag=bar
 	sortBy := q.Get("sort_by")
 	sortOrder := q.Get("sort_order")
 
@@ -1020,6 +1023,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 		ProjectCategory: projectCategory,
 		Status:          status,
 		HasErrors:       hasErrors,
+		Tags:            tags,
 		Since:           since,
 		Until:           until,
 		Limit:           pageSize,
@@ -1083,6 +1087,7 @@ func (s *Server) buildSessionsData(r *http.Request) sessionsPage {
 		FilterProjectCategory: projectCategory,
 		FilterStatus:          status,
 		FilterHasErrors:       hasErrors,
+		FilterTags:            tags,
 		FilterSince:           since,
 		FilterUntil:           until,
 		SortBy:                sortBy,
@@ -1389,6 +1394,7 @@ func (s *Server) buildSessionListItems(sessions []session.Summary) []sessionList
 			ErrorsDisplay: strconv.Itoa(sess.ErrorCount),
 			When:          timeAgo(when),
 			WhenFull:      when.Format("2006-01-02 15:04"),
+			Tags:          sess.Tags,
 		}
 		items = append(items, item)
 	}
@@ -1508,6 +1514,9 @@ type sessionDetailPage struct {
 	// The rest are loaded via HTMX "Load More".
 	TotalMessages int  // total count of messages in the session
 	HasMoreMsgs   bool // true when messages are truncated
+
+	// Manual user-defined tags (loaded from session_tags table).
+	Tags []string
 }
 
 // sessionPRBadge is a template-friendly view of a PR linked to a session.
@@ -2264,6 +2273,11 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		if len(data.ActivitySegments) > msgPageSize {
 			data.ActivitySegments = data.ActivitySegments[:msgPageSize]
 		}
+	}
+
+	// Manual tags (best-effort: missing tags shouldn't break the page).
+	if tags, tagErr := s.sessionSvc.GetSessionTags(r.Context(), sess.ID); tagErr == nil {
+		data.Tags = tags
 	}
 
 	s.render(w, "session_detail.html", data)
@@ -9719,4 +9733,109 @@ func humanTimeAgo(now, t time.Time) string {
 	default:
 		return t.Format("Jan 2")
 	}
+}
+
+// ── Tag handlers ──────────────────────────────────────────────────────────────
+
+// tagsPartialData is the input shape for the _tags_partial.html template.
+type tagsPartialData struct {
+	SessionID string
+	Tags      []string
+	Editable  bool
+}
+
+// handleSessionTagAdd handles POST /api/sessions/{id}/tags.
+// Accepts form fields:
+//   - "tag":  single tag value (preferred for single-add UI)
+//   - "tags": comma-separated list (alternative)
+//
+// Returns the tag-chips partial (HTMX-friendly) so the page can swap it in place.
+func (s *Server) handleSessionTagAdd(w http.ResponseWriter, r *http.Request) {
+	if s.sessionSvc == nil {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "missing session id", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Accept either single "tag" or comma-separated "tags".
+	var raw []string
+	if v := strings.TrimSpace(r.FormValue("tag")); v != "" {
+		raw = append(raw, v)
+	}
+	if v := strings.TrimSpace(r.FormValue("tags")); v != "" {
+		for _, t := range strings.Split(v, ",") {
+			if trimmed := strings.TrimSpace(t); trimmed != "" {
+				raw = append(raw, trimmed)
+			}
+		}
+	}
+	if len(raw) == 0 {
+		http.Error(w, "missing tag", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := s.sessionSvc.AddTags(r.Context(), session.ID(id), raw); err != nil {
+		s.logger.Printf("AddTags(%s): %v", id, err)
+		http.Error(w, "add tags failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Reload current set and render the partial.
+	tags, err := s.sessionSvc.GetSessionTags(r.Context(), session.ID(id))
+	if err != nil {
+		s.logger.Printf("GetSessionTags(%s): %v", id, err)
+		http.Error(w, "load tags failed", http.StatusInternalServerError)
+		return
+	}
+
+	s.renderPartial(w, "_tags_partial.html", tagsPartialData{
+		SessionID: id,
+		Tags:      tags,
+		Editable:  true,
+	})
+}
+
+// handleSessionTagRemove handles DELETE /api/sessions/{id}/tags/{tag}.
+// Returns the updated tag-chips partial.
+func (s *Server) handleSessionTagRemove(w http.ResponseWriter, r *http.Request) {
+	if s.sessionSvc == nil {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	tag := r.PathValue("tag")
+	if id == "" || tag == "" {
+		http.Error(w, "missing session id or tag", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := s.sessionSvc.RemoveTags(r.Context(), session.ID(id), []string{tag}); err != nil {
+		s.logger.Printf("RemoveTags(%s, %s): %v", id, tag, err)
+		http.Error(w, "remove tag failed", http.StatusInternalServerError)
+		return
+	}
+
+	tags, err := s.sessionSvc.GetSessionTags(r.Context(), session.ID(id))
+	if err != nil {
+		s.logger.Printf("GetSessionTags(%s): %v", id, err)
+		http.Error(w, "load tags failed", http.StatusInternalServerError)
+		return
+	}
+
+	s.renderPartial(w, "_tags_partial.html", tagsPartialData{
+		SessionID: id,
+		Tags:      tags,
+		Editable:  true,
+	})
 }

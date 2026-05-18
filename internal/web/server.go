@@ -81,8 +81,8 @@ func New(cfg Config) (*Server, error) {
 	// Each page entry: [page file, optional extra includes...]
 	pageSpecs := [][]string{
 		{"templates/dashboard.html"},
-		{"templates/sessions.html", "templates/sessions_table.html"},
-		{"templates/session_detail.html", "templates/restore_command.html", "templates/analysis_partial.html"},
+		{"templates/sessions.html", "templates/sessions_table.html", "templates/_tags_partial.html"},
+		{"templates/session_detail.html", "templates/restore_command.html", "templates/analysis_partial.html", "templates/_tags_partial.html"},
 		{"templates/branch_explorer.html"},
 		{"templates/cost_dashboard.html"},
 		{"templates/projects.html"},
@@ -115,6 +115,7 @@ func New(cfg Config) (*Server, error) {
 	// Parse partials (standalone, no layout wrapper).
 	partials, err := template.New("").Funcs(funcs).ParseFS(templateFS,
 		"templates/sessions_table.html",
+		"templates/_tags_partial.html",
 		"templates/restore_command.html",
 		"templates/analysis_partial.html",
 		"templates/event_partials.html",
@@ -202,6 +203,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/settings/project/preview", s.handleClassificationPreview)
 	mux.HandleFunc("POST /api/recommendations/dismiss", s.handleRecommendationDismiss)
 	mux.HandleFunc("POST /api/recommendations/snooze", s.handleRecommendationSnooze)
+	mux.HandleFunc("POST /api/sessions/{id}/tags", s.handleSessionTagAdd)
+	mux.HandleFunc("DELETE /api/sessions/{id}/tags/{tag}", s.handleSessionTagRemove)
 
 	// HTMX partials
 	mux.HandleFunc("GET /partials/sessions-table", s.handleSessionsTable)

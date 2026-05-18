@@ -1,0 +1,39 @@
+{{define "_tags_partial.html"}}
+{{/* ── Tag chips for a session ──
+     Inputs:
+       .SessionID    string — session full ID
+       .Tags         []string — sorted alphabetically
+       .Editable     bool — true on detail page, false on list rows
+*/}}
+<div class="tag-chips" id="tags-for-{{.SessionID}}">
+  {{range .Tags}}
+  <span class="tag-chip">
+    {{if $.Editable}}
+    <a href="/sessions?tag={{.}}" class="tag-chip-label" title="Filter by tag {{.}}">{{.}}</a>
+    <button type="button"
+            class="tag-chip-remove"
+            title="Remove tag"
+            hx-delete="/api/sessions/{{$.SessionID}}/tags/{{.}}"
+            hx-target="#tags-for-{{$.SessionID}}"
+            hx-swap="outerHTML">×</button>
+    {{else}}
+    <a href="/sessions?tag={{.}}" class="tag-chip-label">{{.}}</a>
+    {{end}}
+  </span>
+  {{end}}
+  {{if .Editable}}
+  <form class="tag-add-form"
+        hx-post="/api/sessions/{{.SessionID}}/tags"
+        hx-target="#tags-for-{{.SessionID}}"
+        hx-swap="outerHTML"
+        hx-on::after-request="if(event.detail.successful) this.reset()">
+    <input type="text"
+           name="tag"
+           class="tag-add-input"
+           placeholder="+ add tag"
+           maxlength="50"
+           autocomplete="off">
+  </form>
+  {{end}}
+</div>
+{{end}}

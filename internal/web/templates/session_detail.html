@@ -36,6 +36,12 @@
   <p class="detail-summary">{{.Session.Summary}}</p>
   {{end}}
 
+  {{/* ── Tags (always rendered, partial handles empty/edit state) ── */}}
+  <div class="detail-tags">
+    <span class="meta-label">Tags</span>
+    {{template "_tags_partial.html" (dict "SessionID" (printf "%s" .Session.ID) "Tags" .Tags "Editable" true)}}
+  </div>
+
   {{if .Session.ParentID}}
   <div class="detail-parent">
     <span class="detail-parent-icon">↰</span>

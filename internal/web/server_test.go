@@ -3445,3 +3445,224 @@ func TestExtractSkillContentNames(t *testing.T) {
 		}
 	}
 }
+
+// ── Tags HTTP API (PR2.5) ──
+
+// importTestSessionForTags imports a session into the test server so tag API
+// calls can target a real session ID. Returns the imported session ID.
+func importTestSessionForTags(t *testing.T, srv *Server, id string) session.ID {
+	t.Helper()
+	sess := testutil.NewSession(id)
+	data, _ := json.Marshal(sess)
+	if _, err := srv.sessionSvc.Import(service.ImportRequest{
+		Data:         data,
+		SourceFormat: "aisync",
+		IntoTarget:   "aisync",
+	}); err != nil {
+		t.Fatalf("import %s: %v", id, err)
+	}
+	return session.ID(id)
+}
+
+func TestHandleSessionTagAdd_singleTag(t *testing.T) {
+	srv := newTestServer(t)
+	id := importTestSessionForTags(t, srv, "tag-add-1")
+
+	form := strings.NewReader("tag=urgent")
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+string(id)+"/tags", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "urgent") {
+		t.Errorf("expected response body to contain new tag 'urgent', got: %s", body)
+	}
+	if !strings.Contains(body, `id="tags-for-`+string(id)+`"`) {
+		t.Errorf("expected response to contain tag-chips container for session %s", id)
+	}
+
+	// Verify persisted.
+	tags, err := srv.sessionSvc.GetSessionTags(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSessionTags: %v", err)
+	}
+	if len(tags) != 1 || tags[0] != "urgent" {
+		t.Errorf("expected tags=[urgent], got %v", tags)
+	}
+}
+
+func TestHandleSessionTagAdd_csvList(t *testing.T) {
+	srv := newTestServer(t)
+	id := importTestSessionForTags(t, srv, "tag-add-2")
+
+	form := strings.NewReader("tags=alpha,beta,gamma")
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+string(id)+"/tags", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+
+	tags, err := srv.sessionSvc.GetSessionTags(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSessionTags: %v", err)
+	}
+	if len(tags) != 3 {
+		t.Errorf("expected 3 tags, got %d: %v", len(tags), tags)
+	}
+}
+
+func TestHandleSessionTagAdd_missingTag(t *testing.T) {
+	srv := newTestServer(t)
+	id := importTestSessionForTags(t, srv, "tag-add-3")
+
+	form := strings.NewReader("tag=")
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+string(id)+"/tags", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing tag, got %d", w.Code)
+	}
+}
+
+func TestHandleSessionTagRemove(t *testing.T) {
+	srv := newTestServer(t)
+	id := importTestSessionForTags(t, srv, "tag-remove-1")
+
+	// Seed two tags.
+	if _, err := srv.sessionSvc.AddTags(context.Background(), id, []string{"keep", "drop"}); err != nil {
+		t.Fatalf("seed AddTags: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/sessions/"+string(id)+"/tags/drop", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "keep") {
+		t.Errorf("expected 'keep' to remain in response, got: %s", body)
+	}
+	if strings.Contains(body, ">drop<") {
+		t.Errorf("expected 'drop' to be removed from response, got: %s", body)
+	}
+
+	// Verify persisted.
+	tags, err := srv.sessionSvc.GetSessionTags(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSessionTags: %v", err)
+	}
+	if len(tags) != 1 || tags[0] != "keep" {
+		t.Errorf("expected tags=[keep], got %v", tags)
+	}
+}
+
+func TestHandleSessionTagRemove_missingTagPath(t *testing.T) {
+	srv := newTestServer(t)
+	// Note: Go 1.22+ mux requires path values; a request with empty {tag}
+	// won't match the registered route at all, yielding 404. We still test
+	// the handler's defensive path by hitting an unmatched URL.
+	req := httptest.NewRequest(http.MethodDelete, "/api/sessions/foo/tags/", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code == http.StatusOK {
+		t.Errorf("expected non-200 for missing tag path segment, got %d", w.Code)
+	}
+}
+
+func TestSessionsList_filterByTag(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Seed two sessions, only one with the 'critical' tag.
+	id1 := importTestSessionForTags(t, srv, "tag-filter-1")
+	id2 := importTestSessionForTags(t, srv, "tag-filter-2")
+	if _, err := srv.sessionSvc.AddTags(context.Background(), id1, []string{"critical"}); err != nil {
+		t.Fatalf("AddTags id1: %v", err)
+	}
+	if _, err := srv.sessionSvc.AddTags(context.Background(), id2, []string{"routine"}); err != nil {
+		t.Fatalf("AddTags id2: %v", err)
+	}
+
+	// ?tag=critical should keep id1 only.
+	req := httptest.NewRequest(http.MethodGet, "/sessions?tag=critical", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, string(id1)) {
+		t.Errorf("expected %s in tag-filtered results", id1)
+	}
+	if strings.Contains(body, string(id2)) {
+		t.Errorf("did NOT expect %s in tag-filtered results", id2)
+	}
+}
+
+func TestSessionDetail_rendersTags(t *testing.T) {
+	srv := newTestServer(t)
+	id := importTestSessionForTags(t, srv, "tag-detail-1")
+	if _, err := srv.sessionSvc.AddTags(context.Background(), id, []string{"reviewed", "important"}); err != nil {
+		t.Fatalf("AddTags: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sessions/"+string(id), nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "detail-tags") {
+		t.Errorf("expected 'detail-tags' section in detail page")
+	}
+	if !strings.Contains(body, "reviewed") || !strings.Contains(body, "important") {
+		t.Errorf("expected tags in detail page body")
+	}
+	// Editable mode: add form should be present.
+	if !strings.Contains(body, "tag-add-form") {
+		t.Errorf("expected tag-add-form in editable detail render")
+	}
+}
+
+func TestSessionsList_rendersTagChipsOnRow(t *testing.T) {
+	srv := newTestServer(t)
+	id := importTestSessionForTags(t, srv, "tag-row-1")
+	if _, err := srv.sessionSvc.AddTags(context.Background(), id, []string{"hotfix"}); err != nil {
+		t.Fatalf("AddTags: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "hotfix") {
+		t.Errorf("expected 'hotfix' tag chip on sessions list row")
+	}
+	if !strings.Contains(body, "tag-chip") {
+		t.Errorf("expected tag-chip CSS class on list row")
+	}
+}
+
