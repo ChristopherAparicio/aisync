@@ -3322,6 +3322,112 @@ func (s *stubClassifier) Classify(err session.SessionError) session.SessionError
 }
 func (s *stubClassifier) Name() string { return "stub" }
 
+// ── Project Detail: resolveProjectPath ──
+
+func TestResolveProjectPath(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Seed two sessions with distinct project paths.
+	sessA := testutil.NewSession("proj-resolve-a")
+	sessA.ProjectPath = "/Users/guardix/dev/cycloplan"
+	dataA, _ := json.Marshal(sessA)
+	if _, err := srv.sessionSvc.Import(service.ImportRequest{
+		Data: dataA, SourceFormat: "aisync", IntoTarget: "aisync",
+	}); err != nil {
+		t.Fatalf("import sessA: %v", err)
+	}
+
+	sessB := testutil.NewSession("proj-resolve-b")
+	sessB.ProjectPath = "/Users/guardix/dev/freelance/omogen/backend"
+	dataB, _ := json.Marshal(sessB)
+	if _, err := srv.sessionSvc.Import(service.ImportRequest{
+		Data: dataB, SourceFormat: "aisync", IntoTarget: "aisync",
+	}); err != nil {
+		t.Fatalf("import sessB: %v", err)
+	}
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name     string
+		input    string
+		wantPath string
+		wantOK   bool
+	}{
+		{"exact match", "/Users/guardix/dev/cycloplan", "/Users/guardix/dev/cycloplan", true},
+		{"basename only", "/cycloplan", "/Users/guardix/dev/cycloplan", true},
+		{"nested basename", "/backend", "/Users/guardix/dev/freelance/omogen/backend", true},
+		{"partial path", "/omogen/backend", "/Users/guardix/dev/freelance/omogen/backend", true},
+		{"no match", "/nonexistent", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := srv.resolveProjectPath(ctx, tt.input)
+			if ok != tt.wantOK {
+				t.Fatalf("resolveProjectPath(%q) ok=%v, want %v", tt.input, ok, tt.wantOK)
+			}
+			if got != tt.wantPath {
+				t.Errorf("resolveProjectPath(%q) = %q, want %q", tt.input, got, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestProjectDetail_shortPathRedirect(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Seed a session to create the project.
+	sess := testutil.NewSession("proj-redirect-1")
+	sess.ProjectPath = "/Users/guardix/dev/cycloplan"
+	data, _ := json.Marshal(sess)
+	if _, err := srv.sessionSvc.Import(service.ImportRequest{
+		Data: data, SourceFormat: "aisync", IntoTarget: "aisync",
+	}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Short path should redirect to canonical.
+	req := httptest.NewRequest(http.MethodGet, "/projects/cycloplan", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if loc != "/projects/Users/guardix/dev/cycloplan" {
+		t.Errorf("redirect location = %q, want %q", loc, "/projects/Users/guardix/dev/cycloplan")
+	}
+}
+
+func TestProjectDetail_canonicalPathNoRedirect(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Seed a session.
+	sess := testutil.NewSession("proj-canon-1")
+	sess.ProjectPath = "/Users/guardix/dev/cycloplan"
+	data, _ := json.Marshal(sess)
+	if _, err := srv.sessionSvc.Import(service.ImportRequest{
+		Data: data, SourceFormat: "aisync", IntoTarget: "aisync",
+	}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// Full canonical path should render directly (200), not redirect.
+	req := httptest.NewRequest(http.MethodGet, "/projects/Users/guardix/dev/cycloplan", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "cycloplan") {
+		t.Error("expected project name in rendered page")
+	}
+}
+
 func TestExtractSkillContentNames(t *testing.T) {
 	tests := []struct {
 		input string

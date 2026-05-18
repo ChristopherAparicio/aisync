@@ -2370,7 +2370,8 @@ type branchData struct {
 	SessionCount int
 	TotalTokens  int
 	TotalCost    float64
-	LastActivity string // human-readable time ago
+	LastActivity string  // human-readable time ago
+	CostBarPct   float64 // 0-100, cost as % of max branch cost (for inline bar)
 }
 
 type branchExplorerPage struct {
@@ -2408,7 +2409,17 @@ func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
 	})
 
 	data.Branches = make([]branchData, 0, len(stats.PerBranch))
+	maxCost := 0.0
 	for _, bs := range stats.PerBranch {
+		if bs.TotalCost > maxCost {
+			maxCost = bs.TotalCost
+		}
+	}
+	for _, bs := range stats.PerBranch {
+		pct := 0.0
+		if maxCost > 0 {
+			pct = (bs.TotalCost / maxCost) * 100
+		}
 		data.Branches = append(data.Branches, branchData{
 			Name:         bs.Branch,
 			Slug:         slugify(bs.Branch),
@@ -2416,6 +2427,7 @@ func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
 			TotalTokens:  bs.TotalTokens,
 			TotalCost:    bs.TotalCost,
 			LastActivity: timeAgoString(bs.LastActivity),
+			CostBarPct:   pct,
 		})
 	}
 
@@ -2831,7 +2843,7 @@ type heatmapRow struct {
 }
 
 type heatmapCell struct {
-	Color string
+	Color template.CSS
 	Label string
 }
 
@@ -2908,7 +2920,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 				intensity = float64(tokens) / float64(maxTokens)
 			}
 			row.Cells[h] = heatmapCell{
-				Color: heatmapColor(intensity),
+				Color: template.CSS(heatmapColor(intensity)),
 				Label: fmt.Sprintf("%s %02d:00 — %s tokens", dayNames[day.Weekday()], h, formatTokensInt(tokens)),
 			}
 		}
@@ -3027,6 +3039,7 @@ type costBucket struct {
 	Cost         float64
 	SessionCount int
 	HeightPct    float64 // 0–100, for bar chart rendering
+	Timestamp    int64   // Unix epoch seconds (for uPlot x-axis)
 }
 
 // branchCostEntry is a template-friendly view of per-branch cost.
@@ -3086,6 +3099,10 @@ type costDashboardPage struct {
 	APITrendDir         string
 	SubscriptionMonthly float64
 	TotalReal30d        float64 // subscription + API projected 30d
+
+	// Sparkline data for KPI cards (JSON arrays for JS).
+	SparklineCostJSON    template.JS // daily cost values (last 14d)
+	SparklineSessionJSON template.JS // daily session counts (last 14d)
 
 	// Per-backend cost summary
 	HasBackends  bool
@@ -3762,6 +3779,7 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 					Cost:         b.Cost,
 					SessionCount: b.SessionCount,
 					HeightPct:    heightPct,
+					Timestamp:    b.Start.Unix(),
 				})
 			}
 		}
@@ -3772,6 +3790,21 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	}
 	if data.APITrendDir == "" {
 		data.APITrendDir = "stable"
+	}
+
+	// Build sparkline data from the last 14 buckets for KPI cards.
+	if n := len(data.Buckets); n > 0 {
+		start := n - 14
+		if start < 0 {
+			start = 0
+		}
+		var costVals, sessVals []string
+		for _, b := range data.Buckets[start:] {
+			costVals = append(costVals, fmt.Sprintf("%.2f", b.Cost))
+			sessVals = append(sessVals, strconv.Itoa(b.SessionCount))
+		}
+		data.SparklineCostJSON = template.JS("[" + strings.Join(costVals, ",") + "]")
+		data.SparklineSessionJSON = template.JS("[" + strings.Join(sessVals, ",") + "]")
 	}
 
 	// Per-tool and per-agent costs (always loaded — uses pre-computed buckets).
@@ -5986,10 +6019,102 @@ type budgetView struct {
 	Alert   string // "", "warning", "exceeded"
 }
 
+// resolveProjectPath attempts to match a possibly short/partial project path
+// (e.g. "/cycloplan" or "/omogen/backend") against known projects.
+//
+// Resolution order:
+//  1. Exact match in sidebar groups (fastest, most common for sidebar links).
+//  2. Direct session lookup — the path has sessions in DB (e.g. remote-grouped projects).
+//  3. Suffix match across all distinct project paths in DB.
+//
+// Returns ("", false) if no match or ambiguous (multiple suffix matches).
+func (s *Server) resolveProjectPath(ctx context.Context, path string) (string, bool) {
+	// 1. Exact match in sidebar groups.
+	groups := s.cachedSidebarGroups(ctx)
+	for _, g := range groups {
+		if g.ProjectPath == path {
+			return path, true
+		}
+	}
+
+	// 2. Direct lookup — the path itself may have sessions (even if sidebar grouped differently).
+	summaries, err := s.sessionSvc.List(service.ListRequest{ProjectPath: path})
+	if err == nil && len(summaries) > 0 {
+		return path, true
+	}
+
+	// 3. Suffix match across sidebar groups first (cheap).
+	var matches []string
+	for _, g := range groups {
+		if strings.HasSuffix(g.ProjectPath, path) {
+			matches = append(matches, g.ProjectPath)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+
+	// 4. Suffix match across all distinct project paths in DB (covers remote-grouped projects).
+	allPaths := s.distinctProjectPaths(ctx)
+	matches = matches[:0]
+	for _, p := range allPaths {
+		if strings.HasSuffix(p, path) {
+			matches = append(matches, p)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+
+	return "", false
+}
+
+// distinctProjectPaths returns all unique project_path values from the sessions table.
+// This is cached briefly since it's used for short-URL resolution.
+func (s *Server) distinctProjectPaths(ctx context.Context) []string {
+	const cacheKey = "distinct_project_paths"
+	if s.store != nil {
+		if data, _ := s.store.GetCache(cacheKey, sidebarCacheTTL); data != nil {
+			var paths []string
+			if err := json.Unmarshal(data, &paths); err == nil {
+				return paths
+			}
+		}
+	}
+
+	summaries, err := s.sessionSvc.List(service.ListRequest{All: true})
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]bool, len(summaries))
+	var paths []string
+	for _, sm := range summaries {
+		if sm.ProjectPath != "" && !seen[sm.ProjectPath] {
+			seen[sm.ProjectPath] = true
+			paths = append(paths, sm.ProjectPath)
+		}
+	}
+
+	if s.store != nil {
+		if data, marshalErr := json.Marshal(paths); marshalErr == nil {
+			_ = s.store.SetCache(cacheKey, data)
+		}
+	}
+
+	return paths
+}
+
 func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 	projectPath := "/" + r.PathValue("path")
 	if projectPath == "/" {
 		http.Redirect(w, r, "/projects", http.StatusFound)
+		return
+	}
+
+	// Resolve short/partial paths (e.g. "/cycloplan") to canonical absolute paths.
+	if resolved, ok := s.resolveProjectPath(r.Context(), projectPath); ok && resolved != projectPath {
+		http.Redirect(w, r, "/projects"+resolved, http.StatusFound)
 		return
 	}
 
@@ -6000,6 +6125,12 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 // handleProjectSessionsPartial returns a filtered list of sessions for a project (HTMX).
 func (s *Server) handleProjectSessionsPartial(w http.ResponseWriter, r *http.Request) {
 	projectPath := "/" + r.PathValue("path")
+
+	// Resolve short/partial paths for HTMX partials too.
+	if resolved, ok := s.resolveProjectPath(r.Context(), projectPath); ok {
+		projectPath = resolved
+	}
+
 	q := r.URL.Query()
 	keyword := q.Get("keyword")
 	agent := q.Get("agent")
@@ -6270,6 +6401,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 			}
 			dailyBuckets = append(dailyBuckets, dailyActivity{
 				Date:      b.BucketStart.Format("Jan 2"),
+				Timestamp: b.BucketStart.Unix(),
 				ToolCalls: b.ToolCallCount,
 				Errors:    b.ErrorCount,
 				Sessions:  b.SessionCount,
@@ -6807,13 +6939,40 @@ type searchResultView struct {
 	Score            float64 // relevance score (0 = no ranking)
 }
 
+// searchNavItem is a quick-nav link to a page or project that matches the query.
+type searchNavItem struct {
+	Label string // display name
+	Href  string // navigation URL
+	Icon  string // emoji/icon
+	Kind  string // "page" or "project"
+}
+
 type searchResultsData struct {
 	Query      string
 	Results    []searchResultView
+	NavItems   []searchNavItem // quick-nav links (pages + projects)
 	HasMore    bool
 	Engine     string // search engine name ("fts5", "like", "")
 	HasEngine  bool   // true if a named engine was used
 	TotalCount int    // total matching results (not just displayed)
+}
+
+// searchablePages defines navigation pages available for quick-nav matching.
+var searchablePages = []searchNavItem{
+	{Label: "Home", Href: "/", Icon: "🏠", Kind: "page"},
+	{Label: "Dashboard", Href: "/", Icon: "🏠", Kind: "page"},
+	{Label: "Sessions", Href: "/sessions", Icon: "💬", Kind: "page"},
+	{Label: "Branches", Href: "/branches", Icon: "🌿", Kind: "page"},
+	{Label: "Git Files", Href: "/files/", Icon: "📂", Kind: "page"},
+	{Label: "File Tree", Href: "/tree/", Icon: "🌳", Kind: "page"},
+	{Label: "Pull Requests", Href: "/pulls", Icon: "🔀", Kind: "page"},
+	{Label: "Graph", Href: "/graph", Icon: "📊", Kind: "page"},
+	{Label: "Analytics", Href: "/analytics", Icon: "📈", Kind: "page"},
+	{Label: "Costs", Href: "/costs", Icon: "💰", Kind: "page"},
+	{Label: "Team", Href: "/team", Icon: "👥", Kind: "page"},
+	{Label: "Errors", Href: "/errors/unclassified", Icon: "🐛", Kind: "page"},
+	{Label: "Settings", Href: "/settings", Icon: "⚙️", Kind: "page"},
+	{Label: "Usage", Href: "/usage", Icon: "📉", Kind: "page"},
 }
 
 func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
@@ -6821,6 +6980,51 @@ func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
 	if keyword == "" {
 		s.renderPartial(w, "search_results", searchResultsData{})
 		return
+	}
+
+	// Match pages by keyword (case-insensitive prefix/substring).
+	lowerKW := strings.ToLower(keyword)
+	var navItems []searchNavItem
+	seen := make(map[string]bool)
+	for _, p := range searchablePages {
+		if strings.Contains(strings.ToLower(p.Label), lowerKW) {
+			if !seen[p.Href] {
+				seen[p.Href] = true
+				navItems = append(navItems, p)
+			}
+		}
+	}
+
+	// Match projects by keyword (case-insensitive substring on display name or path).
+	ctx := r.Context()
+	if projects, err := s.sessionSvc.ListProjects(ctx); err == nil {
+		for _, pg := range projects {
+			if len(navItems) >= 5 {
+				break
+			}
+			name := pg.DisplayName
+			if name == "" {
+				name = pg.ProjectPath
+			}
+			if strings.Contains(strings.ToLower(name), lowerKW) ||
+				strings.Contains(strings.ToLower(pg.ProjectPath), lowerKW) {
+				href := "/sessions?project=" + pg.ProjectPath
+				if !seen[href] {
+					seen[href] = true
+					navItems = append(navItems, searchNavItem{
+						Label: name,
+						Href:  href,
+						Icon:  "📁",
+						Kind:  "project",
+					})
+				}
+			}
+		}
+	}
+
+	// Cap nav items.
+	if len(navItems) > 5 {
+		navItems = navItems[:5]
 	}
 
 	const searchLimit = 8
@@ -6833,7 +7037,7 @@ func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
 	result, err := s.sessionSvc.Search(searchReq)
 	if err != nil {
 		s.logger.Printf("search error: %v", err)
-		s.renderPartial(w, "search_results", searchResultsData{Query: keyword})
+		s.renderPartial(w, "search_results", searchResultsData{Query: keyword, NavItems: navItems})
 		return
 	}
 
@@ -6874,6 +7078,7 @@ func (s *Server) handleSearchResults(w http.ResponseWriter, r *http.Request) {
 	data := searchResultsData{
 		Query:      keyword,
 		Results:    views,
+		NavItems:   navItems,
 		HasMore:    hasMore,
 		Engine:     result.Engine,
 		HasEngine:  result.Engine != "",

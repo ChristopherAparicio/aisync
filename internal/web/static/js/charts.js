@@ -259,6 +259,22 @@ var AI5 = (function() {
       });
     });
 
+    // Auto-tooltip for truncated sidebar items (overflow detection)
+    document.querySelectorAll('.sidebar-item-name').forEach(function(el) {
+      if (el._tippy) return;
+      if (el.scrollWidth > el.clientWidth) {
+        tippy(el, {
+          content: el.textContent.trim(),
+          theme: 'ai5',
+          placement: 'right',
+          arrow: true,
+          animation: 'shift-away',
+          duration: [200, 150],
+          delay: [300, 0],
+        });
+      }
+    });
+
     // Upgrade native title attributes on KPI values and badges
     document.querySelectorAll('.kpi-strip-value[title], .badge[title], .sparkline-bar[title], .activity-card-when[title]').forEach(function(el) {
       if (el._tippy) return;
@@ -294,6 +310,24 @@ var AI5 = (function() {
         el._ai5Chart = sparkline(el, opts);
       } catch(e) {
         // Fallback: keep CSS bars
+      }
+    });
+
+    // KPI sparklines with data-values attribute (cost/session KPI cards)
+    document.querySelectorAll('.kpi-sparkline[data-values]').forEach(function(el) {
+      if (el._ai5Chart) return;
+      try {
+        var vals = JSON.parse(el.getAttribute('data-values'));
+        if (!vals || vals.length === 0) return;
+        var color = el.getAttribute('data-color') || COLORS.accent;
+        // Resolve CSS variables
+        if (color.indexOf('var(') === 0) {
+          var varName = color.replace('var(', '').replace(')', '').trim();
+          color = getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || COLORS.accent;
+        }
+        el._ai5Chart = sparkline(el, { values: vals, color: color, label: '$' });
+      } catch(e) {
+        // Fallback: leave empty
       }
     });
   }

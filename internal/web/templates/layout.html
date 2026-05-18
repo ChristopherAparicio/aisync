@@ -57,7 +57,35 @@
         <span class="search-modal-kbd">Esc</span>
       </div>
       <div class="search-results" id="search-results">
-        <div class="search-empty">Type to search sessions across all projects</div>
+        <div class="search-quick-nav">
+          <div class="search-section-label">Quick Navigation</div>
+          <a href="/" class="search-nav-item" data-search-item>
+            <span class="search-nav-icon">🏠</span><span>Home</span>
+          </a>
+          <a href="/sessions" class="search-nav-item" data-search-item>
+            <span class="search-nav-icon">💬</span><span>Sessions</span>
+          </a>
+          <a href="/costs" class="search-nav-item" data-search-item>
+            <span class="search-nav-icon">💰</span><span>Costs</span>
+          </a>
+          <a href="/analytics" class="search-nav-item" data-search-item>
+            <span class="search-nav-icon">📈</span><span>Analytics</span>
+          </a>
+          <a href="/branches" class="search-nav-item" data-search-item>
+            <span class="search-nav-icon">🌿</span><span>Branches</span>
+          </a>
+          <a href="/errors/unclassified" class="search-nav-item" data-search-item>
+            <span class="search-nav-icon">🐛</span><span>Errors</span>
+          </a>
+          <a href="/settings" class="search-nav-item" data-search-item>
+            <span class="search-nav-icon">⚙️</span><span>Settings</span>
+          </a>
+        </div>
+        <div class="search-footer">
+          <span class="search-footer-hint"><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+          <span class="search-footer-hint"><kbd>↵</kbd> open</span>
+          <span class="search-footer-hint"><kbd>esc</kbd> close</span>
+        </div>
       </div>
     </div>
   </div>
@@ -83,40 +111,71 @@
     var overlay = document.getElementById('search-overlay');
     var searchInput = document.getElementById('search-input');
     var trigger = document.getElementById('navbar-search-trigger');
+    var activeIdx = -1;
+
+    function getItems() {
+      return document.querySelectorAll('#search-results [data-search-item]');
+    }
+
+    function setActive(idx) {
+      var items = getItems();
+      items.forEach(function(el) { el.classList.remove('active'); });
+      if (idx >= 0 && idx < items.length) {
+        activeIdx = idx;
+        items[idx].classList.add('active');
+        items[idx].scrollIntoView({ block: 'nearest' });
+      } else {
+        activeIdx = -1;
+      }
+    }
+
+    // Cache the default quick-nav HTML from the initial page render.
+    var defaultSearchHTML = document.getElementById('search-results').innerHTML;
 
     function openSearch() {
       overlay.classList.add('open');
       searchInput.focus();
       searchInput.value = '';
-      document.getElementById('search-results').innerHTML =
-        '<div class="search-empty">Type to search sessions across all projects</div>';
+      activeIdx = -1;
+      // Restore the default quick-nav view.
+      document.getElementById('search-results').innerHTML = defaultSearchHTML;
     }
 
     function closeSearch() {
       overlay.classList.remove('open');
       searchInput.blur();
+      activeIdx = -1;
     }
 
     // Click trigger in navbar.
     trigger.addEventListener('click', openSearch);
+
+    // Auto-open search if ?_search=1 in URL (for testing).
+    if (new URLSearchParams(location.search).get('_search') === '1') {
+      setTimeout(openSearch, 500);
+    }
 
     // Click overlay backdrop to close.
     overlay.addEventListener('click', function(e) {
       if (e.target === overlay) closeSearch();
     });
 
+    // Reset active index after HTMX swaps in new results.
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+      if (e.detail.target && e.detail.target.id === 'search-results') {
+        activeIdx = -1;
+      }
+    });
+
     // Keyboard shortcuts.
     document.addEventListener('keydown', function(e) {
+      var isOpen = overlay.classList.contains('open');
       var isInput = ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName);
 
-      // Cmd+K or Ctrl+K opens search.
+      // Cmd+K or Ctrl+K opens/closes search.
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        if (overlay.classList.contains('open')) {
-          closeSearch();
-        } else {
-          openSearch();
-        }
+        if (isOpen) { closeSearch(); } else { openSearch(); }
         return;
       }
 
@@ -127,10 +186,41 @@
         return;
       }
 
+      // Only handle the rest when search is open.
+      if (!isOpen) return;
+
       // Escape closes search.
-      if (e.key === 'Escape' && overlay.classList.contains('open')) {
+      if (e.key === 'Escape') {
         e.preventDefault();
         closeSearch();
+        return;
+      }
+
+      var items = getItems();
+      var count = items.length;
+
+      // Arrow down — move selection forward.
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive(activeIdx < count - 1 ? activeIdx + 1 : 0);
+        return;
+      }
+
+      // Arrow up — move selection backward.
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive(activeIdx > 0 ? activeIdx - 1 : count - 1);
+        return;
+      }
+
+      // Enter — navigate to selected item.
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (activeIdx >= 0 && activeIdx < count) {
+          var href = items[activeIdx].getAttribute('href');
+          if (href) { window.location.href = href; }
+        }
+        return;
       }
     });
   })();

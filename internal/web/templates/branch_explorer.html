@@ -57,33 +57,102 @@
 </div>
 
 <div class="be-table-wrap">
-  <table class="be-table">
+  <table class="be-table" id="branch-table">
     <thead>
       <tr>
-        <th class="be-th-name">Branch</th>
-        <th class="be-th-num">Sessions</th>
-        <th class="be-th-num">Tokens</th>
-        <th class="be-th-num">Cost</th>
-        <th class="be-th-when">Last Activity</th>
+        <th class="be-th-name be-sortable" data-sort="name" data-sort-type="text">Branch <span class="be-sort-icon">&#x2195;</span></th>
+        <th class="be-th-num be-sortable" data-sort="sessions" data-sort-type="num">Sessions <span class="be-sort-icon">&#x2195;</span></th>
+        <th class="be-th-num be-sortable" data-sort="tokens" data-sort-type="num">Tokens <span class="be-sort-icon">&#x2195;</span></th>
+        <th class="be-th-num be-sortable" data-sort="cost" data-sort-type="num">Cost <span class="be-sort-icon">&#x2195;</span></th>
+        <th class="be-th-when be-sortable" data-sort="activity" data-sort-type="text">Last Activity <span class="be-sort-icon">&#x2195;</span></th>
       </tr>
     </thead>
     <tbody>
-      {{range .Branches}}
-      <tr class="be-row" onclick="location.href='/branches/{{.Name}}'">
+      {{range $i, $b := .Branches}}
+      <tr class="be-row fade-in" style="animation-delay: {{printf "%.2f" (mul $i 0.02)}}s"
+          onclick="location.href='/branches/{{$b.Name}}'"
+          data-sessions="{{$b.SessionCount}}"
+          data-tokens="{{$b.TotalTokens}}"
+          data-cost="{{printf "%.2f" $b.TotalCost}}"
+          data-name="{{$b.Name}}">
         <td class="be-cell-name">
-          <a href="/branches/{{.Name}}" class="be-branch-link font-mono">{{if .Name}}{{.Name}}{{else}}<span class="text-muted">(no branch)</span>{{end}}</a>
+          <a href="/branches/{{$b.Name}}" class="be-branch-link font-mono">{{if $b.Name}}{{$b.Name}}{{else}}<span class="text-muted">(no branch)</span>{{end}}</a>
         </td>
         <td class="be-cell-num">
-          <span class="be-session-count">{{.SessionCount}}</span>
+          <span class="be-session-count">{{$b.SessionCount}}</span>
         </td>
-        <td class="be-cell-num font-mono">{{formatTokens .TotalTokens}}</td>
-        <td class="be-cell-num font-mono">{{formatCost .TotalCost}}</td>
-        <td class="be-cell-when text-muted">{{.LastActivity}}</td>
+        <td class="be-cell-num font-mono">{{formatTokens $b.TotalTokens}}</td>
+        <td class="be-cell-num be-cell-cost">
+          <div class="be-cost-bar-bg">
+            <div class="be-cost-bar-fill" style="width: {{printf "%.1f" $b.CostBarPct}}%"></div>
+          </div>
+          <span class="font-mono be-cost-value">{{formatCost $b.TotalCost}}</span>
+        </td>
+        <td class="be-cell-when text-muted">{{$b.LastActivity}}</td>
       </tr>
       {{end}}
     </tbody>
   </table>
 </div>
+
+<!-- Client-side sorting -->
+<script>
+(function() {
+  var table = document.getElementById('branch-table');
+  if (!table) return;
+  var headers = table.querySelectorAll('.be-sortable');
+  var currentSort = { col: 'sessions', dir: 'desc' };
+
+  headers.forEach(function(th) {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', function() {
+      var col = th.getAttribute('data-sort');
+      var type = th.getAttribute('data-sort-type');
+      var dir = (currentSort.col === col && currentSort.dir === 'desc') ? 'asc' : 'desc';
+      currentSort = { col: col, dir: dir };
+
+      // Update sort indicators
+      headers.forEach(function(h) {
+        h.querySelector('.be-sort-icon').textContent = '\u2195';
+        h.classList.remove('be-sorted-asc', 'be-sorted-desc');
+      });
+      th.querySelector('.be-sort-icon').textContent = dir === 'asc' ? '\u2191' : '\u2193';
+      th.classList.add(dir === 'asc' ? 'be-sorted-asc' : 'be-sorted-desc');
+
+      // Sort rows
+      var tbody = table.querySelector('tbody');
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort(function(a, b) {
+        var va, vb;
+        if (col === 'name') {
+          va = (a.getAttribute('data-name') || '').toLowerCase();
+          vb = (b.getAttribute('data-name') || '').toLowerCase();
+        } else if (col === 'sessions') {
+          va = parseInt(a.getAttribute('data-sessions') || '0');
+          vb = parseInt(b.getAttribute('data-sessions') || '0');
+        } else if (col === 'tokens') {
+          va = parseInt(a.getAttribute('data-tokens') || '0');
+          vb = parseInt(b.getAttribute('data-tokens') || '0');
+        } else if (col === 'cost') {
+          va = parseFloat(a.getAttribute('data-cost') || '0');
+          vb = parseFloat(b.getAttribute('data-cost') || '0');
+        } else if (col === 'activity') {
+          va = a.querySelector('.be-cell-when').textContent.trim();
+          vb = b.querySelector('.be-cell-when').textContent.trim();
+        }
+        var cmp = 0;
+        if (type === 'num') {
+          cmp = va - vb;
+        } else {
+          cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        }
+        return dir === 'desc' ? -cmp : cmp;
+      });
+      rows.forEach(function(row) { tbody.appendChild(row); });
+    });
+  });
+})();
+</script>
 
 {{end}}
 {{end}}

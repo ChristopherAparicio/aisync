@@ -67,6 +67,7 @@ type skillContextCost struct {
 
 type dailyActivity struct {
 	Date      string
+	Timestamp int64 // Unix epoch seconds (for uPlot x-axis)
 	ToolCalls int
 	Skills    int
 	Commands  int
@@ -171,6 +172,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		} else {
 			dailyMap[dateKey] = &dailyActivity{
 				Date:      dateKey,
+				Timestamp: b.BucketStart.Unix(),
 				ToolCalls: b.ToolCallCount,
 				Skills:    b.SkillLoadCount,
 				Commands:  b.CommandCount,

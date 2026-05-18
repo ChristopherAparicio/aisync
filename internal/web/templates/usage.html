@@ -72,17 +72,17 @@
     <div class="heatmap-row">
       <div class="heatmap-day-label">{{.DayLabel}}</div>
       {{range .Cells}}
-      <div class="heatmap-cell" style="background-color: {{.Color}}" title="{{.Label}}"></div>
+      <div class="heatmap-cell" style="background-color: {{.Color}}" data-tippy-content="{{.Label}}"></div>
       {{end}}
     </div>
     {{end}}
   </div>
   <div class="heatmap-legend">
     <span class="text-muted">Less</span>
-    <div class="heatmap-cell-legend" style="background:var(--bg-card)"></div>
-    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.2)"></div>
-    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.4)"></div>
-    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.6)"></div>
+    <div class="heatmap-cell-legend" style="background:var(--bg-hover)"></div>
+    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.25)"></div>
+    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.45)"></div>
+    <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.65)"></div>
     <div class="heatmap-cell-legend" style="background:rgba(108,126,225,0.9)"></div>
     <span class="text-muted">More</span>
   </div>
@@ -94,7 +94,7 @@
   <div class="barchart-container">
     {{range .BarChartData}}
     <div class="barchart-bar-wrap">
-      <div class="barchart-bar" style="height:{{.HeightPct}}%" title="{{.Label}}"></div>
+      <div class="barchart-bar" style="height:{{.HeightPct}}%" data-tippy-content="{{.Label}}"></div>
       <div class="barchart-hour">{{.Hour}}</div>
     </div>
     {{end}}

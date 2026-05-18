@@ -9,36 +9,33 @@
     {{end}}
   </div>
 {{else}}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          {{range .Columns}}
-          <th class="{{.Class}}">
-            <span>{{.Label}}</span>
-          </th>
-          {{end}}
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Rows}}
-        <tr>
-          {{range .Cells}}
-          <td class="{{.Class}}"{{if .Tooltip}} data-tippy-content="{{.Tooltip}}"{{end}}>
-            {{if and .IsLink .LinkHref}}<a href="{{.LinkHref}}">{{.Value}}</a>
-            {{else if .IsLink}}<a href="/sessions/{{.LinkID}}">{{.Value}}</a>
-            {{else if .IsBadge}}<span class="badge badge-provider">{{.Value}}</span>
-            {{else}}{{.Value}}
-            {{end}}
-          </td>
-          {{end}}
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
+  <div class="sl-list">
+    {{range .Items}}
+    <a href="/sessions/{{.ID}}" class="sl-item">
+      {{/* ── Line 1: summary + stats ── */}}
+      <div class="sl-row1">
+        <div class="sl-summary">{{.Summary}}</div>
+        <div class="sl-stats">
+          <span class="sl-stat" title="Messages">{{.Messages}} <span class="sl-stat-label">msgs</span></span>
+          <span class="sl-stat" title="Tokens">{{.Tokens}} <span class="sl-stat-label">tok</span></span>
+          {{if gt .Errors 0}}<span class="sl-stat sl-stat-err" title="Errors">{{.ErrorsDisplay}} <span class="sl-stat-label">errs</span></span>{{end}}
+        </div>
+      </div>
+      {{/* ── Line 2: metadata ── */}}
+      <div class="sl-row2">
+        <span class="badge badge-provider">{{.Provider}}</span>
+        {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
+        {{if eq .Status "active"}}<span class="badge badge-active">active</span>{{end}}
+        {{if .Branch}}<span class="sl-meta sl-branch">{{.Branch}}</span>{{end}}
+        {{if .ProjectName}}<span class="sl-meta sl-project">{{.ProjectName}}</span>{{end}}
+        <span class="sl-meta sl-id">{{.ShortID}}</span>
+        <span class="sl-meta sl-when" data-tippy-content="{{.WhenFull}}">{{.When}}</span>
+      </div>
+    </a>
+    {{end}}
   </div>
 
-  <!-- Pagination -->
+  {{/* ── Pagination ── */}}
   {{if gt .TotalPages 1}}
   <div class="pagination">
     {{if .HasPrev}}

@@ -36,6 +36,7 @@ func templateFuncs() template.FuncMap {
 		"healthClass": healthClass,
 		"split":       func(s, sep string) []string { return strings.Split(s, sep) },
 		"settingID":   func(key string) string { return strings.ReplaceAll(key, ".", "-") },
+		"mul":         func(a int, b float64) float64 { return float64(a) * b },
 	}
 }
 

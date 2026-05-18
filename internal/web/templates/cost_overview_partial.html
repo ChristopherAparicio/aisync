@@ -8,11 +8,13 @@
     <div class="kpi-card kpi-accent">
       <div class="label">Real Cost / 30d</div>
       <div class="value">{{formatCost .TotalReal30d}}</div>
+      <div class="kpi-sparkline" data-values="{{.SparklineCostJSON}}" data-color="var(--accent)"></div>
       <div class="sub">subscriptions + API</div>
     </div>
     <div class="kpi-card">
       <div class="label">API Spend / 30d</div>
       <div class="value">{{formatCost .APIProjected30d}}</div>
+      <div class="kpi-sparkline" data-values="{{.SparklineCostJSON}}" data-color="var(--green)"></div>
       <div class="sub trend-{{.APITrendDir}}">
         {{if eq .APITrendDir "increasing"}}&#x2191;{{else if eq .APITrendDir "decreasing"}}&#x2193;{{else}}&#x2192;{{end}}
         {{formatCost .APITrendPerDay}}/day
@@ -26,6 +28,7 @@
     <div class="kpi-card">
       <div class="label">API Spend / 90d</div>
       <div class="value">{{formatCost .APIProjected90d}}</div>
+      <div class="sub">{{.TotalSessions}} sessions</div>
     </div>
   </div>
 </div>
@@ -150,6 +153,28 @@
 {{if .HasBackends}}
 <div class="section">
   <h2 class="section-title">Cost by LLM Backend</h2>
+
+  <!-- Visual bars -->
+  <div class="backend-bars" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+    {{range .BackendCosts}}
+    <div class="backend-bar-item" data-tippy-content="{{.Backend}}: {{formatCost .EstimatedCost}} est. / {{.SessionCount}} sessions / {{formatTokens .TotalTokens}} tokens"
+         style="flex: {{if gt .SessionCount 0}}{{.SessionCount}}{{else}}1{{end}}; min-width: 60px;">
+      <div class="backend-bar-visual" style="
+        height: 32px;
+        border-radius: 6px;
+        background: {{if eq .BillingType "subscription"}}var(--purple){{else if eq .BillingType "api"}}var(--accent){{else}}var(--green){{end}};
+        opacity: 0.7;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.7rem; font-weight: 600; color: white;
+        transition: opacity 0.2s;
+      ">{{.Backend}}</div>
+      <div style="text-align: center; font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">
+        {{if gt .ActualCost 0.0}}{{formatCost .ActualCost}}{{else}}{{formatCost .EstimatedCost}}{{end}}
+      </div>
+    </div>
+    {{end}}
+  </div>
+
   <div class="table-wrap">
     <table>
       <thead>
@@ -257,23 +282,148 @@
 </div>
 {{end}}
 
-<!-- ── Cost Over Time ── -->
+<!-- ── Cost Over Time (uPlot chart with CSS fallback) ── -->
 {{if .Buckets}}
 <div class="section">
   <h2 class="section-title">Cost Over Time <span class="text-muted">({{.Period}})</span>{{if .HasBudgetLine}} <span class="text-muted" style="font-size:0.75rem; font-weight:400;">— budget: {{formatCost .BudgetDailyLine}}/day</span>{{end}}</h2>
+
+  <!-- uPlot chart container -->
+  <div id="cost-over-time-chart" class="uplot-chart-container" style="height: 260px; background: var(--bg-card); border-radius: 8px; padding: 12px;"></div>
+
+  <!-- CSS fallback (hidden when JS loads) -->
+  <noscript>
   <div class="cost-chart cost-chart--with-overlay">
     {{if .HasBudgetLine}}
-    <div class="cost-budget-line" style="bottom: {{printf "%.1f" .BudgetLineHeightPct}}%;" title="Daily budget: {{formatCost .BudgetDailyLine}}">
+    <div class="cost-budget-line" style="bottom: {{printf "%.1f" .BudgetLineHeightPct}}%;" data-tippy-content="Daily budget: {{formatCost .BudgetDailyLine}}">
       <span class="cost-budget-line-label">{{formatCost .BudgetDailyLine}}</span>
     </div>
     {{end}}
     {{range .Buckets}}
-    <div class="cost-bar-wrap" title="{{formatCost .Cost}} — {{.SessionCount}} sessions">
+    <div class="cost-bar-wrap" data-tippy-content="{{formatCost .Cost}} — {{.SessionCount}} sessions">
       <div class="cost-bar" style="height: {{.HeightPct}}%"></div>
       <div class="cost-bar-label text-muted">{{.Label}}</div>
     </div>
     {{end}}
   </div>
+  </noscript>
+
+  <script>
+  (function() {
+    var timestamps = [{{range $i, $b := .Buckets}}{{if $i}},{{end}}{{$b.Timestamp}}{{end}}];
+    var costs      = [{{range $i, $b := .Buckets}}{{if $i}},{{end}}{{printf "%.2f" $b.Cost}}{{end}}];
+    var sessions   = [{{range $i, $b := .Buckets}}{{if $i}},{{end}}{{$b.SessionCount}}{{end}}];
+    var budgetLine = {{if .HasBudgetLine}}{{printf "%.2f" .BudgetDailyLine}}{{else}}0{{end}};
+
+    function renderCostChart() {
+      if (typeof uPlot === 'undefined') return;
+      var el = document.getElementById('cost-over-time-chart');
+      if (!el || el.dataset.rendered) return;
+      el.dataset.rendered = '1';
+
+      var series = [
+        {},
+        {
+          label: "Cost ($)",
+          stroke: "rgba(108, 126, 225, 1)",
+          fill: "rgba(108, 126, 225, 0.15)",
+          width: 2,
+          points: { show: false },
+          value: function(u, v) { return v != null ? '$' + v.toFixed(2) : '--'; }
+        },
+        {
+          label: "Sessions",
+          stroke: "rgba(74, 222, 128, 0.8)",
+          width: 1.5,
+          dash: [4, 4],
+          scale: "sessions",
+          points: { show: false },
+          value: function(u, v) { return v != null ? v.toFixed(0) : '--'; }
+        }
+      ];
+
+      // Budget line as a horizontal band.
+      var plugins = [];
+      if (budgetLine > 0) {
+        plugins.push({
+          hooks: {
+            draw: [function(u) {
+              var ctx = u.ctx;
+              var y = u.valToPos(budgetLine, 'y', true);
+              if (y == null) return;
+              ctx.save();
+              ctx.strokeStyle = 'rgba(248, 113, 113, 0.6)';
+              ctx.lineWidth = 1;
+              ctx.setLineDash([6, 4]);
+              ctx.beginPath();
+              ctx.moveTo(u.bbox.left, y);
+              ctx.lineTo(u.bbox.left + u.bbox.width, y);
+              ctx.stroke();
+              ctx.fillStyle = 'rgba(248, 113, 113, 0.8)';
+              ctx.font = '10px sans-serif';
+              ctx.fillText('Budget: $' + budgetLine.toFixed(0), u.bbox.left + 6, y - 4);
+              ctx.restore();
+            }]
+          }
+        });
+      }
+
+      var opts = {
+        width: el.clientWidth,
+        height: 240,
+        plugins: plugins,
+        cursor: { show: true, drag: { x: false, y: false } },
+        legend: { show: true },
+        scales: {
+          x: { time: true },
+          y: { auto: true, range: function(u, min, max) { return [0, max * 1.1]; } },
+          sessions: { auto: true, range: function(u, min, max) { return [0, max * 1.2]; } }
+        },
+        axes: [
+          {
+            stroke: 'rgba(255,255,255,0.3)',
+            grid: { stroke: 'rgba(255,255,255,0.05)' },
+            ticks: { stroke: 'rgba(255,255,255,0.1)' },
+            font: '10px sans-serif',
+            values: function(u, vals) {
+              return vals.map(function(v) {
+                var d = new Date(v * 1000);
+                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              });
+            }
+          },
+          {
+            stroke: 'rgba(255,255,255,0.3)',
+            grid: { stroke: 'rgba(255,255,255,0.05)' },
+            ticks: { stroke: 'rgba(255,255,255,0.1)' },
+            font: '10px sans-serif',
+            size: 55,
+            values: function(u, vals) { return vals.map(function(v) { return '$' + v.toFixed(0); }); }
+          },
+          {
+            scale: 'sessions',
+            side: 1,
+            stroke: 'rgba(74, 222, 128, 0.5)',
+            grid: { show: false },
+            ticks: { stroke: 'rgba(255,255,255,0.1)' },
+            font: '10px sans-serif',
+            size: 40,
+            values: function(u, vals) { return vals.map(function(v) { return v.toFixed(0); }); }
+          }
+        ],
+        series: series
+      };
+
+      new uPlot(opts, [timestamps, costs, sessions], el);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', renderCostChart);
+    } else {
+      renderCostChart();
+    }
+    document.body.addEventListener('htmx:afterSwap', renderCostChart);
+  })();
+  </script>
 </div>
 {{end}}
 
