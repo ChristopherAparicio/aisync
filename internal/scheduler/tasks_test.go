@@ -365,51 +365,6 @@ func TestCaptureAllTask_Run_Empty(t *testing.T) {
 	}
 }
 
-// ── StatsReportTask Tests ──
-
-func TestStatsReportTask_Name(t *testing.T) {
-	task := NewStatsReportTask(StatsReportTaskConfig{})
-	if task.Name() != "stats_report" {
-		t.Errorf("Name() = %q, want %q", task.Name(), "stats_report")
-	}
-}
-
-func TestStatsReportTask_Run_Success(t *testing.T) {
-	mock := &mockSessionService{
-		statsResult: &service.StatsResult{
-			TotalSessions: 42,
-			TotalTokens:   100000,
-		},
-	}
-	task := NewStatsReportTask(StatsReportTaskConfig{
-		SessionService: mock,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !mock.statsCalled {
-		t.Error("Stats was not called")
-	}
-}
-
-func TestStatsReportTask_Run_Error(t *testing.T) {
-	mock := &mockSessionService{
-		statsErr: errors.New("cache broken"),
-	}
-	task := NewStatsReportTask(StatsReportTaskConfig{
-		SessionService: mock,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
 // ── Integration: tasks register and run via Scheduler ──
 
 func TestScheduler_AllNewTasks(t *testing.T) {
@@ -434,12 +389,6 @@ func TestScheduler_AllNewTasks(t *testing.T) {
 					SessionService: mock,
 				}),
 			},
-			{
-				Schedule: "0 * * * *",
-				Task: NewStatsReportTask(StatsReportTaskConfig{
-					SessionService: mock,
-				}),
-			},
 		},
 		Logger: log.Default(),
 	})
@@ -450,18 +399,16 @@ func TestScheduler_AllNewTasks(t *testing.T) {
 	// Run each task directly to verify they work.
 	gcTask := NewGCTask(GCTaskConfig{SessionService: mock, RetentionDays: 30})
 	captureTask := NewCaptureAllTask(CaptureAllTaskConfig{SessionService: mock})
-	statsTask := NewStatsReportTask(StatsReportTaskConfig{SessionService: mock})
 
 	s.runTask(gcTask)
 	s.runTask(captureTask)
-	s.runTask(statsTask)
 
 	results := s.Status()
-	if len(results) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(results))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
 	}
 
-	// Verify all three tasks ran without error.
+	// Verify all tasks ran without error.
 	for _, r := range results {
 		if r.Error != "" {
 			t.Errorf("task %q had error: %s", r.TaskName, r.Error)
@@ -646,320 +593,10 @@ func TestReclassifyTask_ContextCancelled(t *testing.T) {
 	}
 }
 
-// ── SaturationTask Tests ──
-
-// mockSaturationStore implements the GetCache/SetCache methods needed by SaturationTask.
-type mockSaturationStore struct {
-	storage.Store // embed interface to satisfy it; only cache methods used
-	cache         map[string][]byte
-}
-
-func newMockSaturationStore() *mockSaturationStore {
-	return &mockSaturationStore{cache: make(map[string][]byte)}
-}
-
-func (m *mockSaturationStore) SetCache(key string, data []byte) error {
-	m.cache[key] = data
-	return nil
-}
-
-func (m *mockSaturationStore) GetCache(key string, _ time.Duration) ([]byte, error) {
-	if data, ok := m.cache[key]; ok {
-		return data, nil
-	}
-	return nil, nil
-}
-
-// mockSaturationSessionService extends the base mock with saturation-specific tracking.
-type mockSaturationSessionService struct {
-	mockSessionService
-	saturationResult *session.ContextSaturation
-	saturationErr    error
-	saturationCalled int      // count of calls
-	saturationPaths  []string // project paths passed to ContextSaturation
-
-	projectGroups []session.ProjectGroup
-	projectsErr   error
-}
-
-func (m *mockSaturationSessionService) ContextSaturation(_ context.Context, project string, _ time.Time) (*session.ContextSaturation, error) {
-	m.saturationCalled++
-	m.saturationPaths = append(m.saturationPaths, project)
-	return m.saturationResult, m.saturationErr
-}
-
-func (m *mockSaturationSessionService) ListProjects(_ context.Context) ([]session.ProjectGroup, error) {
-	return m.projectGroups, m.projectsErr
-}
-
-func TestSaturationTask_Name(t *testing.T) {
-	task := NewSaturationTask(SaturationTaskConfig{})
-	if got := task.Name(); got != "saturation_precompute" {
-		t.Errorf("Name() = %q, want %q", got, "saturation_precompute")
-	}
-}
-
-func TestSaturationTask_DefaultSinceDays(t *testing.T) {
-	task := NewSaturationTask(SaturationTaskConfig{})
-	if task.sinceDays != 90 {
-		t.Errorf("sinceDays = %d, want 90", task.sinceDays)
-	}
-}
-
-func TestSaturationTask_CustomSinceDays(t *testing.T) {
-	task := NewSaturationTask(SaturationTaskConfig{SinceDays: 30})
-	if task.sinceDays != 30 {
-		t.Errorf("sinceDays = %d, want 30", task.sinceDays)
-	}
-}
-
-func TestSaturationTask_Run_GlobalOnly(t *testing.T) {
-	mock := &mockSaturationSessionService{
-		saturationResult: &session.ContextSaturation{TotalSessions: 42},
-		projectGroups:    nil, // no projects → only global
-	}
-	store := newMockSaturationStore()
-
-	task := NewSaturationTask(SaturationTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if mock.saturationCalled != 1 {
-		t.Errorf("ContextSaturation called %d times, want 1 (global only)", mock.saturationCalled)
-	}
-	// Check cache was written.
-	if _, ok := store.cache["saturation:"]; !ok {
-		t.Error("global saturation cache not written")
-	}
-}
-
-func TestSaturationTask_Run_WithProjects(t *testing.T) {
-	mock := &mockSaturationSessionService{
-		saturationResult: &session.ContextSaturation{TotalSessions: 10},
-		projectGroups: []session.ProjectGroup{
-			{ProjectPath: "/proj/a"},
-			{ProjectPath: "/proj/b"},
-		},
-	}
-	store := newMockSaturationStore()
-
-	task := NewSaturationTask(SaturationTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// 1 global + 2 per-project = 3 calls.
-	if mock.saturationCalled != 3 {
-		t.Errorf("ContextSaturation called %d times, want 3", mock.saturationCalled)
-	}
-
-	// Check all cache keys written.
-	expectedKeys := []string{"saturation:", "saturation:/proj/a", "saturation:/proj/b"}
-	for _, key := range expectedKeys {
-		if _, ok := store.cache[key]; !ok {
-			t.Errorf("cache key %q not written", key)
-		}
-	}
-}
-
-func TestSaturationTask_Run_SaturationError(t *testing.T) {
-	mock := &mockSaturationSessionService{
-		saturationErr: errors.New("compute failed"),
-	}
-	store := newMockSaturationStore()
-
-	task := NewSaturationTask(SaturationTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when ContextSaturation fails")
-	}
-}
-
-func TestSaturationTask_Run_ProjectListError_NonFatal(t *testing.T) {
-	mock := &mockSaturationSessionService{
-		saturationResult: &session.ContextSaturation{TotalSessions: 5},
-		projectsErr:      errors.New("list failed"),
-	}
-	store := newMockSaturationStore()
-
-	task := NewSaturationTask(SaturationTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	// Should NOT return an error — project list failure is non-fatal.
-	err := task.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Global was still computed.
-	if mock.saturationCalled != 1 {
-		t.Errorf("ContextSaturation called %d times, want 1", mock.saturationCalled)
-	}
-	if _, ok := store.cache["saturation:"]; !ok {
-		t.Error("global saturation cache not written despite project list error")
-	}
-}
-
-// ── CacheEfficiencyTask Tests ──
-
-// mockCacheEffSessionService extends the base mock with cache-efficiency-specific tracking.
-type mockCacheEffSessionService struct {
-	mockSessionService
-	cacheEffResult *session.CacheEfficiency
-	cacheEffErr    error
-	cacheEffCalled int      // count of calls
-	cacheEffPaths  []string // project paths passed
-
-	projectGroups []session.ProjectGroup
-	projectsErr   error
-}
-
-func (m *mockCacheEffSessionService) CacheEfficiency(_ context.Context, project string, _ time.Time) (*session.CacheEfficiency, error) {
-	m.cacheEffCalled++
-	m.cacheEffPaths = append(m.cacheEffPaths, project)
-	return m.cacheEffResult, m.cacheEffErr
-}
-
-func (m *mockCacheEffSessionService) ListProjects(_ context.Context) ([]session.ProjectGroup, error) {
-	return m.projectGroups, m.projectsErr
-}
-
-func TestCacheEfficiencyTask_Name(t *testing.T) {
-	task := NewCacheEfficiencyTask(CacheEfficiencyTaskConfig{})
-	if got := task.Name(); got != "cacheeff_precompute" {
-		t.Errorf("Name() = %q, want %q", got, "cacheeff_precompute")
-	}
-}
-
-func TestCacheEfficiencyTask_Run_GlobalOnly(t *testing.T) {
-	mock := &mockCacheEffSessionService{
-		cacheEffResult: &session.CacheEfficiency{TotalSessions: 20, CacheHitRate: 75.0},
-		projectGroups:  nil, // no projects → only global
-	}
-	store := newMockSaturationStore()
-
-	task := NewCacheEfficiencyTask(CacheEfficiencyTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// 2 calls: global 7d + global 90d.
-	if mock.cacheEffCalled != 2 {
-		t.Errorf("CacheEfficiency called %d times, want 2 (global 7d + 90d)", mock.cacheEffCalled)
-	}
-	// Check cache keys.
-	for _, key := range []string{"cacheeff:7d:", "cacheeff:90d:"} {
-		if _, ok := store.cache[key]; !ok {
-			t.Errorf("cache key %q not written", key)
-		}
-	}
-}
-
-func TestCacheEfficiencyTask_Run_WithProjects(t *testing.T) {
-	mock := &mockCacheEffSessionService{
-		cacheEffResult: &session.CacheEfficiency{TotalSessions: 5},
-		projectGroups: []session.ProjectGroup{
-			{ProjectPath: "/proj/x"},
-			{ProjectPath: "/proj/y"},
-		},
-	}
-	store := newMockSaturationStore()
-
-	task := NewCacheEfficiencyTask(CacheEfficiencyTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// 2 global + 2*2 per-project = 6 calls.
-	if mock.cacheEffCalled != 6 {
-		t.Errorf("CacheEfficiency called %d times, want 6", mock.cacheEffCalled)
-	}
-
-	expectedKeys := []string{
-		"cacheeff:7d:", "cacheeff:90d:",
-		"cacheeff:7d:/proj/x", "cacheeff:90d:/proj/x",
-		"cacheeff:7d:/proj/y", "cacheeff:90d:/proj/y",
-	}
-	for _, key := range expectedKeys {
-		if _, ok := store.cache[key]; !ok {
-			t.Errorf("cache key %q not written", key)
-		}
-	}
-}
-
-func TestCacheEfficiencyTask_Run_ComputeError(t *testing.T) {
-	mock := &mockCacheEffSessionService{
-		cacheEffErr: errors.New("compute failed"),
-	}
-	store := newMockSaturationStore()
-
-	task := NewCacheEfficiencyTask(CacheEfficiencyTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	err := task.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when CacheEfficiency fails on global 7d")
-	}
-}
-
-func TestCacheEfficiencyTask_Run_ProjectListError_NonFatal(t *testing.T) {
-	mock := &mockCacheEffSessionService{
-		cacheEffResult: &session.CacheEfficiency{TotalSessions: 3},
-		projectsErr:    errors.New("list failed"),
-	}
-	store := newMockSaturationStore()
-
-	task := NewCacheEfficiencyTask(CacheEfficiencyTaskConfig{
-		SessionService: mock,
-		Store:          store,
-		Logger:         log.Default(),
-	})
-
-	// Should NOT return an error — project list failure is non-fatal.
-	err := task.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Global was still computed (2 calls: 7d + 90d).
-	if mock.cacheEffCalled != 2 {
-		t.Errorf("CacheEfficiency called %d times, want 2", mock.cacheEffCalled)
-	}
-}
+// NOTE: SaturationTask, CacheEfficiencyTask, DashboardWarmTask, and
+// StatsReportTask tests were removed in the Phase 4 CQRS cleanup. Those
+// pre-compute tasks were obsoleted by the session_analytics read-model
+// and the analytics_backfill task.
 
 // ── ObjectiveBackfillTask Tests ──
 

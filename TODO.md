@@ -173,15 +173,17 @@ for faster local catch-up.
 
 ### Deletion list (after CQRS ships)
 
-- [ ] Delete `cachedForecast`, `cachedCacheEfficiency`, `cachedSaturation`,
-      `cachedAgentROI`, `cachedCostsPage`, `cachedFilesForProject` wrappers
-      (handlers.go:45-336)
-- [ ] Delete `cachedStats`, `cachedTrends`, `cachedSidebarGroups`,
-      `cachedSkillROI` wrappers (benchmark showed they were cache-wrapping
-      already-fast functions — ~200ms not worth the complexity)
-- [ ] Drop `stats_cache` table via new migration
-- [ ] Remove `dashboard_warm_task` (no longer needed — everything is live)
-- [ ] Remove `cacheeff_precompute` scheduler task
+- [x] Deleted `cachedForecast`, `cachedCacheEfficiency`, `cachedSaturation`,
+      `cachedAgentROI` wrappers (step 10).
+- [x] Deleted `cachedStats`, `cachedTrends`, `cachedSidebarGroups`,
+      `cachedCostsPage`, `cachedFilesForProject`, `cachedSkillROI` wrappers
+      (step 11). Callers invoke `sessionSvc.X()` / `store.X()` directly.
+- [x] Removed `saturation_precompute`, `cacheeff_precompute`, `dashboard_warm`,
+      and `stats_report` scheduler tasks (step 11). 4 task files + 11 tests
+      deleted. WarmUp now only runs `cost_backfill` + `analytics_backfill`.
+- [ ] Drop `stats_cache` table via new migration — **kept**: still used by
+      `security:`, `command_patterns:`, and `distinct_project_paths` caches,
+      none of which have a session_analytics equivalent.
 
 ### Implementation order
 

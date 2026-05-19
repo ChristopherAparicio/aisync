@@ -39,7 +39,6 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver/llmanalyzer"
-	"github.com/ChristopherAparicio/aisync/internal/storage"
 	"github.com/ChristopherAparicio/aisync/internal/web"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
@@ -561,22 +560,8 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			logger.Printf("scheduled task: capture_all (%s)", appCfg.GetSchedulerCaptureAllCron())
 		}
 
-		// Stats report task — warms global + per-project stats caches periodically.
-		if appCfg.GetSchedulerStatsReportEnabled() {
-			var statStore storage.Store
-			if st, stErr := f.Store(); stErr == nil {
-				statStore = st
-			}
-			entries = append(entries, scheduler.Entry{
-				Schedule: appCfg.GetSchedulerStatsReportCron(),
-				Task: scheduler.NewStatsReportTask(scheduler.StatsReportTaskConfig{
-					SessionService: sessionSvc,
-					Store:          statStore,
-					Logger:         logger,
-				}),
-			})
-			logger.Printf("scheduled task: stats_report (%s)", appCfg.GetSchedulerStatsReportCron())
-		}
+		// NOTE: stats_report task removed in Phase 4 cleanup — the cachedStats()
+		// wrapper it warmed has been removed and Stats() is computed on demand.
 
 		// Token usage compute task — runs nightly at 3:30 AM.
 		entries = append(entries, scheduler.Entry{
@@ -588,9 +573,10 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 		})
 		logger.Println("scheduled task: token_usage_compute (30 3 * * *)")
 
-		// NOTE: SaturationTask and CacheEfficiencyTask were removed — those handlers
-		// now read from pre-computed session_analytics rows (<100ms) and no longer
-		// need a JSON cache layer.
+		// NOTE: saturation_precompute, cacheeff_precompute, dashboard_warm tasks
+		// were removed in Phase 4 cleanup. Their handlers (Forecast, AgentROI,
+		// CacheEfficiency, ContextSaturation, Stats, Trends) now read from the
+		// session_analytics read-model (analytics_backfill task) — <250ms cold.
 
 		// Hot-spots pre-compute task — runs nightly at 03:15.
 		// Pre-computes investigation hot-spots (command aggregation, skill footprints,
@@ -604,20 +590,6 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 				}),
 			})
 			logger.Println("scheduled task: hotspots_compute (15 3 * * *)")
-		}
-
-		// Dashboard warm task — pre-computes stats and trends caches.
-		// Runs every 5 minutes to keep the dashboard snappy; also runs at startup via WarmUp.
-		if storeSched, storeErr := f.Store(); storeErr == nil {
-			entries = append(entries, scheduler.Entry{
-				Schedule: "*/5 * * * *", // every 5 minutes
-				Task: scheduler.NewDashboardWarmTask(scheduler.DashboardWarmTaskConfig{
-					SessionService: sessionSvc,
-					Store:          storeSched,
-					Logger:         logger,
-				}),
-			})
-			logger.Println("scheduled task: dashboard_warm (*/5 * * * *)")
 		}
 
 		// Backfill remote URLs task — resolves git remote URLs for sessions that lack them.
@@ -958,11 +930,10 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 				sched.Start()
 				logger.Printf("scheduler started with %d task(s)", len(entries))
 
-				// Pre-warm expensive caches on startup so the first page load is fast.
-				// dashboard_warm covers stats + trends.
-				// saturation + cacheeff removed — handlers now read from session_analytics.
+				// Pre-warm critical read-models on startup so first page load is fast.
+				// analytics_backfill ensures session_analytics is populated for all
+				// hot-path handlers (Forecast/Stats/Trends/AgentROI/CacheEff/Saturation).
 				sched.WarmUp(
-					"dashboard_warm",
 					"cost_backfill",
 					"analytics_backfill",
 				)

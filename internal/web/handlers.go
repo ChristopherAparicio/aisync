@@ -27,201 +27,21 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/sessionevent"
 )
 
-// Cache TTLs for dashboard statistics.
-// NOTE: forecastCacheTTL, saturationCacheTTL, cacheEfficiencyCTTL, agentROICacheTTL
-// were removed — those handlers now read from pre-computed session_analytics rows.
+// Cache TTLs for the few remaining cache_table-backed lookups.
+// Most analytics caches were removed in Phase 4 — handlers now read from
+// pre-computed session_analytics rows.
 const (
-	statsCacheTTL    = 2 * time.Minute
-	costPageCacheTTL = 60 * time.Second
-	trendsCacheTTL   = 5 * time.Minute
-	sidebarCacheTTL  = 2 * time.Minute
-	skillROICacheTTL = 2 * time.Hour
-	securityCacheTTL = 2 * time.Hour
-	fileCacheTTL     = 60 * time.Second
+	sidebarCacheTTL  = 2 * time.Minute // distinctProjectPaths only
+	securityCacheTTL = 2 * time.Hour   // SecurityScanTask output (best-effort read)
 )
 
-// cachedStats returns Stats from cache if fresh, otherwise computes and caches.
-func (s *Server) cachedStats(req service.StatsRequest) (*service.StatsResult, error) {
-	cacheKey := "stats:" + req.ProjectPath + ":" + req.Branch
-
-	// 1. Try cache
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, statsCacheTTL); data != nil {
-			var result service.StatsResult
-			if err := json.Unmarshal(data, &result); err == nil {
-				return &result, nil
-			}
-		}
-	}
-
-	// 2. Compute
-	result, err := s.sessionSvc.Stats(req)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Cache
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return result, nil
-}
-
-// NOTE: cachedForecast, cachedSaturation, cachedCacheEfficiency, cachedAgentROI
-// were removed as part of Phase 4 CQRS migration. These four hot-path handlers
-// now read from pre-computed session_analytics rows (50-100ms) and no longer
-// need a JSON cache layer. Callers invoke s.sessionSvc.Forecast(),
-// s.sessionSvc.ContextSaturation(), s.sessionSvc.CacheEfficiency(),
-// s.sessionSvc.AgentROIAnalysis() directly.
-
-// cachedTrends returns Trends from cache if fresh, otherwise computes and caches.
-// Trends compare current vs previous period and are moderately expensive (2 full scans).
-func (s *Server) cachedTrends(ctx context.Context, req service.TrendRequest) (*service.TrendResult, error) {
-	cacheKey := "trends:" + req.ProjectPath
-
-	// 1. Try cache.
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, trendsCacheTTL); data != nil {
-			var result service.TrendResult
-			if err := json.Unmarshal(data, &result); err == nil {
-				return &result, nil
-			}
-		}
-	}
-
-	// 2. Compute.
-	result, err := s.sessionSvc.Trends(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Cache.
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return result, nil
-}
-
-// cachedSidebarGroups returns the project groups for the sidebar from cache if fresh.
-// The raw groups are cached centrally; the caller applies the active path locally.
-func (s *Server) cachedSidebarGroups(ctx context.Context) []session.ProjectGroup {
-	const cacheKey = "sidebar_groups"
-
-	// 1. Try cache.
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, sidebarCacheTTL); data != nil {
-			var groups []session.ProjectGroup
-			if err := json.Unmarshal(data, &groups); err == nil {
-				return groups
-			}
-		}
-	}
-
-	// 2. Compute.
-	groups, err := s.sessionSvc.ListProjects(ctx)
-	if err != nil || len(groups) == 0 {
-		return nil
-	}
-
-	// 3. Cache.
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(groups); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return groups
-}
-
-// cachedCostsPage returns the full cost dashboard data from cache if fresh,
-// otherwise computes via buildCostsData and caches for subsequent tab switches.
-// This prevents each HTMX tab partial from recomputing the entire cost page.
-func (s *Server) cachedCostsPage(r *http.Request) costDashboardPage {
-	project := r.URL.Query().Get("project")
-	cacheKey := "costs_page:" + project
-
-	// 1. Try cache.
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, costPageCacheTTL); data != nil {
-			var result costDashboardPage
-			if err := json.Unmarshal(data, &result); err == nil {
-				return result
-			}
-		}
-	}
-
-	// 2. Compute.
-	data := s.buildCostsData(r)
-
-	// 3. Cache for tab switches.
-	if s.store != nil {
-		if payload, marshalErr := json.Marshal(data); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, payload)
-		}
-	}
-
-	return data
-}
-
-// cachedFilesForProject returns FilesForProject from cache if fresh, otherwise queries and caches.
-// The file explorer page calls this instead of store.FilesForProject directly.
-func (s *Server) cachedFilesForProject(projectPath, dirPrefix string, limit int) ([]session.ProjectFileEntry, error) {
-	cacheKey := "files:" + projectPath + ":" + dirPrefix
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, fileCacheTTL); data != nil {
-			var result []session.ProjectFileEntry
-			if err := json.Unmarshal(data, &result); err == nil {
-				return result, nil
-			}
-		}
-	}
-
-	entries, err := s.store.FilesForProject(projectPath, dirPrefix, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	if s.store != nil {
-		if payload, marshalErr := json.Marshal(entries); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, payload)
-		}
-	}
-	return entries, nil
-}
-
-// cachedSkillROI returns SkillROI from cache if fresh, otherwise computes and caches.
-// SkillROI queries session events for every session in the project — expensive for large projects.
-func (s *Server) cachedSkillROI(ctx context.Context, projectPath string, since time.Time) (*session.SkillROI, error) {
-	cacheKey := "skill_roi:" + projectPath
-
-	if s.store != nil {
-		if data, _ := s.store.GetCache(cacheKey, skillROICacheTTL); data != nil {
-			var result session.SkillROI
-			if err := json.Unmarshal(data, &result); err == nil {
-				return &result, nil
-			}
-		}
-	}
-
-	result, err := s.sessionSvc.SkillROIAnalysis(ctx, projectPath, since)
-	if err != nil {
-		return nil, err
-	}
-
-	if s.store != nil {
-		if data, marshalErr := json.Marshal(result); marshalErr == nil {
-			_ = s.store.SetCache(cacheKey, data)
-		}
-	}
-
-	return result, nil
-}
+// NOTE: cachedForecast, cachedSaturation, cachedCacheEfficiency, cachedAgentROI,
+// cachedStats, cachedTrends, cachedSidebarGroups, cachedCostsPage,
+// cachedFilesForProject, and cachedSkillROI wrappers were removed as part of
+// the Phase 4 CQRS cleanup. Hot-path analytics now read from the
+// session_analytics read-model (populated by the analytics_backfill task) and
+// complete in <250ms cold, so a JSON cache layer is no longer needed. Callers
+// invoke s.sessionSvc.X() / s.store.X() directly.
 
 // ── Shared ──
 
@@ -249,11 +69,12 @@ type sidebarProject struct {
 }
 
 // buildSidebarProjects returns project data for the sidebar, sorted by recent activity.
-// Uses cachedSidebarGroups() so the expensive ListProjects() call is not repeated
-// on every page load (11+ call sites).
+// Calls sessionSvc.ListProjects() directly — the previous cachedSidebarGroups()
+// wrapper was removed in Phase 4 cleanup (ListProjects now reads from
+// session_analytics-backed aggregates).
 func (s *Server) buildSidebarProjects(ctx context.Context, activePath string) []sidebarProject {
-	groups := s.cachedSidebarGroups(ctx)
-	if len(groups) == 0 {
+	groups, err := s.sessionSvc.ListProjects(ctx)
+	if err != nil || len(groups) == 0 {
 		return nil
 	}
 
@@ -630,7 +451,7 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 	}
 
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
-	stats, err := s.cachedStats(statsReq)
+	stats, err := s.sessionSvc.Stats(statsReq)
 	if err != nil {
 		s.logger.Printf("dashboard stats error: %v", err)
 		return data
@@ -724,7 +545,7 @@ func (s *Server) buildDashboardData(r *http.Request) dashboardPage {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		trends, trendsErr := s.cachedTrends(ctx, service.TrendRequest{
+		trends, trendsErr := s.sessionSvc.Trends(ctx, service.TrendRequest{
 			Period: 7 * 24 * time.Hour,
 		})
 		if trendsErr != nil {
@@ -2405,9 +2226,9 @@ func (s *Server) buildBranchesData(r *http.Request) branchExplorerPage {
 	project := r.URL.Query().Get("project")
 	data := branchExplorerPage{Nav: "branches", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project)}
 
-	// Get per-branch stats (cached). No ListTree calls — just aggregate stats.
+	// Get per-branch stats. No ListTree calls — just aggregate stats.
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
-	stats, err := s.cachedStats(statsReq)
+	stats, err := s.sessionSvc.Stats(statsReq)
 	if err != nil {
 		s.logger.Printf("branches stats error: %v", err)
 		return data
@@ -3680,9 +3501,9 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 	project := r.URL.Query().Get("project")
 	data := costDashboardPage{Nav: "costs", SidebarProjects: s.buildSidebarProjects(r.Context(), project), Projects: s.buildProjectList(project), ProjectQuery: project}
 
-	// Stats for totals + per-branch (cached).
+	// Stats for totals + per-branch.
 	statsReq := service.StatsRequest{All: project == "", ProjectPath: project}
-	stats, err := s.cachedStats(statsReq)
+	stats, err := s.sessionSvc.Stats(statsReq)
 	if err != nil {
 		s.logger.Printf("costs stats error: %v", err)
 		return data
@@ -4603,28 +4424,25 @@ func (s *Server) buildCostsData(r *http.Request) costDashboardPage {
 }
 
 // handleCostOverviewPartial renders the Overview tab content.
-// Uses cachedCostsPage to avoid recomputing the full cost page on each tab switch.
 func (s *Server) handleCostOverviewPartial(w http.ResponseWriter, r *http.Request) {
-	data := s.cachedCostsPage(r)
+	data := s.buildCostsData(r)
 	s.renderPartial(w, "cost_overview_partial", data)
 }
 
 // handleCostToolsPartial renders the Tools & Agents tab content.
-// Uses cachedCostsPage to avoid recomputing the full cost page on each tab switch.
 func (s *Server) handleCostToolsPartial(w http.ResponseWriter, r *http.Request) {
-	data := s.cachedCostsPage(r)
+	data := s.buildCostsData(r)
 	s.renderPartial(w, "cost_tools_partial", data)
 }
 
 // handleCostOptimizationPartial renders the Optimization tab content.
-// Uses cachedCostsPage to avoid recomputing the full cost page on each tab switch.
 func (s *Server) handleCostOptimizationPartial(w http.ResponseWriter, r *http.Request) {
-	data := s.cachedCostsPage(r)
+	data := s.buildCostsData(r)
 	s.renderPartial(w, "cost_optimization_partial", data)
 }
 
 func (s *Server) handleCostTreemapPartial(w http.ResponseWriter, r *http.Request) {
-	data := s.cachedCostsPage(r)
+	data := s.buildCostsData(r)
 	s.renderPartial(w, "cost_treemap_partial", data)
 }
 
@@ -4835,7 +4653,7 @@ func (s *Server) handleFileExplorer(w http.ResponseWriter, r *http.Request) {
 		absPrefix = strings.TrimSuffix(projectPath, "/") + "/" + dirPrefix
 	}
 
-	entries, err := s.cachedFilesForProject(projectPath, absPrefix, 500)
+	entries, err := s.store.FilesForProject(projectPath, absPrefix, 500)
 	if err != nil {
 		s.logger.Printf("file explorer: %v", err)
 		s.render(w, "file_explorer.html", data)
@@ -6044,7 +5862,7 @@ type budgetView struct {
 // Returns ("", false) if no match or ambiguous (multiple suffix matches).
 func (s *Server) resolveProjectPath(ctx context.Context, path string) (string, bool) {
 	// 1. Exact match in sidebar groups.
-	groups := s.cachedSidebarGroups(ctx)
+	groups, _ := s.sessionSvc.ListProjects(ctx)
 	for _, g := range groups {
 		if g.ProjectPath == path {
 			return path, true
@@ -6200,8 +6018,8 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		SidebarProjects: s.buildSidebarProjects(ctx, projectPath),
 	}
 
-	// Find project metadata from cached sidebar groups (avoids redundant ListProjects).
-	groups := s.cachedSidebarGroups(ctx)
+	// Find project metadata from sidebar groups.
+	groups, _ := s.sessionSvc.ListProjects(ctx)
 	for _, g := range groups {
 		if g.ProjectPath == projectPath {
 			data.DisplayName = g.DisplayName
@@ -6214,7 +6032,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 
 	// KPIs (filtered by project) — must complete before rendering.
 	statsReq := service.StatsRequest{ProjectPath: projectPath}
-	stats, err := s.cachedStats(statsReq)
+	stats, err := s.sessionSvc.Stats(statsReq)
 	if err != nil {
 		s.logger.Printf("project detail stats error: %v", err)
 		return data
@@ -6310,7 +6128,7 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		trends, trendsErr := s.cachedTrends(ctx, service.TrendRequest{
+		trends, trendsErr := s.sessionSvc.Trends(ctx, service.TrendRequest{
 			Period:      7 * 24 * time.Hour,
 			ProjectPath: projectPath,
 		})
@@ -6552,11 +6370,12 @@ func (s *Server) buildProjectDetailData(r *http.Request, projectPath string) pro
 		mu.Unlock()
 	}()
 
-	// 10. Skill ROI (cached — expensive, queries events for every session on cold cache).
+	// 10. Skill ROI (still expensive on cold call — Phase 4 didn't migrate this
+	// hot path to session_analytics; could be a follow-up.)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		skillROI, skillErr := s.cachedSkillROI(ctx, projectPath, since90d)
+		skillROI, skillErr := s.sessionSvc.SkillROIAnalysis(ctx, projectPath, since90d)
 		if skillErr != nil || skillROI == nil || len(skillROI.Skills) == 0 {
 			return
 		}
