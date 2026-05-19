@@ -141,6 +141,12 @@ type SessionWriter interface {
 	// CountSessionsWithFiles returns how many sessions have file-blame data.
 	CountSessionsWithFiles() (int, error)
 
+	// AggregateFileCounts returns {file_path: touch_count} for sessions
+	// matching the filter, computed in a single GROUP BY query. Replaces
+	// the N+1 GetSessionFileChanges loop in Stats() aggregation. Limit caps
+	// the result set; 0 means no limit.
+	AggregateFileCounts(filter session.AnalyticsFilter, limit int) (map[string]int, error)
+
 	// SearchFacets returns aggregated counts for faceted navigation.
 	// Respects the same filters as Search (project, date range, etc.) so that
 	// facet counts reflect the current search context.

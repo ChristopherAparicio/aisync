@@ -113,10 +113,25 @@ type AnalyticsFilter struct {
 	Since       time.Time
 	Until       time.Time
 	Backend     string
+	// Branch, Provider, OwnerID, SessionType, ProjectCategory mirror the
+	// session-level filters from ListOptions so Stats() can read from
+	// session_analytics without first calling List(). All optional.
+	Branch          string
+	Provider        ProviderName
+	OwnerID         string
+	SessionType     string
+	ProjectCategory string
 	// MinSchemaVersion filters out rows older than the current formula.
 	// When zero, all rows are returned regardless of schema version (useful
 	// for the backfill task which wants to find the oldest).
 	MinSchemaVersion int
+
+	// SkipBlobs disables decoding (and reading) of the per-session JSON blob
+	// columns (waste_breakdown, freshness, overload, sysprompt, fitness,
+	// forecast_input). Callers that only need flat aggregates (Stats, Trends)
+	// can set this to skip ~6 column reads per row and avoid JSON unmarshal,
+	// which matters when scanning thousands of rows from cold storage.
+	SkipBlobs bool
 }
 
 // AnalyticsRow is the hydrated result of a QueryAnalytics call. It pairs
@@ -127,15 +142,19 @@ type AnalyticsFilter struct {
 // display and AgentROI grouping.
 type AnalyticsRow struct {
 	Analytics
-	ProjectPath   string        `json:"project_path"`
-	CreatedAt     time.Time     `json:"created_at"`
-	Branch        string        `json:"branch"`
-	Summary       string        `json:"summary"`
-	Agent         string        `json:"agent"`
-	MessageCount  int           `json:"message_count"`
-	TotalTokens   int           `json:"total_tokens"`
-	ToolCallCount int           `json:"tool_call_count"`
-	ErrorCount    int           `json:"error_count"`
-	SessionType   string        `json:"session_type"`
-	Status        SessionStatus `json:"status"`
+	ProjectPath     string        `json:"project_path"`
+	CreatedAt       time.Time     `json:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at,omitempty"`
+	Branch          string        `json:"branch"`
+	Summary         string        `json:"summary"`
+	Agent           string        `json:"agent"`
+	Provider        ProviderName  `json:"provider,omitempty"`
+	OwnerID         ID            `json:"owner_id,omitempty"`
+	ProjectCategory string        `json:"project_category,omitempty"`
+	MessageCount    int           `json:"message_count"`
+	TotalTokens     int           `json:"total_tokens"`
+	ToolCallCount   int           `json:"tool_call_count"`
+	ErrorCount      int           `json:"error_count"`
+	SessionType     string        `json:"session_type"`
+	Status          SessionStatus `json:"status"`
 }

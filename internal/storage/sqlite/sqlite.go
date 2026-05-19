@@ -1716,6 +1716,15 @@ func (s *Store) GetSessionAnalytics(id session.ID) (*session.Analytics, error) {
 // and Branch in a single query. AgentUsage is NOT hydrated (hot paths
 // aggregate at parent level; per-agent reads go through GetSessionAnalytics).
 func (s *Store) QueryAnalytics(filter session.AnalyticsFilter) ([]session.AnalyticsRow, error) {
+	// Build SELECT. When SkipBlobs is true, the 6 JSON blob columns are
+	// replaced by empty-string literals so the row scan still has the same
+	// shape but the storage engine doesn't touch overflow pages for them.
+	blobCols := `COALESCE(sa.waste_breakdown_json,''), COALESCE(sa.freshness_json,''),
+			COALESCE(sa.overload_json,''), COALESCE(sa.sysprompt_json,''),
+			COALESCE(sa.fitness_json,''), COALESCE(sa.forecast_input_json,'')`
+	if filter.SkipBlobs {
+		blobCols = `'', '', '', '', '', ''`
+	}
 	query := `
 		SELECT
 			sa.session_id,
@@ -1725,15 +1734,15 @@ func (s *Store) QueryAnalytics(filter session.AnalyticsFilter) ([]session.Analyt
 			sa.cache_miss_count, sa.cache_wasted_tokens, sa.longest_gap_mins, sa.session_avg_gap_mins,
 			sa.backend, sa.estimated_cost, sa.actual_cost, sa.fork_offset, sa.deduplicated_cost,
 			sa.total_agent_invocations, sa.unique_agents_used, sa.agent_tokens, sa.agent_cost, sa.total_wasted_tokens,
-			COALESCE(sa.waste_breakdown_json,''), COALESCE(sa.freshness_json,''),
-			COALESCE(sa.overload_json,''), COALESCE(sa.sysprompt_json,''),
-			COALESCE(sa.fitness_json,''), COALESCE(sa.forecast_input_json,''),
+			` + blobCols + `,
 			sa.schema_version, sa.computed_at,
 			s.project_path, s.created_at, COALESCE(s.branch,''),
 			COALESCE(s.summary,''), COALESCE(s.agent,''),
 			COALESCE(s.message_count,0), COALESCE(s.total_tokens,0),
 			COALESCE(s.tool_call_count,0), COALESCE(s.error_count,0),
-			COALESCE(s.session_type,''), COALESCE(s.status,'')
+			COALESCE(s.session_type,''), COALESCE(s.status,''),
+			COALESCE(s.provider,''), COALESCE(s.owner_id,''),
+			COALESCE(s.project_category,''), COALESCE(s.source_updated_at,0)
 		FROM session_analytics sa
 		JOIN sessions s ON sa.session_id = s.id
 		WHERE 1=1`
@@ -1755,6 +1764,26 @@ func (s *Store) QueryAnalytics(filter session.AnalyticsFilter) ([]session.Analyt
 		query += " AND sa.backend = ?"
 		args = append(args, filter.Backend)
 	}
+	if filter.Branch != "" {
+		query += " AND s.branch = ?"
+		args = append(args, filter.Branch)
+	}
+	if filter.Provider != "" {
+		query += " AND s.provider = ?"
+		args = append(args, string(filter.Provider))
+	}
+	if filter.OwnerID != "" {
+		query += " AND s.owner_id = ?"
+		args = append(args, filter.OwnerID)
+	}
+	if filter.SessionType != "" {
+		query += " AND s.session_type = ?"
+		args = append(args, filter.SessionType)
+	}
+	if filter.ProjectCategory != "" {
+		query += " AND s.project_category = ?"
+		args = append(args, filter.ProjectCategory)
+	}
 	if filter.MinSchemaVersion > 0 {
 		query += " AND sa.schema_version >= ?"
 		args = append(args, filter.MinSchemaVersion)
@@ -1775,7 +1804,8 @@ func (s *Store) QueryAnalytics(filter session.AnalyticsFilter) ([]session.Analyt
 		var wasteJSON, freshnessJSON, overloadJSON, syspromptJSON, fitnessJSON, forecastJSON string
 		var computedAtStr, createdAtStr string
 
-		var statusStr string
+		var statusStr, providerStr, ownerIDStr string
+		var updatedAtMs int64
 		if err := rows.Scan(
 			&ar.SessionID,
 			&ar.PeakInputTokens, &ar.DominantModel, &ar.MaxContextWindow, &ar.PeakSaturationPct,
@@ -1791,6 +1821,8 @@ func (s *Store) QueryAnalytics(filter session.AnalyticsFilter) ([]session.Analyt
 			&ar.MessageCount, &ar.TotalTokens,
 			&ar.ToolCallCount, &ar.ErrorCount,
 			&ar.SessionType, &statusStr,
+			&providerStr, &ownerIDStr,
+			&ar.ProjectCategory, &updatedAtMs,
 		); err != nil {
 			continue
 		}
@@ -1799,6 +1831,11 @@ func (s *Store) QueryAnalytics(filter session.AnalyticsFilter) ([]session.Analyt
 		ar.ComputedAt, _ = time.Parse(time.RFC3339, computedAtStr)
 		ar.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 		ar.Status = session.SessionStatus(statusStr)
+		ar.Provider = session.ProviderName(providerStr)
+		ar.OwnerID = session.ID(ownerIDStr)
+		if updatedAtMs > 0 {
+			ar.UpdatedAt = time.UnixMilli(updatedAtMs)
+		}
 
 		// Unmarshal JSON blobs.
 		if wasteJSON != "" {
@@ -1988,6 +2025,82 @@ func (s *Store) CountSessionsWithFiles() (int, error) {
 	var count int
 	err := s.db.QueryRow("SELECT COUNT(DISTINCT session_id) FROM file_changes").Scan(&count)
 	return count, err
+}
+
+// AggregateFileCounts returns a {file_path: touch_count} map for sessions
+// matching the given filter. Each row in file_changes counts as one touch,
+// preserving the previous Stats() semantics (which incremented a counter
+// per file_changes entry, not per distinct session). A single SQL GROUP BY
+// replaces the previous N+1 GetSessionFileChanges loop.
+//
+// The filter mirrors AnalyticsFilter so Stats() can pass it through. Limit
+// caps the result set; 0 means no limit.
+func (s *Store) AggregateFileCounts(filter session.AnalyticsFilter, limit int) (map[string]int, error) {
+	query := `
+		SELECT fc.file_path, COUNT(*) AS touches
+		FROM file_changes fc
+		JOIN sessions s ON s.id = fc.session_id`
+	var args []interface{}
+	var conds []string
+
+	if filter.ProjectPath != "" {
+		conds = append(conds, "s.project_path = ?")
+		args = append(args, filter.ProjectPath)
+	}
+	if !filter.Since.IsZero() {
+		conds = append(conds, "s.created_at >= ?")
+		args = append(args, filter.Since.Format(time.RFC3339))
+	}
+	if !filter.Until.IsZero() {
+		conds = append(conds, "s.created_at <= ?")
+		args = append(args, filter.Until.Format(time.RFC3339))
+	}
+	if filter.Branch != "" {
+		conds = append(conds, "s.branch = ?")
+		args = append(args, filter.Branch)
+	}
+	if filter.Provider != "" {
+		conds = append(conds, "s.provider = ?")
+		args = append(args, string(filter.Provider))
+	}
+	if filter.OwnerID != "" {
+		conds = append(conds, "s.owner_id = ?")
+		args = append(args, filter.OwnerID)
+	}
+	if filter.SessionType != "" {
+		conds = append(conds, "s.session_type = ?")
+		args = append(args, filter.SessionType)
+	}
+	if filter.ProjectCategory != "" {
+		conds = append(conds, "s.project_category = ?")
+		args = append(args, filter.ProjectCategory)
+	}
+
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	query += " GROUP BY fc.file_path ORDER BY touches DESC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate file counts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var path string
+		var n int
+		if err := rows.Scan(&path, &n); err != nil {
+			return nil, fmt.Errorf("scan file count: %w", err)
+		}
+		counts[path] = n
+	}
+	return counts, rows.Err()
 }
 
 // TopFilesForProject returns the most frequently touched files for a project,

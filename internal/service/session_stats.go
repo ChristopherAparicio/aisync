@@ -258,6 +258,228 @@ func primaryModel(sess *session.Session) string {
 
 // Stats computes aggregated statistics across sessions.
 func (s *SessionService) Stats(req StatsRequest) (*StatsResult, error) {
+	// IncludeTools requires walking message-level tool calls, which means
+	// loading full payloads. The CQRS read model doesn't carry that data,
+	// so we keep the slow List+Get path for that case only.
+	if req.IncludeTools {
+		return s.statsFromList(req)
+	}
+	result, err := s.statsFromAnalytics(req)
+	if err != nil {
+		return nil, err
+	}
+	// Safety net: if the analytics read model returned nothing, fall back to
+	// the legacy List() path. Covers cases where session_analytics is not yet
+	// backfilled (fresh install, schema bump in flight, test stores that
+	// bypass the service layer's stampAnalytics() hook).
+	if result.TotalSessions == 0 {
+		return s.statsFromList(req)
+	}
+	return result, nil
+}
+
+// statsFromAnalytics is the fast path. It reads pre-computed metrics from
+// session_analytics (CQRS read model) and aggregates them in Go without
+// loading session payloads. Used when IncludeTools is false (the common case).
+//
+// Sessions not yet backfilled (no session_analytics row) are silently excluded
+// from results. The analytics_backfill scheduler task keeps the read model
+// in sync; in practice the gap is bounded by its cron interval (30 minutes).
+func (s *SessionService) statsFromAnalytics(req StatsRequest) (*StatsResult, error) {
+	filter := session.AnalyticsFilter{
+		ProjectPath:     req.ProjectPath,
+		Branch:          req.Branch,
+		Provider:        req.Provider,
+		OwnerID:         req.OwnerID,
+		SessionType:     req.SessionType,
+		ProjectCategory: req.ProjectCategory,
+		Since:           req.Since,
+		Until:           req.Until,
+		// Stats() aggregates flat columns only — skip per-session JSON blobs
+		// (waste/freshness/overload/sysprompt/fitness/forecast) to avoid
+		// touching overflow pages and JSON unmarshal on ~thousands of rows.
+		SkipBlobs: true,
+	}
+
+	rows, err := s.store.QueryAnalytics(filter)
+	if err != nil {
+		return nil, fmt.Errorf("query analytics: %w", err)
+	}
+
+	result := &StatsResult{
+		PerProvider: make(map[session.ProviderName]int),
+	}
+
+	perBranch := make(map[string]*BranchStats)
+	perType := make(map[string]*TypeStats)
+
+	for _, ar := range rows {
+		result.TotalSessions++
+		result.TotalTokens += ar.TotalTokens
+		result.TotalMessages += ar.MessageCount
+		result.TotalErrors += ar.ErrorCount
+		result.TotalToolCalls += ar.ToolCallCount
+		if ar.ErrorCount > 0 {
+			result.SessionsWithErrors++
+		}
+
+		if ar.SessionType != "" {
+			ts, ok := perType[ar.SessionType]
+			if !ok {
+				ts = &TypeStats{Type: ar.SessionType}
+				perType[ar.SessionType] = ts
+			}
+			ts.SessionCount++
+			ts.TotalTokens += ar.TotalTokens
+			ts.TotalErrors += ar.ErrorCount
+		}
+
+		bs, ok := perBranch[ar.Branch]
+		if !ok {
+			bs = &BranchStats{Branch: ar.Branch}
+			perBranch[ar.Branch] = bs
+		}
+		bs.SessionCount++
+		bs.TotalTokens += ar.TotalTokens
+		if ar.CreatedAt.After(bs.LastActivity) {
+			bs.LastActivity = ar.CreatedAt
+		}
+
+		result.PerProvider[ar.Provider]++
+
+		result.TotalCost += ar.EstimatedCost
+		bs.TotalCost += ar.EstimatedCost
+		result.ActualCost += ar.ActualCost
+		bs.ActualCost += ar.ActualCost
+	}
+
+	// File counts: one GROUP BY query instead of N GetSessionFileChanges
+	// calls. Limit to 200 — TopFiles only displays the top 10 but we keep
+	// a bit of headroom in case future callers want more.
+	fileCounts, _ := s.store.AggregateFileCounts(filter, 200)
+	if fileCounts == nil {
+		fileCounts = map[string]int{}
+	}
+
+	// Billing type and savings.
+	result.Savings = result.TotalCost - result.ActualCost
+	if result.ActualCost > 0 && result.Savings > 0 {
+		result.BillingType = "mixed"
+	} else if result.ActualCost > 0 {
+		result.BillingType = "api"
+	} else {
+		result.BillingType = "subscription"
+	}
+
+	// Sort branches by token count descending.
+	branchList := make([]*BranchStats, 0, len(perBranch))
+	for _, bs := range perBranch {
+		branchList = append(branchList, bs)
+	}
+	sort.Slice(branchList, func(i, j int) bool {
+		return branchList[i].TotalTokens > branchList[j].TotalTokens
+	})
+	result.PerBranch = branchList
+
+	// Per-type stats.
+	typeList := make([]TypeStats, 0, len(perType))
+	for _, ts := range perType {
+		if ts.SessionCount > 0 {
+			ts.AvgTokens = ts.TotalTokens / ts.SessionCount
+		}
+		typeList = append(typeList, *ts)
+	}
+	sort.Slice(typeList, func(i, j int) bool {
+		return typeList[i].SessionCount > typeList[j].SessionCount
+	})
+	result.PerType = typeList
+
+	// Top files (up to 10).
+	files := make([]FileEntry, 0, len(fileCounts))
+	for path, count := range fileCounts {
+		files = append(files, FileEntry{Path: path, Count: count})
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Count > files[j].Count
+	})
+	if len(files) > 10 {
+		files = files[:10]
+	}
+	result.TopFiles = files
+
+	// Recent sessions (top 10 by last activity). Synthesize Summary values
+	// from AnalyticsRow so the API contract stays unchanged.
+	if len(rows) > 0 {
+		recentSorted := make([]session.AnalyticsRow, len(rows))
+		copy(recentSorted, rows)
+		sort.Slice(recentSorted, func(i, j int) bool {
+			ti := recentSorted[i].UpdatedAt
+			if ti.IsZero() {
+				ti = recentSorted[i].CreatedAt
+			}
+			tj := recentSorted[j].UpdatedAt
+			if tj.IsZero() {
+				tj = recentSorted[j].CreatedAt
+			}
+			return ti.After(tj)
+		})
+		const recentLimit = 10
+		if len(recentSorted) > recentLimit {
+			recentSorted = recentSorted[:recentLimit]
+		}
+		recent := make([]session.Summary, 0, len(recentSorted))
+		for _, ar := range recentSorted {
+			recent = append(recent, session.Summary{
+				ID:              ar.SessionID,
+				Provider:        ar.Provider,
+				Agent:           ar.Agent,
+				Branch:          ar.Branch,
+				Summary:         ar.Summary,
+				MessageCount:    ar.MessageCount,
+				TotalTokens:     ar.TotalTokens,
+				ToolCallCount:   ar.ToolCallCount,
+				ErrorCount:      ar.ErrorCount,
+				EstimatedCost:   ar.EstimatedCost,
+				ActualCost:      ar.ActualCost,
+				CreatedAt:       ar.CreatedAt,
+				UpdatedAt:       ar.UpdatedAt,
+				OwnerID:         ar.OwnerID,
+				ProjectPath:     ar.ProjectPath,
+				SessionType:     ar.SessionType,
+				ProjectCategory: ar.ProjectCategory,
+				Status:          ar.Status,
+			})
+		}
+		result.RecentSessions = recent
+	}
+
+	// Fork deduplication: subtract shared tokens from cost estimate.
+	dedupInput, dedupOutput, dedupErr := s.store.GetTotalDeduplication()
+	if dedupErr == nil && (dedupInput > 0 || dedupOutput > 0) {
+		avgInputRate := 3.0
+		avgOutputRate := 15.0
+		if result.TotalCost > 0 && result.TotalTokens > 0 {
+			avgInputRate = result.TotalCost / float64(result.TotalTokens) * 1_000_000
+			avgOutputRate = avgInputRate * 5
+		}
+		forkCostSaved := float64(dedupInput)*avgInputRate/1_000_000 +
+			float64(dedupOutput)*avgOutputRate/1_000_000
+		result.ForkSavings = forkCostSaved
+		result.DeduplicatedCost = result.TotalCost - forkCostSaved
+		if result.DeduplicatedCost < 0 {
+			result.DeduplicatedCost = 0
+		}
+	} else {
+		result.DeduplicatedCost = result.TotalCost
+	}
+
+	return result, nil
+}
+
+// statsFromList is the legacy path. It loads session summaries (and, when
+// IncludeTools is true, full session payloads) and computes the same metrics.
+// Retained for IncludeTools=true and as a safety net.
+func (s *SessionService) statsFromList(req StatsRequest) (*StatsResult, error) {
 	listOpts := session.ListOptions{
 		ProjectPath: req.ProjectPath,
 		All:         true,

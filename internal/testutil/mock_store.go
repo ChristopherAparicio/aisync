@@ -407,6 +407,61 @@ func (m *MockStore) GetSessionFileChanges(id session.ID) ([]session.SessionFileR
 	return records, nil
 }
 func (m *MockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
+
+// AggregateFileCounts returns {file_path: touch_count} aggregated across the
+// in-memory Sessions map, filtering by the same criteria as QueryAnalytics.
+// Mirrors the SQLite GROUP BY semantics: every FileChange counts as one
+// touch (not deduplicated per session).
+func (m *MockStore) AggregateFileCounts(filter session.AnalyticsFilter, limit int) (map[string]int, error) {
+	counts := make(map[string]int)
+	for _, s := range m.Sessions {
+		if filter.ProjectPath != "" && s.ProjectPath != filter.ProjectPath {
+			continue
+		}
+		if !filter.Since.IsZero() && s.CreatedAt.Before(filter.Since) {
+			continue
+		}
+		if !filter.Until.IsZero() && s.CreatedAt.After(filter.Until) {
+			continue
+		}
+		if filter.Branch != "" && s.Branch != filter.Branch {
+			continue
+		}
+		if filter.Provider != "" && s.Provider != filter.Provider {
+			continue
+		}
+		if filter.OwnerID != "" && s.OwnerID != session.ID(filter.OwnerID) {
+			continue
+		}
+		if filter.SessionType != "" && s.SessionType != filter.SessionType {
+			continue
+		}
+		if filter.ProjectCategory != "" && s.ProjectCategory != filter.ProjectCategory {
+			continue
+		}
+		for _, fc := range s.FileChanges {
+			counts[fc.FilePath]++
+		}
+	}
+	if limit > 0 && len(counts) > limit {
+		// Order by count desc and take top-limit. Cheap because tests have few entries.
+		type pair struct {
+			path string
+			n    int
+		}
+		pairs := make([]pair, 0, len(counts))
+		for p, n := range counts {
+			pairs = append(pairs, pair{p, n})
+		}
+		sort.Slice(pairs, func(i, j int) bool { return pairs[i].n > pairs[j].n })
+		trimmed := make(map[string]int, limit)
+		for i := 0; i < limit; i++ {
+			trimmed[pairs[i].path] = pairs[i].n
+		}
+		counts = trimmed
+	}
+	return counts, nil
+}
 func (m *MockStore) SearchFacets(_ session.SearchQuery) (*session.SearchFacets, error) {
 	return &session.SearchFacets{}, nil
 }

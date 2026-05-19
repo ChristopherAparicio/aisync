@@ -925,6 +925,9 @@ func (m *mockStore) GetSessionFileChanges(_ session.ID) ([]session.SessionFileRe
 	return nil, nil
 }
 func (m *mockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
+func (m *mockStore) AggregateFileCounts(_ session.AnalyticsFilter, _ int) (map[string]int, error) {
+	return map[string]int{}, nil
+}
 func (m *mockStore) SearchFacets(_ session.SearchQuery) (*session.SearchFacets, error) {
 	return &session.SearchFacets{}, nil
 }

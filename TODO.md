@@ -250,15 +250,39 @@ for faster local catch-up.
    offset, `session.ComputeAnalytics` for computation, and
    `UpsertSessionAnalytics` to persist. Errors are logged but non-fatal
    (backfill task catches missed rows).
-9. [ ] **Backfill task** `AnalyticsBackfillTask`
-10. [ ] **Rewrite** `Forecast`, `CacheEfficiency`, `ContextSaturation`,
-    `AgentROIAnalysis` to read from `session_analytics` (fallback to live
-    computation for missing rows)
-11. [ ] **Delete cache wrappers + stats_cache table** (separate commit for clean
-    revert)
-12. [ ] **Re-run benchmark** to confirm <100ms on all 4 critical paths
-13. [ ] **Production verify**: reload each page, measure latency, tail
-    `~/.aisync/aisync.log` for regressions
+9. [x] **Backfill task** `AnalyticsBackfillTask` — wired in `serve.go`
+   WarmUp + cron `*/30 * * * *`. Rebuilds rows older than
+   `AnalyticsSchemaVersion`.
+10. [x] **Rewrite** `Forecast`, `CacheEfficiency`, `ContextSaturation`,
+    `AgentROIAnalysis` to read from `session_analytics`. Hot paths now
+    aggregate from the read model; legacy live computation remains as a
+    fallback when rows are missing.
+11. [x] **Delete cache wrappers + obsolete precompute tasks** (commit
+    `fe76d1d`). `stats_cache` table kept (still used by 3 unrelated caches).
+12. [x] **Re-run benchmark** — per-project hot paths 35-150ms cold, AllProjects
+    150-300ms warm. Stats_AllProjects: 4.47s→4.4s cold / 264ms→182ms warm
+    (Phase 5).
+13. [x] **Production verify** — dashboard + sessions list + forecast + cost
+    pages all snappy; `aisync.log` clean.
+
+### Phase 5: migrate Stats() to session_analytics
+
+- [x] Extend `AnalyticsFilter` with Branch/Provider/OwnerID/SessionType/
+      ProjectCategory + `SkipBlobs` flag (skip JSON unmarshal when caller
+      only needs flat aggregates).
+- [x] Extend `AnalyticsRow` with Provider/OwnerID/ProjectCategory/UpdatedAt
+      (single JOIN, no extra round-trip).
+- [x] `Stats()` is now hybrid: fast path reads `session_analytics`, slow
+      path (List+Get) kept for `IncludeTools=true`. Automatic fallback to
+      slow path if read model returns 0 rows (covers backfill gaps + test
+      stores bypassing `stampAnalytics()`).
+- [x] New `Store.AggregateFileCounts(filter, limit)` — single GROUP BY
+      replaces the N+1 `GetSessionFileChanges` loop in TopFiles
+      aggregation.
+- [x] Bench: Stats_AllProjects warm 264ms→182ms; Stats_SelfProject 53ms→41ms.
+      Cold disk-bound (4.4s) unchanged — bottleneck is initial 1.36GB page
+      cache fill, not the aggregation code. In prod the scheduler keeps
+      pages hot.
 
 ### Open questions (to resolve before step 1)
 
