@@ -155,57 +155,87 @@ func roiGrade(score int) string {
 }
 
 // SkillROIAnalysis computes per-skill ROI metrics for a project.
+//
+// Reads session-level error/tool counts from the session_analytics CQRS
+// read model (flat columns only); falls back to List() when the read
+// model is empty. Per-skill event data still comes from session_events.
 func (s *SessionService) SkillROIAnalysis(ctx context.Context, projectPath string, since time.Time) (*session.SkillROI, error) {
-	listOpts := session.ListOptions{All: true}
-	if !since.IsZero() {
-		listOpts.Since = since
+	if s.store == nil {
+		return &session.SkillROI{}, nil
 	}
-	summaries, err := s.store.List(listOpts)
+
+	type sessionFacts struct {
+		ID            session.ID
+		ProjectPath   string
+		ErrorCount    int
+		ToolCallCount int
+	}
+
+	var projectSessions []sessionFacts
+	rows, err := s.store.QueryAnalytics(session.AnalyticsFilter{
+		ProjectPath: projectPath,
+		Since:       since,
+		SkipBlobs:   true,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	// Filter to project.
-	var projectSessions []session.Summary
-	for _, sm := range summaries {
-		if projectPath != "" && sm.ProjectPath != projectPath {
-			continue
+	if len(rows) == 0 {
+		listOpts := session.ListOptions{All: true}
+		if !since.IsZero() {
+			listOpts.Since = since
 		}
-		projectSessions = append(projectSessions, sm)
+		summaries, err := s.store.List(listOpts)
+		if err != nil {
+			return nil, err
+		}
+		for _, sm := range summaries {
+			if projectPath != "" && sm.ProjectPath != projectPath {
+				continue
+			}
+			projectSessions = append(projectSessions, sessionFacts{
+				ID:            sm.ID,
+				ProjectPath:   sm.ProjectPath,
+				ErrorCount:    sm.ErrorCount,
+				ToolCallCount: sm.ToolCallCount,
+			})
+		}
+	} else {
+		for _, row := range rows {
+			projectSessions = append(projectSessions, sessionFacts{
+				ID:            row.SessionID,
+				ProjectPath:   row.ProjectPath,
+				ErrorCount:    row.ErrorCount,
+				ToolCallCount: row.ToolCallCount,
+			})
+		}
 	}
+
 	totalSessions := len(projectSessions)
 	if totalSessions == 0 {
 		return &session.SkillROI{}, nil
 	}
 
-	// Query skill events from session_events table.
-	// We need: which skills were loaded in which sessions.
-	if s.store == nil {
-		return &session.SkillROI{}, nil
-	}
-
 	type skillAcc struct {
 		loadCount       int
-		sessions        map[string]bool // session IDs where loaded
+		sessions        map[string]bool
 		totalErrors     int
 		totalTools      int
-		totalTokens     int  // sum of EstimatedTokens from all loads
-		tokensPopulated bool // true if at least one load had EstimatedTokens > 0
+		totalTokens     int
+		tokensPopulated bool
 	}
 	bySkill := make(map[string]*skillAcc)
 
-	// Tally session-wide totals and collect IDs for the batch event fetch.
-	// Fix #8: previously issued one GetSessionEvents() call per session (N+1). Now
-	// we fetch all skill_load events for the whole project in a single SQL query,
-	// filtered at the DB level so we don't transfer unrelated event payloads.
+	// Fix #8: batched event fetch — one SQL query for all skill_load events
+	// across the whole project, instead of N GetSessionEvents() calls.
 	var totalErrorsAll, totalToolsAll int
 	ids := make([]session.ID, 0, len(projectSessions))
-	summaryByID := make(map[session.ID]session.Summary, len(projectSessions))
-	for _, sm := range projectSessions {
-		totalErrorsAll += sm.ErrorCount
-		totalToolsAll += sm.ToolCallCount
-		ids = append(ids, sm.ID)
-		summaryByID[sm.ID] = sm
+	factsByID := make(map[session.ID]sessionFacts, len(projectSessions))
+	for _, sf := range projectSessions {
+		totalErrorsAll += sf.ErrorCount
+		totalToolsAll += sf.ToolCallCount
+		ids = append(ids, sf.ID)
+		factsByID[sf.ID] = sf
 	}
 
 	// Single batched query filtered to skill_load events only.
@@ -217,12 +247,11 @@ func (s *SessionService) SkillROIAnalysis(ctx context.Context, projectPath strin
 	}
 
 	for sid, events := range eventsBySession {
-		sm, ok := summaryByID[sid]
+		sf, ok := factsByID[sid]
 		if !ok {
 			continue
 		}
 		for _, evt := range events {
-			// SQL filter already narrows to skill_load, but defensively guard the payload.
 			if evt.Type != sessionevent.EventSkillLoad || evt.SkillLoad == nil {
 				continue
 			}
@@ -236,9 +265,9 @@ func (s *SessionService) SkillROIAnalysis(ctx context.Context, projectPath strin
 				bySkill[name] = acc
 			}
 			acc.loadCount++
-			acc.sessions[string(sm.ID)] = true
-			acc.totalErrors += sm.ErrorCount
-			acc.totalTools += sm.ToolCallCount
+			acc.sessions[string(sf.ID)] = true
+			acc.totalErrors += sf.ErrorCount
+			acc.totalTools += sf.ToolCallCount
 			if evt.SkillLoad.EstimatedTokens > 0 {
 				acc.totalTokens += evt.SkillLoad.EstimatedTokens
 				acc.tokensPopulated = true

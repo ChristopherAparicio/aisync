@@ -455,8 +455,75 @@ func (s *SessionService) ToolCostSummary(ctx context.Context, projectPath string
 }
 
 // AgentCostSummary computes per-agent cost aggregation for a project.
-// This walks sessions directly (agents are session-level, not tool-level).
+// Reads from the session_analytics CQRS read model (flat columns only);
+// falls back to List() when the read model is empty.
 func (s *SessionService) AgentCostSummary(ctx context.Context, projectPath string, since, until time.Time) ([]session.AgentCostEntry, error) {
+	filter := session.AnalyticsFilter{
+		ProjectPath: projectPath,
+		Since:       since,
+		Until:       until,
+		SkipBlobs:   true,
+	}
+	rows, err := s.store.QueryAnalytics(filter)
+	if err != nil {
+		return nil, fmt.Errorf("querying analytics: %w", err)
+	}
+	if len(rows) == 0 {
+		return s.agentCostSummaryFromList(projectPath, since, until)
+	}
+
+	type agentAgg struct {
+		sessions  int
+		messages  int
+		tokens    int
+		toolCalls int
+		cost      float64
+	}
+	byAgent := make(map[string]*agentAgg)
+
+	for _, row := range rows {
+		agent := row.Agent
+		if agent == "" {
+			agent = "unknown"
+		}
+		agg, ok := byAgent[agent]
+		if !ok {
+			agg = &agentAgg{}
+			byAgent[agent] = agg
+		}
+		agg.sessions++
+		agg.messages += row.MessageCount
+		agg.tokens += row.TotalTokens
+		agg.toolCalls += row.ToolCallCount
+
+		const blendedRatePerToken = 3.0 / 1_000_000 // ~$3/M tokens
+		agg.cost += float64(row.TotalTokens) * blendedRatePerToken
+	}
+
+	var entries []session.AgentCostEntry
+	for agent, agg := range byAgent {
+		entry := session.AgentCostEntry{
+			Agent:         agent,
+			SessionCount:  agg.sessions,
+			MessageCount:  agg.messages,
+			TotalTokens:   agg.tokens,
+			ToolCallCount: agg.toolCalls,
+			EstimatedCost: agg.cost,
+		}
+		if agg.sessions > 0 {
+			entry.AvgCostPerSession = agg.cost / float64(agg.sessions)
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].EstimatedCost > entries[j].EstimatedCost
+	})
+	return entries, nil
+}
+
+// agentCostSummaryFromList is the legacy List() path, retained as a safety
+// net when the session_analytics read model is empty.
+func (s *SessionService) agentCostSummaryFromList(projectPath string, since, until time.Time) ([]session.AgentCostEntry, error) {
 	listOpts := session.ListOptions{All: true}
 	if !since.IsZero() {
 		listOpts.Since = since
@@ -476,11 +543,9 @@ func (s *SessionService) AgentCostSummary(ctx context.Context, projectPath strin
 	byAgent := make(map[string]*agentAgg)
 
 	for _, sm := range summaries {
-		// Filter by project if specified.
 		if projectPath != "" && sm.ProjectPath != projectPath {
 			continue
 		}
-		// Filter by time range.
 		if !until.IsZero() && sm.CreatedAt.After(until) {
 			continue
 		}
@@ -499,8 +564,7 @@ func (s *SessionService) AgentCostSummary(ctx context.Context, projectPath strin
 		agg.tokens += sm.TotalTokens
 		agg.toolCalls += sm.ToolCallCount
 
-		// Estimate cost from tokens (blended rate).
-		const blendedRatePerToken = 3.0 / 1_000_000 // ~$3/M tokens
+		const blendedRatePerToken = 3.0 / 1_000_000
 		agg.cost += float64(sm.TotalTokens) * blendedRatePerToken
 	}
 

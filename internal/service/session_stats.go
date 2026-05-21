@@ -860,7 +860,47 @@ func (s *SessionService) Trends(_ context.Context, req TrendRequest) (*TrendResu
 }
 
 // periodStats computes aggregated stats for sessions in [from, to).
+//
+// Reads from the session_analytics CQRS read model (flat columns only,
+// no JSON blob hydration). Falls back to the legacy List() path when the
+// read model returns zero rows — covers backfill gaps and tests that
+// bypass stampAnalytics().
 func (s *SessionService) periodStats(req TrendRequest, from, to time.Time) (*TrendPeriodStats, error) {
+	rows, err := s.store.QueryAnalytics(session.AnalyticsFilter{
+		ProjectPath: req.ProjectPath,
+		Provider:    req.Provider,
+		SessionType: req.SessionType,
+		Since:       from,
+		Until:       to,
+		SkipBlobs:   true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	stats := &TrendPeriodStats{From: from, To: to}
+	for _, row := range rows {
+		stats.SessionCount++
+		stats.TotalTokens += row.TotalTokens
+		stats.TotalErrors += row.ErrorCount
+	}
+
+	// Safety net: if the read model has no rows but a List() pass would,
+	// fall back to the legacy aggregation so trends remain meaningful
+	// during backfill or in tests.
+	if stats.SessionCount == 0 {
+		return s.periodStatsFromList(req, from, to)
+	}
+
+	if stats.SessionCount > 0 {
+		stats.AvgTokens = stats.TotalTokens / stats.SessionCount
+		stats.AvgErrors = float64(stats.TotalErrors) / float64(stats.SessionCount)
+	}
+	return stats, nil
+}
+
+// periodStatsFromList is the legacy path retained as a safety net.
+func (s *SessionService) periodStatsFromList(req TrendRequest, from, to time.Time) (*TrendPeriodStats, error) {
 	summaries, err := s.store.List(session.ListOptions{
 		All:         req.ProjectPath == "",
 		ProjectPath: req.ProjectPath,
@@ -873,10 +913,7 @@ func (s *SessionService) periodStats(req TrendRequest, from, to time.Time) (*Tre
 		return nil, err
 	}
 
-	stats := &TrendPeriodStats{
-		From: from,
-		To:   to,
-	}
+	stats := &TrendPeriodStats{From: from, To: to}
 	for _, sm := range summaries {
 		stats.SessionCount++
 		stats.TotalTokens += sm.TotalTokens
@@ -886,6 +923,5 @@ func (s *SessionService) periodStats(req TrendRequest, from, to time.Time) (*Tre
 		stats.AvgTokens = stats.TotalTokens / stats.SessionCount
 		stats.AvgErrors = float64(stats.TotalErrors) / float64(stats.SessionCount)
 	}
-
 	return stats, nil
 }
