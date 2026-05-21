@@ -265,6 +265,18 @@ for faster local catch-up.
 13. [x] **Production verify** — dashboard + sessions list + forecast + cost
     pages all snappy; `aisync.log` clean.
 
+### Phase 5b: extend CQRS to Trends, AgentCostSummary, SkillROIAnalysis
+
+- [x] `periodStats` (powers `Trends`): aggregates via `QueryAnalytics`
+      with `SkipBlobs=true`; falls back to `List()` when read model empty.
+- [x] `AgentCostSummary`: per-agent rollup via `QueryAnalytics`; fallback
+      `agentCostSummaryFromList`.
+- [x] `SkillROIAnalysis`: session-level error/tool counts via
+      `QueryAnalytics`; per-skill events still from `GetSessionEventsBatch`
+      (events aren't part of the read model).
+- [x] Architectural benefit: 3 more dashboard endpoints decoupled from
+      the `sessions` table column layout.
+
 ### Phase 5: migrate Stats() to session_analytics
 
 - [x] Extend `AnalyticsFilter` with Branch/Provider/OwnerID/SessionType/
