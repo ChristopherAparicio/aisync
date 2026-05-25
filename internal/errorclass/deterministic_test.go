@@ -255,6 +255,163 @@ func TestClassify_MessagePattern_Aborted(t *testing.T) {
 	}
 }
 
+func TestClassify_MessagePattern_AbortedBare(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{RawError: "Aborted"})
+
+	if err.Category != session.ErrorCategoryAborted {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryAborted)
+	}
+}
+
+func TestClassify_MessagePattern_GeminiInvalidRapt(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		ProviderName: "google-vertex",
+		RawError:     `{"error":"invalid_grant","error_description":"reauth related error (invalid_rapt)","error_uri":"https://support.google.com/a/answer/9368756"}`,
+	})
+
+	if err.Category != session.ErrorCategoryAuthError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryAuthError)
+	}
+	if !containsStr(err.Message, "OAuth reauth") {
+		t.Errorf("Message = %q, expected mention of OAuth reauth", err.Message)
+	}
+}
+
+func TestClassify_MessagePattern_InvalidGrantOnly(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: `{"error":"invalid_grant","error_description":"Bad refresh token"}`,
+	})
+
+	if err.Category != session.ErrorCategoryAuthError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryAuthError)
+	}
+}
+
+func TestClassify_MessagePattern_ProviderOverloaded(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "The model is overloaded. Please try again later.",
+	})
+
+	if err.Category != session.ErrorCategoryProviderError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryProviderError)
+	}
+	if !containsStr(err.Message, "overloaded") {
+		t.Errorf("Message = %q, expected mention of overloaded", err.Message)
+	}
+}
+
+func TestClassify_MessagePattern_ServiceUnavailable(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "Service unavailable. Please retry.",
+	})
+
+	if err.Category != session.ErrorCategoryProviderError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryProviderError)
+	}
+}
+
+func TestClassify_MessagePattern_NetworkUnableToConnect(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "Error: Unable to connect. Is the computer able to reach the host?",
+	})
+
+	if err.Category != session.ErrorCategoryNetworkError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryNetworkError)
+	}
+}
+
+func TestClassify_MessagePattern_MissingAPIKey(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "Anthropic API key is missing. Pass it using the 'anthropicApiKey' parameter.",
+	})
+
+	if err.Category != session.ErrorCategoryAuthError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryAuthError)
+	}
+}
+
+func TestClassify_MessagePattern_MissingAWSRegion(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "AWS region setting is missing. Pass it using the 'region' parameter.",
+	})
+
+	if err.Category != session.ErrorCategoryAuthError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryAuthError)
+	}
+}
+
+func TestClassify_MessagePattern_DatabaseLocked(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "SQLiteError: database is locked",
+	})
+
+	if err.Category != session.ErrorCategoryToolError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryToolError)
+	}
+	if !containsStr(err.Message, "storage") {
+		t.Errorf("Message = %q, expected mention of storage", err.Message)
+	}
+}
+
+func TestClassify_MessagePattern_DatabaseDiskFull(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "SQLiteError: database or disk is full",
+	})
+
+	if err.Category != session.ErrorCategoryToolError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryToolError)
+	}
+}
+
+func TestClassify_MessagePattern_QuotaExceeded(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: `{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}`,
+	})
+
+	if err.Category != session.ErrorCategoryRateLimit {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryRateLimit)
+	}
+	if !containsStr(err.Message, "Quota") {
+		t.Errorf("Message = %q, expected mention of Quota", err.Message)
+	}
+}
+
+func TestClassify_MessagePattern_ToolUseCorruption(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "messages.2: tool_use ids were found without tool_result blocks immediately after: toolu_01PuVceYiGUXocc9bge12UFM",
+	})
+
+	if err.Category != session.ErrorCategoryValidation {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryValidation)
+	}
+	if !containsStr(err.Message, "Tool sequence") {
+		t.Errorf("Message = %q, expected mention of Tool sequence", err.Message)
+	}
+}
+
+func TestClassify_MessagePattern_ContextOverflowOpenCode(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "Session too large to compact - context exceeds model limit even after stripping media",
+	})
+
+	if err.Category != session.ErrorCategoryContextOverflow {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryContextOverflow)
+	}
+}
+
 func TestClassify_MessagePattern_InternalServerError(t *testing.T) {
 	c := errorclass.NewDeterministicClassifier()
 	err := c.Classify(session.SessionError{
@@ -337,6 +494,65 @@ func TestClassify_ToolError_DiskFull(t *testing.T) {
 	}
 	if err.Message != "Disk full" {
 		t.Errorf("Message = %q, want %q", err.Message, "Disk full")
+	}
+}
+
+func TestClassify_HTTPStatus412_FireworksBilling(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		HTTPStatus: 412,
+		RawError:   `{"error":{"message":"Account suspended","code":"PRECONDITION_FAILED"}}`,
+	})
+
+	if err.Category != session.ErrorCategoryRateLimit {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryRateLimit)
+	}
+	if err.IsRetryable {
+		t.Error("expected IsRetryable=false for billing precondition")
+	}
+}
+
+func TestClassify_ClaudeCodeCredentialsExpired(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
+	})
+
+	if err.Category != session.ErrorCategoryAuthError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryAuthError)
+	}
+}
+
+func TestClassify_TokenRefreshFailed(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "Error: Token refresh failed: 429",
+	})
+
+	if err.Category != session.ErrorCategoryAuthError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryAuthError)
+	}
+}
+
+func TestClassify_TLSCertificateError(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: "unknown certificate verification error",
+	})
+
+	if err.Category != session.ErrorCategoryNetworkError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryNetworkError)
+	}
+}
+
+func TestClassify_PeerClosedConnection(t *testing.T) {
+	c := errorclass.NewDeterministicClassifier()
+	err := c.Classify(session.SessionError{
+		RawError: `Type validation failed: Value: {"code":"InternalError","message":"peer closed connection"}`,
+	})
+
+	if err.Category != session.ErrorCategoryNetworkError {
+		t.Errorf("Category = %q, want %q", err.Category, session.ErrorCategoryNetworkError)
 	}
 }
 

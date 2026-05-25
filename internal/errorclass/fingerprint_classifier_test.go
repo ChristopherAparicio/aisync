@@ -183,12 +183,13 @@ func TestFingerprintClassifier_SourceInference(t *testing.T) {
 func TestFingerprintClassifier_InComposite(t *testing.T) {
 	// Simulate the real chain: deterministic → fingerprint → (no LLM)
 	// An error that deterministic can't classify but fingerprint can.
+	// Use a unique provider-specific string that no deterministic pattern matches.
 	store := &fpMockStore{
 		groups: map[string]session.ErrorFingerprintGroup{
-			"fp-aborted": {
-				Fingerprint: "fp-aborted",
-				Category:    session.ErrorCategoryAborted,
-				Message:     "user cancelled",
+			"fp-custom": {
+				Fingerprint: "fp-custom",
+				Category:    session.ErrorCategoryToolError,
+				Message:     "known flaky tool",
 			},
 		},
 	}
@@ -200,18 +201,19 @@ func TestFingerprintClassifier_InComposite(t *testing.T) {
 		},
 	})
 
-	// Error that deterministic won't classify (no HTTP status, no known pattern).
+	// Error with no HTTP status and a raw message that matches zero deterministic
+	// patterns — so the fingerprint classifier must be the one to claim it.
 	err := session.SessionError{
 		ID:          "err-composite",
-		Fingerprint: "fp-aborted",
-		RawError:    "Aborted by user action",
+		Fingerprint: "fp-custom",
+		RawError:    "FluxCapacitorMisalignment: jigawatts off by 0.21",
 	}
 
 	result := composite.Classify(err)
-	if result.Category != session.ErrorCategoryAborted {
-		t.Errorf("Category = %q, want %q (fingerprint should have matched)", result.Category, session.ErrorCategoryAborted)
+	if result.Category != session.ErrorCategoryToolError {
+		t.Errorf("Category = %q, want %q (fingerprint should have matched)", result.Category, session.ErrorCategoryToolError)
 	}
-	if result.Message != "user cancelled" {
-		t.Errorf("Message = %q, want %q", result.Message, "user cancelled")
+	if result.Message != "known flaky tool" {
+		t.Errorf("Message = %q, want %q", result.Message, "known flaky tool")
 	}
 }

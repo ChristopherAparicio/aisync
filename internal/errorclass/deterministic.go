@@ -89,6 +89,15 @@ func classifyByHTTPStatus(err session.SessionError) session.SessionError {
 		err.Message = "Request payload too large (context overflow)"
 		err.IsRetryable = false
 
+	case err.HTTPStatus == 412:
+		// Fireworks (and some OpenAI-compatible gateways) emit 412
+		// PRECONDITION_FAILED when an account is suspended for unpaid
+		// invoices or hit its monthly spending cap — semantically a
+		// billing/quota issue, mapped to rate_limit.
+		err.Category = session.ErrorCategoryRateLimit
+		err.Message = "Account precondition failed (billing/quota)"
+		err.IsRetryable = false
+
 	case err.HTTPStatus == 529:
 		// Anthropic-specific: overloaded
 		err.Category = session.ErrorCategoryProviderError
@@ -282,6 +291,9 @@ func classifyToolError(err session.SessionError) session.SessionError {
 // ── Message-based classification (fallback) ──
 
 // messagePatterns maps string patterns to error categories.
+// Order matters: specific patterns (OAuth, quota, config) must precede
+// the generic "unauthorized" auth pattern, and the broad bare "aborted"
+// alias sits with its abort cluster so verbatim provider strings still match.
 var messagePatterns = []struct {
 	contains []string
 	category session.ErrorCategory
@@ -289,10 +301,41 @@ var messagePatterns = []struct {
 	message  string
 }{
 	{
-		contains: []string{"the operation was aborted"},
+		// Anthropic/OpenAI/Bedrock emit verbatim "Aborted" on mid-stream cancel
+		// — by far the most common pattern in production.
+		contains: []string{"the operation was aborted", "aborted"},
 		category: session.ErrorCategoryAborted,
 		source:   session.ErrorSourceClient,
 		message:  "Operation aborted",
+	},
+	{
+		// google-vertex emits invalid_rapt when the OAuth reauth-after-period
+		// token expires — user must re-run `gcloud auth login`.
+		contains: []string{"invalid_rapt", "reauth related error"},
+		category: session.ErrorCategoryAuthError,
+		source:   session.ErrorSourceProvider,
+		message:  "Google OAuth reauth required (invalid_rapt)",
+	},
+	{
+		contains: []string{"invalid_grant"},
+		category: session.ErrorCategoryAuthError,
+		source:   session.ErrorSourceProvider,
+		message:  "OAuth grant invalid or expired",
+	},
+	{
+		// Missing env vars / config (e.g. "AWS region setting is missing")
+		// block authentication, so categorised as auth_error.
+		contains: []string{"api key is missing", "region setting is missing", "credentials not found", "credential not found"},
+		category: session.ErrorCategoryAuthError,
+		source:   session.ErrorSourceClient,
+		message:  "Provider credentials or required config missing",
+	},
+	{
+		// Quota/billing maps to rate_limit (closest semantic — usage cap hit).
+		contains: []string{"insufficient_quota", "out of credits", "out_of_credits", "quota exceeded", "billing", "exceeded your current quota"},
+		category: session.ErrorCategoryRateLimit,
+		source:   session.ErrorSourceProvider,
+		message:  "Quota or billing limit reached",
 	},
 	{
 		contains: []string{"internal server error"},
@@ -301,22 +344,49 @@ var messagePatterns = []struct {
 		message:  "Provider internal server error",
 	},
 	{
+		// Provider SDKs sometimes drop the HTTP code and only forward the
+		// text body, so 5xx-equivalents land here.
+		contains: []string{"overloaded", "currently unavailable", "service unavailable", "temporarily unavailable", "model is overloaded"},
+		category: session.ErrorCategoryProviderError,
+		source:   session.ErrorSourceProvider,
+		message:  "Provider overloaded or unavailable",
+	},
+	{
 		contains: []string{"rate limit", "too many requests"},
 		category: session.ErrorCategoryRateLimit,
 		source:   session.ErrorSourceProvider,
 		message:  "Rate limit exceeded",
 	},
 	{
-		contains: []string{"context length", "context window", "maximum context", "token limit"},
+		// "too large to compact" / "exceeds model limit" are OpenCode-specific
+		// strings emitted when even media-stripped context still overflows.
+		contains: []string{"context length", "context window", "maximum context", "token limit", "too large to compact", "exceeds model limit", "prompt is too long"},
 		category: session.ErrorCategoryContextOverflow,
 		source:   session.ErrorSourceProvider,
 		message:  "Context window exceeded",
 	},
 	{
-		contains: []string{"unauthorized", "invalid api key", "invalid x-api-key"},
+		// Anthropic 400 when a tool_use block has no matching tool_result —
+		// caused by killed sub-agents; poisons the rest of the session.
+		contains: []string{"tool_use ids were found without tool_result", "tool_use_id", "without tool_result blocks"},
+		category: session.ErrorCategoryValidation,
+		source:   session.ErrorSourceProvider,
+		message:  "Tool sequence corrupted (tool_use without tool_result)",
+	},
+	{
+		contains: []string{"unauthorized", "invalid api key", "invalid x-api-key", "authentication_error", "invalid authentication credentials"},
 		category: session.ErrorCategoryAuthError,
 		source:   session.ErrorSourceProvider,
 		message:  "Authentication failure",
+	},
+	{
+		// Claude Code CLI emits this string when its stored OAuth token has
+		// expired or been revoked; the only fix is re-running `claude` to
+		// refresh credentials, so it is unambiguously an auth error.
+		contains: []string{"credentials are unavailable", "credentials are expired", "credentials unavailable or expired", "token refresh failed"},
+		category: session.ErrorCategoryAuthError,
+		source:   session.ErrorSourceClient,
+		message:  "Provider credentials expired or unavailable",
 	},
 	{
 		contains: []string{"timeout", "timed out", "deadline exceeded"},
@@ -325,10 +395,32 @@ var messagePatterns = []struct {
 		message:  "Request timeout",
 	},
 	{
+		contains: []string{"unable to connect", "was there a typo in the url", "name or service not known", "no route to host"},
+		category: session.ErrorCategoryNetworkError,
+		source:   session.ErrorSourceClient,
+		message:  "Cannot reach provider endpoint",
+	},
+	{
 		contains: []string{"connection refused", "connection reset", "dns resolution"},
 		category: session.ErrorCategoryNetworkError,
 		source:   session.ErrorSourceClient,
 		message:  "Network connection failure",
+	},
+	{
+		// TLS handshake failures and mid-stream connection drops surface as
+		// these strings from Go's net/http and provider SDK shims; both are
+		// transport-layer issues, not auth/quota.
+		contains: []string{"certificate verification", "peer closed connection", "tls handshake", "x509:"},
+		category: session.ErrorCategoryNetworkError,
+		source:   session.ErrorSourceClient,
+		message:  "TLS or transport-layer failure",
+	},
+	{
+		// SQLite from OpenCode's local cache — host disk full or write lock.
+		contains: []string{"database is locked", "database or disk is full", "disk i/o error", "no space left"},
+		category: session.ErrorCategoryToolError,
+		source:   session.ErrorSourceClient,
+		message:  "Local storage error (SQLite/disk)",
 	},
 }
 

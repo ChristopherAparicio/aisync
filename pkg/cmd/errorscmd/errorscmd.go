@@ -67,6 +67,8 @@ Examples:
 	cmd.Flags().IntVar(&opts.Limit, "limit", 50, "Maximum number of errors to show")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Structured JSON output")
 
+	cmd.AddCommand(newCmdReclassify(f))
+
 	return cmd
 }
 
