@@ -2,6 +2,7 @@
 package capture
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -44,7 +45,7 @@ func NewCmdCapture(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.ProviderFlag, "provider", "", "Force a specific provider (claude-code, opencode)")
+	cmd.Flags().StringVar(&opts.ProviderFlag, "provider", "", "Force a specific provider (claude-code, opencode, hermes)")
 	cmd.Flags().StringVar(&opts.ModeFlag, "mode", "", "Storage mode: full, compact, summary")
 	cmd.Flags().StringVar(&opts.Message, "message", "", "Manual summary message")
 	cmd.Flags().StringVar(&opts.BranchFlag, "branch", "", "Explicit git branch (useful when capturing from a worktree)")
@@ -164,6 +165,9 @@ func runCaptureSingle(opts *Options, svc service.SessionServicer, req service.Ca
 
 	result, err := svc.Capture(req)
 	if err != nil {
+		if opts.ProviderFlag == "hermes" && errors.Is(err, session.ErrSessionNotFound) {
+			return nil
+		}
 		if opts.Auto {
 			return nil
 		}

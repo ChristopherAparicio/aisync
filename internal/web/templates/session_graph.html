@@ -181,7 +181,8 @@ function sgApplyFilter(query) {
     <span class="sg-dot {{if .IsFork}}sg-dot--fork{{end}} {{if gt .Errors 0}}sg-dot--error{{end}} {{if eq .Status "active"}}sg-dot--active{{end}}"></span>
     {{if .HasChildren}}<svg class="sg-chevron {{if not .IsCollapsed}}sg-chevron-open{{end}}" viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.752.752 0 0 1-1.042-.018.752.752 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>{{end}}
     <a href="/sessions/{{.ID}}" class="sg-node-id font-mono" onclick="event.stopPropagation()">{{.IDShort}}</a>
-    <span class="badge badge-provider">{{.Provider}}</span>
+    {{if .HasChildren}}<a href="/sessions/{{.ID}}/exchanges" class="badge badge-sm sg-badge-exchanges" title="View exchanges" onclick="event.stopPropagation()">&#x2194;</a>{{end}}
+    <span class="badge badge-provider {{if eq .Provider "hermes"}}badge-hermes{{end}}">{{.Provider}}</span>
     {{if .Agent}}<span class="badge badge-agent">{{.Agent}}</span>{{end}}
     {{if .SessionType}}<span class="badge badge-type">{{.SessionType}}</span>{{end}}
     {{if .IsFork}}<span class="badge sg-badge-fork">fork</span>{{end}}

@@ -19,11 +19,15 @@ import (
 type mockProvider struct {
 	session *session.Session
 	name    session.ProviderName
+	empty   bool
 }
 
 func (m *mockProvider) Name() session.ProviderName { return m.name }
 
 func (m *mockProvider) Detect(_, _ string) ([]session.Summary, error) {
+	if m.empty {
+		return nil, nil
+	}
 	if m.session == nil {
 		return nil, session.ErrProviderNotDetected
 	}
@@ -194,6 +198,53 @@ func TestCapture_invalidProvider(t *testing.T) {
 	err := runCapture(opts)
 	if err == nil {
 		t.Fatal("expected error for invalid provider")
+	}
+}
+
+func TestCapture_withHermesProvider(t *testing.T) {
+	sess := testutil.NewSession("cap-hermes")
+	prov := &mockProvider{
+		name:    session.ProviderHermes,
+		session: sess,
+	}
+	f, ios, store := testFactory(t, prov)
+
+	opts := &Options{
+		IO:           ios,
+		Factory:      f,
+		ProviderFlag: "hermes",
+	}
+
+	err := runCapture(opts)
+	if err != nil {
+		t.Fatalf("runCapture() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "hermes") {
+		t.Error("expected provider name in output")
+	}
+	if store.SaveCount < 1 {
+		t.Fatalf("expected at least 1 saved session, got %d", store.SaveCount)
+	}
+}
+
+func TestCapture_withHermesProviderEmptyHome(t *testing.T) {
+	f, ios, _ := testFactory(t, &mockProvider{name: session.ProviderHermes, empty: true})
+
+	opts := &Options{
+		IO:           ios,
+		Factory:      f,
+		ProviderFlag: "hermes",
+	}
+
+	err := runCapture(opts)
+	if err != nil {
+		t.Fatalf("runCapture() error = %v", err)
+	}
+
+	if got := ios.Out.(*bytes.Buffer).String(); got != "" {
+		t.Fatalf("expected no output, got %q", got)
 	}
 }
 
