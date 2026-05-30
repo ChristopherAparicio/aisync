@@ -37,6 +37,12 @@ func templateFuncs() template.FuncMap {
 		"split":       func(s, sep string) []string { return strings.Split(s, sep) },
 		"settingID":   func(key string) string { return strings.ReplaceAll(key, ".", "-") },
 		"mul":         func(a int, b float64) float64 { return float64(a) * b },
+		"fmtTimePtr": func(t *time.Time) string {
+			if t == nil {
+				return "—"
+			}
+			return timeAgo(*t)
+		},
 		// dict builds a map from alternating key/value args, useful for passing
 		// structured arguments to {{template}} invocations.
 		"dict": func(values ...any) (map[string]any, error) {

@@ -1,0 +1,62 @@
+{{define "exchanges.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Agent Exchanges — {{truncate .Session.ID 10}} — aisync{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <div class="page-header-left">
+    <h1>Agent Exchanges</h1>
+    <p class="page-subtitle">
+      <a href="/sessions/{{.Session.ID}}" class="breadcrumb-link">&larr; Session <span class="font-mono">{{truncate .Session.ID 12}}</span></a>
+    </p>
+  </div>
+  <div class="page-header-meta">
+    <span class="badge">{{len .Entries}} messages</span>
+    <span class="text-muted">from {{.ChildCount}} agent{{if ne .ChildCount 1}}s{{end}}</span>
+  </div>
+</div>
+
+{{if not .Entries}}
+<div class="empty-state">
+  <p>No messages found. This session may not have any child agent delegations.</p>
+</div>
+{{else}}
+<div class="exchange-timeline">
+  {{range .Entries}}
+  <div class="exchange-entry{{if .IsDelegation}} exchange-entry--delegation{{end}}">
+    <div class="exchange-header">
+      <span class="exchange-agent font-mono" title="Session {{.SessionID}}">{{if .Agent}}{{.Agent}}{{else}}agent{{end}}</span>
+      <span class="exchange-role badge {{if eq (printf "%s" .Msg.Role) "user"}}badge-muted{{else if eq (printf "%s" .Msg.Role) "assistant"}}badge-success{{else}}badge-muted{{end}}">{{.Msg.Role}}</span>
+      <span class="exchange-time text-muted">{{timeAgo .Msg.Timestamp}}</span>
+      {{if .IsDelegation}}<span class="badge badge-delegated" title="This message triggered a delegation">delegated</span>{{end}}
+    </div>
+    {{if .Msg.Thinking}}
+    <details class="exchange-thinking">
+      <summary class="text-muted">Thinking</summary>
+      <pre class="exchange-thinking-content">{{.Msg.Thinking}}</pre>
+    </details>
+    {{end}}
+    {{if .Msg.Content}}<p class="exchange-content">{{.Msg.Content}}</p>{{end}}
+    {{range .Msg.ToolCalls}}
+    <div class="exchange-tool-call">
+      <span class="exchange-tool-name badge">{{.Name}}</span>
+      {{if .Input}}<code class="exchange-tool-input">{{.Input}}</code>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+
+{{if .HasMore}}
+<div class="load-more-sentinel"
+     hx-get="{{.MoreURL}}"
+     hx-trigger="revealed"
+     hx-swap="outerHTML"
+     hx-target="this">
+  <span class="text-muted">Loading more&hellip;</span>
+</div>
+{{end}}
+{{end}}
+{{end}}

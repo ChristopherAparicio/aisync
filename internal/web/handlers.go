@@ -9659,6 +9659,191 @@ func (s *Server) handleSessionTagRemove(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// ── Inter-agent exchange view (H3) ──
+
+// ExchangeEntry is one message in the merged inter-agent exchange timeline.
+type ExchangeEntry struct {
+	SessionID    string
+	Agent        string
+	Msg          session.Message
+	IsDelegation bool
+}
+
+// exchangePage is the view model for the exchanges page.
+type exchangePage struct {
+	Nav        string
+	Session    *session.Session
+	Entries    []ExchangeEntry
+	HasMore    bool
+	MoreURL    string
+	ChildCount int
+}
+
+const maxInlineChildren = 10
+
+// buildExchangeTimeline merges messages from the parent and its direct children
+// into a single time-ordered sequence, tagging each entry with its source session.
+// children is capped by the caller to avoid N+1 payload decompression on large trees.
+func buildExchangeTimeline(parent *session.Session, children []session.Session) []ExchangeEntry {
+	var entries []ExchangeEntry
+	for _, msg := range parent.Messages {
+		msg.Content = stripSentinelContent(msg.Content)
+		entries = append(entries, ExchangeEntry{
+			SessionID:    string(parent.ID),
+			Agent:        parent.Agent,
+			Msg:          msg,
+			IsDelegation: isDelegationMessage(msg),
+		})
+	}
+	for _, child := range children {
+		for _, msg := range child.Messages {
+			msg.Content = stripSentinelContent(msg.Content)
+			entries = append(entries, ExchangeEntry{
+				SessionID: string(child.ID),
+				Agent:     child.Agent,
+				Msg:       msg,
+			})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Msg.Timestamp.Before(entries[j].Msg.Timestamp)
+	})
+	return entries
+}
+
+func stripSentinelContent(s string) string {
+	if len(s) >= 2 && s[0] == ' ' && s[1] == '' {
+		return s[2:]
+	}
+	return s
+}
+
+// isDelegationMessage returns true when the message contains a delegation tool call.
+func isDelegationMessage(msg session.Message) bool {
+	for _, tc := range msg.ToolCalls {
+		name := strings.ToLower(tc.Name)
+		if name == "delegate_task" || name == "delegate" || name == "ask_subagent" {
+			return true
+		}
+	}
+	return false
+}
+
+// handleSessionExchanges renders the inter-agent exchange timeline for a session.
+func (s *Server) handleSessionExchanges(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	// If Children is not populated, fall back to loading delegated_to linked sessions.
+	children := sess.Children
+	if len(children) == 0 && s.store != nil {
+		if links, lerr := s.store.GetLinkedSessions(sess.ID); lerr == nil {
+			for _, link := range links {
+				if link.LinkType == session.SessionLinkDelegatedTo && link.SourceSessionID == sess.ID {
+					if child, cerr := s.sessionSvc.Get(string(link.TargetSessionID)); cerr == nil {
+						children = append(children, *child)
+					}
+				}
+			}
+		}
+	}
+
+	totalChildren := len(children)
+	hasMore := totalChildren > maxInlineChildren
+	if hasMore {
+		children = children[:maxInlineChildren]
+	}
+
+	entries := buildExchangeTimeline(sess, children)
+
+	moreURL := ""
+	if hasMore {
+		moreURL = "/partials/session-exchanges/" + id + "?offset=" + strconv.Itoa(maxInlineChildren)
+	}
+
+	data := exchangePage{
+		Nav:        "sessions",
+		Session:    sess,
+		Entries:    entries,
+		HasMore:    hasMore,
+		MoreURL:    moreURL,
+		ChildCount: totalChildren,
+	}
+
+	s.render(w, "exchanges.html", data)
+}
+
+// handleSessionExchangesMore returns the next batch of child session messages for a session (HTMX partial).
+func (s *Server) handleSessionExchangesMore(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+
+	offset := 10
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	sess, err := s.sessionSvc.Get(id)
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	children := sess.Children
+	if len(children) == 0 && s.store != nil {
+		links, _ := s.store.GetLinkedSessions(sess.ID)
+		for _, lk := range links {
+			if lk.LinkType == session.SessionLinkDelegatedTo && lk.SourceSessionID == sess.ID {
+				if child, cerr := s.sessionSvc.Get(string(lk.TargetSessionID)); cerr == nil {
+					children = append(children, *child)
+				}
+			}
+		}
+	}
+
+	if offset >= len(children) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	const batchSize = 10
+	end := offset + batchSize
+	if end > len(children) {
+		end = len(children)
+	}
+	batch := children[offset:end]
+	hasMore := end < len(children)
+
+	entries := buildExchangeTimeline(sess, batch)
+
+	nextURL := ""
+	if hasMore {
+		nextURL = "/partials/session-exchanges/" + id + "?offset=" + strconv.Itoa(end)
+	}
+
+	type moreData struct {
+		Entries []ExchangeEntry
+		HasMore bool
+		MoreURL string
+	}
+	data := moreData{Entries: entries, HasMore: hasMore, MoreURL: nextURL}
+
+	s.renderPartial(w, "exchanges_more_partial.html", data)
+}
 type cronPage struct {
 	Nav  string
 	Jobs []session.CronJob

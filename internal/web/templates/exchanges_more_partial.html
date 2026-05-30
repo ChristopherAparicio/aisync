@@ -1,0 +1,13 @@
+{{define "exchanges_more_partial.html"}}
+{{range .Entries}}
+<div class="exchange-entry">
+  <span class="exchange-agent">{{.Agent}}</span>
+  <span class="exchange-role">{{.Msg.Role}}</span>
+  {{if .Msg.Content}}<p>{{.Msg.Content}}</p>{{end}}
+  {{if .IsDelegation}}<span class="badge badge-delegated">delegated</span>{{end}}
+</div>
+{{end}}
+{{if .HasMore}}
+<div hx-get="{{.MoreURL}}" hx-trigger="revealed" hx-swap="outerHTML"></div>
+{{end}}
+{{end}}

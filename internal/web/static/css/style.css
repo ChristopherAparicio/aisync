@@ -6834,6 +6834,33 @@ pre {
 /* ── Filter hidden ── */
 .sg-filter-hidden { display: none !important; }
 
+/* ── Graph Hermes provider badge ── */
+.badge-hermes {
+  background: color-mix(in srgb, var(--primary, var(--accent)) 18%, transparent);
+  color: var(--primary, var(--accent-light));
+  border: 1px solid color-mix(in srgb, var(--primary, var(--accent)) 35%, transparent);
+}
+
+/* ── Compact badge variant (used for inline icon links like exchanges) ── */
+.badge-sm {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  line-height: 1.2;
+}
+
+/* ── Exchanges jump link on graph nodes ── */
+.sg-badge-exchanges {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.sg-badge-exchanges:hover {
+  background: rgba(56, 189, 248, 0.22);
+  color: #7dd3fc;
+}
 /* ══════════════════════════════════════════════════════════════════════════════
    aisync v2 — uPlot / Tippy.js / Smooth Accordion Styles
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -7111,4 +7138,58 @@ details.section-accordion .accordion-body {
   letter-spacing: 0.5px;
   color: var(--text-muted);
   font-weight: 600;
+}
+/* ── Exchange Timeline (agent ↔ child session messages) ── */
+
+.exchange-entry {
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--border);
+  margin-bottom: 0.5rem;
+  background: var(--bg-card);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  transition: border-left-color 0.15s ease;
+}
+
+.exchange-entry + .exchange-entry {
+  margin-top: 0.25rem;
+}
+
+.exchange-entry:hover {
+  border-left-color: var(--accent);
+}
+
+.exchange-agent {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent-light);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 0.5rem;
+}
+
+.exchange-role {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 0.75rem;
+}
+
+.exchange-entry p {
+  margin: 0.35rem 0 0;
+  color: var(--text);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.badge-delegated {
+  background: color-mix(in srgb, var(--yellow, #f59e0b) 15%, transparent);
+  color: var(--yellow, #f59e0b);
+  border: 1px solid color-mix(in srgb, var(--yellow, #f59e0b) 30%, transparent);
+  margin-left: 0.5rem;
 }

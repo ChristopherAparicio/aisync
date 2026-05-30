@@ -961,7 +961,10 @@ function toggleExpand(btn) {
 <!-- ── Children ── -->
 {{if .Session.Children}}
 <div class="section">
-  <h2 class="section-title">Child Sessions <span class="text-muted">({{len .Session.Children}})</span></h2>
+  <h2 class="section-title">
+    Child Sessions <span class="text-muted">({{len .Session.Children}})</span>
+    <a href="/sessions/{{.Session.ID}}/exchanges" class="btn btn-sm" style="margin-left:0.75rem;">View exchanges &rarr;</a>
+  </h2>
   <div class="table-wrap">
     <table>
       <thead>

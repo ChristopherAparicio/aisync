@@ -98,6 +98,8 @@ func New(cfg Config) (*Server, error) {
 		{"templates/file_tree.html"},
 		{"templates/team.html"},
 		{"templates/session_graph.html"},
+		{"templates/exchanges.html"},
+		{"templates/cron.html"},
 		{"templates/cron.html"},
 		{"templates/errors_unclassified.html"},
 	}
@@ -135,6 +137,7 @@ func New(cfg Config) (*Server, error) {
 		"templates/session_messages_partial.html",
 		"templates/inspect_partial.html",
 	)
+		"templates/exchanges_more_partial.html",
 	if err != nil {
 		return nil, fmt.Errorf("parse partials: %w", err)
 	}
@@ -183,6 +186,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sessions/{id}", s.handleSessionDetail)
 	mux.HandleFunc("GET /branches", s.handleBranches)
 	mux.HandleFunc("GET /branches/{name...}", s.handleBranchTimeline)
+	mux.HandleFunc("GET /sessions/{id}/exchanges", s.handleSessionExchanges)
 	mux.HandleFunc("GET /projects", s.handleProjects)
 	mux.HandleFunc("GET /projects/{path...}", s.handleProjectDetail)
 	mux.HandleFunc("GET /files/{path...}", s.handleFileExplorer)
@@ -232,6 +236,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects", s.handleAPIProjects)
 	mux.HandleFunc("GET /api/sessions/{id}/inspect", s.handleAPISessionInspect)
 	mux.HandleFunc("GET /api/inspect/project", s.handleAPIProjectInspect)
+	mux.HandleFunc("GET /partials/session-exchanges/{id}", s.handleSessionExchangesMore)
 }
 
 // ListenAndServe starts the web server and blocks until shutdown.
