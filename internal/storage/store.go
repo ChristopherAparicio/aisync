@@ -584,6 +584,84 @@ type TagStore interface {
 	FilterSessionIDsByTags(ids []session.ID, tags []string) ([]session.ID, error)
 }
 
+// SessionStallStore persists detected stuck sessions (sessions that stopped
+// progressing without a clean termination — stream stalls, mid-stream
+// aborts, 429s, provider errors). Populated by the StallDetectorTask
+// and read by the dashboard /sessions/health page + `aisync sessions
+// health` CLI.
+type SessionStallStore interface {
+	// UpsertStall persists a stall. Uniqueness is enforced on
+	// (provider_session_id, started_at, root_cause): re-detecting the
+	// same live stall is idempotent (the row's updated_at is bumped and
+	// metric columns refreshed). When the stall resolves the same call
+	// site sets EndedAt + DurationMs.
+	UpsertStall(stall *session.SessionStall) error
+
+	// SealStall marks a previously-live stall as resolved at the given
+	// time and fills DurationMs. No-op if the stall is already sealed.
+	SealStall(id int64, endedAt time.Time) error
+
+	// GetStall retrieves a stall by its row id.
+	// Returns (nil, nil) when no row matches.
+	GetStall(id int64) (*session.SessionStall, error)
+
+	// ListStalls returns stalls matching the filter, ordered by
+	// detected_at DESC.
+	ListStalls(filter session.StallFilter) ([]session.SessionStall, error)
+
+	// ListLiveStalls returns currently-live stalls (ended_at IS NULL),
+	// ordered by started_at ASC (oldest stuck first).
+	ListLiveStalls() ([]session.SessionStall, error)
+
+	// StallStats returns aggregated counts + cost/token sums for the
+	// given time window. RootCauses/Providers filters from the filter
+	// are respected; OnlyLive is ignored (stats always include both).
+	StallStats(filter session.StallFilter) (*session.StallStats, error)
+}
+
+// NotificationLogStore persists every notification.Event dispatched through
+// the always-on store adapter. Powers the in-app /alerts page and the
+// `aisync alerts` CLI: list active alerts, acknowledge them, browse history.
+type NotificationLogStore interface {
+	// InsertNotificationLog persists a dispatched notification.
+	// Returns the assigned row id on the entry pointer (entry.ID is set in place).
+	InsertNotificationLog(entry *session.NotificationLogEntry) error
+
+	// GetNotificationLog retrieves an entry by id.
+	// Returns (nil, nil) when no row matches.
+	GetNotificationLog(id int64) (*session.NotificationLogEntry, error)
+
+	// ListNotificationLogs returns entries matching the filter, ordered by
+	// dispatched_at DESC. OnlyUnack=true restricts to acknowledged_at IS NULL.
+	ListNotificationLogs(filter session.NotificationLogFilter) ([]session.NotificationLogEntry, error)
+
+	// AcknowledgeNotification marks a single entry as acked.
+	// No-op when the entry is already acked or does not exist.
+	AcknowledgeNotification(id int64, actor string, at time.Time) error
+
+	// AcknowledgeAllNotifications marks every currently-unacked entry as acked.
+	// Returns the number of rows updated.
+	AcknowledgeAllNotifications(actor string, at time.Time) (int, error)
+
+	// UnacknowledgedNotificationCount returns the count of entries where
+	// acknowledged_at IS NULL.
+	UnacknowledgedNotificationCount() (int, error)
+}
+
+// CronJobStore persists scheduled cron jobs from providers (e.g. Hermes).
+type CronJobStore interface {
+	// UpsertCronJob inserts or updates a cron job record (idempotent on job_id).
+	UpsertCronJob(job *session.CronJob) error
+
+	// ListCronJobs returns all cron jobs for the given provider.
+	// Pass an empty string to list all providers.
+	ListCronJobs(provider string) ([]session.CronJob, error)
+
+	// GetCronJob returns a single cron job by its job_id.
+	// Returns nil, nil when not found.
+	GetCronJob(jobID string) (*session.CronJob, error)
+}
+
 // ── Composed Interface ──
 
 // Store composes all role interfaces into a single persistence contract.
@@ -608,6 +686,9 @@ type Store interface {
 	RecommendationStore
 	HotspotStore
 	TagStore
+	SessionStallStore
+	NotificationLogStore
+	CronJobStore
 
 	// Close releases any resources held by the store.
 	Close() error

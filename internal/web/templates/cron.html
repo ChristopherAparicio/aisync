@@ -1,0 +1,49 @@
+{{define "cron.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}Cron Jobs — aisync{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Cron Jobs</h1>
+  <p class="page-subtitle">Scheduled tasks tracked from Hermes</p>
+</div>
+{{if not .Jobs}}
+<div class="empty-state">
+  <p>No cron jobs found. Run <code>aisync capture --provider hermes</code> to ingest Hermes scheduled tasks.</p>
+</div>
+{{else}}
+<div class="table-container">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Schedule</th>
+        <th>Enabled</th>
+        <th>State</th>
+        <th>Last Status</th>
+        <th>Last Run</th>
+        <th>Next Run</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Jobs}}
+      <tr>
+        <td class="fw-medium">{{.Name}}</td>
+        <td>{{if .ScheduleDisplay}}<code>{{.ScheduleDisplay}}</code>{{else}}<code>{{.Schedule}}</code>{{end}}</td>
+        <td>{{if .Enabled}}<span class="badge badge-success">Yes</span>{{else}}<span class="badge">No</span>{{end}}</td>
+        <td>{{if .State}}<span class="badge">{{.State}}</span>{{else}}<span class="text-muted">—</span>{{end}}</td>
+        <td>
+          {{if .LastStatus}}
+          <span class="badge {{if eq .LastStatus "success"}}badge-success{{else if eq .LastStatus "error"}}badge-error{{else}}badge-muted{{end}}">{{.LastStatus}}</span>
+          {{else}}<span class="text-muted">—</span>{{end}}
+        </td>
+        <td>{{fmtTimePtr .LastRunAt}}</td>
+        <td>{{fmtTimePtr .NextRunAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+{{end}}

@@ -98,6 +98,7 @@ func New(cfg Config) (*Server, error) {
 		{"templates/file_tree.html"},
 		{"templates/team.html"},
 		{"templates/session_graph.html"},
+		{"templates/cron.html"},
 		{"templates/errors_unclassified.html"},
 	}
 
@@ -193,6 +194,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /analytics", s.handleAnalytics)
 	mux.HandleFunc("GET /team", s.handleTeam)
 	mux.HandleFunc("GET /graph", s.handleSessionGraph)
+	mux.HandleFunc("GET /cron", s.handleCron)
 	mux.HandleFunc("GET /errors/unclassified", s.handleUnclassifiedErrors)
 	mux.HandleFunc("POST /api/errors/classify", s.handleClassifyError)
 	mux.HandleFunc("GET /investigate/command-patterns", s.handleCommandPatterns)

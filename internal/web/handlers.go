@@ -9658,3 +9658,20 @@ func (s *Server) handleSessionTagRemove(w http.ResponseWriter, r *http.Request) 
 		Editable:  true,
 	})
 }
+
+type cronPage struct {
+	Nav  string
+	Jobs []session.CronJob
+}
+
+func (s *Server) handleCron(w http.ResponseWriter, r *http.Request) {
+	var jobs []session.CronJob
+	if s.store != nil {
+		if list, err := s.store.ListCronJobs(""); err == nil {
+			jobs = list
+		} else {
+			s.logger.Printf("cron: list jobs: %v", err)
+		}
+	}
+	s.render(w, "cron.html", cronPage{Nav: "cron", Jobs: jobs})
+}

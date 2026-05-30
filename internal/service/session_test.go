@@ -1184,6 +1184,33 @@ func (m *mockStore) FilterSessionIDsByTags(ids []session.ID, _ []string) ([]sess
 	return ids, nil
 }
 
+// SessionStallStore stubs.
+func (m *mockStore) UpsertStall(_ *session.SessionStall) error                         { return nil }
+func (m *mockStore) SealStall(_ int64, _ time.Time) error                              { return nil }
+func (m *mockStore) GetStall(_ int64) (*session.SessionStall, error)                   { return nil, nil }
+func (m *mockStore) ListStalls(_ session.StallFilter) ([]session.SessionStall, error)  { return nil, nil }
+func (m *mockStore) ListLiveStalls() ([]session.SessionStall, error)                   { return nil, nil }
+func (m *mockStore) StallStats(_ session.StallFilter) (*session.StallStats, error)     { return nil, nil }
+
+// NotificationLogStore stubs.
+func (m *mockStore) InsertNotificationLog(_ *session.NotificationLogEntry) error { return nil }
+func (m *mockStore) GetNotificationLog(_ int64) (*session.NotificationLogEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) ListNotificationLogs(_ session.NotificationLogFilter) ([]session.NotificationLogEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) AcknowledgeNotification(_ int64, _ string, _ time.Time) error { return nil }
+func (m *mockStore) AcknowledgeAllNotifications(_ string, _ time.Time) (int, error) {
+	return 0, nil
+}
+func (m *mockStore) UnacknowledgedNotificationCount() (int, error) { return 0, nil }
+
+// CronJobStore stubs.
+func (m *mockStore) UpsertCronJob(_ *session.CronJob) error               { return nil }
+func (m *mockStore) ListCronJobs(_ string) ([]session.CronJob, error)     { return nil, nil }
+func (m *mockStore) GetCronJob(_ string) (*session.CronJob, error)        { return nil, nil }
+
 // ── Garbage Collection tests ──
 
 // gcMockStore is a more functional mock that supports List, Delete, DeleteOlderThan.
@@ -2626,6 +2653,52 @@ func TestExtractSessionID(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("extractSessionID(%q) = %q, want %q", tc.raw, got, tc.want)
 		}
+	}
+}
+
+func TestStripSentinel(t *testing.T) {
+	if got := stripSentinel("\x00\x01{\"session_id\":\"abc123\"}"); got != "{\"session_id\":\"abc123\"}" {
+		t.Fatalf("stripSentinel() = %q, want stripped JSON", got)
+	}
+	if got := stripSentinel("{\"session_id\":\"abc123\"}"); got != "{\"session_id\":\"abc123\"}" {
+		t.Fatalf("stripSentinel() without prefix changed content: %q", got)
+	}
+}
+
+func TestIngest_HeuristicDelegation_SentinelPrefixedDelegateTask(t *testing.T) {
+	svc, store := newIngestService(t)
+
+	targetID := session.ID("hermes-child-session")
+	store.sessions[targetID] = &session.Session{ID: targetID}
+
+	result, err := svc.Ingest(context.Background(), IngestRequest{
+		Provider:  "ollama",
+		SessionID: "hermes-parent-session",
+		Messages: []IngestMessage{
+			{
+				Role: "assistant",
+				ToolCalls: []IngestToolCall{
+					{
+						Name:  "delegate_task",
+						Input: "\x00\x01{\"session_id\":\"hermes-child-session\",\"task\":\"implement auth\"}",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+
+	links := store.sessionLinks[result.SessionID]
+	found := false
+	for _, l := range links {
+		if l.LinkType == session.SessionLinkDelegatedTo && l.TargetSessionID == targetID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected delegated_to link to %q, links = %+v", targetID, links)
 	}
 }
 
