@@ -3841,7 +3841,155 @@ func runMigrations(db *sql.DB) error {
 		return fmt.Errorf("migration 034 (session_tags tag index): %w", err)
 	}
 
+	// ── Migration 035: session_stalls — stuck session tracking ──
+	//
+	// Records every session detected as "stuck" by the StallDetectorTask.
+	// A stall is a session that stopped progressing without a clean
+	// termination — most commonly a stream stall (TCP half-open between
+	// OpenCode and the LLM provider) or a mid-stream Aborted message.
+	//
+	// Fields:
+	//   provider_session_id : foreign session id as known by the provider
+	//                         (e.g. OpenCode's ses_xxx). Different from the
+	//                         aisync session_id, which is the captured row.
+	//   detected_at         : when the StallDetectorTask first observed it.
+	//   started_at          : when the stuck activity started (tool start /
+	//                         message start, depending on root_cause).
+	//   ended_at            : when the stall resolved (NULL while live).
+	//                         Aborted stalls are sealed immediately.
+	//   duration_ms         : convenience column, ended_at - started_at.
+	//   root_cause          : stream_stall | aborted | rate_limit_429 |
+	//                         provider_error.
+	//   tokens_lost / cost_lost_usd : best-effort estimate of wasted work
+	//                                 (input + cache tokens billed but no
+	//                                 useful output produced).
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS session_stalls (
+		id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id           TEXT NOT NULL DEFAULT '',
+		provider_session_id  TEXT NOT NULL,
+		detected_at          INTEGER NOT NULL,
+		started_at           INTEGER NOT NULL,
+		ended_at             INTEGER,
+		duration_ms          INTEGER,
+		root_cause           TEXT NOT NULL,
+		provider             TEXT NOT NULL DEFAULT '',
+		model                TEXT NOT NULL DEFAULT '',
+		agent                TEXT NOT NULL DEFAULT '',
+		parent_session_id    TEXT NOT NULL DEFAULT '',
+		tool_name            TEXT NOT NULL DEFAULT '',
+		tokens_lost          INTEGER NOT NULL DEFAULT 0,
+		cost_lost_usd        REAL    NOT NULL DEFAULT 0,
+		error_message        TEXT    NOT NULL DEFAULT '',
+		created_at           INTEGER NOT NULL,
+		updated_at           INTEGER NOT NULL,
+		UNIQUE(provider_session_id, started_at, root_cause)
+	)`); err != nil {
+		return fmt.Errorf("migration 035 (session_stalls table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_stalls_detected_at
+		ON session_stalls(detected_at)`); err != nil {
+		return fmt.Errorf("migration 035 (session_stalls detected_at index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_stalls_root_cause
+		ON session_stalls(root_cause)`); err != nil {
+		return fmt.Errorf("migration 035 (session_stalls root_cause index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_stalls_provider_session
+		ON session_stalls(provider_session_id)`); err != nil {
+		return fmt.Errorf("migration 035 (session_stalls provider_session_id index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_stalls_live
+		ON session_stalls(ended_at) WHERE ended_at IS NULL`); err != nil {
+		return fmt.Errorf("migration 035 (session_stalls live index): %w", err)
+	}
+
+	// ── Migration 036: notification_log — persisted alert/notification history ──
+	//
+	// Records every notification.Event dispatched through the NotificationService
+	// via the always-on store adapter. This provides:
+	//   - an in-app /alerts page (no external channel required),
+	//   - a queryable history (when did spike X happen?),
+	//   - an acknowledge ("ack") workflow so dismissed alerts disappear from
+	//     the active list but stay readable in the archive.
+	//
+	// Fields:
+	//   event_type        : notification.EventType (e.g. "stall.spike").
+	//   severity          : info | warning | critical.
+	//   project           : optional project display name (empty for global).
+	//   title             : short headline rendered in the alert list.
+	//   summary           : one-line description shown under the title.
+	//   payload_json      : full event.Data marshalled as JSON (expandable view).
+	//   dispatched_at     : when the notification fired.
+	//   acknowledged_at   : when an operator acked the alert (NULL = active).
+	//   acknowledged_by   : optional actor identifier (CLI = "cli", web = "web").
+	//   dedup_key         : deduplication key derived from the event
+	//                       (used to coalesce repeated alerts in the UI).
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS notification_log (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_type      TEXT NOT NULL,
+		severity        TEXT NOT NULL DEFAULT 'info',
+		project         TEXT NOT NULL DEFAULT '',
+		title           TEXT NOT NULL DEFAULT '',
+		summary         TEXT NOT NULL DEFAULT '',
+		payload_json    TEXT NOT NULL DEFAULT '',
+		dispatched_at   INTEGER NOT NULL,
+		acknowledged_at INTEGER,
+		acknowledged_by TEXT NOT NULL DEFAULT '',
+		dedup_key       TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		return fmt.Errorf("migration 036 (notification_log table): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_notification_log_dispatched_at
+		ON notification_log(dispatched_at)`); err != nil {
+		return fmt.Errorf("migration 036 (notification_log dispatched_at index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_notification_log_unack
+		ON notification_log(acknowledged_at) WHERE acknowledged_at IS NULL`); err != nil {
+		return fmt.Errorf("migration 036 (notification_log unack index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_notification_log_event_type
+		ON notification_log(event_type)`); err != nil {
+		return fmt.Errorf("migration 036 (notification_log event_type index): %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_notification_log_severity
+		ON notification_log(severity)`); err != nil {
+		return fmt.Errorf("migration 036 (notification_log severity index): %w", err)
+	}
+
+	// Migration 038: cron_jobs — persisted scheduled cron jobs from providers.
+	if err := migration038(db); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// migration038 creates the cron_jobs table for tracking scheduled cron jobs from providers.
+func migration038(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS cron_jobs (
+			job_id           TEXT    PRIMARY KEY,
+			provider         TEXT    NOT NULL DEFAULT '',
+			name             TEXT    NOT NULL DEFAULT '',
+			prompt           TEXT    NOT NULL DEFAULT '',
+			schedule         TEXT    NOT NULL DEFAULT '',
+			schedule_display TEXT    NOT NULL DEFAULT '',
+			repeat           INTEGER NOT NULL DEFAULT 0,
+			enabled          INTEGER NOT NULL DEFAULT 1,
+			state            TEXT    NOT NULL DEFAULT '',
+			model            TEXT    NOT NULL DEFAULT '',
+			next_run_at      REAL,
+			last_run_at      REAL,
+			last_status      TEXT    NOT NULL DEFAULT '',
+			last_error       TEXT    NOT NULL DEFAULT '',
+			origin           TEXT    NOT NULL DEFAULT '',
+			workdir          TEXT    NOT NULL DEFAULT '',
+			profile          TEXT    NOT NULL DEFAULT '',
+			raw_json         TEXT    NOT NULL DEFAULT '',
+			updated_at       REAL    NOT NULL DEFAULT 0
+		)
+	`)
+	return err
 }
 
 // backfillToolCounts reads each session's payload JSON and computes

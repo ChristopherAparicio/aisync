@@ -14,11 +14,12 @@ import (
 // When a session's messages contain one of these tools, aisync looks for a referenced
 // session_id in the tool input/output and creates a delegated_to link automatically.
 var delegateToolNames = map[string]bool{
-	"delegate":     true,
-	"ask_subagent": true,
-	"run_subagent": true,
-	"subagent":     true,
-	"computer_use": true, // Anthropic computer_use sometimes references child sessions
+	"delegate":      true,
+	"ask_subagent":  true,
+	"run_subagent":  true,
+	"subagent":      true,
+	"computer_use":  true, // Anthropic computer_use sometimes references child sessions
+	"delegate_task": true, // Hermes agent delegation tool
 }
 
 // ── Ingest ──
@@ -239,9 +240,20 @@ func (s *SessionService) detectAndLinkDelegation(sess *session.Session, delegate
 	}
 }
 
+// stripSentinel removes the Hermes sentinel prefix from content before JSON parsing.
+// Hermes prefixes structured content with a 2-byte marker (\x00\x01) followed by JSON.
+// If the prefix is not present, the original string is returned unchanged.
+func stripSentinel(s string) string {
+	if len(s) >= 2 && s[0] == '\x00' && s[1] == '\x01' {
+		return s[2:]
+	}
+	return s
+}
+
 // extractSessionID looks for a "session_id" key in a JSON string.
 // Returns the value if found, empty string otherwise.
 func extractSessionID(raw string) string {
+	raw = stripSentinel(raw)
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw[0] != '{' {
 		return ""

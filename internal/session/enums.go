@@ -19,6 +19,7 @@ const (
 	ProviderOpenCode   ProviderName = "opencode"
 	ProviderCursor     ProviderName = "cursor"
 	ProviderOllama     ProviderName = "ollama"
+	ProviderHermes     ProviderName = "hermes"
 )
 
 var allProviders = []ProviderName{
@@ -26,6 +27,7 @@ var allProviders = []ProviderName{
 	ProviderOpenCode,
 	ProviderCursor,
 	ProviderOllama,
+	ProviderHermes,
 }
 
 // Valid reports whether p is a known provider name.

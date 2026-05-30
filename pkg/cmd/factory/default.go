@@ -37,6 +37,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/provider"
 	"github.com/ChristopherAparicio/aisync/internal/provider/claude"
 	cursorprov "github.com/ChristopherAparicio/aisync/internal/provider/cursor"
+	"github.com/ChristopherAparicio/aisync/internal/provider/hermes"
 	"github.com/ChristopherAparicio/aisync/internal/provider/opencode"
 	"github.com/ChristopherAparicio/aisync/internal/search"
 	"github.com/ChristopherAparicio/aisync/internal/search/elastic"
@@ -239,6 +240,7 @@ func New() *cmdutil.Factory {
 				claude.New(""),     // default ~/.claude
 				opencode.New(""),   // default XDG data dir
 				cursorprov.New(""), // default platform Cursor dir
+				hermes.New(""),     // default ~/.hermes
 			)
 		})
 		return cachedRegistry
