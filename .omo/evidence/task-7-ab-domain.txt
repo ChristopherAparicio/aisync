@@ -1,0 +1,35 @@
+=== RUN   TestEvalAB
+    eval_test.go: loaded 9 eval queries from fixture
+    eval_test.go: found 5014 session summaries
+    eval_test.go: loaded 5014 full sessions
+    eval_test.go: noisy index: 142.55 MB, reindex: 2m13.294s
+    eval_test.go: clean index: 46.54 MB, reindex: 47.428s
+    eval_test.go: size ratio (clean/noisy): 32.6%
+    eval_test.go: [domain] "authentication": noisy=0.50 clean=0.50
+    eval_test.go: [domain] "database migration": noisy=0.00 clean=0.00
+    eval_test.go: [domain] "docker": noisy=0.00 clean=0.00
+    eval_test.go: [project] "omogen": noisy=0.00 clean=0.00
+    eval_test.go: [project] "cycloplan": noisy=0.00 clean=0.00
+    eval_test.go: [project] "aisync": noisy=0.00 clean=0.50
+    eval_test.go: [path] "internal/storage/store.go": noisy=0.00 clean=0.00
+    eval_test.go: [path] "apps/authent": noisy=0.00 clean=1.00
+    eval_test.go: [command] "git rebase": noisy=0.00 clean=0.00
+=== RUN   TestEvalAB/DomainProject
+    eval_test.go: [domain] "authentication": noisy=0.50 clean=0.50
+    eval_test.go: [domain] "database migration": noisy=0.00 clean=0.00
+    eval_test.go: [domain] "docker": noisy=0.00 clean=0.00
+    eval_test.go: [project] "omogen": noisy=0.00 clean=0.00
+    eval_test.go: [project] "cycloplan": noisy=0.00 clean=0.00
+    eval_test.go: [project] "aisync": noisy=0.00 clean=0.50
+    eval_test.go: domain+project: noisy avg P@10=0.083, clean avg P@10=0.167
+--- PASS: TestEvalAB/DomainProject (0.00s)
+--- PASS: TestEvalAB (229.85s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search	230.649s
+
+NOTE: clean avg P@10 (0.167) >= noisy avg P@10 (0.083) — 2x improvement on domain+project queries.
+Most queries return 0.00 for both because FTS5 requires ALL query tokens in the indexed content.
+Session summaries for domain-level queries (authentication, database migration, docker) are often
+too short or use different terminology than the fixture query keywords.
+The "aisync" project query gains +0.50 in clean: the project_path token "aisync" now ranks without
+competition from inflated tool-echo noise.

@@ -1,0 +1,26 @@
+=== RUN   TestEvalAB
+    eval_test.go: loaded 9 eval queries from fixture
+    eval_test.go: found 5014 session summaries
+    eval_test.go: loaded 5014 full sessions
+    eval_test.go: noisy index: 142.55 MB, reindex: 2m13.294s
+    eval_test.go: clean index: 46.54 MB, reindex: 47.428s
+    eval_test.go: size ratio (clean/noisy): 32.6%
+=== RUN   TestEvalAB/PathCommand
+    eval_test.go: [path] "internal/storage/store.go": clean P@10=0.00 (expected [ses_2d10f533effeDi56cuLr1LvrnB])
+    eval_test.go: NOTE [path] "internal/storage/store.go": expected IDs not in clean top-10; see report for root cause
+    eval_test.go: [path] "apps/authent": clean P@10=1.00 (expected [ses_2bcbebecdffeWlT6BVTcyNhIcZ])
+    eval_test.go: [command] "git rebase": clean P@10=0.00 (expected [ses_2d9e6b50affeADSfj1QVkViMZk ses_2db719795ffecFr9IrTpmTauRO])
+    eval_test.go: NOTE [command] "git rebase": expected IDs not in clean top-10; see report for root cause
+--- PASS: TestEvalAB/PathCommand (0.00s)
+--- PASS: TestEvalAB (229.85s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search	230.649s
+
+NOTE: 1/3 path+command queries fully covered in clean top-10 (apps/authent: P@10=1.00).
+Known regressions (non-fatal):
+- "internal/storage/store.go": too many competing hits containing tokens [internal, storage, store, go]
+  in a Go repo; expected session ranks below 10 despite containing the path in the user message.
+- "git rebase": user message says "tu peux rebase depuis main" — "git" never appears in user turn,
+  only in stripped bash outputs. The FTS5 AND query "git" "rebase" cannot match without both tokens.
+  This is a documented limitation of tool-content stripping: commands referenced implicitly via
+  natural language are not discoverable by exact-keyword search. Covered by aisync blame.
