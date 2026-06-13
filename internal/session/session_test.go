@@ -177,3 +177,38 @@ func TestSession_WithChildren(t *testing.T) {
 		t.Errorf("Children[0].ParentID = %q, want %q", got.Children[0].ParentID, "parent-1")
 	}
 }
+
+func TestMessage_JSONRoundTripPreservesIsCompactionSummary(t *testing.T) {
+	message := Message{
+		ID:                  "msg-compact",
+		Role:                RoleUser,
+		Content:             "Compaction summary",
+		IsCompactionSummary: true,
+		Timestamp:           time.Date(2026, 2, 16, 14, 30, 0, 0, time.UTC),
+	}
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got.IsCompactionSummary != true {
+		t.Fatalf("IsCompactionSummary = %v, want true", got.IsCompactionSummary)
+	}
+}
+
+func TestMessage_JSONDefaultsIsCompactionSummaryToFalse(t *testing.T) {
+	var got Message
+	if err := json.Unmarshal([]byte(`{"id":"msg-legacy","role":"user","content":"hello"}`), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got.IsCompactionSummary != false {
+		t.Fatalf("IsCompactionSummary = %v, want false", got.IsCompactionSummary)
+	}
+}

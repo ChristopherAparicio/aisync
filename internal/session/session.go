@@ -114,21 +114,22 @@ type TagCount struct {
 
 // Message represents a single message in an AI conversation.
 type Message struct {
-	Timestamp        time.Time      `json:"timestamp"`
-	ID               string         `json:"id"`
-	Content          string         `json:"content"`
-	Model            string         `json:"model,omitempty"`
-	ProviderID       string         `json:"provider_id,omitempty"` // e.g. "anthropic", "amazon-bedrock", "opencode"
-	Thinking         string         `json:"thinking,omitempty"`
-	Role             MessageRole    `json:"role"`
-	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
-	Images           []ImageMeta    `json:"images,omitempty"`         // images included in this message
-	ContentBlocks    []ContentBlock `json:"content_blocks,omitempty"` // structured content blocks (text, image, etc.)
-	InputTokens      int            `json:"input_tokens,omitempty"`
-	OutputTokens     int            `json:"output_tokens,omitempty"`
-	CacheReadTokens  int            `json:"cache_read_tokens,omitempty"`  // tokens read from prompt cache (cheaper)
-	CacheWriteTokens int            `json:"cache_write_tokens,omitempty"` // tokens written to prompt cache (more expensive)
-	ProviderCost     float64        `json:"provider_cost,omitempty"`      // actual cost reported by provider (0 = unknown/subscription)
+	Timestamp           time.Time      `json:"timestamp"`
+	ID                  string         `json:"id"`
+	Content             string         `json:"content"`
+	Model               string         `json:"model,omitempty"`
+	ProviderID          string         `json:"provider_id,omitempty"` // e.g. "anthropic", "amazon-bedrock", "opencode"
+	Thinking            string         `json:"thinking,omitempty"`
+	Role                MessageRole    `json:"role"`
+	IsCompactionSummary bool           `json:"is_compaction_summary,omitempty"`
+	ToolCalls           []ToolCall     `json:"tool_calls,omitempty"`
+	Images              []ImageMeta    `json:"images,omitempty"`         // images included in this message
+	ContentBlocks       []ContentBlock `json:"content_blocks,omitempty"` // structured content blocks (text, image, etc.)
+	InputTokens         int            `json:"input_tokens,omitempty"`
+	OutputTokens        int            `json:"output_tokens,omitempty"`
+	CacheReadTokens     int            `json:"cache_read_tokens,omitempty"`  // tokens read from prompt cache (cheaper)
+	CacheWriteTokens    int            `json:"cache_write_tokens,omitempty"` // tokens written to prompt cache (more expensive)
+	ProviderCost        float64        `json:"provider_cost,omitempty"`      // actual cost reported by provider (0 = unknown/subscription)
 }
 
 // ContentBlock represents a structured content block within a message.
