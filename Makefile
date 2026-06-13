@@ -5,7 +5,7 @@ GO := go
 GOFLAGS := -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build test test-verbose test-race test-cover lint fmt vet install clean release-dry
+.PHONY: all build test test-verbose test-race test-cover lint fmt vet install clean install-skills uninstall-skills release-dry
 
 all: lint test build
 
@@ -50,6 +50,29 @@ vet:
 clean:
 	rm -rf $(BUILD_DIR)
 	$(GO) clean -cache
+
+## Agent Skills
+
+SKILLS_DIR := $(shell pwd)/.opencode/skills
+OPENCODE_SKILLS_DIR := $(HOME)/.config/opencode/skills
+
+install-skills:
+	@mkdir -p $(OPENCODE_SKILLS_DIR)
+	@for skill in aisync-session-finder aisync-stats aisync-analyze; do \
+		ln -sfn $(SKILLS_DIR)/$$skill $(OPENCODE_SKILLS_DIR)/$$skill; \
+		echo "Installed: $(OPENCODE_SKILLS_DIR)/$$skill -> $(SKILLS_DIR)/$$skill"; \
+	done
+
+uninstall-skills:
+	@for skill in aisync-session-finder aisync-stats aisync-analyze; do \
+		target=$(OPENCODE_SKILLS_DIR)/$$skill; \
+		if [ -L "$$target" ]; then \
+			rm "$$target"; \
+			echo "Removed: $$target"; \
+		elif [ -e "$$target" ]; then \
+			echo "Skipped (not a symlink): $$target"; \
+		fi; \
+	done
 
 ## Release
 
