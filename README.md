@@ -231,6 +231,24 @@ Once configured, you can ask your AI assistant to interact with aisync directly:
 
 The AI assistant will call the appropriate MCP tools automatically.
 
+## Agent Skills
+
+The aisync repo ships a bundle of 3 CLI-first [OpenCode](https://opencode.ai) skills that teach your agents to use aisync automatically.
+
+| Skill | Triggers |
+|-------|---------|
+| `aisync-session-finder` | "which session worked on X?", "find sessions on this branch", "restore a past session" |
+| `aisync-stats` | "how many tokens did this cost?", "which tools were used most?", "forecast usage" |
+| `aisync-analyze` | "why did this session fail?", "find sessions with errors", "did this go off-topic?" |
+
+**Install in one command:**
+
+```bash
+make install-skills
+```
+
+See [`.opencode/skills/README.md`](.opencode/skills/README.md) for full documentation.
+
 ## Configuration
 
 Two-level config: global (`~/.aisync/config.json`) + per-repo (`.aisync/config.json`).
