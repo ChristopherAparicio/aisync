@@ -1,0 +1,13 @@
+=== RUN   TestDocumentFromSession
+=== RUN   TestDocumentFromSession/MaxContentLenRespected
+--- PASS: TestDocumentFromSession (0.00s)
+    --- PASS: TestDocumentFromSession/MaxContentLenRespected (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search	0.181s
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/elastic	0.338s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/fts5	0.505s [no tests to run]
+?   	github.com/ChristopherAparicio/aisync/internal/search/like	[no test files]

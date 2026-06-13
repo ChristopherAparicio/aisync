@@ -1,0 +1,13 @@
+=== RUN   TestDocumentFromSession
+=== RUN   TestDocumentFromSession/NonOpenCode
+--- PASS: TestDocumentFromSession (0.00s)
+    --- PASS: TestDocumentFromSession/NonOpenCode (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search	0.260s
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/elastic	0.432s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/fts5	0.600s [no tests to run]
+?   	github.com/ChristopherAparicio/aisync/internal/search/like	[no test files]

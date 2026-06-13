@@ -355,13 +355,14 @@ func TestIntegration_FTS5_DocumentFromSession(t *testing.T) {
 		t.Errorf("Tokens = %d, want 50000", hit.Tokens)
 	}
 
-	// Search by tool output (bash PASS).
+	// Tool outputs are intentionally excluded from indexed Content (ai5-search-v2).
+	// Searching for bash output "PASS" must return 0 hits.
 	result2, err := engine.Search(ctx, search.Query{Text: "PASS", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result2.Hits) != 1 {
-		t.Fatalf("tool output search: got %d hits, want 1", len(result2.Hits))
+	if len(result2.Hits) != 0 {
+		t.Fatalf("tool output search: got %d hits, want 0 (tool outputs excluded from index)", len(result2.Hits))
 	}
 }
 

@@ -85,3 +85,48 @@ IsCompactionSummary added at session.go after Role. Tests: round-trip + back-com
 **Key insight on path/command queries**: User messages sometimes contain explicit file paths and commands BEFORE any tool invocation. These sessions verify that search still finds user-requested paths/commands after tool-output content is filtered from FTS (the A3 regression risk). If FTS drops tool outputs but keeps user turns, these IDs should still rank high.
 
 **All 12 IDs validated** via sqlite3: `SELECT COUNT(*) FROM sessions WHERE id='...'` — all return 1.
+
+## T4 done — User-turn consolidation spike (empirical verdict)
+
+### Evidence file: `.omo/evidence/task-4-user-consolidation.md`
+
+**Sample**: 200 sessions present in BOTH opencode.db (3,561 sessions) AND aisync sessions.db
+(4,986 opencode sessions). Session IDs are shared verbatim across databases.
+
+**Cross-DB diff results** (opencode.db user count vs aisync user count):
+- diff == 0 (perfect match): **160 / 200 (80.0%)**
+- diff < 0 (aisync has fewer): 39 / 200 (19.5%) — all explained by capture-lag (stale snapshot)
+- diff > 0 (aisync has more): 1 / 200 (0.5%)
+
+**Compaction-marker accounting**: opencode.db avg 1.81 compaction-marker user msgs / session;
+aisync avg 1.83 empty-content user msgs / session — these are the same artifact. They carry no
+text and must be filtered at index time.
+
+**User:assistant ratio** is structurally ~0.16 (1 user per 6 assistant messages). This is
+**inherent to OpenCode's architecture** — tool results are stored inside assistant message parts
+(`state.output`), NOT as separate user messages. No consolidation causes this ratio.
+
+**User content quality** (non-empty user msgs): avg 418 chars, median 154 chars, 87.1% non-empty.
+
+**No structural consolidation** exists in `Export()` (opencode.go:202-295). It is a strict 1:1
+mapping: one `ocMessage` row → one `session.Message`.
+
+### Verdict: USER-ONLY INDEXING IS SUFFICIENT
+
+### T5 action items from T4:
+1. **MUST filter** user messages where `strings.TrimSpace(content) == ""` (compaction markers, 12.9% of all user msgs).
+2. **No splitting needed** — each user message already represents exactly one OpenCode turn.
+3. **Capture-lag** (19.5% of sessions) is a data-freshness concern, not a consolidation concern;
+   document as known limitation.
+
+## T6 done — Filter content to user + compaction summaries only
+
+### Files changed:
+- `internal/search/document.go` — replaced content loop: now indexes ONLY `RoleUser` (non-empty) + `IsCompactionSummary==true`. Tool inputs/outputs dropped from Content. ToolNames still collected from all messages.
+- `internal/search/document_test.go` — created with 3 subtests: FilterCorrectness, NonOpenCode, MaxContentLenRespected. All PASS.
+- `internal/search/fts5/integration_test.go` — updated `TestIntegration_FTS5_DocumentFromSession`: tool output search now asserts 0 hits (was 1; reflects new intentional behavior).
+
+### Key decisions:
+- `stubCleanBuilder` in `eval_test.go` (lines 32-34) already calls `search.DocumentFromSession` directly — no change needed. Once DocumentFromSession IS the clean version, the stub is automatically correct.
+- `session_index.go` callers (lines 54, 79) compile unchanged — signature preserved.
+- LSP diagnostics: clean on all 3 changed files.

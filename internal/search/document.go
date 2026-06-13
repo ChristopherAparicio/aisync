@@ -31,7 +31,10 @@ func DocumentFromSession(sess *session.Session, maxContentLen int) Document {
 		ErrorCount:      len(sess.Errors),
 	}
 
-	// Concatenate message content (user + assistant) for full-text indexing.
+	// Index only user messages and compaction summaries.
+	// Tool names (not content) are still collected as a lightweight index signal.
+	// See ai5-search-v2 plan: dropping tool inputs/outputs eliminates BM25 term
+	// inflation from echo content while preserving the 6.6x signal density gain.
 	var contentParts []string
 	var toolNames []string
 	toolSeen := make(map[string]bool)
@@ -41,7 +44,13 @@ func DocumentFromSession(sess *session.Session, maxContentLen int) Document {
 		if totalLen >= maxContentLen {
 			break
 		}
-		if msg.Content != "" {
+
+		// Include: non-empty user messages
+		shouldIndex := msg.Role == session.RoleUser && strings.TrimSpace(msg.Content) != ""
+		// Include: compaction summaries (regardless of role)
+		shouldIndex = shouldIndex || msg.IsCompactionSummary
+
+		if shouldIndex && msg.Content != "" {
 			remaining := maxContentLen - totalLen
 			text := msg.Content
 			if len(text) > remaining {
@@ -51,42 +60,15 @@ func DocumentFromSession(sess *session.Session, maxContentLen int) Document {
 			totalLen += len(text)
 		}
 
-		// Collect unique tool names + index tool call inputs.
+		// Collect unique tool names (lightweight signal — no content).
 		for _, tc := range msg.ToolCalls {
 			if !toolSeen[tc.Name] {
 				toolSeen[tc.Name] = true
 				toolNames = append(toolNames, tc.Name)
 			}
-			// Index bash commands and file paths from Edit/Write.
-			if totalLen < maxContentLen {
-				var tcText string
-				switch tc.Name {
-				case "bash", "Bash":
-					// Index command + output (contains versions, errors, results).
-					tcText = tc.Input
-					if tc.Output != "" {
-						out := tc.Output
-						if len(out) > 3000 {
-							out = out[:3000] // cap large outputs (ls, cat, etc.)
-						}
-						tcText += "\n" + out
-					}
-				case "Edit", "edit", "Write", "write":
-					// Index the file path + first part of content
-					tcText = tc.Input
-					if len(tcText) > 2000 {
-						tcText = tcText[:2000]
-					}
-				}
-				if tcText != "" {
-					remaining := maxContentLen - totalLen
-					if len(tcText) > remaining {
-						tcText = tcText[:remaining]
-					}
-					contentParts = append(contentParts, tcText)
-					totalLen += len(tcText)
-				}
-			}
+			// Tool inputs/outputs intentionally excluded from Content.
+			// Discovery of file paths via tool calls is covered by aisync blame
+			// and the file_changes table. See ai5-search-v2 plan guardrails.
 		}
 	}
 
