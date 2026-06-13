@@ -1,0 +1,69 @@
+=== SESSION ===
+ses_13f8fe183ffexNx1Gc9EuTOQYu
+
+=== aisync errors --recent --limit 5 ===
+Recent Errors — 5 results
+
+  SESSION       CATEGORY            SOURCE      CODE      MESSAGE
+  ────────────  ──────────────────  ──────────  ────────  ────────────────────────────────────────
+  ses_13f8fe1…  tool_error          tool        —         Tool execution failed
+  ses_13f9003…  tool_error          tool        —         Tool execution failed
+  ses_14855ba…  tool_error          tool        —         Tool execution failed
+  ses_144c61a…  aborted             client      —         Operation aborted
+  ses_144c61a…  tool_error          tool        —         Tool execution failed
+
+=== aisync validate $SESSION --json ===
+2026/06/13 12:14:06 [search] FTS5 engine initialized
+{
+  "session_id": "ses_13f8fe183ffexNx1Gc9EuTOQYu",
+  "valid": true,
+  "issues": [
+    {
+      "type": "consecutive_roles",
+      "severity": "warning",
+      "message_index": 2,
+      "message_number": 3,
+      "description": "Message 3 (assistant) follows another assistant message — breaks alternation rule",
+      "rewind_to": 2
+    },
+    {
+      "type": "consecutive_roles",
+      "severity": "warning",
+      "message_index": 3,
+      "message_number": 4,
+      "description": "Message 4 (assistant) follows another assistant message — breaks alternation rule",
+      "rewind_to": 3
+
+=== aisync list --off-topic --limit 5 ===
+2026/06/13 12:14:07 [search] FTS5 engine initialized
+Off-topic analysis for branch "master" (255 sessions, 0 off-topic)
+
+ID            PROVIDER       OVERLAP  STATUS    SUMMARY
+----          --------       -------  ------    -------
+ses_13f8fe1…  opencode          100%  ok        ## 1. TASK Repo (@Sisyphus-Junior sub...
+ses_13f9032…  opencode          100%  ok        ## 1. TASK Preflight (@Sisyphus-Junio...
+ses_13f9635…  opencode          100%  ok        Verify the plan at (@oracle subagent)
+ses_13fa09a…  opencode          100%  ok        Verify Prometheus phase 2 (@oracle su...
+ses_13fa6b9…  opencode          100%  ok        Verify Prometheus phase 1 (@oracle su...
+
+=== aisync diagnose $SESSION ===
+2026/06/13 12:14:11 [search] FTS5 engine initialized
+[!!] DEGRADED  Score: 44/100  Grade: D
+  Quality declined at message 3: output productivity declined 44% in second half; 6 tool retry sequences detected
+
+Health Score Breakdown:
+  Error:      20/30
+  Saturation: 0/25
+  Cache:      15/20
+  Completion: 8/15
+  Efficiency: 1/10
+
+Phase Analysis: intermittent
+  [0-2] clean  errors=0/10 (0%)
+  [3-5] degrading  errors=1/6 (17%)
+  [6-8] clean  errors=0/10 (0%)
+  [9-13] clean  errors=0/5 (0%)
+  Turning point: message 3
+
+Overload: declining
+  output productivity declined 44% in second half; 6 tool retry sequences detected

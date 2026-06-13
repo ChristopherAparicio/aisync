@@ -1,0 +1,7 @@
+| Cost breakdown | `aisync stats --cost` *(offline, no LLM)* |
+| LLM efficiency analysis | `aisync efficiency <id>` *(OPTIONAL -- needs LLM)* |
+## Warning: efficiency Requires LLM
+> **`aisync efficiency`** requires a running LLM (ollama or Claude CLI). If it errors, use `aisync stats --cost` instead -- it reads directly from SQLite, requires no LLM, and shows the full cost breakdown.
+> To configure a LLM adapter: `aisync config set analysis.adapter <claude|ollama>`
+
+      95 .opencode/skills/aisync-stats/SKILL.md

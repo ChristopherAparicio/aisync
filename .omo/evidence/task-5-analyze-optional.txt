@@ -1,0 +1,9 @@
+=== optional/LLM caveat grep ===
+| "deep LLM diagnosis" | `aisync diagnose <id> --deep` *(OPTIONAL -- needs LLM)* |
+| "LLM-powered analysis" | `aisync analyze <id>` *(OPTIONAL -- needs LLM)* |
+## Offline-Safe Core (no LLM required)
+These commands work without any LLM or auth configured:
+- **`aisync diagnose <id>`** (quick scan, no `--deep`) -- instant health score + error timeline, no LLM needed
+
+=== line count ===
+     112 .opencode/skills/aisync-analyze/SKILL.md

@@ -1,0 +1,31 @@
+=== aisync stats --json (no --json flag; plain stats used) ===
+2026/06/13 12:14:11 [search] FTS5 engine initialized
+=== Overall Statistics ===
+  Sessions:  390
+  Messages:  201999
+  Tokens:    37968.5M
+
+=== By Provider ===
+  opencode       390 sessions
+
+=== By Branch ===
+  BRANCH                          SESSIONS    TOKENS
+  master                               254  32302.9M
+                                       136   5665.6M
+
+=== Most Touched Files ===
+   1
+=== aisync tool-usage --json ses_13f8fe183ffexNx1Gc9EuTOQYu ===
+2026/06/13 12:14:11 [search] FTS5 engine initialized
+{
+  "tools": [
+    {
+      "name": "skill",
+      "calls": 1,
+      "input_tokens": 41,
+      "output_tokens": 7639,
+      "total_tokens": 7680,
+      "avg_duration_ms": 123,
+      "error_count": 0,
+      "cost": {
+        "input_cost": 0.00003075
