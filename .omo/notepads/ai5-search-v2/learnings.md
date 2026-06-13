@@ -60,3 +60,28 @@ IsCompactionSummary added at session.go after Role. Tests: round-trip + back-com
 2. T7 changes the `stubCleanBuilder` reference in eval_test.go to point to T6's function
 3. T7 also adds a corpus from a tmp DB copy and asserts `cleanScore >= noisyScore` on domain queries
 - The harness is already wired for injection — no structural changes needed, just swap the function reference
+
+## T2 done — eval query fixture
+
+### File: internal/search/testdata/eval_queries.json
+
+**Fixture**: 9 eval queries across 4 categories (domain×3, project×3, path×2, command×1), 12 unique session IDs.
+
+**Baseline ID derivation method**: LIKE search on `sessions_fts_content.c2` (raw FTS content column). NOT derived from BM25/FTS5 MATCH ranking — avoids circular validation.
+
+**DB copy used**: `cp ~/.aisync/sessions.db /tmp/aisync-eval-t2.db` (never touched the original).
+
+**Category breakdown**:
+- domain "authentication": ses_2c0c519e2ffeKr4iKBBb6dCKjq, ses_2bcbebecdffeWlT6BVTcyNhIcZ — user messages discuss DRF auth patterns (omogen ADR 008 review)
+- domain "database migration": ses_2d5a53501ffenSM97z7X3LSFeS — user asks about SQLAlchemy+Alembic in TrainerCycle audit
+- domain "docker": ses_2e411eb5effeIvDidbEqfvBJ0n, ses_2cfc478ecffeysKM5exqCxJmhV — user messages reference Docker explicitly
+- project "omogen": ses_2bcec1f4dffe9gbmDC2SPkSSBZ, ses_2bcbebecdffeWlT6BVTcyNhIcZ — project_path contains omogen/backend
+- project "cycloplan": ses_2bd79e29bffeJEtqFwNl74n2NQ, ses_2c0aa01d9ffexNoceyBQMlFh15 — project_path contains cycloplan
+- project "aisync": ses_2d10f533effeDi56cuLr1LvrnB, ses_2d1d536a5ffe4fGzP3c41PmCEb — project_path contains aisync
+- path "internal/storage/store.go": ses_2d10f533effeDi56cuLr1LvrnB — path in user's own message (not tool output)
+- path "apps/authent": ses_2bcbebecdffeWlT6BVTcyNhIcZ — path in orchestrator/user message
+- command "git rebase": ses_2d9e6b50affeADSfj1QVkViMZk, ses_2db719795ffecFr9IrTpmTauRO — user says "tu peux rebase depuis main"
+
+**Key insight on path/command queries**: User messages sometimes contain explicit file paths and commands BEFORE any tool invocation. These sessions verify that search still finds user-requested paths/commands after tool-output content is filtered from FTS (the A3 regression risk). If FTS drops tool outputs but keeps user turns, these IDs should still rank high.
+
+**All 12 IDs validated** via sqlite3: `SELECT COUNT(*) FROM sessions WHERE id='...'` — all return 1.

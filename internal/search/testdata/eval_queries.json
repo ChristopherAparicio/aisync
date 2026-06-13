@@ -1,0 +1,80 @@
+[
+  {
+    "query": "authentication",
+    "category": "domain",
+    "expected_ids": [
+      "ses_2c0c519e2ffeKr4iKBBb6dCKjq",
+      "ses_2bcbebecdffeWlT6BVTcyNhIcZ"
+    ],
+    "note": "Sessions where user messages discuss authentication: ses_2c0c519e2ffeKr4iKBBb6dCKjq user asks to analyze ADR 008 from security/implementation perspective mentioning auth patterns; ses_2bcbebecdffeWlT6BVTcyNhIcZ orchestrator message explicitly asks to find DRF auth patterns in core/auth/ and apps/authent/. Both IDs derived from LIKE search on FTS content, NOT from BM25 ranking."
+  },
+  {
+    "query": "database migration",
+    "category": "domain",
+    "expected_ids": [
+      "ses_2d5a53501ffenSM97z7X3LSFeS"
+    ],
+    "note": "Session where user explicitly asks 'Is SQLAlchemy + Alembic already set up? Are there migration files?' during a TrainerCycle backend audit. User message originates the term 'migration'. ID derived from LIKE search on fts content column, not BM25 ranking."
+  },
+  {
+    "query": "docker",
+    "category": "domain",
+    "expected_ids": [
+      "ses_2e411eb5effeIvDidbEqfvBJ0n",
+      "ses_2cfc478ecffeysKM5exqCxJmhV"
+    ],
+    "note": "Sessions where user messages mention Docker: ses_2e411eb5effeIvDidbEqfvBJ0n user discusses Traefik CPU consumption and references 'backend-blue@docker does not exist' routing error (omogen backend); ses_2cfc478ecffeysKM5exqCxJmhV user instructs agent to 'Check for Docker/docker-compose files' in deployment config (omogen monorepops). Both are user-originated Docker mentions."
+  },
+  {
+    "query": "omogen",
+    "category": "project",
+    "expected_ids": [
+      "ses_2bcec1f4dffe9gbmDC2SPkSSBZ",
+      "ses_2bcbebecdffeWlT6BVTcyNhIcZ"
+    ],
+    "note": "Sessions from project_path=/Users/guardix/dev/freelance/omogen/backend: ses_2bcec1f4dffe9gbmDC2SPkSSBZ explores API view patterns (APIView, GenericAPIView, ViewSets); ses_2bcbebecdffeWlT6BVTcyNhIcZ reviews ADR 008 Admin CLI API architecture. 'omogen' appears both in project_path and in user message content."
+  },
+  {
+    "query": "cycloplan",
+    "category": "project",
+    "expected_ids": [
+      "ses_2bd79e29bffeJEtqFwNl74n2NQ",
+      "ses_2c0aa01d9ffexNoceyBQMlFh15"
+    ],
+    "note": "Sessions from project_path=/Users/guardix/dev/cycloplan: ses_2bd79e29bffeJEtqFwNl74n2NQ analyzes physics/power model architecture (ride category detection, fatigue model); ses_2c0aa01d9ffexNoceyBQMlFh15 user asks about implementing a Garmin LiveTrack watchdog feature. 'cycloplan' appears in project_path."
+  },
+  {
+    "query": "aisync",
+    "category": "project",
+    "expected_ids": [
+      "ses_2d10f533effeDi56cuLr1LvrnB",
+      "ses_2d1d536a5ffe4fGzP3c41PmCEb"
+    ],
+    "note": "Sessions from project_path=/Users/guardix/dev/aisync: ses_2d10f533effeDi56cuLr1LvrnB user message asks to research current search implementation (internal/service, internal/storage); ses_2d1d536a5ffe4fGzP3c41PmCEb user asks for full architecture exploration (package map, domain model, storage interface). 'aisync' appears in both project_path and session content."
+  },
+  {
+    "query": "internal/storage/store.go",
+    "category": "path",
+    "expected_ids": [
+      "ses_2d10f533effeDi56cuLr1LvrnB"
+    ],
+    "note": "User-originated path reference: the user's own message explicitly lists 'internal/storage/store.go — find the Search() method on the Store interface' as one of four files to research. This path appears in the USER message, not only in tool outputs — critical regression check for dropping tool output from FTS index."
+  },
+  {
+    "query": "apps/authent",
+    "category": "path",
+    "expected_ids": [
+      "ses_2bcbebecdffeWlT6BVTcyNhIcZ"
+    ],
+    "note": "User-originated path reference: the orchestrator/user message explicitly says 'Look at core/auth/, apps/authent/, and any custom authentication classes'. The path apps/authent appears in the USER message before any tool call, validating that user-typed paths remain discoverable after tool-output filtering."
+  },
+  {
+    "query": "git rebase",
+    "category": "command",
+    "expected_ids": [
+      "ses_2d9e6b50affeADSfj1QVkViMZk",
+      "ses_2db719795ffecFr9IrTpmTauRO"
+    ],
+    "note": "User-originated command reference: both sessions start with user saying 'tu peux rebase depuis main' (please rebase from main) followed by a CI setup request. 'git rebase' / 'rebase' appears in the user's own turn, not only in bash tool outputs — critical regression check for dropping tool output from FTS index."
+  }
+]
