@@ -1,0 +1,22 @@
+=== Happy Path QA: task-3-finder ===
+
+--- aisync list --branch master --limit 5 --json ---
+2026/06/13 12:12:48 [search] FTS5 engine initialized
+[
+  {
+    "created_at": "2026-06-13T12:03:53Z",
+    "updated_at": "2026-06-13T12:07:58.047+02:00",
+    "id": "ses_13f8fe183ffexNx1Gc9EuTOQYu",
+    "owner_id": "8259d828-baed-4861-adc3-ee1073f6b38a",
+    "provider": "opencode",
+    "agent": "Sisyphus-Junior",
+    "branch": "master",
+    "project_path": "/Users/guardix/dev/aisync",
+    "remote_url
+--- aisync blame README.md ---
+2026/06/13 12:12:48 [search] FTS5 engine initialized
+Last AI session that touched "README.md":
+
+SESSION_ID    PROVIDER      BRANCH                    CHANGE    DATE          SUMMARY
+----------    --------      ------                    ------    ----          -------
+ses_32ecb00…  opencode                                deleted   96d ago       [WIP] Test Session ID

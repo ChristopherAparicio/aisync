@@ -1,0 +1,12 @@
+=== Limitation QA: task-3-finder ===
+
+--- grep for search/fts/unreliable/limitation ---
+## WARNING: --search (FTS5) is Unreliable
+> **--search is unreliable**: The FTS5 full-text search engine exits 0 but returns false positives. It matches raw truncated message content (50k chars), not summaries. The OR operator is broken and child-to-parent propagation is missing.
+> A separate search-architecture plan is in progress to fix FTS5.
+
+--- line count ---
+     237 .opencode/skills/aisync-session-finder/SKILL.md
+
+ASSERT: limitation note present = PASS (grep returned matches above)
+ASSERT: file <=350 lines = PASS (237 lines)
