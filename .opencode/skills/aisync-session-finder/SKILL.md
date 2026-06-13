@@ -174,7 +174,7 @@ aisync resume <branch>
 # Resume with a specific session
 aisync resume <branch> --session <session-id>
 
-# Dry run (preview without switching branch)
+# Dry run (preview session restore; note: may still attempt git checkout and fail on a dirty worktree)
 aisync resume <branch> --dry-run
 
 # Resume using a specific provider

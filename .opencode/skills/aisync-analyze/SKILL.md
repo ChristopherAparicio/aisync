@@ -11,7 +11,7 @@ Load this skill to inspect session health, find errors, validate integrity, and 
 
 | User question | aisync command |
 |---|---|
-| "find sessions with errors" | `aisync errors --limit 10 --json` |
+| "find sessions with errors" | `aisync errors --recent --limit 10` |
 | "validate session integrity" | `aisync validate <id> --json` |
 | "quick health check (offline)" | `aisync diagnose <id>` |
 | "deep LLM diagnosis" | `aisync diagnose <id> --deep` *(OPTIONAL -- needs LLM)* |
@@ -38,17 +38,17 @@ These commands work without any LLM or auth configured:
 ### Find sessions with errors
 
 ```bash
-# List sessions with errors (last 10)
-aisync errors --limit 10
-
-# JSON output
-aisync errors --json --limit 10
-
-# Filter by error category
-aisync errors --category tool-failure --limit 5
-
-# Most recent errors only
+# Most recent sessions with errors
 aisync errors --recent
+
+# Most recent errors, machine-readable
+aisync errors --recent --json
+
+# Limit to last N recent error sessions
+aisync errors --recent --limit 10
+
+# Filter by error category (requires --recent or a session ID)
+aisync errors --recent --category tool-failure --limit 5
 ```
 
 ### Validate session integrity
