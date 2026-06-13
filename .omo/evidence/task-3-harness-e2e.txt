@@ -1,0 +1,20 @@
+=== RUN   TestEvalHarness_LoadFixture
+    eval_test.go:211: fixture not yet created
+--- SKIP: TestEvalHarness_LoadFixture (0.00s)
+=== RUN   TestEvalHarness
+=== RUN   TestEvalHarness/NoisyBuilder
+    eval_test.go:325: noisy builder precision@10 for "authentication token OAuth" = 1.00
+=== RUN   TestEvalHarness/CleanBuilder
+    eval_test.go:346: clean builder precision@10 for "database migration schema" = 1.00
+--- PASS: TestEvalHarness (0.00s)
+    --- PASS: TestEvalHarness/NoisyBuilder (0.00s)
+    --- PASS: TestEvalHarness/CleanBuilder (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search	0.213s
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/elastic	0.551s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/fts5	0.380s [no tests to run]
+?   	github.com/ChristopherAparicio/aisync/internal/search/like	[no test files]
