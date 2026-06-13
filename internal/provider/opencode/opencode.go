@@ -199,6 +199,7 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		allParts = nil // fallback to per-message loading below
 	}
 
+	var compactionMarkers []bool
 	for _, msg := range messages {
 		var parts []ocPart
 		if allParts != nil {
@@ -233,8 +234,12 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 
 		// Process parts.
 		var textParts []string
+		isCompactionMarker := false
 		for _, part := range parts {
 			switch part.Type {
+			case "compaction":
+				isCompactionMarker = true
+
 			case "text":
 				textParts = append(textParts, part.Text)
 
@@ -293,6 +298,21 @@ func (p *Provider) Export(sessionID session.ID, mode session.StorageMode) (*sess
 		}
 
 		result.Messages = append(result.Messages, domainMsg)
+		compactionMarkers = append(compactionMarkers, isCompactionMarker)
+	}
+
+	// Mark compaction summaries: the assistant message immediately following a
+	// compaction marker is the structured session summary.
+	for i, isMarker := range compactionMarkers {
+		if !isMarker {
+			continue
+		}
+		for j := i + 1; j < len(result.Messages); j++ {
+			if result.Messages[j].Role == session.RoleAssistant {
+				result.Messages[j].IsCompactionSummary = true
+				break
+			}
+		}
 	}
 
 	result.TokenUsage = session.TokenUsage{
@@ -371,6 +391,7 @@ func (p *Provider) ExportIncremental(sessionID session.ID, messageOffset int, mo
 
 	// Convert new messages to domain format.
 	var newMessages []session.Message
+	var newCompactionMarkers []bool
 	for _, msg := range newOCMsgs {
 		parts := newParts[msg.ID]
 
@@ -397,8 +418,11 @@ func (p *Provider) ExportIncremental(sessionID session.ID, messageOffset int, mo
 		}
 
 		var textParts []string
+		isCompactionMarker := false
 		for _, part := range parts {
 			switch part.Type {
+			case "compaction":
+				isCompactionMarker = true
 			case "text":
 				textParts = append(textParts, part.Text)
 			case "tool":
@@ -442,6 +466,19 @@ func (p *Provider) ExportIncremental(sessionID session.ID, messageOffset int, mo
 		}
 
 		newMessages = append(newMessages, domainMsg)
+		newCompactionMarkers = append(newCompactionMarkers, isCompactionMarker)
+	}
+
+	for i, isMarker := range newCompactionMarkers {
+		if !isMarker {
+			continue
+		}
+		for j := i + 1; j < len(newMessages); j++ {
+			if newMessages[j].Role == session.RoleAssistant {
+				newMessages[j].IsCompactionSummary = true
+				break
+			}
+		}
 	}
 
 	// Recompute full token totals from ALL messages (cheap query).

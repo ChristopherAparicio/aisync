@@ -1,0 +1,30 @@
+=== RUN   TestExport_fullMode
+--- PASS: TestExport_fullMode (0.00s)
+=== RUN   TestExport_summaryMode
+--- PASS: TestExport_summaryMode (0.00s)
+=== RUN   TestExport_sessionNotFound
+--- PASS: TestExport_sessionNotFound (0.00s)
+=== RUN   TestImport_basicSession
+--- PASS: TestImport_basicSession (0.00s)
+=== RUN   TestImport_nilSession
+--- PASS: TestImport_nilSession (0.00s)
+=== RUN   TestImport_noProjectPath
+--- PASS: TestImport_noProjectPath (0.00s)
+=== RUN   TestImport_reusesExistingProject
+--- PASS: TestImport_reusesExistingProject (0.00s)
+=== RUN   TestImport_roundTrip
+--- PASS: TestImport_roundTrip (0.01s)
+=== RUN   TestE2E_realOpenCodeSession_Export
+    opencode_test.go:502: session ses_143521ae2fferUyCJUo3ycIJ1M: 8 messages, 266430 input tokens, 492 output tokens, 0 file changes, 0 children
+--- PASS: TestE2E_realOpenCodeSession_Export (0.02s)
+=== RUN   TestE2E_realOpenCodeSession_Freshness
+    opencode_test.go:532: session ses_143521ae2fferUyCJUo3ycIJ1M: freshness MessageCount=8, UpdatedAt=1781282527298
+--- PASS: TestE2E_realOpenCodeSession_Freshness (0.02s)
+=== RUN   TestE2E_realOpenCodeSession_ExportIncremental
+    opencode_test.go:582: session ses_143521ae2fferUyCJUo3ycIJ1M: full=8, incr(0)=8, incr(4)=4
+--- PASS: TestE2E_realOpenCodeSession_ExportIncremental (0.02s)
+=== RUN   TestE2E_realOpenCodeSession_FreshnessVsExport
+    opencode_test.go:607: session ses_143521ae2fferUyCJUo3ycIJ1M: freshness=8, export=8
+--- PASS: TestE2E_realOpenCodeSession_FreshnessVsExport (0.02s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/opencode	0.336s

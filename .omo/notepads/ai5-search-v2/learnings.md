@@ -130,3 +130,20 @@ mapping: one `ocMessage` row → one `session.Message`.
 - `stubCleanBuilder` in `eval_test.go` (lines 32-34) already calls `search.DocumentFromSession` directly — no change needed. Once DocumentFromSession IS the clean version, the stub is automatically correct.
 - `session_index.go` callers (lines 54, 79) compile unchanged — signature preserved.
 - LSP diagnostics: clean on all 3 changed files.
+
+## T5 done — Extract compaction summary text
+
+### Files changed:
+- `internal/provider/opencode/opencode.go` — `Export()`: added `var compactionMarkers []bool`, `isCompactionMarker := false` per message, `case "compaction": isCompactionMarker = true` in part switch, parallel slice tracking, and post-loop pass to set `IsCompactionSummary = true` on the next assistant after each marker.
+- `internal/provider/opencode/opencode.go` — `ExportIncremental()`: identical pattern with `newCompactionMarkers` slice.
+- `internal/provider/opencode/dbreader_test.go` — added `setupCompactionDB` helper + `TestCompactionMarker` (subtests: nominal, multiple_markers, non_compacted) + `TestCompactionOrphan`. All 4 cases PASS.
+
+### Key decisions:
+- Two-pass approach: collect `compactionMarkers []bool` during message build, then loop over it. Avoids index arithmetic inside the message loop.
+- Orphan case (compaction marker at end, no following assistant) → inner `for j` loop simply finds nothing and moves on. No explicit guard needed.
+- `ExportIncremental` only sees a window of messages, so its compaction marking only covers that window. Cross-window summaries (marker in prior window, summary in new window) are not handled — acceptable given 2% orphan rate and incremental windows typically spanning full sessions.
+
+### Evidence:
+- `.omo/evidence/task-5-extract-nominal.txt` — TestCompactionMarker all subtests PASS
+- `.omo/evidence/task-5-extract-orphan.txt` — TestCompactionOrphan PASS
+- `.omo/evidence/task-5-extract-realdb.txt` — full opencode package PASS (E2E against real DB)

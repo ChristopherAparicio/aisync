@@ -1059,3 +1059,200 @@ func TestExportIncremental_consistentWithFullExport(t *testing.T) {
 			full.TokenUsage.OutputTokens, incr.TokenUsage.OutputTokens)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Compaction marker tests — verify IsCompactionSummary propagation.
+// ---------------------------------------------------------------------------
+
+// setupCompactionDB creates an in-memory SQLite DB with a single session
+// "ses_cmp001" and returns helpers to add messages and parts.
+func setupCompactionDB(t *testing.T) (
+	r *dbReader,
+	addMsg func(id, sessID, role string, ts int64),
+	addPart func(id, msgID, sessID, partType, text string),
+) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("opening in-memory db: %v", err)
+	}
+
+	schema := `
+		CREATE TABLE project (
+			id TEXT PRIMARY KEY,
+			worktree TEXT NOT NULL,
+			vcs TEXT,
+			name TEXT,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			sandboxes TEXT NOT NULL DEFAULT '[]'
+		);
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			parent_id TEXT,
+			slug TEXT NOT NULL DEFAULT '',
+			directory TEXT NOT NULL,
+			title TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '1.0.0',
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
+		);
+		CREATE INDEX session_project_idx ON session (project_id);
+		CREATE INDEX session_parent_idx ON session (parent_id);
+		CREATE TABLE message (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL,
+			FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE CASCADE
+		);
+		CREATE INDEX message_session_idx ON message (session_id);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY,
+			message_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL,
+			FOREIGN KEY (message_id) REFERENCES message(id) ON DELETE CASCADE
+		);
+		CREATE INDEX part_message_idx ON part (message_id);
+		CREATE INDEX part_session_idx ON part (session_id);
+	`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatalf("creating schema: %v", err)
+	}
+
+	db.Exec(`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES (?, ?, ?, ?, ?)`,
+		"proj_cmp", "/tmp/test/cmp", 1700000000000, 1700000000000, "[]")
+	db.Exec(`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"ses_cmp001", "proj_cmp", "cmp-test", "/tmp/test/cmp", "Compaction test", "1.0.0", 1700000000000, 1700000000000)
+
+	addMsg = func(id, sessID, role string, ts int64) {
+		data := mustJSON(t, map[string]interface{}{
+			"role":  role,
+			"agent": "coder",
+			"time":  map[string]interface{}{"created": ts},
+			"model": map[string]interface{}{"providerID": "anthropic", "modelID": "claude-sonnet-4-6"},
+			"tokens": map[string]interface{}{
+				"input": 0, "output": 0, "reasoning": 0,
+				"cache": map[string]interface{}{"read": 0, "write": 0},
+			},
+		})
+		db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+			id, sessID, ts, ts, data)
+	}
+
+	addPart = func(id, msgID, sessID, partType, text string) {
+		var data string
+		if partType == "compaction" {
+			data = mustJSON(t, map[string]interface{}{"type": "compaction", "auto": true})
+		} else {
+			data = mustJSON(t, map[string]interface{}{"type": partType, "text": text})
+		}
+		db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			id, msgID, sessID, 1700000000000, 1700000000000, data)
+	}
+
+	t.Cleanup(func() { db.Close() })
+	return &dbReader{db: db}, addMsg, addPart
+}
+
+// TestCompactionMarker covers the nominal, multiple-markers, and non-compacted
+// cases using a table-driven approach.
+func TestCompactionMarker(t *testing.T) {
+	type testCase struct {
+		name          string
+		setup         func(addMsg func(string, string, string, int64), addPart func(string, string, string, string, string))
+		wantMsgCount  int
+		wantSummaryAt map[int]bool
+	}
+
+	tests := []testCase{
+		{
+			name: "nominal",
+			setup: func(addMsg func(string, string, string, int64), addPart func(string, string, string, string, string)) {
+				addMsg("msg_u1", "ses_cmp001", "user", 1000)
+				addPart("prt_c1", "msg_u1", "ses_cmp001", "compaction", "")
+				addMsg("msg_a1", "ses_cmp001", "assistant", 2000)
+				addPart("prt_t1", "msg_a1", "ses_cmp001", "text", "## Goal\nSession summary.")
+			},
+			wantMsgCount:  2,
+			wantSummaryAt: map[int]bool{1: true},
+		},
+		{
+			name: "multiple_markers",
+			setup: func(addMsg func(string, string, string, int64), addPart func(string, string, string, string, string)) {
+				addMsg("msg_u1", "ses_cmp001", "user", 1000)
+				addPart("prt_c1", "msg_u1", "ses_cmp001", "compaction", "")
+				addMsg("msg_a1", "ses_cmp001", "assistant", 2000)
+				addPart("prt_t1", "msg_a1", "ses_cmp001", "text", "## Goal\nFirst summary.")
+				addMsg("msg_u2", "ses_cmp001", "user", 3000)
+				addPart("prt_t2", "msg_u2", "ses_cmp001", "text", "Continue work")
+				addMsg("msg_u3", "ses_cmp001", "user", 4000)
+				addPart("prt_c2", "msg_u3", "ses_cmp001", "compaction", "")
+				addMsg("msg_a2", "ses_cmp001", "assistant", 5000)
+				addPart("prt_t3", "msg_a2", "ses_cmp001", "text", "## Goal\nSecond summary.")
+			},
+			wantMsgCount:  5,
+			wantSummaryAt: map[int]bool{1: true, 4: true},
+		},
+		{
+			name: "non_compacted",
+			setup: func(addMsg func(string, string, string, int64), addPart func(string, string, string, string, string)) {
+				addMsg("msg_u1", "ses_cmp001", "user", 1000)
+				addPart("prt_t1", "msg_u1", "ses_cmp001", "text", "Hello")
+				addMsg("msg_a1", "ses_cmp001", "assistant", 2000)
+				addPart("prt_t2", "msg_a1", "ses_cmp001", "text", "Hi there!")
+			},
+			wantMsgCount:  2,
+			wantSummaryAt: map[int]bool{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, addMsg, addPart := setupCompactionDB(t)
+			tt.setup(addMsg, addPart)
+
+			p := &Provider{dataHome: t.TempDir(), reader: r}
+			sess, err := p.Export("ses_cmp001", session.StorageModeFull)
+			if err != nil {
+				t.Fatalf("Export() error: %v", err)
+			}
+			if len(sess.Messages) != tt.wantMsgCount {
+				t.Fatalf("Messages count = %d, want %d", len(sess.Messages), tt.wantMsgCount)
+			}
+			for i, msg := range sess.Messages {
+				want := tt.wantSummaryAt[i]
+				if msg.IsCompactionSummary != want {
+					t.Errorf("Messages[%d].IsCompactionSummary = %v, want %v", i, msg.IsCompactionSummary, want)
+				}
+			}
+		})
+	}
+}
+
+// TestCompactionOrphan verifies that a compaction marker with no following
+// assistant message does not panic and does not mark any message.
+func TestCompactionOrphan(t *testing.T) {
+	r, addMsg, addPart := setupCompactionDB(t)
+	addMsg("msg_u1", "ses_cmp001", "user", 1000)
+	addPart("prt_c1", "msg_u1", "ses_cmp001", "compaction", "")
+
+	p := &Provider{dataHome: t.TempDir(), reader: r}
+	sess, err := p.Export("ses_cmp001", session.StorageModeFull)
+	if err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+	if len(sess.Messages) != 1 {
+		t.Fatalf("Messages count = %d, want 1", len(sess.Messages))
+	}
+	if sess.Messages[0].IsCompactionSummary {
+		t.Error("orphan compaction marker must not set IsCompactionSummary on the user message itself")
+	}
+}

@@ -1,0 +1,4 @@
+=== RUN   TestCompactionOrphan
+--- PASS: TestCompactionOrphan (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/opencode	0.222s
