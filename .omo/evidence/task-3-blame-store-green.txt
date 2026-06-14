@@ -1,0 +1,10 @@
+=== RUN   TestGetSessionsByFile_AgentFromJoin
+--- PASS: TestGetSessionsByFile_AgentFromJoin (0.03s)
+=== RUN   TestGetSessionsByFile_EmptyAgent
+--- PASS: TestGetSessionsByFile_EmptyAgent (0.02s)
+=== RUN   TestGetSessionsByFile_MultiFile
+--- PASS: TestGetSessionsByFile_MultiFile (0.02s)
+=== RUN   TestFilesForProject_LastAgent
+--- PASS: TestFilesForProject_LastAgent (0.02s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/storage/sqlite	(cached)

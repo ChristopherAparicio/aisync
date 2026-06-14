@@ -4103,3 +4103,182 @@ func TestQueryAnalytics_BlobsHydrated(t *testing.T) {
 		t.Error("ForecastInput is nil in QueryAnalytics result")
 	}
 }
+
+// ── Task-3: Agent field + multi-file blame ──
+
+func TestGetSessionsByFile_AgentFromJoin(t *testing.T) {
+	store := mustOpenStore(t)
+
+	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	sess1 := testSession("t3-agent-1")
+	sess1.Agent = "claude"
+	sess1.CreatedAt = now
+	sess1.FileChanges = []session.FileChange{
+		{FilePath: "a.go", ChangeType: session.ChangeModified},
+	}
+
+	sess2 := testSession("t3-agent-2")
+	sess2.Agent = "jarvis"
+	sess2.CreatedAt = now.Add(time.Hour)
+	sess2.FileChanges = []session.FileChange{
+		{FilePath: "a.go", ChangeType: session.ChangeCreated},
+	}
+
+	if err := store.Save(sess1); err != nil {
+		t.Fatalf("Save(1) error = %v", err)
+	}
+	if err := store.Save(sess2); err != nil {
+		t.Fatalf("Save(2) error = %v", err)
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{FilePath: "a.go"})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	// Most recent first (same ordering as existing MultipleSessions test).
+	if entries[0].Agent != "jarvis" {
+		t.Errorf("entries[0].Agent = %q, want %q", entries[0].Agent, "jarvis")
+	}
+	if entries[1].Agent != "claude" {
+		t.Errorf("entries[1].Agent = %q, want %q", entries[1].Agent, "claude")
+	}
+}
+
+func TestGetSessionsByFile_EmptyAgent(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("t3-empty-agent")
+	sess.Agent = ""
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "empty-agent.go", ChangeType: session.ChangeModified},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{FilePath: "empty-agent.go"})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry (row must not be dropped), got %d", len(entries))
+	}
+	if entries[0].Agent != "" {
+		t.Errorf("Agent = %q, want empty string", entries[0].Agent)
+	}
+}
+
+func TestGetSessionsByFile_MultiFile(t *testing.T) {
+	store := mustOpenStore(t)
+
+	now := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+
+	sessA := testSession("t3-multi-a")
+	sessA.Agent = "alpha"
+	sessA.CreatedAt = now
+	sessA.FileChanges = []session.FileChange{
+		{FilePath: "multi/a.go", ChangeType: session.ChangeModified},
+	}
+
+	sessB := testSession("t3-multi-b")
+	sessB.Agent = "beta"
+	sessB.CreatedAt = now.Add(time.Hour)
+	sessB.FileChanges = []session.FileChange{
+		{FilePath: "multi/b.go", ChangeType: session.ChangeCreated},
+	}
+
+	sessC := testSession("t3-multi-c")
+	sessC.Agent = "gamma"
+	sessC.CreatedAt = now.Add(2 * time.Hour)
+	sessC.FileChanges = []session.FileChange{
+		{FilePath: "multi/c.go", ChangeType: session.ChangeModified},
+	}
+
+	for _, s := range []*session.Session{sessA, sessB, sessC} {
+		if err := store.Save(s); err != nil {
+			t.Fatalf("Save(%s) error = %v", s.ID, err)
+		}
+	}
+
+	entries, err := store.GetSessionsByFile(session.BlameQuery{
+		FilePaths: []string{"multi/a.go", "multi/b.go"},
+	})
+	if err != nil {
+		t.Fatalf("GetSessionsByFile(FilePaths) error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries (a.go + b.go), got %d", len(entries))
+	}
+
+	ids := map[string]bool{}
+	for _, e := range entries {
+		ids[string(e.SessionID)] = true
+	}
+	if !ids["t3-multi-a"] {
+		t.Error("expected t3-multi-a in results")
+	}
+	if !ids["t3-multi-b"] {
+		t.Error("expected t3-multi-b in results")
+	}
+	if ids["t3-multi-c"] {
+		t.Error("t3-multi-c (multi/c.go) should NOT be in results")
+	}
+}
+
+func TestFilesForProject_LastAgent(t *testing.T) {
+	store := mustOpenStore(t)
+
+	now := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	proj := "/home/user/t3-proj"
+
+	sess1 := testSession("t3-fp-1")
+	sess1.Agent = "earlier-agent"
+	sess1.ProjectPath = proj
+	sess1.CreatedAt = now
+	sess1.FileChanges = []session.FileChange{
+		{FilePath: proj + "/alpha.go", ChangeType: session.ChangeModified},
+		{FilePath: proj + "/beta.go", ChangeType: session.ChangeCreated},
+	}
+
+	sess2 := testSession("t3-fp-2")
+	sess2.Agent = "later-agent"
+	sess2.ProjectPath = proj
+	sess2.CreatedAt = now.Add(time.Hour)
+	sess2.FileChanges = []session.FileChange{
+		{FilePath: proj + "/alpha.go", ChangeType: session.ChangeModified},
+	}
+
+	if err := store.Save(sess1); err != nil {
+		t.Fatalf("Save(1) error = %v", err)
+	}
+	if err := store.Save(sess2); err != nil {
+		t.Fatalf("Save(2) error = %v", err)
+	}
+
+	entries, err := store.FilesForProject(proj, "", 100)
+	if err != nil {
+		t.Fatalf("FilesForProject() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(entries), entries)
+	}
+
+	for _, e := range entries {
+		switch e.FilePath {
+		case proj + "/alpha.go":
+			if e.LastAgent != "later-agent" {
+				t.Errorf("alpha.go LastAgent = %q, want %q", e.LastAgent, "later-agent")
+			}
+		case proj + "/beta.go":
+			if e.LastAgent != "earlier-agent" {
+				t.Errorf("beta.go LastAgent = %q, want %q", e.LastAgent, "earlier-agent")
+			}
+		default:
+			t.Errorf("unexpected file: %s", e.FilePath)
+		}
+	}
+}

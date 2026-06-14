@@ -1,0 +1,33 @@
+?   	github.com/ChristopherAparicio/aisync/internal/storage	[no test files]
+=== RUN   TestGetSessionsByFile_Basic
+--- PASS: TestGetSessionsByFile_Basic (0.02s)
+=== RUN   TestGetSessionsByFile_NoMatch
+--- PASS: TestGetSessionsByFile_NoMatch (0.02s)
+=== RUN   TestGetSessionsByFile_MultipleSessions
+--- PASS: TestGetSessionsByFile_MultipleSessions (0.02s)
+=== RUN   TestGetSessionsByFile_Limit
+--- PASS: TestGetSessionsByFile_Limit (0.02s)
+=== RUN   TestGetSessionsByFile_FilterByBranch
+--- PASS: TestGetSessionsByFile_FilterByBranch (0.02s)
+=== RUN   TestGetSessionsByFile_FilterByProvider
+--- PASS: TestGetSessionsByFile_FilterByProvider (0.02s)
+=== RUN   TestFilesForProject_Basic
+--- PASS: TestFilesForProject_Basic (0.03s)
+=== RUN   TestFilesForProject_MultipleSessions
+--- PASS: TestFilesForProject_MultipleSessions (0.03s)
+=== RUN   TestFilesForProject_DirPrefix
+--- PASS: TestFilesForProject_DirPrefix (0.04s)
+=== RUN   TestFilesForProject_ExcludesOutsidePaths
+--- PASS: TestFilesForProject_ExcludesOutsidePaths (0.03s)
+=== RUN   TestFilesForProject_Empty
+--- PASS: TestFilesForProject_Empty (0.03s)
+=== RUN   TestGetSessionsByFile_AgentFromJoin
+--- PASS: TestGetSessionsByFile_AgentFromJoin (0.02s)
+=== RUN   TestGetSessionsByFile_EmptyAgent
+--- PASS: TestGetSessionsByFile_EmptyAgent (0.02s)
+=== RUN   TestGetSessionsByFile_MultiFile
+--- PASS: TestGetSessionsByFile_MultiFile (0.03s)
+=== RUN   TestFilesForProject_LastAgent
+--- PASS: TestFilesForProject_LastAgent (0.03s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/storage/sqlite	(cached)

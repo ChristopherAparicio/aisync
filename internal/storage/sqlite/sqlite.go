@@ -1908,8 +1908,16 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 	var conditions []string
 	var args []interface{}
 
-	conditions = append(conditions, "fc.file_path = ?")
-	args = append(args, query.FilePath)
+	if len(query.FilePaths) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(query.FilePaths)), ",")
+		conditions = append(conditions, "fc.file_path IN ("+placeholders+")")
+		for _, p := range query.FilePaths {
+			args = append(args, p)
+		}
+	} else {
+		conditions = append(conditions, "fc.file_path = ?")
+		args = append(args, query.FilePath)
+	}
 
 	if query.Branch != "" {
 		conditions = append(conditions, "s.branch = ?")
@@ -1926,7 +1934,7 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 	where := " WHERE " + strings.Join(conditions, " AND ")
 
 	q := `SELECT s.id, s.provider, s.branch, s.summary, s.created_at,
-	             COALESCE(s.owner_id, ''), fc.change_type
+	             COALESCE(s.agent, ''), COALESCE(s.owner_id, ''), fc.change_type
 	      FROM sessions s
 	      JOIN file_changes fc ON fc.session_id = s.id` + where + `
 	      ORDER BY s.created_at DESC`
@@ -1946,7 +1954,7 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 		var e session.BlameEntry
 		var createdAt string
 		if err := rows.Scan(&e.SessionID, &e.Provider, &e.Branch, &e.Summary,
-			&createdAt, &e.OwnerID, &e.ChangeType); err != nil {
+			&createdAt, &e.Agent, &e.OwnerID, &e.ChangeType); err != nil {
 			return nil, fmt.Errorf("scanning blame entry: %w", err)
 		}
 		e.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
@@ -2178,6 +2186,7 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 		       COALESCE(s.summary, '') AS last_summary,
 		       COALESCE(s.branch, '') AS last_branch,
 		       COALESCE(s.provider, '') AS last_provider,
+		       COALESCE(s.agent, '') AS last_agent,
 		       COALESCE(s.commit_sha, '') AS last_commit_sha,
 		       COALESCE(fc.change_type, '') AS last_change_type
 		  FROM file_agg fa
@@ -2185,7 +2194,7 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 		  JOIN file_changes fc ON fc.session_id = s.id AND fc.file_path = fa.file_path
 	)
 	SELECT file_path, sess_count, write_count, last_change_type,
-	       last_session_id, last_time, last_summary, last_branch, last_provider, last_commit_sha
+	       last_session_id, last_time, last_summary, last_branch, last_provider, last_agent, last_commit_sha
 	  FROM last_session
 	  ORDER BY last_time DESC
 	  LIMIT ?`
@@ -2208,7 +2217,7 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 		var provider, changeType, lastTime string
 		if err := rows.Scan(
 			&e.FilePath, &e.SessionCount, &e.WriteCount, &changeType,
-			&e.LastSessionID, &lastTime, &e.LastSummary, &e.LastBranch, &provider, &e.LastCommitSHA,
+			&e.LastSessionID, &lastTime, &e.LastSummary, &e.LastBranch, &provider, &e.LastAgent, &e.LastCommitSHA,
 		); err != nil {
 			return nil, fmt.Errorf("scanning project file: %w", err)
 		}
