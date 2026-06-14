@@ -169,8 +169,9 @@ func registerSessionTools(s *server.MCPServer, h *handlers) {
 
 	// ── Blame ──
 	s.AddTool(mcp.NewTool("aisync_blame",
-		mcp.WithDescription("Find which AI sessions touched a given file. Reverse lookup from file changes to sessions, like git blame but for AI sessions."),
-		mcp.WithString("file", mcp.Required(), mcp.Description("File path relative to project root")),
+		mcp.WithDescription("Find which AI sessions touched a given file. Reverse lookup from file changes to sessions, like git blame but for AI sessions. `files` takes priority over `file` when both are provided."),
+		mcp.WithString("file", mcp.Description("File path relative to project root")),
+		mcp.WithArray("files", mcp.WithStringItems(), mcp.Description("File paths relative to project root (takes priority over `file`)")),
 		mcp.WithString("branch", mcp.Description("Filter by git branch")),
 		mcp.WithString("provider", mcp.Description("Filter by provider: claude-code, opencode, or cursor")),
 		mcp.WithBoolean("all", mcp.Description("If true, return all sessions (default: most recent only)")),

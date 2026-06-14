@@ -1,0 +1,43 @@
+Task: T6 — MCP aisync_blame accepts files[] and returns agent
+Date: 2026-06-14
+
+## TDD RED phase
+Wrote 3 new tests, 2 correctly failed before implementation:
+
+  TestHandleBlame_FilesArray       FAIL: unexpected tool error: file parameter is required
+  TestHandleBlame_NeitherFileNorFiles FAIL: expected error about 'file or files', got: file parameter is required
+  TestHandleBlame_AgentField       PASS (already green — T1/T3 had populated BlameEntry.Agent)
+
+## Implementation
+internal/mcp/tools.go:
+  - Added `Files []string \`json:"files"\`` to handleBlame args struct
+  - Changed validation: error when BOTH File == "" AND len(Files) == 0
+  - Error message: "file or files parameter is required"
+  - Routing: if len(Files) > 0 → BlameRequest{FilePaths: args.Files, ...}; else → BlameRequest{FilePath: args.File, ...}
+
+internal/mcp/server.go:
+  - Removed mcp.Required() from the "file" string parameter
+  - Added mcp.WithArray("files", mcp.WithStringItems(), mcp.Description(...))
+  - Updated tool description to note files takes priority over file
+
+## GREEN phase
+$ go test ./internal/mcp/ -run Blame -v
+=== RUN   TestHandleBlame                   PASS
+=== RUN   TestHandleBlame_NoFile            PASS
+=== RUN   TestHandleBlame_NoResults         PASS
+=== RUN   TestHandleBlame_AgentField        PASS
+=== RUN   TestHandleBlame_FilesArray        PASS
+=== RUN   TestHandleBlame_NeitherFileNorFiles PASS
+PASS ok github.com/ChristopherAparicio/aisync/internal/mcp 0.529s
+
+## Build
+$ go build ./internal/mcp/...   exit 0 (no output)
+
+## Full suite
+$ go test ./internal/mcp/...
+ok  github.com/ChristopherAparicio/aisync/internal/mcp 1.211s
+
+## API choice
+mcp-go v0.44.1 has native WithArray + WithStringItems — no comma-string workaround needed.
+BindArguments does json.Marshal(map)+json.Unmarshal(struct), so []string in callToolReq map
+correctly populates Files []string in the args struct.

@@ -458,6 +458,83 @@ func TestHandleBlame_NoResults(t *testing.T) {
 	}
 }
 
+func TestHandleBlame_AgentField(t *testing.T) {
+	h, svc := newTestHandlers(t)
+	seedSession(t, svc, "blame-agent-1")
+
+	req := callToolReq("aisync_blame", map[string]any{
+		"file": "src/main.go",
+		"all":  true,
+	})
+
+	result, err := h.handleBlame(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleBlame error: %v", err)
+	}
+
+	text := requireTextResult(t, result)
+
+	var blameResult struct {
+		Entries []struct {
+			SessionID string `json:"session_id"`
+			Agent     string `json:"agent"`
+		} `json:"Entries"`
+	}
+	if err := json.Unmarshal([]byte(text), &blameResult); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(blameResult.Entries) < 1 {
+		t.Fatalf("expected at least 1 blame entry, got 0")
+	}
+	if blameResult.Entries[0].Agent == "" {
+		t.Errorf("expected agent field to be populated, got empty string")
+	}
+}
+
+func TestHandleBlame_FilesArray(t *testing.T) {
+	h, svc := newTestHandlers(t)
+	seedSession(t, svc, "blame-files-1")
+
+	req := callToolReq("aisync_blame", map[string]any{
+		"files": []string{"src/main.go", "other.go"},
+	})
+
+	result, err := h.handleBlame(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleBlame error: %v", err)
+	}
+
+	text := requireTextResult(t, result)
+
+	var blameResult struct {
+		Entries []struct {
+			SessionID string `json:"session_id"`
+		} `json:"Entries"`
+	}
+	if err := json.Unmarshal([]byte(text), &blameResult); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(blameResult.Entries) < 1 {
+		t.Errorf("expected at least 1 blame entry for files array, got %d", len(blameResult.Entries))
+	}
+}
+
+func TestHandleBlame_NeitherFileNorFiles(t *testing.T) {
+	h, _ := newTestHandlers(t)
+
+	req := callToolReq("aisync_blame", map[string]any{})
+
+	result, err := h.handleBlame(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleBlame error: %v", err)
+	}
+
+	errText := requireErrorResult(t, result)
+	if !strings.Contains(errText, "file or files") {
+		t.Errorf("expected error about 'file or files', got: %s", errText)
+	}
+}
+
 // ── Stats ──
 
 func TestHandleStats(t *testing.T) {
