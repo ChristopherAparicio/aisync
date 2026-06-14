@@ -1,7 +1,9 @@
 package session
 
 import (
+	"encoding/json"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -271,6 +273,19 @@ func TestExtractFileOperations_MergeUpgrade(t *testing.T) {
 	}
 	if ops[0].ChangeType != ChangeModified {
 		t.Errorf("ChangeType = %q, want modified (upgraded from read)", ops[0].ChangeType)
+	}
+}
+
+func TestProjectFileEntry_JSONIncludesLastAgent(t *testing.T) {
+	entry := ProjectFileEntry{LastAgent: "jarvis"}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	if !strings.Contains(string(data), `"last_agent":"jarvis"`) {
+		t.Fatalf("json = %s, want last_agent field", data)
 	}
 }
 
