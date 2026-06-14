@@ -45,11 +45,29 @@ func TestNewCmdBlame_flags(t *testing.T) {
 	f := &cmdutil.Factory{IOStreams: ios}
 	cmd := NewCmdBlame(f)
 
-	flags := []string{"all", "restore", "branch", "provider", "json", "quiet"}
+	flags := []string{"all", "restore", "branch", "provider", "json", "quiet", "project"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected --%s flag", name)
 		}
+	}
+}
+
+// TestBlame_noArgsNoProject verifies that calling blame with no args and no --project
+// returns an error requiring at least one source.
+func TestBlame_noArgsNoProject(t *testing.T) {
+	f, ios := blameTestFactory(t, nil)
+	opts := &Options{
+		IO:      ios,
+		Factory: f,
+	}
+
+	err := runBlame(opts)
+	if err == nil {
+		t.Fatal("expected error when no args and no --project")
+	}
+	if !strings.Contains(err.Error(), "at least one file argument or --project flag") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
 
@@ -58,9 +76,9 @@ func TestBlame_noResults(t *testing.T) {
 	f, ios := blameTestFactory(t, store)
 
 	opts := &Options{
-		IO:       ios,
-		Factory:  f,
-		FilePath: "nonexistent.go",
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"nonexistent.go"},
 	}
 
 	err := runBlame(opts)
@@ -80,6 +98,7 @@ func TestBlame_tableOutput(t *testing.T) {
 		{
 			SessionID:  "sess-123",
 			Provider:   session.ProviderClaudeCode,
+			Agent:      "copilot",
 			Branch:     "feat/auth",
 			ChangeType: session.ChangeModified,
 			Summary:    "Implement login handler",
@@ -89,9 +108,9 @@ func TestBlame_tableOutput(t *testing.T) {
 	f, ios := blameTestFactory(t, store)
 
 	opts := &Options{
-		IO:       ios,
-		Factory:  f,
-		FilePath: "handler.go",
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"handler.go"},
 	}
 
 	err := runBlame(opts)
@@ -112,6 +131,12 @@ func TestBlame_tableOutput(t *testing.T) {
 	if !strings.Contains(output, "Last AI session") {
 		t.Errorf("expected 'Last AI session' header, got: %s", output)
 	}
+	if !strings.Contains(output, "AGENT") {
+		t.Errorf("expected AGENT column header, got: %s", output)
+	}
+	if !strings.Contains(output, "copilot") {
+		t.Errorf("expected agent name in output, got: %s", output)
+	}
 }
 
 func TestBlame_allFlag(t *testing.T) {
@@ -123,10 +148,10 @@ func TestBlame_allFlag(t *testing.T) {
 	f, ios := blameTestFactory(t, store)
 
 	opts := &Options{
-		IO:       ios,
-		Factory:  f,
-		FilePath: "file.go",
-		All:      true,
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"file.go"},
+		All:       true,
 	}
 
 	err := runBlame(opts)
@@ -151,10 +176,10 @@ func TestBlame_jsonOutput(t *testing.T) {
 	f, ios := blameTestFactory(t, store)
 
 	opts := &Options{
-		IO:       ios,
-		Factory:  f,
-		FilePath: "file.go",
-		JSON:     true,
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"file.go"},
+		JSON:      true,
 	}
 
 	err := runBlame(opts)
@@ -177,11 +202,11 @@ func TestBlame_quietOutput(t *testing.T) {
 	f, ios := blameTestFactory(t, store)
 
 	opts := &Options{
-		IO:       ios,
-		Factory:  f,
-		FilePath: "file.go",
-		All:      true,
-		Quiet:    true,
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"file.go"},
+		All:       true,
+		Quiet:     true,
 	}
 
 	err := runBlame(opts)
@@ -194,8 +219,218 @@ func TestBlame_quietOutput(t *testing.T) {
 	if !strings.Contains(lines, "quiet-1") || !strings.Contains(lines, "quiet-2") {
 		t.Errorf("expected session IDs only, got: %s", output)
 	}
-	// Should NOT contain table headers
 	if strings.Contains(output, "PROVIDER") {
 		t.Errorf("quiet mode should not contain table headers, got: %s", output)
+	}
+}
+
+// TestBlame_multipleFiles verifies that multiple positional args are all passed to the service
+// and that AGENT column appears in the table output.
+func TestBlame_multipleFiles(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "sess-a", Provider: session.ProviderClaudeCode, Agent: "jarvis", Branch: "main", ChangeType: session.ChangeModified, CreatedAt: time.Now()},
+		{SessionID: "sess-b", Provider: session.ProviderOpenCode, Agent: "", Branch: "main", ChangeType: session.ChangeCreated, CreatedAt: time.Now()},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	opts := &Options{
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"src/a.go", "src/b.go"},
+		All:       true,
+	}
+
+	err := runBlame(opts)
+	if err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "sess-a") || !strings.Contains(output, "sess-b") {
+		t.Errorf("expected both sessions in multi-file output, got: %s", output)
+	}
+	if !strings.Contains(output, "AGENT") {
+		t.Errorf("expected AGENT column header in multi-file output, got: %s", output)
+	}
+	if !strings.Contains(output, "jarvis") {
+		t.Errorf("expected agent 'jarvis' in output, got: %s", output)
+	}
+}
+
+// TestBlame_agentEmptyRendersAsDash verifies that an empty agent field renders as "-" in the table.
+func TestBlame_agentEmptyRendersAsDash(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "sess-abc", Provider: session.ProviderClaudeCode, Agent: "", Branch: "main", ChangeType: session.ChangeModified, CreatedAt: time.Now()},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	opts := &Options{
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"main.go"},
+	}
+
+	err := runBlame(opts)
+	if err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "AGENT") {
+		t.Errorf("expected AGENT column header in output, got: %s", output)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "sess-abc") {
+			// The agent column should be "-", not blank.
+			// Split fields: SESSION_ID  PROVIDER  AGENT  BRANCH  ...
+			// We verify by finding "  -  " (padded dash) in the line.
+			fields := strings.Fields(line)
+			if len(fields) < 3 {
+				t.Fatalf("unexpected table line: %q", line)
+			}
+			// fields[2] is the AGENT column value
+			if fields[2] != "-" {
+				t.Errorf("expected '-' for empty agent in output line, got field[2]=%q in %q", fields[2], line)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected to find session line in output:\n%s", output)
+}
+
+// TestBlame_projectMode verifies --project with no file args renders the project-view table
+// with FILE | SESSION_ID | AGENT | DATE columns.
+func TestBlame_projectMode(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.ProjectFileEntries = []session.ProjectFileEntry{
+		{
+			FilePath:        "src/main.go",
+			LastSessionID:   "pf-sess-1",
+			LastAgent:       "cody",
+			LastSessionTime: time.Now(),
+		},
+		{
+			FilePath:        "src/auth.go",
+			LastSessionID:   "pf-sess-2",
+			LastAgent:       "",
+			LastSessionTime: time.Now(),
+		},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	opts := &Options{
+		IO:          ios,
+		Factory:     f,
+		ProjectPath: "/some/project",
+	}
+
+	err := runBlame(opts)
+	if err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	for _, want := range []string{"FILE", "SESSION_ID", "AGENT", "src/main.go", "pf-sess-1", "cody"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected %q in project-mode output, got:\n%s", want, output)
+		}
+	}
+	// DATE header must appear; PROVIDER and BRANCH must NOT (project-view is a different layout).
+	if !strings.Contains(output, "DATE") {
+		t.Errorf("expected DATE column in project-mode output, got: %s", output)
+	}
+}
+
+// TestBlame_projectModeJSON verifies --project --json encodes ProjectFiles (not Entries).
+func TestBlame_projectModeJSON(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.ProjectFileEntries = []session.ProjectFileEntry{
+		{FilePath: "src/main.go", LastSessionID: "json-proj-1", LastAgent: "copilot"},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	opts := &Options{
+		IO:          ios,
+		Factory:     f,
+		ProjectPath: "/some/project",
+		JSON:        true,
+	}
+
+	err := runBlame(opts)
+	if err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, `"file_path"`) {
+		t.Errorf("expected 'file_path' key in JSON output (ProjectFiles), got: %s", output)
+	}
+	if !strings.Contains(output, `"last_session_id"`) {
+		t.Errorf("expected 'last_session_id' key in JSON output (ProjectFiles), got: %s", output)
+	}
+	// Must NOT encode file-mode fields like "session_id" at top level.
+	if strings.Contains(output, `"session_id"`) && !strings.Contains(output, `"last_session_id"`) {
+		t.Errorf("project-mode JSON should encode ProjectFiles, not Entries")
+	}
+}
+
+// TestBlame_projectModeQuiet verifies --project --quiet prints LastSessionID per line, no headers.
+func TestBlame_projectModeQuiet(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.ProjectFileEntries = []session.ProjectFileEntry{
+		{FilePath: "src/a.go", LastSessionID: "quiet-proj-1"},
+		{FilePath: "src/b.go", LastSessionID: "quiet-proj-2"},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	opts := &Options{
+		IO:          ios,
+		Factory:     f,
+		ProjectPath: "/some/project",
+		Quiet:       true,
+	}
+
+	err := runBlame(opts)
+	if err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "quiet-proj-1") || !strings.Contains(output, "quiet-proj-2") {
+		t.Errorf("expected both session IDs in quiet project output, got: %s", output)
+	}
+	if strings.Contains(output, "FILE") || strings.Contains(output, "AGENT") {
+		t.Errorf("quiet mode should not contain table headers, got: %s", output)
+	}
+}
+
+// TestBlame_quietModeNoAgentColumn ensures --quiet file-mode never emits the AGENT column header.
+func TestBlame_quietModeNoAgentColumn(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "quiet-f-1", Provider: session.ProviderClaudeCode, Agent: "jarvis", CreatedAt: time.Now()},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	opts := &Options{
+		IO:        ios,
+		Factory:   f,
+		FilePaths: []string{"main.go"},
+		Quiet:     true,
+	}
+
+	err := runBlame(opts)
+	if err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if strings.Contains(output, "AGENT") {
+		t.Errorf("quiet mode should not contain AGENT column, got: %s", output)
+	}
+	if !strings.Contains(output, "quiet-f-1") {
+		t.Errorf("expected session ID in quiet output, got: %s", output)
 	}
 }

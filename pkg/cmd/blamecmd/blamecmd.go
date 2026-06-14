@@ -22,13 +22,14 @@ type Options struct {
 	IO      *iostreams.IOStreams
 	Factory *cmdutil.Factory
 
-	FilePath string
-	Branch   string
-	Provider string
-	All      bool
-	Restore  bool
-	JSON     bool
-	Quiet    bool
+	FilePaths   []string
+	ProjectPath string
+	Branch      string
+	Provider    string
+	All         bool
+	Restore     bool
+	JSON        bool
+	Quiet       bool
 }
 
 // NewCmdBlame creates the `aisync blame` command.
@@ -39,22 +40,25 @@ func NewCmdBlame(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "blame <file>",
+		Use:   "blame [file...]",
 		Short: "Find which AI sessions touched a file",
 		Long: `Reverse lookup from file changes to AI sessions.
 Shows which AI sessions modified a given file, ordered by most recent first.
 
 By default, only the most recent session is shown. Use --all to see all sessions.
+Use --project to list all files touched in a project.
 
 Examples:
   aisync blame src/main.go                    # last session that touched this file
   aisync blame --all src/main.go              # all sessions that touched this file
+  aisync blame src/a.go src/b.go              # sessions that touched multiple files
   aisync blame --branch feat/auth handler.go  # filter by branch
   aisync blame --restore handler.go           # restore the last session that touched this file
-  aisync blame --json src/main.go             # machine-readable output`,
-		Args: cobra.ExactArgs(1),
+  aisync blame --json src/main.go             # machine-readable output
+  aisync blame --project /path/to/project     # list all files touched in project`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.FilePath = args[0]
+			opts.FilePaths = args
 			return runBlame(opts)
 		},
 	}
@@ -65,6 +69,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "Filter by provider (claude-code, opencode, cursor)")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output results as JSON")
 	cmd.Flags().BoolVarP(&opts.Quiet, "quiet", "q", false, "Only print session IDs")
+	cmd.Flags().StringVar(&opts.ProjectPath, "project", "", "Show all files touched in this project path")
 
 	return cmd
 }
@@ -72,11 +77,22 @@ Examples:
 func runBlame(opts *Options) error {
 	out := opts.IO.Out
 
-	// Resolve project path for restore shortcut
-	var projectPath string
+	isProjectMode := opts.ProjectPath != ""
+
+	// Require at least one file arg OR --project flag.
+	if !isProjectMode && len(opts.FilePaths) == 0 {
+		return fmt.Errorf("requires at least one file argument or --project flag")
+	}
+
+	// Resolve effective project path: explicit --project overrides git top-level.
+	// git top-level is kept as fallback for the Restore shortcut in single-file mode.
+	var effectiveProjectPath string
 	gitClient, err := opts.Factory.Git()
 	if err == nil {
-		projectPath, _ = gitClient.TopLevel()
+		effectiveProjectPath, _ = gitClient.TopLevel()
+	}
+	if opts.ProjectPath != "" {
+		effectiveProjectPath = opts.ProjectPath
 	}
 
 	svc, err := opts.Factory.SessionService()
@@ -84,7 +100,6 @@ func runBlame(opts *Options) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	// Build provider filter
 	var providerName session.ProviderName
 	if opts.Provider != "" {
 		parsed, parseErr := session.ParseProviderName(opts.Provider)
@@ -94,32 +109,84 @@ func runBlame(opts *Options) error {
 		providerName = parsed
 	}
 
-	result, err := svc.Blame(context.Background(), service.BlameRequest{
-		FilePath:    opts.FilePath,
-		ProjectPath: projectPath,
+	// Build the service request.
+	// Single file uses FilePath so that --restore continues to work (service Restore
+	// shortcut only fires in single-file mode). Multiple files use FilePaths.
+	req := service.BlameRequest{
+		ProjectPath: effectiveProjectPath,
 		Branch:      opts.Branch,
 		Provider:    providerName,
 		All:         opts.All,
 		Restore:     opts.Restore,
-	})
+	}
+	switch len(opts.FilePaths) {
+	case 1:
+		req.FilePath = opts.FilePaths[0]
+	default:
+		req.FilePaths = opts.FilePaths
+	}
+
+	result, err := svc.Blame(context.Background(), req)
 	if err != nil {
 		return err
 	}
 
-	// Handle restore result
 	if result.Restored != nil {
 		fmt.Fprintf(out, "Restored session %s (%s)\n", result.Restored.Session.ID, result.Restored.Method)
 		return nil
 	}
 
-	// JSON output
+	if isProjectMode {
+		return renderProjectView(opts, result)
+	}
+	return renderFileMode(opts, result)
+}
+
+func renderProjectView(opts *Options, result *service.BlameResult) error {
+	out := opts.IO.Out
+
+	if opts.JSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result.ProjectFiles)
+	}
+
+	if opts.Quiet {
+		for _, e := range result.ProjectFiles {
+			fmt.Fprintln(out, e.LastSessionID)
+		}
+		return nil
+	}
+
+	if len(result.ProjectFiles) == 0 {
+		fmt.Fprintf(out, "No files found for project %q\n", opts.ProjectPath)
+		return nil
+	}
+
+	fmt.Fprintf(out, "%-40s  %-12s  %-12s  %s\n", "FILE", "SESSION_ID", "AGENT", "DATE")
+	fmt.Fprintf(out, "%-40s  %-12s  %-12s  %s\n", "----", "----------", "-----", "----")
+	for _, e := range result.ProjectFiles {
+		file := truncate(e.FilePath, 40)
+		id := truncate(string(e.LastSessionID), 12)
+		agent := e.LastAgent
+		if agent == "" {
+			agent = "-"
+		}
+		date := timeAgo(e.LastSessionTime)
+		fmt.Fprintf(out, "%-40s  %-12s  %-12s  %s\n", file, id, agent, date)
+	}
+	return nil
+}
+
+func renderFileMode(opts *Options, result *service.BlameResult) error {
+	out := opts.IO.Out
+
 	if opts.JSON {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(result.Entries)
 	}
 
-	// Quiet mode
 	if opts.Quiet {
 		for _, e := range result.Entries {
 			fmt.Fprintln(out, e.SessionID)
@@ -127,37 +194,49 @@ func runBlame(opts *Options) error {
 		return nil
 	}
 
-	// No results
 	if len(result.Entries) == 0 {
-		fmt.Fprintf(out, "No AI sessions found for file %q\n", opts.FilePath)
+		if len(opts.FilePaths) == 1 {
+			fmt.Fprintf(out, "No AI sessions found for file %q\n", opts.FilePaths[0])
+		} else {
+			fmt.Fprintf(out, "No AI sessions found for the specified files\n")
+		}
 		return nil
 	}
 
-	// Header
 	if opts.All {
-		fmt.Fprintf(out, "AI sessions that touched %q (%d found):\n\n", opts.FilePath, len(result.Entries))
+		if len(opts.FilePaths) == 1 {
+			fmt.Fprintf(out, "AI sessions that touched %q (%d found):\n\n", opts.FilePaths[0], len(result.Entries))
+		} else {
+			fmt.Fprintf(out, "AI sessions that touched %d files (%d found):\n\n", len(opts.FilePaths), len(result.Entries))
+		}
 	} else {
-		fmt.Fprintf(out, "Last AI session that touched %q:\n\n", opts.FilePath)
+		if len(opts.FilePaths) == 1 {
+			fmt.Fprintf(out, "Last AI session that touched %q:\n\n", opts.FilePaths[0])
+		} else {
+			fmt.Fprintf(out, "Last AI sessions that touched %d files:\n\n", len(opts.FilePaths))
+		}
 	}
 
-	// Table
-	fmt.Fprintf(out, "%-12s  %-12s  %-24s  %-8s  %-12s  %s\n",
-		"SESSION_ID", "PROVIDER", "BRANCH", "CHANGE", "DATE", "SUMMARY")
-	fmt.Fprintf(out, "%-12s  %-12s  %-24s  %-8s  %-12s  %s\n",
-		"----------", "--------", "------", "------", "----", "-------")
+	fmt.Fprintf(out, "%-12s  %-12s  %-12s  %-24s  %-8s  %-12s  %s\n",
+		"SESSION_ID", "PROVIDER", "AGENT", "BRANCH", "CHANGE", "DATE", "SUMMARY")
+	fmt.Fprintf(out, "%-12s  %-12s  %-12s  %-24s  %-8s  %-12s  %s\n",
+		"----------", "--------", "-----", "------", "------", "----", "-------")
 
 	for _, e := range result.Entries {
 		id := truncate(string(e.SessionID), 12)
 		prov := truncate(string(e.Provider), 12)
+		agent := e.Agent
+		if agent == "" {
+			agent = "-"
+		}
 		br := truncate(e.Branch, 24)
 		change := truncate(string(e.ChangeType), 8)
 		date := timeAgo(e.CreatedAt)
 		summary := truncate(e.Summary, 40)
 
-		fmt.Fprintf(out, "%-12s  %-12s  %-24s  %-8s  %-12s  %s\n",
-			id, prov, br, change, date, summary)
+		fmt.Fprintf(out, "%-12s  %-12s  %-12s  %-24s  %-8s  %-12s  %s\n",
+			id, prov, agent, br, change, date, summary)
 	}
-
 	return nil
 }
 
