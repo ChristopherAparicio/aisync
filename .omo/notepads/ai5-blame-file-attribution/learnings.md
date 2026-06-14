@@ -75,3 +75,67 @@
 ### Build/test outcome
 - `go build ./internal/service/...` clean
 - `go test ./internal/service/...` PASS (all existing tests + 4 new blame tests)
+
+## [2026-06-14] Task 6: MCP layer — files[] array param + agent in result
+
+### API discovery
+- `mcp-go` v0.44.1 has native `WithArray(name, opts...)` + `WithStringItems(opts...)` — no comma-string workaround needed
+- `BindArguments` does `json.Marshal(map[string]any)` then `json.Unmarshal([]byte, &struct)` so `[]string` in the args map correctly populates `Files []string` in the args struct
+
+### Changes made
+- `internal/mcp/tools.go`: added `Files []string \`json:"files"\`` to handleBlame args struct; changed validation to error when BOTH File=="" AND len(Files)==0; new error message "file or files parameter is required"; routing: if len(Files)>0 → BlameRequest{FilePaths: args.Files}; else → BlameRequest{FilePath: args.File}
+- `internal/mcp/server.go`: removed `mcp.Required()` from "file" param; added `mcp.WithArray("files", mcp.WithStringItems(), mcp.Description(...))` line; updated tool description to note files takes priority
+- `internal/mcp/server_test.go`: added 3 new tests — TestHandleBlame_AgentField (GREEN in RED; agent already populated by T1/T3), TestHandleBlame_FilesArray (RED: "file parameter is required"), TestHandleBlame_NeitherFileNorFiles (RED: error message lacked "file or files")
+
+### TDD outcome
+- RED: TestHandleBlame_FilesArray FAIL ("unexpected tool error: file parameter is required"), TestHandleBlame_NeitherFileNorFiles FAIL ("expected error about 'file or files'"), TestHandleBlame_AgentField PASS (already green)
+- GREEN: all 6 blame tests pass
+- `go build ./internal/mcp/...` clean; `go test ./internal/mcp/...` PASS (full suite)
+- Committed: `feat(blame): MCP aisync_blame accepts files[] and returns agent`
+
+## [2026-06-14] Task 5: CLI layer — multi-file args, --project flag, AGENT column
+
+### TDD Protocol
+- RED: compilation failure — `Options.FilePaths` and `Options.ProjectPath` undefined in test file
+- GREEN: 13 tests pass (7 original updated + 6 new)
+
+### Options struct changes
+- Removed: `FilePath string`
+- Added: `FilePaths []string`, `ProjectPath string`
+
+### Cobra changes
+- `cobra.ExactArgs(1)` → `cobra.ArbitraryArgs`
+- `RunE`: `opts.FilePaths = args`
+- New flag: `--project` via `StringVar(&opts.ProjectPath, "project", "", ...)`
+
+### runBlame routing
+- Manual validation: `len(FilePaths)==0 && ProjectPath==""` → error "requires at least one file argument or --project flag"
+- `effectiveProjectPath`: `gitClient.TopLevel()` unless `--project` is set, then `opts.ProjectPath`
+- Single file → `req.FilePath = opts.FilePaths[0]` (preserves --restore shortcut in service)
+- Multi-file → `req.FilePaths = opts.FilePaths`
+- Project-mode → `renderProjectView()`: FILE|SESSION_ID|AGENT|DATE; --json encodes ProjectFiles; --quiet prints LastSessionIDs
+- File-mode → `renderFileMode()`: SESSION_ID|PROVIDER|AGENT|BRANCH|CHANGE|DATE|SUMMARY; empty agent → "-"
+
+### Key design decision
+- Single file still uses `req.FilePath` (not `req.FilePaths`) so that `--restore` continues to trigger the Restore shortcut in the service layer (service Restore only fires in single-file path)
+
+### Build/test outcome
+- `go test ./pkg/cmd/blamecmd/ -v` PASS (13 tests)
+- `make build` → `bin/aisync` produced, exit 0
+- LSP diagnostics: no errors on blamecmd.go or blamecmd_test.go
+- Committed: `feat(blame): CLI multi-file args, --project, AGENT column`
+
+## [2026-06-15] Task 7: Documentation — agent attribution, multi-file, project mode
+
+### Files updated
+- `architecture/blame.md`: Full rewrite. Added agent attribution section (COALESCE from sessions JOIN), multi-file section (IN clause, explicit list only), project-view section (CTE last_session explanation), updated domain types (BlameEntry.Agent, BlameQuery.FilePaths, ProjectFileEntry.LastAgent), updated Layer Responsibilities table, updated SQL query section with COALESCE and IN variant, added CLI usage and MCP tool parameter tables.
+- `README.md`: Updated commands table blame row to mention AGENT column, multi-file, and --project. Updated MCP tools table blame row to mention files[] parameter. Added "Blame Examples" subsection under Commands with 7 usage examples.
+
+### Guardrails respected
+- No --agent filter documented (does not exist)
+- No glob/wildcard documented (not supported)
+- No MCP project mode documented (CLI only)
+- No fictional flags invented — all examples verified against blamecmd.go
+
+### Evidence
+- `.omo/evidence/task-7-docs-grep.txt` confirms "project" in architecture/blame.md and "agent" in README.md

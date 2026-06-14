@@ -87,12 +87,37 @@ With hooks installed (`aisync init` offers this), capture happens automatically 
 | `aisync hooks install` | Install Git hooks for automatic capture |
 | `aisync secrets scan` | Scan sessions for leaked secrets |
 | `aisync tui` | Interactive terminal UI to browse sessions |
-| `aisync blame` | Find which AI sessions touched a file |
+| `aisync blame` | Find which AI sessions touched a file (shows AGENT column; supports multi-file and `--project`) |
 | `aisync serve` | Start HTTP/REST API server (19 endpoints) |
 | `aisync search` | Search sessions by keyword, branch, provider, time range |
 | `aisync mcp` | Start MCP server for AI tool integration (18 tools) |
 
 Run `aisync <command> --help` for detailed flags and usage.
+
+### Blame Examples
+
+```bash
+# Last session that touched a file (table includes AGENT column)
+aisync blame src/main.go
+
+# All sessions that touched a file
+aisync blame --all src/main.go
+
+# Sessions that touched multiple files (explicit list)
+aisync blame src/a.go src/b.go
+
+# Filter by branch
+aisync blame --branch feat/auth handler.go
+
+# Restore the last session that touched a file
+aisync blame --restore handler.go
+
+# Machine-readable output
+aisync blame --json src/main.go
+
+# List every file touched in a project with its last agent
+aisync blame --project /path/to/project
+```
 
 ## Supported AI Providers
 
@@ -203,7 +228,7 @@ Add an `mcp` section to your `opencode.json` (at project root or `~/.config/open
 | `aisync_get` | Get session details by ID |
 | `aisync_list` | List captured sessions |
 | `aisync_search` | Search sessions by keyword, branch, provider, time range |
-| `aisync_blame` | Find which AI sessions touched a file |
+| `aisync_blame` | Find which AI sessions touched a file; accepts `file` (string) or `files[]` (array) |
 | `aisync_explain` | AI-generated explanation of a session |
 | `aisync_rewind` | Fork a session at message N |
 | `aisync_delete` | Delete a session |

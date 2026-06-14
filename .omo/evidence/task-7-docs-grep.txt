@@ -1,0 +1,10 @@
+5. **"Project overview"** — `--project` flag to list every file touched in a project with its last agent
+| **Domain** | `BlameEntry` type (session summary + change type + agent + timestamp); `BlameQuery` with `FilePaths []string`; `ProjectFileEntry` with `LastAgent string` |
+| **Store (port)** | `GetSessionsByFile(query BlameQuery) → []BlameEntry` — single-file or multi-file SQL query; `FilesForProject(path, branch, limit) → []ProjectFileEntry` — CTE-based project scan |
+| **CLI** | `aisync blame [file...]` — multi-file args via `cobra.ArbitraryArgs`; `--project` flag; AGENT column in table output |
+// ProjectFileEntry is one row in the project-wide file listing.
+When you use an AI agent to code on a branch, the conversation context disappears after the session:
+- **Context is lost** -- if a bug surfaces during PR review or CI, nobody can understand why the agent made that choice
+Developer codes with AI agent
+        +-- reloads the full AI conversation into your agent
+| `aisync blame` | Find which AI sessions touched a file (shows AGENT column; supports multi-file and `--project`) |
