@@ -11,8 +11,9 @@ import (
 
 // BlameRequest contains inputs for a blame lookup.
 type BlameRequest struct {
-	FilePath    string               // required — file path relative to project root
-	ProjectPath string               // used for Restore shortcut
+	FilePath    string               // single-file mode — required when FilePaths is empty and no project-view
+	FilePaths   []string             // multi-file mode; takes priority over FilePath when non-empty
+	ProjectPath string               // project-view mode when FilePath and FilePaths are empty; also used as Restore destination
 	Branch      string               // optional filter
 	Provider    session.ProviderName // optional filter
 	All         bool                 // true = all sessions; false = most recent only
@@ -21,16 +22,45 @@ type BlameRequest struct {
 
 // BlameResult contains the outcome of a blame operation.
 type BlameResult struct {
-	Entries  []session.BlameEntry
-	Restored *RestoreResult // non-nil only when Restore=true
-	FilePath string
+	Entries      []session.BlameEntry
+	ProjectFiles []session.ProjectFileEntry // populated only in project-view mode
+	Restored     *RestoreResult             // non-nil only when Restore=true
+	FilePath     string
 }
 
-// Blame finds AI sessions that touched the given file.
-// If Restore is set, it restores the most recent matching session.
+// Blame finds AI sessions that touched the given file(s), or lists all project files.
+// Routing:
+//  1. Project-view: ProjectPath set with no file paths → FilesForProject
+//  2. Multi-file: FilePaths non-empty → GetSessionsByFile with IN(...)
+//  3. Single-file: FilePath set → existing behavior with optional Restore
+//  4. None set → validation error
 func (s *SessionService) Blame(ctx context.Context, req BlameRequest) (*BlameResult, error) {
+	// Project-view mode: ProjectPath set, no file path(s) specified.
+	if req.ProjectPath != "" && req.FilePath == "" && len(req.FilePaths) == 0 {
+		entries, err := s.store.FilesForProject(req.ProjectPath, "", 0)
+		if err != nil {
+			return nil, fmt.Errorf("blame project: %w", err)
+		}
+		return &BlameResult{ProjectFiles: entries}, nil
+	}
+
+	// Multi-file mode: FilePaths takes priority over FilePath.
+	if len(req.FilePaths) > 0 {
+		query := session.BlameQuery{
+			FilePaths: req.FilePaths,
+			Branch:    req.Branch,
+			Provider:  req.Provider,
+		}
+		entries, err := s.store.GetSessionsByFile(query)
+		if err != nil {
+			return nil, fmt.Errorf("blame lookup: %w", err)
+		}
+		return &BlameResult{Entries: entries}, nil
+	}
+
+	// Single-file mode (original behavior).
 	if req.FilePath == "" {
-		return nil, fmt.Errorf("file path is required")
+		return nil, fmt.Errorf("file path or project path is required")
 	}
 
 	query := session.BlameQuery{

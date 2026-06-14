@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +53,9 @@ type MockStore struct {
 	// BlameEntries is the return value for GetSessionsByFile.
 	BlameEntries []session.BlameEntry
 
+	// ProjectFileEntries is the return value for FilesForProject.
+	ProjectFileEntries []session.ProjectFileEntry
+
 	// PRSessions maps "owner/repo#number" → summaries for GetSessionsForPR.
 	PRSessions map[string][]session.Summary
 
@@ -78,6 +82,15 @@ type MockStore struct {
 
 	// DeletedByGC tracks sessions removed by DeleteOlderThan.
 	DeletedByGC int
+
+	// Stalls holds session stalls keyed by id (used by StallDetectorTask tests).
+	Stalls      map[int64]*session.SessionStall
+	nextStallID int64
+
+	// NotificationLogs holds persisted notification entries keyed by id.
+	// Used by the notifstore Channel adapter tests and the /alerts page.
+	NotificationLogs   map[int64]*session.NotificationLogEntry
+	nextNotificationID int64
 
 	// SessionLinks stores session-to-session links added via LinkSessions.
 	SessionLinks []session.SessionLink
@@ -378,7 +391,7 @@ func (m *MockStore) TopFilesForProject(_ string, _ int) ([]session.TopFileEntry,
 }
 
 func (m *MockStore) FilesForProject(_ string, _ string, _ int) ([]session.ProjectFileEntry, error) {
-	return nil, nil
+	return m.ProjectFileEntries, nil
 }
 
 // ── Lifecycle ──
@@ -1164,4 +1177,260 @@ func (m *MockStore) FilterSessionIDsByTags(ids []session.ID, tags []string) ([]s
 		}
 	}
 	return out, nil
+}
+
+func (m *MockStore) UpsertStall(stall *session.SessionStall) error {
+	if stall == nil {
+		return fmt.Errorf("UpsertStall: nil stall")
+	}
+	if m.Stalls == nil {
+		m.Stalls = make(map[int64]*session.SessionStall)
+	}
+	for _, existing := range m.Stalls {
+		if existing.ProviderSessionID == stall.ProviderSessionID &&
+			existing.StartedAt.Equal(stall.StartedAt) &&
+			existing.RootCause == stall.RootCause {
+			if stall.EndedAt != nil {
+				existing.EndedAt = stall.EndedAt
+				existing.DurationMs = stall.EndedAt.Sub(existing.StartedAt).Milliseconds()
+			}
+			if stall.TokensLost > existing.TokensLost {
+				existing.TokensLost = stall.TokensLost
+			}
+			if stall.CostLostUSD > existing.CostLostUSD {
+				existing.CostLostUSD = stall.CostLostUSD
+			}
+			existing.UpdatedAt = time.Now().UTC()
+			stall.ID = existing.ID
+			return nil
+		}
+	}
+	m.nextStallID++
+	stall.ID = m.nextStallID
+	if stall.CreatedAt.IsZero() {
+		stall.CreatedAt = time.Now().UTC()
+	}
+	stall.UpdatedAt = stall.CreatedAt
+	if stall.EndedAt != nil && stall.DurationMs == 0 {
+		stall.DurationMs = stall.EndedAt.Sub(stall.StartedAt).Milliseconds()
+	}
+	copy := *stall
+	m.Stalls[stall.ID] = &copy
+	return nil
+}
+
+func (m *MockStore) SealStall(id int64, endedAt time.Time) error {
+	s, ok := m.Stalls[id]
+	if !ok || s.EndedAt != nil {
+		return nil
+	}
+	t := endedAt.UTC()
+	s.EndedAt = &t
+	s.DurationMs = t.Sub(s.StartedAt).Milliseconds()
+	s.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *MockStore) GetStall(id int64) (*session.SessionStall, error) {
+	s, ok := m.Stalls[id]
+	if !ok {
+		return nil, nil
+	}
+	c := *s
+	return &c, nil
+}
+
+func (m *MockStore) ListStalls(filter session.StallFilter) ([]session.SessionStall, error) {
+	out := make([]session.SessionStall, 0, len(m.Stalls))
+	for _, s := range m.Stalls {
+		if !matchStallFilter(*s, filter) {
+			continue
+		}
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DetectedAt.After(out[j].DetectedAt) })
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+func (m *MockStore) ListLiveStalls() ([]session.SessionStall, error) {
+	out := make([]session.SessionStall, 0)
+	for _, s := range m.Stalls {
+		if s.EndedAt == nil {
+			out = append(out, *s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })
+	return out, nil
+}
+
+func (m *MockStore) StallStats(filter session.StallFilter) (*session.StallStats, error) {
+	filter.OnlyLive = false
+	stats := &session.StallStats{
+		ByRootCause: make(map[session.StallRootCause]session.StallStatsRow),
+		ByProvider:  make(map[string]session.StallStatsRow),
+	}
+	for _, s := range m.Stalls {
+		if !matchStallFilter(*s, filter) {
+			continue
+		}
+		stats.TotalCount++
+		stats.TokensLost += s.TokensLost
+		stats.CostLostUSD += s.CostLostUSD
+		stats.TotalDurationMs += s.DurationMs
+		if s.EndedAt == nil {
+			stats.LiveCount++
+		}
+		rc := stats.ByRootCause[s.RootCause]
+		rc.Count++
+		rc.TokensLost += s.TokensLost
+		rc.CostLostUSD += s.CostLostUSD
+		stats.ByRootCause[s.RootCause] = rc
+		p := stats.ByProvider[s.Provider]
+		p.Count++
+		p.TokensLost += s.TokensLost
+		p.CostLostUSD += s.CostLostUSD
+		stats.ByProvider[s.Provider] = p
+	}
+	return stats, nil
+}
+
+func matchStallFilter(s session.SessionStall, f session.StallFilter) bool {
+	if !f.Since.IsZero() && s.DetectedAt.Before(f.Since) {
+		return false
+	}
+	if !f.Until.IsZero() && s.DetectedAt.After(f.Until) {
+		return false
+	}
+	if f.OnlyLive && s.EndedAt != nil {
+		return false
+	}
+	if len(f.RootCauses) > 0 && !slices.Contains(f.RootCauses, s.RootCause) {
+		return false
+	}
+	if len(f.Providers) > 0 && !slices.Contains(f.Providers, s.Provider) {
+		return false
+	}
+	return true
+}
+
+func (m *MockStore) InsertNotificationLog(entry *session.NotificationLogEntry) error {
+	if entry == nil {
+		return fmt.Errorf("InsertNotificationLog: nil entry")
+	}
+	if entry.EventType == "" {
+		return fmt.Errorf("InsertNotificationLog: empty event_type")
+	}
+	if m.NotificationLogs == nil {
+		m.NotificationLogs = make(map[int64]*session.NotificationLogEntry)
+	}
+	m.nextNotificationID++
+	entry.ID = m.nextNotificationID
+	if entry.DispatchedAt.IsZero() {
+		entry.DispatchedAt = time.Now().UTC()
+	}
+	if entry.Severity == "" {
+		entry.Severity = "info"
+	}
+	copy := *entry
+	m.NotificationLogs[entry.ID] = &copy
+	return nil
+}
+
+func (m *MockStore) GetNotificationLog(id int64) (*session.NotificationLogEntry, error) {
+	e, ok := m.NotificationLogs[id]
+	if !ok {
+		return nil, nil
+	}
+	c := *e
+	return &c, nil
+}
+
+func (m *MockStore) ListNotificationLogs(filter session.NotificationLogFilter) ([]session.NotificationLogEntry, error) {
+	out := make([]session.NotificationLogEntry, 0, len(m.NotificationLogs))
+	for _, e := range m.NotificationLogs {
+		if !matchNotificationLogFilter(*e, filter) {
+			continue
+		}
+		out = append(out, *e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DispatchedAt.After(out[j].DispatchedAt) })
+	if filter.Offset > 0 {
+		if filter.Offset >= len(out) {
+			return nil, nil
+		}
+		out = out[filter.Offset:]
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+func (m *MockStore) AcknowledgeNotification(id int64, actor string, at time.Time) error {
+	e, ok := m.NotificationLogs[id]
+	if !ok || e.AcknowledgedAt != nil {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	t := at.UTC()
+	e.AcknowledgedAt = &t
+	e.AcknowledgedBy = actor
+	return nil
+}
+
+func (m *MockStore) AcknowledgeAllNotifications(actor string, at time.Time) (int, error) {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	t := at.UTC()
+	count := 0
+	for _, e := range m.NotificationLogs {
+		if e.AcknowledgedAt == nil {
+			e.AcknowledgedAt = &t
+			e.AcknowledgedBy = actor
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *MockStore) UnacknowledgedNotificationCount() (int, error) {
+	n := 0
+	for _, e := range m.NotificationLogs {
+		if e.AcknowledgedAt == nil {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (m *MockStore) UpsertCronJob(job *session.CronJob) error { return nil }
+func (m *MockStore) ListCronJobs(provider string) ([]session.CronJob, error) { return nil, nil }
+func (m *MockStore) GetCronJob(jobID string) (*session.CronJob, error) { return nil, nil }
+
+func matchNotificationLogFilter(e session.NotificationLogEntry, f session.NotificationLogFilter) bool {
+	if !f.Since.IsZero() && e.DispatchedAt.Before(f.Since) {
+		return false
+	}
+	if !f.Until.IsZero() && e.DispatchedAt.After(f.Until) {
+		return false
+	}
+	if f.OnlyUnack && e.AcknowledgedAt != nil {
+		return false
+	}
+	if len(f.EventTypes) > 0 && !slices.Contains(f.EventTypes, e.EventType) {
+		return false
+	}
+	if len(f.Severities) > 0 && !slices.Contains(f.Severities, e.Severity) {
+		return false
+	}
+	if len(f.Projects) > 0 && !slices.Contains(f.Projects, e.Project) {
+		return false
+	}
+	return true
 }

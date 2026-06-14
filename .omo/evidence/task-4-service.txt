@@ -1,0 +1,10 @@
+=== RUN   TestBlame_SingleFile
+--- PASS: TestBlame_SingleFile (0.00s)
+=== RUN   TestBlame_MultiFile
+--- PASS: TestBlame_MultiFile (0.00s)
+=== RUN   TestBlame_Project
+--- PASS: TestBlame_Project (0.00s)
+=== RUN   TestBlame_Validation
+--- PASS: TestBlame_Validation (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/service	0.232s

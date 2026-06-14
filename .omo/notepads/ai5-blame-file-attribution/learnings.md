@@ -54,3 +54,24 @@
 - TestGetSessionsByFile_EmptyAgent passed trivially in RED (zero-value string already matches expected "")
 - GREEN: all 4 pass; 15 total blame/FilesForProject tests pass (11 existing + 4 new)
 - go build ./... clean, go build ./internal/web/... clean
+
+## [2026-06-14] Task 4: Service layer — multi-file and project blame
+
+### TDD Protocol
+- RED: compilation failure — `BlameRequest.FilePaths` undefined, `BlameResult.ProjectFiles` undefined
+- GREEN: 4 tests pass — TestBlame_SingleFile, TestBlame_MultiFile, TestBlame_Project, TestBlame_Validation
+
+### Changes made
+- `internal/testutil/mock_store.go`: added `ProjectFileEntries []session.ProjectFileEntry` field; updated `FilesForProject` to return `m.ProjectFileEntries`
+- `internal/service/session_blame.go`: added `FilePaths []string` to `BlameRequest`; added `ProjectFiles []session.ProjectFileEntry` to `BlameResult`; implemented 3-way routing in `Blame()` with updated validation error message
+- `internal/service/session_blame_test.go`: new file with `blameMockStore` extending local `mockStore`; 4 TDD tests
+
+### Routing rules
+- `ProjectPath != "" && FilePath == "" && len(FilePaths) == 0` → `FilesForProject(path, "", 0)` → `BlameResult{ProjectFiles: ...}`
+- `len(FilePaths) > 0` → `GetSessionsByFile(BlameQuery{FilePaths: ...})` → `BlameResult{Entries: ...}` (no Limit=1 even when All=false)
+- `FilePath != ""` → existing single-file path with optional Restore shortcut
+- None set → error "file path or project path is required"
+
+### Build/test outcome
+- `go build ./internal/service/...` clean
+- `go test ./internal/service/...` PASS (all existing tests + 4 new blame tests)
