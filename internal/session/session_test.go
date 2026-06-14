@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -210,5 +211,32 @@ func TestMessage_JSONDefaultsIsCompactionSummaryToFalse(t *testing.T) {
 
 	if got.IsCompactionSummary != false {
 		t.Fatalf("IsCompactionSummary = %v, want false", got.IsCompactionSummary)
+	}
+}
+
+func TestBlameEntry_JSONIncludesAgent(t *testing.T) {
+	entry := BlameEntry{Agent: "jarvis"}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	if !strings.Contains(string(data), `"agent":"jarvis"`) {
+		t.Fatalf("json = %s, want agent field", data)
+	}
+}
+
+func TestBlameQuery_CompileWithFilePathAndFilePaths(t *testing.T) {
+	query := BlameQuery{
+		FilePath:  "src/auth.go",
+		FilePaths: []string{"src/auth.go", "src/oauth.go"},
+	}
+
+	if query.FilePath != "src/auth.go" {
+		t.Fatalf("FilePath = %q, want %q", query.FilePath, "src/auth.go")
+	}
+	if len(query.FilePaths) != 2 {
+		t.Fatalf("FilePaths length = %d, want 2", len(query.FilePaths))
 	}
 }

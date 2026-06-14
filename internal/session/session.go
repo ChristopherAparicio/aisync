@@ -988,6 +988,7 @@ type BlameEntry struct {
 	SessionID  ID           `json:"session_id"`
 	OwnerID    ID           `json:"owner_id,omitempty"`
 	Provider   ProviderName `json:"provider"`
+	Agent      string       `json:"agent"`
 	Branch     string       `json:"branch"`
 	Summary    string       `json:"summary,omitempty"`
 	ChangeType ChangeType   `json:"change_type"`
@@ -996,6 +997,7 @@ type BlameEntry struct {
 // BlameQuery contains parameters for a blame lookup.
 type BlameQuery struct {
 	FilePath     string       // required — relative to project root
+	FilePaths    []string     // optionnel — quand non vide, prime sur FilePath et matche plusieurs fichiers via IN(...)
 	Branch       string       // optional filter
 	Provider     ProviderName // optional filter
 	Limit        int          // 0 = no limit (all sessions); >0 = cap results
