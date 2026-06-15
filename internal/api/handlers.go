@@ -848,6 +848,92 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Bulk export / import (JSONL bundle) ──
+
+// exportAllRequest is the JSON body for POST /api/v1/sessions/export-all.
+type exportAllRequest struct {
+	ProjectPath string `json:"project_path,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	All         bool   `json:"all,omitempty"`
+	Global      bool   `json:"global,omitempty"`
+}
+
+// exportAllResponse is the JSON response for bulk export. Data is base64-encoded JSONL.
+type exportAllResponse struct {
+	Data  string `json:"data"`
+	Count int    `json:"count"`
+}
+
+// handleExportAll streams a JSONL bundle of every matching session.
+// POST /api/v1/sessions/export-all
+func (s *Server) handleExportAll(w http.ResponseWriter, r *http.Request) {
+	var req exportAllRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	var providerName session.ProviderName
+	if req.Provider != "" {
+		parsed, err := session.ParseProviderName(req.Provider)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		providerName = parsed
+	}
+
+	result, err := s.sessionSvc.ExportAll(service.ExportAllRequest{
+		ProjectPath: req.ProjectPath,
+		Branch:      req.Branch,
+		Provider:    providerName,
+		All:         req.All,
+		Global:      req.Global,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, exportAllResponse{
+		Data:  base64.StdEncoding.EncodeToString(result.Data),
+		Count: result.Count,
+	})
+}
+
+// importBundleRequest is the JSON body for POST /api/v1/sessions/import-bundle.
+// Data is base64-encoded JSONL.
+type importBundleRequest struct {
+	Data       string `json:"data"`
+	IntoTarget string `json:"into_target,omitempty"`
+}
+
+// handleImportBundle imports every session line of a JSONL bundle.
+// POST /api/v1/sessions/import-bundle
+func (s *Server) handleImportBundle(w http.ResponseWriter, r *http.Request) {
+	var req importBundleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	data, err := base64.StdEncoding.DecodeString(req.Data)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid base64 data: "+err.Error())
+		return
+	}
+
+	result, err := s.sessionSvc.ImportBundle(service.ImportRequest{
+		Data:       data,
+		IntoTarget: req.IntoTarget,
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ── Ingest ──
 
 // handleIngest accepts a session pushed by an external client.

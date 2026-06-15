@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/ChristopherAparicio/aisync/internal/converter"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -204,4 +206,147 @@ func (s *SessionService) Import(req ImportRequest) (*ImportResult, error) {
 		SourceFormat: detectedLabel,
 		Target:       target,
 	}, nil
+}
+
+// ── Bulk export (JSONL bundle) ──
+
+// ExportAllRequest selects which sessions to include in a bulk export.
+// The output is always the unified aisync format, serialized as JSONL
+// (one compact session JSON object per line) so it streams and concatenates
+// cleanly and transfers easily between two aisync servers.
+type ExportAllRequest struct {
+	ProjectPath string
+	Branch      string
+	Provider    session.ProviderName
+	All         bool // ignore Branch: every session in the project (all branches)
+	Global      bool // ignore ProjectPath+Branch: every session across all projects
+}
+
+// ExportAllResult contains the JSONL bundle and how many sessions it holds.
+type ExportAllResult struct {
+	Data  []byte
+	Count int
+}
+
+// ExportAll serializes every session matching req into a JSONL bundle. Each
+// line is a complete unified aisync session object. The bundle round-trips
+// through ImportBundle.
+func (s *SessionService) ExportAll(req ExportAllRequest) (*ExportAllResult, error) {
+	summaries, err := s.List(ListRequest{
+		ProjectPath: req.ProjectPath,
+		Branch:      req.Branch,
+		Provider:    req.Provider,
+		All:         req.All,
+		Global:      req.Global,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(summaries) == 0 {
+		return &ExportAllResult{}, nil
+	}
+
+	ids := make([]session.ID, 0, len(summaries))
+	for _, sm := range summaries {
+		ids = append(ids, sm.ID)
+	}
+
+	batch, err := s.store.GetBatch(ids)
+	if err != nil {
+		return nil, fmt.Errorf("loading sessions: %w", err)
+	}
+
+	var buf bytes.Buffer
+	count := 0
+	for _, id := range ids {
+		sess, ok := batch[id]
+		if !ok || sess == nil {
+			continue
+		}
+		line, marshalErr := json.Marshal(sess)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshaling session %s: %w", id, marshalErr)
+		}
+		buf.Write(line)
+		buf.WriteByte('\n')
+		count++
+	}
+
+	return &ExportAllResult{Data: buf.Bytes(), Count: count}, nil
+}
+
+// ── Bulk import (JSONL bundle) ──
+
+// IsBundle reports whether data is a multi-session JSONL bundle produced by
+// ExportAll: two or more non-empty lines, each a standalone unified aisync
+// session object (carrying both "provider" and "messages"). A pretty-printed
+// single export (whose first line is just "{") and Claude JSONL (lines carry
+// "type", not the session shape) are NOT bundles. The two-line minimum lets a
+// single compact session JSON fall through to the normal single-session import
+// path, which stores the identical result while preserving direct error
+// reporting (e.g. an unknown --into target).
+func IsBundle(data []byte) bool {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return false
+	}
+	nonEmpty := 0
+	for _, ln := range strings.Split(trimmed, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(ln), &obj); err != nil {
+			return false
+		}
+		if _, ok := obj["provider"]; !ok {
+			return false
+		}
+		if _, ok := obj["messages"]; !ok {
+			return false
+		}
+		nonEmpty++
+	}
+	return nonEmpty >= 2
+}
+
+// ImportBundleResult summarizes a bulk import.
+type ImportBundleResult struct {
+	SessionIDs []session.ID
+	Errors     []string
+	Imported   int
+	Failed     int
+}
+
+// ImportBundle imports every session line of a JSONL bundle. Each line is
+// routed through the standard Import path (secret scan, owner stamping,
+// post-capture hook), so a bundle import is equivalent to importing each
+// session individually. A failed line is recorded and does not abort the rest.
+func (s *SessionService) ImportBundle(req ImportRequest) (*ImportBundleResult, error) {
+	trimmed := strings.TrimSpace(string(req.Data))
+	if trimmed == "" {
+		return nil, fmt.Errorf("import data is empty")
+	}
+
+	result := &ImportBundleResult{}
+	for i, ln := range strings.Split(trimmed, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		res, err := s.Import(ImportRequest{
+			Data:         []byte(ln),
+			SourceFormat: "aisync",
+			IntoTarget:   req.IntoTarget,
+		})
+		if err != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, fmt.Sprintf("line %d: %v", i+1, err))
+			continue
+		}
+		result.Imported++
+		result.SessionIDs = append(result.SessionIDs, res.SessionID)
+	}
+	return result, nil
 }

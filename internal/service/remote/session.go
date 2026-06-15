@@ -208,6 +208,44 @@ func (r *SessionService) Import(req service.ImportRequest) (*service.ImportResul
 	}, nil
 }
 
+func (r *SessionService) ExportAll(req service.ExportAllRequest) (*service.ExportAllResult, error) {
+	res, err := r.c.ExportAll(client.ExportAllRequest{
+		ProjectPath: req.ProjectPath,
+		Branch:      req.Branch,
+		Provider:    string(req.Provider),
+		All:         req.All,
+		Global:      req.Global,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &service.ExportAllResult{
+		Data:  res.Data,
+		Count: res.Count,
+	}, nil
+}
+
+func (r *SessionService) ImportBundle(req service.ImportRequest) (*service.ImportBundleResult, error) {
+	res, err := r.c.ImportBundle(client.ImportRequest{
+		Data:         req.Data,
+		SourceFormat: req.SourceFormat,
+		IntoTarget:   req.IntoTarget,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]session.ID, len(res.SessionIDs))
+	for i, id := range res.SessionIDs {
+		ids[i] = session.ID(id)
+	}
+	return &service.ImportBundleResult{
+		Imported:   res.Imported,
+		Failed:     res.Failed,
+		SessionIDs: ids,
+		Errors:     res.Errors,
+	}, nil
+}
+
 // ── Git Integration ──
 
 func (r *SessionService) Link(req service.LinkRequest) (*service.LinkResult, error) {

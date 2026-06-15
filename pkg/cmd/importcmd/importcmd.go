@@ -95,6 +95,11 @@ func runImport(opts *Options, filePath string) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
+	// Multi-session JSONL bundles route to ImportBundle, but only when the user did not force a non-aisync format.
+	if (opts.FormatFlag == "" || opts.FormatFlag == "aisync") && service.IsBundle(data) {
+		return runImportBundle(opts, svc, data)
+	}
+
 	// Import
 	result, err := svc.Import(service.ImportRequest{
 		Data:         data,
@@ -113,6 +118,29 @@ func runImport(opts *Options, filePath string) error {
 		fmt.Fprintf(out, "Use 'aisync restore --session %s' to load into your agent.\n", result.SessionID)
 	default:
 		fmt.Fprintf(out, "Imported session %s into %s.\n", result.SessionID, result.Target)
+	}
+
+	return nil
+}
+
+func runImportBundle(opts *Options, svc service.SessionServicer, data []byte) error {
+	out := opts.IO.Out
+
+	result, err := svc.ImportBundle(service.ImportRequest{
+		Data:       data,
+		IntoTarget: opts.IntoFlag,
+	})
+	if err != nil {
+		return err
+	}
+
+	if result.Failed > 0 {
+		fmt.Fprintf(out, "Imported %d session(s), %d failed.\n", result.Imported, result.Failed)
+		for _, e := range result.Errors {
+			fmt.Fprintf(opts.IO.ErrOut, "  %s\n", e)
+		}
+	} else {
+		fmt.Fprintf(out, "Imported %d session(s).\n", result.Imported)
 	}
 
 	return nil

@@ -87,6 +87,12 @@ func (m *mockSessionService) Export(_ service.ExportRequest) (*service.ExportRes
 func (m *mockSessionService) Import(_ service.ImportRequest) (*service.ImportResult, error) {
 	return nil, nil
 }
+func (m *mockSessionService) ExportAll(_ service.ExportAllRequest) (*service.ExportAllResult, error) {
+	return nil, nil
+}
+func (m *mockSessionService) ImportBundle(_ service.ImportRequest) (*service.ImportBundleResult, error) {
+	return nil, nil
+}
 func (m *mockSessionService) Link(_ service.LinkRequest) (*service.LinkResult, error) {
 	return nil, nil
 }

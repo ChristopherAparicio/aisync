@@ -87,6 +87,12 @@ type SessionCRUD interface {
 type SessionExporter interface {
 	Export(req ExportRequest) (*ExportResult, error)
 	Import(req ImportRequest) (*ImportResult, error)
+
+	// ExportAll serializes every session matching the request into a JSONL bundle.
+	ExportAll(req ExportAllRequest) (*ExportAllResult, error)
+
+	// ImportBundle imports every session line of a JSONL bundle produced by ExportAll.
+	ImportBundle(req ImportRequest) (*ImportBundleResult, error)
 }
 
 // SessionLinker manages git-integration features (linking sessions to PRs, posting comments).

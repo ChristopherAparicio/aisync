@@ -406,6 +406,72 @@ func (c *Client) Import(req ImportRequest) (*ImportResult, error) {
 	return &result, decode(data, &result)
 }
 
+// ── Bulk export / import (JSONL bundle) ──
+
+// ExportAllRequest selects which sessions a bulk export should include.
+type ExportAllRequest struct {
+	ProjectPath string `json:"project_path,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	All         bool   `json:"all,omitempty"`
+	Global      bool   `json:"global,omitempty"`
+}
+
+// ExportAllResult contains the JSONL bundle and its session count.
+type ExportAllResult struct {
+	Data  []byte
+	Count int
+}
+
+// ExportAll downloads a JSONL bundle of every session matching the request.
+func (c *Client) ExportAll(req ExportAllRequest) (*ExportAllResult, error) {
+	data, err := c.doPost("/api/v1/sessions/export-all", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var raw struct {
+		Data  string `json:"data"`
+		Count int    `json:"count"`
+	}
+	if decErr := decode(data, &raw); decErr != nil {
+		return nil, decErr
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(raw.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decode export bundle: %w", err)
+	}
+
+	return &ExportAllResult{Data: decoded, Count: raw.Count}, nil
+}
+
+// ImportBundleResult contains the outcome of a bulk import.
+type ImportBundleResult struct {
+	Imported   int      `json:"imported"`
+	Failed     int      `json:"failed"`
+	SessionIDs []string `json:"session_ids"`
+	Errors     []string `json:"errors"`
+}
+
+// ImportBundle uploads a JSONL bundle and imports every session it contains.
+func (c *Client) ImportBundle(req ImportRequest) (*ImportBundleResult, error) {
+	body := struct {
+		Data       string `json:"data"`
+		IntoTarget string `json:"into_target,omitempty"`
+	}{
+		Data:       base64.StdEncoding.EncodeToString(req.Data),
+		IntoTarget: req.IntoTarget,
+	}
+
+	data, err := c.doPost("/api/v1/sessions/import-bundle", body)
+	if err != nil {
+		return nil, err
+	}
+	var result ImportBundleResult
+	return &result, decode(data, &result)
+}
+
 // ── Link ──
 
 // LinkRequest contains inputs for linking a session.

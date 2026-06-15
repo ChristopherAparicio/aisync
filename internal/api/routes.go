@@ -19,6 +19,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/v1/sessions/export", s.handleExport)
 	mux.HandleFunc("POST /api/v1/sessions/import", s.handleImport)
+	mux.HandleFunc("POST /api/v1/sessions/export-all", s.handleExportAll)
+	mux.HandleFunc("POST /api/v1/sessions/import-bundle", s.handleImportBundle)
 	mux.HandleFunc("POST /api/v1/sessions/link", s.handleLink)
 	mux.HandleFunc("POST /api/v1/sessions/comment", s.handleComment)
 
