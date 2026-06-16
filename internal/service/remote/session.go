@@ -368,6 +368,36 @@ func (r *SessionService) Blame(_ context.Context, req service.BlameRequest) (*se
 	return &result, nil
 }
 
+func (r *SessionService) WorkItems(_ context.Context, req service.WorkItemRequest) (*session.WorkItemList, error) {
+	raw, err := r.c.WorkItems(client.WorkItemsOptions{
+		ProjectPath: req.ProjectPath,
+		RemoteURL:   req.RemoteURL,
+		Kind:        req.Kind,
+	})
+	if err != nil {
+		return nil, err
+	}
+	data, _ := json.Marshal(raw)
+	var result session.WorkItemList
+	if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+		return nil, fmt.Errorf("decoding work items: %w", jsonErr)
+	}
+	return &result, nil
+}
+
+func (r *SessionService) WorkItem(_ context.Context, ref string) (*session.WorkItem, error) {
+	raw, err := r.c.WorkItem(ref)
+	if err != nil {
+		return nil, err
+	}
+	data, _ := json.Marshal(raw)
+	var result session.WorkItem
+	if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+		return nil, fmt.Errorf("decoding work item: %w", jsonErr)
+	}
+	return &result, nil
+}
+
 func (r *SessionService) EstimateCost(_ context.Context, idOrSHA string) (*session.CostEstimate, error) {
 	raw, err := r.c.EstimateCost(idOrSHA)
 	if err != nil {

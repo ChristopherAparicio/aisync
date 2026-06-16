@@ -1178,6 +1178,28 @@ func (s *Store) GetByLink(linkType session.LinkType, ref string) ([]session.Summ
 	return summaries, nil
 }
 
+// DistinctLinkRefs returns every distinct link ref of the given type, sorted ascending.
+func (s *Store) DistinctLinkRefs(linkType session.LinkType) ([]string, error) {
+	rows, err := s.db.Query(
+		"SELECT DISTINCT link_ref FROM session_links WHERE link_type = ? ORDER BY link_ref ASC",
+		linkType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying distinct link refs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if scanErr := rows.Scan(&ref); scanErr != nil {
+			return nil, fmt.Errorf("scanning link ref: %w", scanErr)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
 func (s *Store) loadLinks(sessionID session.ID) ([]session.Link, error) {
 	rows, err := s.db.Query("SELECT link_type, link_ref FROM session_links WHERE session_id = ?", sessionID)
 	if err != nil {

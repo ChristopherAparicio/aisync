@@ -197,6 +197,16 @@ type ProjectClassifierConf struct {
 	// Example: "https://www.notion.so/omogen/{id}"
 	TicketURL string `json:"ticket_url,omitempty"`
 
+	// Kinds is the work-item vocabulary used by `aisync items <kind>` for this
+	// project (e.g. ["feature", "bug", "chore", "epic"]). If empty,
+	// session.DefaultSessionTypes is used. Adding a kind requires no code change.
+	Kinds []string `json:"kinds,omitempty"`
+
+	// KindFrom controls how a work item's kind is derived:
+	//   "session_type" (default) — kind = the classified session type (feat→feature, fix→bug)
+	//   "prefix"                  — kind = the alphabetic prefix of the ticket ref (BUG-12 → bug)
+	KindFrom string `json:"kind_from,omitempty"`
+
 	// BranchRules map branch glob patterns to session types.
 	// Example: {"feature/*": "feature", "fix/*": "bug", "hotfix/*": "bug"}
 	BranchRules map[string]string `json:"branch_rules,omitempty"`
@@ -244,6 +254,15 @@ var DefaultCommitRules = map[string]string{
 	"style":    "refactor",
 	"build":    "devops",
 	"revert":   "bug",
+}
+
+// ResolveKinds returns the work-item kind vocabulary for a project classifier,
+// falling back to the built-in session types when none are configured.
+func ResolveKinds(pc *ProjectClassifierConf) []string {
+	if pc != nil && len(pc.Kinds) > 0 {
+		return pc.Kinds
+	}
+	return session.DefaultSessionTypes
 }
 
 // DefaultAgentRules maps common agent names to session types.

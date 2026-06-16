@@ -491,6 +491,36 @@ func (s *Server) handleBlame(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ── Work Items ──
+
+func (s *Server) handleWorkItems(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	result, err := s.sessionSvc.WorkItems(r.Context(), service.WorkItemRequest{
+		ProjectPath: q.Get("project"),
+		RemoteURL:   q.Get("remote_url"),
+		Kind:        q.Get("kind"),
+	})
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleWorkItem(w http.ResponseWriter, r *http.Request) {
+	ref := r.PathValue("ref")
+	if ref == "" {
+		writeError(w, http.StatusBadRequest, "ref is required")
+		return
+	}
+	result, err := s.sessionSvc.WorkItem(r.Context(), ref)
+	if err != nil {
+		mapServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ── Explain ──
 
 type explainRequest struct {

@@ -110,6 +110,12 @@ type SessionAnalytics interface {
 	ToolUsage(ctx context.Context, idOrSHA string) (*session.ToolUsageStats, error)
 	Forecast(ctx context.Context, req ForecastRequest) (*session.ForecastResult, error)
 
+	// WorkItems lists external tracker references (tickets) with aggregated cost.
+	WorkItems(ctx context.Context, req WorkItemRequest) (*session.WorkItemList, error)
+
+	// WorkItem returns a single ticket reference with its linked sessions and cost.
+	WorkItem(ctx context.Context, ref string) (*session.WorkItem, error)
+
 	// ListProjects returns all distinct projects, grouped by git remote URL
 	// (for git repos) or by project path (for non-git projects).
 	ListProjects(ctx context.Context) ([]session.ProjectGroup, error)

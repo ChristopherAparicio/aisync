@@ -833,6 +833,30 @@ type CostEstimate struct {
 	UnknownModels []string      `json:"unknown_models,omitempty"` // models without pricing data
 }
 
+// WorkItem is an external tracker reference (e.g. a Notion ticket "OMO-904")
+// with the AI sessions linked to it and their aggregated cost. It is a derived
+// read-model: aisync owns the session↔ticket mapping and the analytics, while
+// the ticket's own metadata stays in the external tracker.
+type WorkItem struct {
+	FirstActivity time.Time `json:"first_activity"`
+	LastActivity  time.Time `json:"last_activity"`
+	Ref           string    `json:"ref"`            // ticket identifier, e.g. "OMO-904"
+	Kind          string    `json:"kind"`           // feature, bug, refactor, ...
+	Source        string    `json:"source"`         // notion, jira, linear, github
+	URL           string    `json:"url,omitempty"`  // resolved from the tracker URL template
+	Sessions      []Summary `json:"sessions"`       // linked sessions (populated for detail view)
+	SessionCount  int       `json:"session_count"`  // number of linked sessions
+	TotalTokens   int       `json:"total_tokens"`   // summed token usage across sessions
+	EstimatedCost float64   `json:"estimated_cost"` // summed API-equivalent cost in USD
+}
+
+// WorkItemList is the result of listing work items for a project.
+type WorkItemList struct {
+	Items         []WorkItem `json:"items"`
+	TotalCost     float64    `json:"total_cost"`
+	TotalSessions int        `json:"total_sessions"`
+}
+
 // ModelCost groups cost by model within a session.
 type ModelCost struct {
 	Model        string `json:"model"`

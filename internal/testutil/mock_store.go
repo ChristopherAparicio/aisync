@@ -330,6 +330,24 @@ func (m *MockStore) GetByLink(linkType session.LinkType, ref string) ([]session.
 	return summaries, nil
 }
 
+func (m *MockStore) DistinctLinkRefs(linkType session.LinkType) ([]string, error) {
+	prefix := string(linkType) + ":"
+	seen := make(map[string]bool)
+	var refs []string
+	for key, summaries := range m.Links {
+		if len(summaries) == 0 || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		ref := strings.TrimPrefix(key, prefix)
+		if !seen[ref] {
+			seen[ref] = true
+			refs = append(refs, ref)
+		}
+	}
+	sort.Strings(refs)
+	return refs, nil
+}
+
 // ── Session Links ──
 
 func (m *MockStore) LinkSessions(link session.SessionLink) error {

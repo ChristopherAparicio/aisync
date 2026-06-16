@@ -717,6 +717,76 @@ func (c *Client) Blame(opts BlameOptions) (*BlameResult, error) {
 	return &result, decode(data, &result)
 }
 
+// ── Work Items ──
+
+// WorkItem is an external tracker reference (ticket) with aggregated cost.
+type WorkItem struct {
+	FirstActivity time.Time `json:"first_activity"`
+	LastActivity  time.Time `json:"last_activity"`
+	Ref           string    `json:"ref"`
+	Kind          string    `json:"kind"`
+	Source        string    `json:"source"`
+	URL           string    `json:"url,omitempty"`
+	Sessions      []Summary `json:"sessions"`
+	SessionCount  int       `json:"session_count"`
+	TotalTokens   int       `json:"total_tokens"`
+	EstimatedCost float64   `json:"estimated_cost"`
+}
+
+// WorkItemList is the result of listing work items for a project.
+type WorkItemList struct {
+	Items         []WorkItem `json:"items"`
+	TotalCost     float64    `json:"total_cost"`
+	TotalSessions int        `json:"total_sessions"`
+}
+
+// WorkItemsOptions filters a work-item listing.
+type WorkItemsOptions struct {
+	ProjectPath string
+	RemoteURL   string
+	Kind        string
+}
+
+// WorkItems lists external tracker references with aggregated cost.
+func (c *Client) WorkItems(opts WorkItemsOptions) (*WorkItemList, error) {
+	q := url.Values{}
+	if opts.ProjectPath != "" {
+		q.Set("project", opts.ProjectPath)
+	}
+	if opts.RemoteURL != "" {
+		q.Set("remote_url", opts.RemoteURL)
+	}
+	if opts.Kind != "" {
+		q.Set("kind", opts.Kind)
+	}
+
+	path := "/api/v1/work-items"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+
+	data, err := c.doGet(path)
+	if err != nil {
+		return nil, err
+	}
+	var result WorkItemList
+	return &result, decode(data, &result)
+}
+
+// WorkItem returns a single ticket reference with its linked sessions and cost.
+func (c *Client) WorkItem(ref string) (*WorkItem, error) {
+	if ref == "" {
+		return nil, fmt.Errorf("ref parameter is required")
+	}
+
+	data, err := c.doGet("/api/v1/work-items/" + url.PathEscape(ref))
+	if err != nil {
+		return nil, err
+	}
+	var result WorkItem
+	return &result, decode(data, &result)
+}
+
 // ── Stats ──
 
 // StatsOptions controls statistics queries.

@@ -114,6 +114,12 @@ func (m *mockSessionService) ToolUsage(_ context.Context, _ string) (*session.To
 func (m *mockSessionService) Forecast(_ context.Context, _ service.ForecastRequest) (*session.ForecastResult, error) {
 	return nil, nil
 }
+func (m *mockSessionService) WorkItems(_ context.Context, _ service.WorkItemRequest) (*session.WorkItemList, error) {
+	return nil, nil
+}
+func (m *mockSessionService) WorkItem(_ context.Context, _ string) (*session.WorkItem, error) {
+	return nil, nil
+}
 func (m *mockSessionService) ListProjects(_ context.Context) ([]session.ProjectGroup, error) {
 	return nil, nil
 }

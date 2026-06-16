@@ -229,6 +229,10 @@ type LinkStore interface {
 	// Returns ErrSessionNotFound if no sessions match.
 	GetByLink(linkType session.LinkType, ref string) ([]session.Summary, error)
 
+	// DistinctLinkRefs returns every distinct link ref of the given type,
+	// sorted ascending. Used to enumerate all work items (ticket references).
+	DistinctLinkRefs(linkType session.LinkType) ([]string, error)
+
 	// LinkSessions creates a bidirectional link between two sessions.
 	LinkSessions(link session.SessionLink) error
 

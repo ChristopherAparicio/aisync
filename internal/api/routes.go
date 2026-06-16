@@ -37,6 +37,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Blame
 	mux.HandleFunc("GET /api/v1/blame", s.handleBlame)
+	mux.HandleFunc("GET /api/v1/work-items", s.handleWorkItems)
+	mux.HandleFunc("GET /api/v1/work-items/{ref}", s.handleWorkItem)
 
 	// Garbage Collection
 	mux.HandleFunc("POST /api/v1/gc", s.handleGC)

@@ -91,6 +91,8 @@ With hooks installed (`aisync init` offers this), capture happens automatically 
 | `aisync serve` | Start HTTP/REST API server (19 endpoints) |
 | `aisync search` | Search sessions by keyword, branch, provider, time range |
 | `aisync mcp` | Start MCP server for AI tool integration (18 tools) |
+| `aisync items` | List tracker tickets (e.g. Notion) with their aggregated AI cost |
+| `aisync item` | Show one ticket: its sessions, tokens, and total cost |
 
 Run `aisync <command> --help` for detailed flags and usage.
 
@@ -298,6 +300,33 @@ aisync config set auto-capture false
 aisync config set summarize.enabled true    # AI-powered summaries on every capture
 aisync config set summarize.model sonnet    # Specific model for summarization
 ```
+
+### Ticket Tracking (Work Items)
+
+Link AI sessions to external tracker tickets per project. Only `ticket_pattern` is required — everything else works out of the box.
+
+```json
+{
+  "projects": {
+    "acme/web": {
+      "ticket_pattern": "OMO-\\d+",
+      "ticket_source": "notion",
+      "ticket_url": "https://notion.so/{id}",
+      "kind_from": "session_type"
+    }
+  }
+}
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `ticket_pattern` | (none) | Regex used to extract ticket refs from branch names and summaries |
+| `ticket_source` | `""` | Tracker name shown in output (`notion`, `jira`, `linear`, `github`) |
+| `ticket_url` | `""` | Link template; `{id}` is replaced by the ticket ref |
+| `kinds` | built-in session types | Allowed kinds (`feature`, `bug`, `refactor`, ...) |
+| `kind_from` | `session_type` | How a ticket's kind is derived: `session_type` (most frequent type of linked sessions) or `prefix` (alphabetic ref prefix, e.g. `BUG-12` → `bug`) |
+
+The project key matches the git remote display name (e.g. `acme/web`), the remote URL, or the project path. Run `aisync items` to see the result.
 
 ## Build from Source
 

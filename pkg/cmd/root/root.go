@@ -25,6 +25,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/importcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/initcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/inspectcmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/itemcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/linkcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/listcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/mcpcmd"
@@ -85,6 +86,8 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(commentcmd.NewCmdComment(f))
 	cmd.AddCommand(statscmd.NewCmdStats(f))
 	cmd.AddCommand(blamecmd.NewCmdBlame(f))
+	cmd.AddCommand(itemcmd.NewCmdItems(f))
+	cmd.AddCommand(itemcmd.NewCmdItem(f))
 	cmd.AddCommand(explaincmd.NewCmdExplain(f))
 	cmd.AddCommand(toolusagecmd.NewCmdToolUsage(f))
 	cmd.AddCommand(efficiencycmd.NewCmdEfficiency(f))
