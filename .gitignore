@@ -32,3 +32,6 @@ vendor/
 # Node (opencode plugins)
 .opencode/node_modules/
 .opencode/bun.lock
+
+# Playwright MCP cache
+.playwright-mcp/
