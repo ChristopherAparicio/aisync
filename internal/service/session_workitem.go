@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -15,6 +16,7 @@ type WorkItemRequest struct {
 	ProjectPath string
 	RemoteURL   string
 	Kind        string
+	Source      string
 }
 
 // WorkItems lists work items (external ticket references) with aggregated cost,
@@ -27,16 +29,18 @@ func (s *SessionService) WorkItems(_ context.Context, req WorkItemRequest) (*ses
 
 	list := &session.WorkItemList{}
 	for _, ref := range refs {
-		item, buildErr := s.buildWorkItem(ref, req.ProjectPath, req.RemoteURL, false)
-		if buildErr != nil || item == nil {
+		items, buildErr := s.buildWorkItems(ref, req.ProjectPath, req.RemoteURL, req.Source, false)
+		if buildErr != nil {
 			continue
 		}
-		if req.Kind != "" && item.Kind != req.Kind {
-			continue
+		for _, item := range items {
+			if req.Kind != "" && item.Kind != req.Kind {
+				continue
+			}
+			list.Items = append(list.Items, *item)
+			list.TotalCost += item.EstimatedCost
+			list.TotalSessions += item.SessionCount
 		}
-		list.Items = append(list.Items, *item)
-		list.TotalCost += item.EstimatedCost
-		list.TotalSessions += item.SessionCount
 	}
 
 	sort.SliceStable(list.Items, func(i, j int) bool {
@@ -47,21 +51,25 @@ func (s *SessionService) WorkItems(_ context.Context, req WorkItemRequest) (*ses
 
 // WorkItem returns a single work item by ticket ref, including its linked
 // sessions. Returns ErrSessionNotFound when no session is linked to the ref.
-func (s *SessionService) WorkItem(_ context.Context, ref string) (*session.WorkItem, error) {
-	item, err := s.buildWorkItem(ref, "", "", true)
+func (s *SessionService) WorkItem(_ context.Context, ref string, filters ...WorkItemRequest) (*session.WorkItem, error) {
+	req := WorkItemRequest{}
+	if len(filters) > 0 {
+		req = filters[0]
+	}
+	items, err := s.buildWorkItems(ref, req.ProjectPath, req.RemoteURL, req.Source, true)
 	if err != nil {
 		return nil, err
 	}
-	if item == nil {
+	if len(items) == 0 {
 		return nil, session.ErrSessionNotFound
 	}
-	return item, nil
+	if len(items) == 1 {
+		return items[0], nil
+	}
+	return mergeWorkItems(ref, items), nil
 }
 
-// buildWorkItem aggregates cost, tokens and activity for one ticket ref. When
-// projectPath or remoteURL is set, only matching sessions are counted. Returns
-// (nil, nil) when no session remains after filtering.
-func (s *SessionService) buildWorkItem(ref, projectPath, remoteURL string, withSessions bool) (*session.WorkItem, error) {
+func (s *SessionService) buildWorkItems(ref, projectPath, remoteURL, source string, withSessions bool) ([]*session.WorkItem, error) {
 	summaries, err := s.store.GetByLink(session.LinkTicket, ref)
 	if err != nil {
 		if errors.Is(err, session.ErrSessionNotFound) {
@@ -70,7 +78,12 @@ func (s *SessionService) buildWorkItem(ref, projectPath, remoteURL string, withS
 		return nil, err
 	}
 
-	var sessions []*session.Session
+	type sourcedSession struct {
+		session *session.Session
+		source  string
+		url     string
+	}
+	var sessions []sourcedSession
 	for i := range summaries {
 		sess, getErr := s.store.Get(summaries[i].ID)
 		if getErr != nil {
@@ -82,19 +95,70 @@ func (s *SessionService) buildWorkItem(ref, projectPath, remoteURL string, withS
 		if remoteURL != "" && sess.RemoteURL != remoteURL {
 			continue
 		}
-		sessions = append(sessions, sess)
+		itemSource, itemURL := resolveSourceAndURL(s.projectClassifier(sess), ref)
+		if source != "" && itemSource != source {
+			continue
+		}
+		sessions = append(sessions, sourcedSession{session: sess, source: itemSource, url: itemURL})
 	}
 	if len(sessions) == 0 {
 		return nil, nil
 	}
 
-	item := &session.WorkItem{Ref: ref}
+	groups := make(map[string][]*session.Session)
+	metadata := make(map[string]struct{ source, url string })
+	var keys []string
+	for _, entry := range sessions {
+		key := entry.source + "\x00" + entry.url
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
+			metadata[key] = struct{ source, url string }{source: entry.source, url: entry.url}
+		}
+		groups[key] = append(groups[key], entry.session)
+	}
+	sort.Strings(keys)
+
+	items := make([]*session.WorkItem, 0, len(keys))
+	for _, key := range keys {
+		meta := metadata[key]
+		items = append(items, s.aggregateWorkItem(ref, meta.source, meta.url, groups[key], withSessions))
+	}
+	return items, nil
+}
+
+func (s *SessionService) aggregateWorkItem(ref, sourceName, url string, sessions []*session.Session, withSessions bool) *session.WorkItem {
+	item := &session.WorkItem{Ref: ref, Source: sourceName, URL: url}
 	for _, sess := range sessions {
 		item.SessionCount++
-		item.TotalTokens += sess.TokenUsage.TotalTokens
+
+		netTokens := sess.TokenUsage.TotalTokens
+		var netCost float64
 		if est := s.pricing.SessionCost(sess); est != nil {
-			item.EstimatedCost += est.TotalCost.TotalCost
+			netCost = est.TotalCost.TotalCost
 		}
+
+		// Fork-aware deduction: subtract shared-prefix cost from fork sessions
+		// to avoid double-counting the shared context.
+		rels, _ := s.store.GetForkRelations(sess.ID)
+		for _, rel := range rels {
+			if rel.ForkID == sess.ID && rel.SharedInputTokens+rel.SharedOutputTokens > 0 && sess.TokenUsage.TotalTokens > 0 {
+				sharedTokens := rel.SharedInputTokens + rel.SharedOutputTokens
+				ratio := float64(sharedTokens) / float64(sess.TokenUsage.TotalTokens)
+				netCost -= netCost * ratio
+				netTokens -= sharedTokens
+				break
+			}
+		}
+		if netTokens < 0 {
+			netTokens = 0
+		}
+		if netCost < 0 {
+			netCost = 0
+		}
+
+		item.TotalTokens += netTokens
+		item.EstimatedCost += netCost
+
 		if item.FirstActivity.IsZero() || sess.CreatedAt.Before(item.FirstActivity) {
 			item.FirstActivity = sess.CreatedAt
 		}
@@ -108,13 +172,65 @@ func (s *SessionService) buildWorkItem(ref, projectPath, remoteURL string, withS
 
 	pc := s.projectClassifier(sessions[0])
 	item.Kind = deriveKind(pc, ref, sessions)
-	if pc != nil {
-		item.Source = pc.TicketSource
-		if pc.TicketURL != "" {
-			item.URL = strings.ReplaceAll(pc.TicketURL, "{id}", ref)
+	return item
+}
+
+func mergeWorkItems(ref string, items []*session.WorkItem) *session.WorkItem {
+	merged := &session.WorkItem{Ref: ref, Source: items[0].Source, URL: items[0].URL}
+	mixedSource := false
+	for _, item := range items {
+		merged.SessionCount += item.SessionCount
+		merged.TotalTokens += item.TotalTokens
+		merged.EstimatedCost += item.EstimatedCost
+		if merged.FirstActivity.IsZero() || item.FirstActivity.Before(merged.FirstActivity) {
+			merged.FirstActivity = item.FirstActivity
+		}
+		if item.LastActivity.After(merged.LastActivity) {
+			merged.LastActivity = item.LastActivity
+		}
+		merged.Sessions = append(merged.Sessions, item.Sessions...)
+		if item.Source != merged.Source {
+			mixedSource = true
+		}
+		if merged.Kind == "" {
+			merged.Kind = item.Kind
 		}
 	}
-	return item, nil
+	if mixedSource {
+		merged.Source = "mixed"
+		merged.URL = ""
+	}
+	return merged
+}
+
+// resolveSourceAndURL returns the tracker source name and resolved URL for a
+// ticket ref. It checks ticket_sources entries in order (first pattern matching
+// the ref wins), then falls back to the legacy single-source fields.
+func resolveSourceAndURL(pc *config.ProjectClassifierConf, ref string) (source, ticketURL string) {
+	if pc == nil {
+		return "", ""
+	}
+	for _, ts := range pc.TicketSources {
+		if ts.TicketPattern == "" {
+			continue
+		}
+		re, err := regexp.Compile(ts.TicketPattern)
+		if err != nil {
+			continue
+		}
+		if re.MatchString(ref) {
+			u := ""
+			if ts.TicketURL != "" {
+				u = strings.ReplaceAll(ts.TicketURL, "{id}", ref)
+			}
+			return ts.Name, u
+		}
+	}
+	u := ""
+	if pc.TicketURL != "" {
+		u = strings.ReplaceAll(pc.TicketURL, "{id}", ref)
+	}
+	return pc.TicketSource, u
 }
 
 func (s *SessionService) projectClassifier(sess *session.Session) *config.ProjectClassifierConf {

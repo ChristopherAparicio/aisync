@@ -27,7 +27,33 @@ func (s *SessionService) ClassifySession(sess *session.Session) int {
 	changes := 0
 
 	// ── 1. Extract ticket IDs and create links ──
-	if pc != nil && pc.TicketPattern != "" {
+	// When ticket_sources is configured, iterate each source's pattern.
+	// Fallback to the legacy single ticket_pattern when ticket_sources is empty.
+	if pc != nil && len(pc.TicketSources) > 0 {
+		for _, ts := range pc.TicketSources {
+			if ts.TicketPattern == "" {
+				continue
+			}
+			re, err := regexp.Compile(ts.TicketPattern)
+			if err != nil {
+				log.Printf("[classifier] ticket_sources %q invalid ticket_pattern %q: %v", ts.Name, ts.TicketPattern, err)
+				continue
+			}
+			tickets := extractTickets(re, sess.Branch, sess.Summary)
+			for _, ticket := range tickets {
+				if err := s.store.AddLink(sess.ID, session.Link{
+					LinkType: session.LinkTicket,
+					Ref:      ticket,
+				}); err != nil {
+					if !strings.Contains(err.Error(), "UNIQUE") {
+						log.Printf("[classifier] error adding ticket link %s to %s: %v", ticket, sess.ID, err)
+					}
+				} else {
+					changes++
+				}
+			}
+		}
+	} else if pc != nil && pc.TicketPattern != "" {
 		re, err := regexp.Compile(pc.TicketPattern)
 		if err != nil {
 			log.Printf("[classifier] invalid ticket_pattern %q: %v", pc.TicketPattern, err)

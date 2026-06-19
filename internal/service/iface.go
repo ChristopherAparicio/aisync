@@ -114,7 +114,7 @@ type SessionAnalytics interface {
 	WorkItems(ctx context.Context, req WorkItemRequest) (*session.WorkItemList, error)
 
 	// WorkItem returns a single ticket reference with its linked sessions and cost.
-	WorkItem(ctx context.Context, ref string) (*session.WorkItem, error)
+	WorkItem(ctx context.Context, ref string, filters ...WorkItemRequest) (*session.WorkItem, error)
 
 	// ListProjects returns all distinct projects, grouped by git remote URL
 	// (for git repos) or by project path (for non-git projects).
@@ -213,6 +213,10 @@ type SessionManager interface {
 	// the results to the session_forks table. Returns the number of fork
 	// relations detected.
 	DetectForksBatch(ctx context.Context) (*ForkDetectionResult, error)
+
+	// NormalizePaths rewrites stored absolute in-project file_changes paths
+	// to their project-relative form. With dryRun it only reports counts.
+	NormalizePaths(ctx context.Context, dryRun bool) (session.NormalizePathsStats, error)
 }
 
 // SessionIngester handles externally-pushed sessions and session-to-session links.

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,5 +300,257 @@ func TestWorkItem_notFound(t *testing.T) {
 	_, err := svc.WorkItem(context.Background(), "NOPE-1")
 	if err == nil {
 		t.Fatal("expected error for unknown ref")
+	}
+}
+
+func TestWorkItems_forkAwareDedup(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	s1 := workItemSession("s1", "feature", 10_000, 10_000, base)
+	s2 := workItemSession("s2", "feature", 10_000, 10_000, base.Add(time.Hour))
+
+	store := testutil.NewMockStore(s1, s2)
+	for _, id := range []session.ID{"s1", "s2"} {
+		if err := store.AddLink(id, session.Link{LinkType: session.LinkTicket, Ref: "OMO-1"}); err != nil {
+			t.Fatalf("AddLink %s: %v", id, err)
+		}
+	}
+
+	// s2 is a fork of s1 sharing 15k of the 20k tokens as prefix.
+	if err := store.SaveForkRelation(session.ForkRelation{
+		OriginalID:         "s1",
+		ForkID:             "s2",
+		SharedInputTokens:  7_500,
+		SharedOutputTokens: 7_500,
+	}); err != nil {
+		t.Fatalf("SaveForkRelation: %v", err)
+	}
+
+	cfg := newWorkItemConfig(t, config.ProjectClassifierConf{TicketPattern: `OMO-\d+`})
+	svc := NewSessionService(SessionServiceConfig{Store: store, Config: cfg})
+
+	list, err := svc.WorkItems(context.Background(), WorkItemRequest{})
+	if err != nil {
+		t.Fatalf("WorkItems: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("Items length = %d, want 1", len(list.Items))
+	}
+
+	item := list.Items[0]
+	// s1: 20k tokens (original, no deduction).
+	// s2: 20k - 15k shared = 5k net tokens.
+	// total = 25k, not 40k.
+	if item.TotalTokens != 25_000 {
+		t.Errorf("TotalTokens = %d, want 25000 (fork dedup reduces shared prefix)", item.TotalTokens)
+	}
+
+	// Compare against a naive (no fork relation) service to verify cost is lower.
+	storeCopy := testutil.NewMockStore(s1, s2)
+	for _, id := range []session.ID{"s1", "s2"} {
+		_ = storeCopy.AddLink(id, session.Link{LinkType: session.LinkTicket, Ref: "OMO-1"})
+	}
+	svcNaive := NewSessionService(SessionServiceConfig{Store: storeCopy, Config: cfg})
+	naiveList, _ := svcNaive.WorkItems(context.Background(), WorkItemRequest{})
+	if len(naiveList.Items) != 1 {
+		t.Fatalf("naive list should have 1 item")
+	}
+	if item.EstimatedCost >= naiveList.Items[0].EstimatedCost {
+		t.Errorf("fork dedup: cost %.6f should be < naive %.6f", item.EstimatedCost, naiveList.Items[0].EstimatedCost)
+	}
+}
+
+func TestWorkItems_filterBySource(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	s1 := workItemSession("s1", "feature", 1_000, 500, base)
+	s2 := workItemSession("s2", "bug", 1_000, 500, base.Add(time.Hour))
+
+	store := testutil.NewMockStore(s1, s2)
+	if err := store.AddLink("s1", session.Link{LinkType: session.LinkTicket, Ref: "OMO-10"}); err != nil {
+		t.Fatalf("AddLink s1: %v", err)
+	}
+	if err := store.AddLink("s2", session.Link{LinkType: session.LinkTicket, Ref: "JIRA-42"}); err != nil {
+		t.Fatalf("AddLink s2: %v", err)
+	}
+
+	cfg := newWorkItemConfig(t, config.ProjectClassifierConf{
+		TicketSources: []config.TicketSourceConf{
+			{Name: "notion", TicketPattern: `OMO-\d+`, TicketURL: "https://notion.so/{id}"},
+			{Name: "jira", TicketPattern: `JIRA-\d+`, TicketURL: "https://jira.example.com/browse/{id}"},
+		},
+	})
+	svc := NewSessionService(SessionServiceConfig{Store: store, Config: cfg})
+
+	notionList, err := svc.WorkItems(context.Background(), WorkItemRequest{Source: "notion"})
+	if err != nil {
+		t.Fatalf("WorkItems notion: %v", err)
+	}
+	if len(notionList.Items) != 1 {
+		t.Fatalf("notion filter: Items length = %d, want 1", len(notionList.Items))
+	}
+	if notionList.Items[0].Ref != "OMO-10" || notionList.Items[0].Source != "notion" {
+		t.Errorf("notion filter: got Ref=%q Source=%q, want OMO-10/notion", notionList.Items[0].Ref, notionList.Items[0].Source)
+	}
+	if notionList.Items[0].URL != "https://notion.so/OMO-10" {
+		t.Errorf("notion URL = %q, want https://notion.so/OMO-10", notionList.Items[0].URL)
+	}
+
+	jiraList, err := svc.WorkItems(context.Background(), WorkItemRequest{Source: "jira"})
+	if err != nil {
+		t.Fatalf("WorkItems jira: %v", err)
+	}
+	if len(jiraList.Items) != 1 {
+		t.Fatalf("jira filter: Items length = %d, want 1", len(jiraList.Items))
+	}
+	if jiraList.Items[0].Ref != "JIRA-42" || jiraList.Items[0].Source != "jira" {
+		t.Errorf("jira filter: got Ref=%q Source=%q, want JIRA-42/jira", jiraList.Items[0].Ref, jiraList.Items[0].Source)
+	}
+}
+
+func TestWorkItems_multiSourceURLDerivation(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	s1 := workItemSession("s1", "feature", 1_000, 500, base)
+	s2 := workItemSession("s2", "bug", 1_000, 500, base.Add(time.Hour))
+
+	store := testutil.NewMockStore(s1, s2)
+	if err := store.AddLink("s1", session.Link{LinkType: session.LinkTicket, Ref: "OMO-5"}); err != nil {
+		t.Fatalf("AddLink s1: %v", err)
+	}
+	if err := store.AddLink("s2", session.Link{LinkType: session.LinkTicket, Ref: "JIRA-9"}); err != nil {
+		t.Fatalf("AddLink s2: %v", err)
+	}
+
+	cfg := newWorkItemConfig(t, config.ProjectClassifierConf{
+		TicketSources: []config.TicketSourceConf{
+			{Name: "notion", TicketPattern: `OMO-\d+`, TicketURL: "https://notion.so/{id}"},
+			{Name: "jira", TicketPattern: `JIRA-\d+`, TicketURL: "https://jira.example.com/{id}"},
+		},
+	})
+	svc := NewSessionService(SessionServiceConfig{Store: store, Config: cfg})
+
+	list, err := svc.WorkItems(context.Background(), WorkItemRequest{})
+	if err != nil {
+		t.Fatalf("WorkItems: %v", err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("Items length = %d, want 2", len(list.Items))
+	}
+
+	byRef := map[string]session.WorkItem{}
+	for _, it := range list.Items {
+		byRef[it.Ref] = it
+	}
+
+	omo := byRef["OMO-5"]
+	if omo.Source != "notion" {
+		t.Errorf("OMO-5 Source = %q, want notion", omo.Source)
+	}
+	if omo.URL != "https://notion.so/OMO-5" {
+		t.Errorf("OMO-5 URL = %q, want https://notion.so/OMO-5", omo.URL)
+	}
+
+	jira := byRef["JIRA-9"]
+	if jira.Source != "jira" {
+		t.Errorf("JIRA-9 Source = %q, want jira", jira.Source)
+	}
+	if jira.URL != "https://jira.example.com/JIRA-9" {
+		t.Errorf("JIRA-9 URL = %q, want https://jira.example.com/JIRA-9", jira.URL)
+	}
+}
+
+func TestWorkItems_sourceFilterExcludesUnknown(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	s1 := workItemSession("s1", "feature", 1_000, 500, base)
+
+	store := testutil.NewMockStore(s1)
+	if err := store.AddLink("s1", session.Link{LinkType: session.LinkTicket, Ref: "OMO-7"}); err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+
+	cfg := newWorkItemConfig(t, config.ProjectClassifierConf{
+		TicketSources: []config.TicketSourceConf{
+			{Name: "notion", TicketPattern: `OMO-\d+`, TicketURL: "https://notion.so/{id}"},
+		},
+	})
+	svc := NewSessionService(SessionServiceConfig{Store: store, Config: cfg})
+
+	list, err := svc.WorkItems(context.Background(), WorkItemRequest{Source: "linear"})
+	if err != nil {
+		t.Fatalf("WorkItems: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("Items length = %d, want 0 (linear source has no matches)", len(list.Items))
+	}
+}
+
+func TestWorkItems_sameRefDifferentSourcesStaySeparate(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	notion := workItemSession("s1", "feature", 1_000, 500, base)
+	jira := workItemSession("s2", "bug", 2_000, 500, base.Add(time.Hour))
+	jira.RemoteURL = "github.com/acme/backend"
+	jira.ProjectPath = "/work/backend"
+
+	store := testutil.NewMockStore(notion, jira)
+	for _, id := range []session.ID{"s1", "s2"} {
+		if err := store.AddLink(id, session.Link{LinkType: session.LinkTicket, Ref: "TASK-1"}); err != nil {
+			t.Fatalf("AddLink %s: %v", id, err)
+		}
+	}
+
+	cfg, err := config.New(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("config.New: %v", err)
+	}
+	if err := cfg.SetProjectClassifier("acme/web", config.ProjectClassifierConf{
+		TicketSources: []config.TicketSourceConf{{Name: "notion", TicketPattern: `TASK-\d+`, TicketURL: "https://notion.so/{id}"}},
+	}); err != nil {
+		t.Fatalf("SetProjectClassifier notion: %v", err)
+	}
+	if err := cfg.SetProjectClassifier("acme/backend", config.ProjectClassifierConf{
+		TicketSources: []config.TicketSourceConf{{Name: "jira", TicketPattern: `TASK-\d+`, TicketURL: "https://jira.example.com/{id}"}},
+	}); err != nil {
+		t.Fatalf("SetProjectClassifier jira: %v", err)
+	}
+
+	svc := NewSessionService(SessionServiceConfig{Store: store, Config: cfg})
+	list, err := svc.WorkItems(context.Background(), WorkItemRequest{})
+	if err != nil {
+		t.Fatalf("WorkItems: %v", err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("Items length = %d, want 2 separate source/ref entries", len(list.Items))
+	}
+	seen := map[string]bool{}
+	for _, it := range list.Items {
+		seen[it.Source+":"+it.Ref] = true
+	}
+	if !seen["notion:TASK-1"] || !seen["jira:TASK-1"] {
+		t.Fatalf("sources = %#v, want notion:TASK-1 and jira:TASK-1", seen)
+	}
+
+	jiraOnly, err := svc.WorkItem(context.Background(), "TASK-1", WorkItemRequest{Source: "jira"})
+	if err != nil {
+		t.Fatalf("WorkItem jira: %v", err)
+	}
+	if jiraOnly.Source != "jira" || jiraOnly.SessionCount != 1 || len(jiraOnly.Sessions) != 1 || jiraOnly.Sessions[0].ID != "s2" {
+		t.Fatalf("jira detail = source %q count %d sessions %#v, want only s2", jiraOnly.Source, jiraOnly.SessionCount, jiraOnly.Sessions)
+	}
+}
+
+func TestSetProjectClassifier_invalidTicketSourcesPattern(t *testing.T) {
+	cfg, err := config.New(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("config.New: %v", err)
+	}
+
+	err = cfg.SetProjectClassifier("proj", config.ProjectClassifierConf{
+		TicketSources: []config.TicketSourceConf{
+			{Name: "notion", TicketPattern: `[invalid`},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid ticket_sources pattern")
+	}
+	if !strings.Contains(err.Error(), "ticket_sources") {
+		t.Errorf("error should mention ticket_sources, got: %v", err)
 	}
 }

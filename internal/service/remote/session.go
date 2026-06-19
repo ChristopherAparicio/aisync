@@ -92,6 +92,8 @@ func (r *SessionService) Restore(req service.RestoreRequest) (*service.RestoreRe
 		Session:     sess,
 		Method:      res.Method,
 		ContextPath: res.ContextPath,
+		Fidelity:    session.RetentionFidelity(res.Fidelity),
+		Warning:     res.Warning,
 	}, nil
 }
 
@@ -373,6 +375,7 @@ func (r *SessionService) WorkItems(_ context.Context, req service.WorkItemReques
 		ProjectPath: req.ProjectPath,
 		RemoteURL:   req.RemoteURL,
 		Kind:        req.Kind,
+		Source:      req.Source,
 	})
 	if err != nil {
 		return nil, err
@@ -385,8 +388,15 @@ func (r *SessionService) WorkItems(_ context.Context, req service.WorkItemReques
 	return &result, nil
 }
 
-func (r *SessionService) WorkItem(_ context.Context, ref string) (*session.WorkItem, error) {
-	raw, err := r.c.WorkItem(ref)
+func (r *SessionService) WorkItem(_ context.Context, ref string, filters ...service.WorkItemRequest) (*session.WorkItem, error) {
+	opts := client.WorkItemsOptions{}
+	if len(filters) > 0 {
+		req := filters[0]
+		opts.ProjectPath = req.ProjectPath
+		opts.RemoteURL = req.RemoteURL
+		opts.Source = req.Source
+	}
+	raw, err := r.c.WorkItem(ref, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -678,6 +688,11 @@ func (r *SessionService) DetectForksBatch(_ context.Context) (*service.ForkDetec
 	return nil, fmt.Errorf("fork detection batch is only available in local mode")
 }
 
+// NormalizePaths is not supported in remote mode — backfill must run locally.
+func (r *SessionService) NormalizePaths(_ context.Context, _ bool) (session.NormalizePathsStats, error) {
+	return session.NormalizePathsStats{}, fmt.Errorf("path normalization is only available in local mode")
+}
+
 // ── Ingest ──
 
 func (r *SessionService) Ingest(_ context.Context, req service.IngestRequest) (*service.IngestResult, error) {
@@ -769,19 +784,23 @@ func clientSessionToDomain(cs client.Session) session.Session {
 	}
 
 	return session.Session{
-		ID:          session.ID(cs.ID),
-		Provider:    session.ProviderName(cs.Provider),
-		Agent:       cs.Agent,
-		Branch:      cs.Branch,
-		CommitSHA:   cs.CommitSHA,
-		ProjectPath: cs.ProjectPath,
-		ParentID:    session.ID(cs.ParentID),
-		OwnerID:     session.ID(cs.OwnerID),
-		StorageMode: session.StorageMode(cs.StorageMode),
-		Summary:     cs.Summary,
-		Messages:    msgs,
-		Links:       links,
-		FileChanges: fcs,
+		ID:                session.ID(cs.ID),
+		Provider:          session.ProviderName(cs.Provider),
+		Agent:             cs.Agent,
+		Branch:            cs.Branch,
+		CommitSHA:         cs.CommitSHA,
+		ProjectPath:       cs.ProjectPath,
+		ParentID:          session.ID(cs.ParentID),
+		OwnerID:           session.ID(cs.OwnerID),
+		StorageMode:       session.StorageMode(cs.StorageMode),
+		RetentionTier:     session.RetentionTier(cs.RetentionTier),
+		RetentionFidelity: session.RetentionFidelity(cs.RetentionFidelity),
+		CompactedAt:       cs.CompactedAt,
+		LastAccessedAt:    cs.LastAccessedAt,
+		Summary:           cs.Summary,
+		Messages:          msgs,
+		Links:             links,
+		FileChanges:       fcs,
 		TokenUsage: session.TokenUsage{
 			InputTokens:  cs.TokenUsage.InputTokens,
 			OutputTokens: cs.TokenUsage.OutputTokens,
@@ -797,15 +816,17 @@ func clientSessionToDomain(cs client.Session) session.Session {
 
 func clientSummaryToDomain(cs client.Summary) session.Summary {
 	return session.Summary{
-		ID:           session.ID(cs.ID),
-		OwnerID:      session.ID(cs.OwnerID),
-		Provider:     session.ProviderName(cs.Provider),
-		Agent:        cs.Agent,
-		Branch:       cs.Branch,
-		Summary:      cs.Summary,
-		MessageCount: cs.MessageCount,
-		TotalTokens:  cs.TotalTokens,
-		CreatedAt:    cs.CreatedAt,
+		ID:                session.ID(cs.ID),
+		OwnerID:           session.ID(cs.OwnerID),
+		Provider:          session.ProviderName(cs.Provider),
+		Agent:             cs.Agent,
+		Branch:            cs.Branch,
+		Summary:           cs.Summary,
+		RetentionTier:     session.RetentionTier(cs.RetentionTier),
+		RetentionFidelity: session.RetentionFidelity(cs.RetentionFidelity),
+		MessageCount:      cs.MessageCount,
+		TotalTokens:       cs.TotalTokens,
+		CreatedAt:         cs.CreatedAt,
 	}
 }
 

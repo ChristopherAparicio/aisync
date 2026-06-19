@@ -919,11 +919,14 @@ func (m *mockStore) GetByLink(_ session.LinkType, _ string) ([]session.Summary, 
 }
 func (m *mockStore) DistinctLinkRefs(_ session.LinkType) ([]string, error) { return nil, nil }
 func (m *mockStore) DeleteOlderThan(_ time.Time) (int, error) { return 0, nil }
-func (m *mockStore) ReplaceSessionFiles(_ session.ID, _ []session.SessionFileRecord) error {
+func (m *mockStore) ReplaceSessionFiles(_ session.ID, _ string, _ []session.SessionFileRecord) error {
 	return nil
 }
 func (m *mockStore) GetSessionFileChanges(_ session.ID) ([]session.SessionFileRecord, error) {
 	return nil, nil
+}
+func (m *mockStore) NormalizeFilePaths(_ bool) (session.NormalizePathsStats, error) {
+	return session.NormalizePathsStats{}, nil
 }
 func (m *mockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
 func (m *mockStore) AggregateFileCounts(_ session.AnalyticsFilter, _ int) (map[string]int, error) {

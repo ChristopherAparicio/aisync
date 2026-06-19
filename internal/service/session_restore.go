@@ -39,26 +39,30 @@ type RestoreResult struct {
 	Session       *session.Session
 	Method        string // "native", "converted", or "context"
 	ContextPath   string
-	WorktreePath  string                 // only set if Worktree was requested
+	WorktreePath  string // only set if Worktree was requested
+	Fidelity      session.RetentionFidelity
+	Warning       string
 	FilterResults []session.FilterResult // results from each applied filter
 	DryRun        *DryRunPreview         // only set if DryRun was requested
 }
 
 // DryRunPreview contains a preview of what a restore would do without actually doing it.
 type DryRunPreview struct {
-	SessionID     session.ID             `json:"session_id"`
-	Provider      session.ProviderName   `json:"provider"`
-	Branch        string                 `json:"branch"`
-	Summary       string                 `json:"summary"`
-	Method        string                 `json:"method"` // "native", "converted", or "context"
-	MessageCount  int                    `json:"message_count"`
-	ToolCallCount int                    `json:"tool_call_count"`
-	ErrorCount    int                    `json:"error_count"`
-	InputTokens   int                    `json:"input_tokens"`
-	OutputTokens  int                    `json:"output_tokens"`
-	TotalTokens   int                    `json:"total_tokens"`
-	FileChanges   int                    `json:"file_changes"`
-	FilterResults []session.FilterResult `json:"filter_results,omitempty"`
+	SessionID     session.ID                `json:"session_id"`
+	Provider      session.ProviderName      `json:"provider"`
+	Branch        string                    `json:"branch"`
+	Summary       string                    `json:"summary"`
+	Method        string                    `json:"method"` // "native", "converted", or "context"
+	MessageCount  int                       `json:"message_count"`
+	ToolCallCount int                       `json:"tool_call_count"`
+	ErrorCount    int                       `json:"error_count"`
+	InputTokens   int                       `json:"input_tokens"`
+	OutputTokens  int                       `json:"output_tokens"`
+	TotalTokens   int                       `json:"total_tokens"`
+	FileChanges   int                       `json:"file_changes"`
+	Fidelity      session.RetentionFidelity `json:"fidelity,omitempty"`
+	Warning       string                    `json:"warning,omitempty"`
+	FilterResults []session.FilterResult    `json:"filter_results,omitempty"`
 }
 
 // Restore looks up a session and imports it into a target provider.
@@ -104,11 +108,16 @@ func (s *SessionService) Restore(req RestoreRequest) (*RestoreResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if result.Session != nil {
+		s.touchSessionAccessed(result.Session.ID)
+	}
 
 	out := &RestoreResult{
 		Session:       result.Session,
 		Method:        result.Method,
 		ContextPath:   result.ContextPath,
+		Fidelity:      retentionFidelity(result.Session),
+		Warning:       retentionWarning(result.Session),
 		FilterResults: result.FilterResults,
 	}
 
@@ -127,6 +136,8 @@ func (s *SessionService) Restore(req RestoreRequest) (*RestoreResult, error) {
 			OutputTokens:  result.DryRun.OutputTokens,
 			TotalTokens:   result.DryRun.TotalTokens,
 			FileChanges:   result.DryRun.FileChanges,
+			Fidelity:      retentionFidelity(result.Session),
+			Warning:       retentionWarning(result.Session),
 			FilterResults: result.DryRun.FilterResults,
 		}
 		return out, nil

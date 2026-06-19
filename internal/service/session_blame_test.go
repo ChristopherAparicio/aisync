@@ -54,29 +54,79 @@ func TestBlame_SingleFile(t *testing.T) {
 
 func TestBlame_MultiFile(t *testing.T) {
 	store := newBlameMockStore()
+	// Entries ordered created_at DESC as the real store returns them.
 	store.blameEntries = []session.BlameEntry{
-		{SessionID: "sess-1", Provider: "claude-code", Branch: "main"},
-		{SessionID: "sess-2", Provider: "opencode", Branch: "feat"},
+		{SessionID: "sess-a2", Provider: "claude-code", Agent: "jarvis", Branch: "main", FilePath: "a.go"},
+		{SessionID: "sess-a1", Provider: "opencode", Agent: "", Branch: "main", FilePath: "a.go"},
+		{SessionID: "sess-b1", Provider: "claude-code", Agent: "vega", Branch: "feat", FilePath: "b.go"},
+	}
+	svc := NewSessionService(SessionServiceConfig{Store: store})
+
+	result, err := svc.Blame(context.Background(), BlameRequest{
+		FilePaths: []string{"a.go", "b.go", "c.go"}, // c.go: untouched
+	})
+	if err != nil {
+		t.Fatalf("Blame() error: %v", err)
+	}
+
+	if len(result.Entries) != 0 {
+		t.Errorf("multi-file should populate FilesGrouped, not Entries; got %d entries", len(result.Entries))
+	}
+	if len(result.FilesGrouped) != 3 {
+		t.Fatalf("expected 3 file groups (a,b,c), got %d", len(result.FilesGrouped))
+	}
+	if result.FilesGrouped[0].File != "a.go" || result.FilesGrouped[1].File != "b.go" || result.FilesGrouped[2].File != "c.go" {
+		t.Errorf("file order not preserved: got %q,%q,%q",
+			result.FilesGrouped[0].File, result.FilesGrouped[1].File, result.FilesGrouped[2].File)
+	}
+	// Default (All=false): each file keeps only its most recent session.
+	if len(result.FilesGrouped[0].Sessions) != 1 {
+		t.Fatalf("a.go should have 1 session (most recent) by default, got %d", len(result.FilesGrouped[0].Sessions))
+	}
+	if result.FilesGrouped[0].Sessions[0].SessionID != "sess-a2" {
+		t.Errorf("a.go most-recent session = %q, want sess-a2", result.FilesGrouped[0].Sessions[0].SessionID)
+	}
+	if result.FilesGrouped[0].Sessions[0].Agent != "jarvis" {
+		t.Errorf("agent should be preserved on grouped entry, got %q", result.FilesGrouped[0].Sessions[0].Agent)
+	}
+	if len(result.FilesGrouped[2].Sessions) != 0 {
+		t.Errorf("c.go (untouched) should have 0 sessions, got %d", len(result.FilesGrouped[2].Sessions))
+	}
+
+	if len(store.lastBlameQuery.FilePaths) != 3 {
+		t.Errorf("query.FilePaths = %v, want [a.go b.go c.go]", store.lastBlameQuery.FilePaths)
+	}
+	if store.lastBlameQuery.FilePath != "" {
+		t.Errorf("single FilePath should be empty in multi-file mode, got %q", store.lastBlameQuery.FilePath)
+	}
+}
+
+func TestBlame_MultiFileAll(t *testing.T) {
+	store := newBlameMockStore()
+	store.blameEntries = []session.BlameEntry{
+		{SessionID: "sess-a2", Provider: "claude-code", Agent: "jarvis", Branch: "main", FilePath: "a.go"},
+		{SessionID: "sess-a1", Provider: "opencode", Agent: "", Branch: "main", FilePath: "a.go"},
+		{SessionID: "sess-b1", Provider: "claude-code", Agent: "vega", Branch: "feat", FilePath: "b.go"},
 	}
 	svc := NewSessionService(SessionServiceConfig{Store: store})
 
 	result, err := svc.Blame(context.Background(), BlameRequest{
 		FilePaths: []string{"a.go", "b.go"},
+		All:       true,
 	})
 	if err != nil {
 		t.Fatalf("Blame() error: %v", err)
 	}
-	if len(result.Entries) == 0 {
-		t.Error("expected entries for multi-file blame")
+	if len(result.FilesGrouped) != 2 {
+		t.Fatalf("expected 2 file groups, got %d", len(result.FilesGrouped))
 	}
-	if len(store.lastBlameQuery.FilePaths) != 2 {
-		t.Errorf("query.FilePaths = %v, want [a.go b.go]", store.lastBlameQuery.FilePaths)
+	// With All=true, a.go keeps both sessions in DESC order.
+	if len(result.FilesGrouped[0].Sessions) != 2 {
+		t.Fatalf("a.go with All=true should have 2 sessions, got %d", len(result.FilesGrouped[0].Sessions))
 	}
-	if store.lastBlameQuery.FilePaths[0] != "a.go" || store.lastBlameQuery.FilePaths[1] != "b.go" {
-		t.Errorf("query.FilePaths = %v, want [a.go b.go]", store.lastBlameQuery.FilePaths)
-	}
-	if store.lastBlameQuery.FilePath != "" {
-		t.Errorf("single FilePath should be empty in multi-file mode, got %q", store.lastBlameQuery.FilePath)
+	if result.FilesGrouped[0].Sessions[0].SessionID != "sess-a2" || result.FilesGrouped[0].Sessions[1].SessionID != "sess-a1" {
+		t.Errorf("a.go sessions not in DESC order: %q,%q",
+			result.FilesGrouped[0].Sessions[0].SessionID, result.FilesGrouped[0].Sessions[1].SessionID)
 	}
 }
 

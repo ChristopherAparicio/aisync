@@ -33,7 +33,7 @@ func (s *SessionService) ExtractAndSaveFiles(sess *session.Session) (int, error)
 		}
 	}
 
-	if err := s.store.ReplaceSessionFiles(sess.ID, records); err != nil {
+	if err := s.store.ReplaceSessionFiles(sess.ID, sess.ProjectPath, records); err != nil {
 		return 0, fmt.Errorf("saving file records: %w", err)
 	}
 

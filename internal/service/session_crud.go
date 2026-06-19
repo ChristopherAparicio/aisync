@@ -24,7 +24,11 @@ func (s *SessionService) Get(idOrSHA string) (*session.Session, error) {
 			if trailerID != "" {
 				sid, parseErr := session.ParseID(trailerID)
 				if parseErr == nil {
-					return s.store.Get(sid)
+					sess, getErr := s.store.Get(sid)
+					if getErr == nil {
+						s.touchSessionAccessed(sess.ID)
+					}
+					return sess, getErr
 				}
 			}
 		}
@@ -36,7 +40,11 @@ func (s *SessionService) Get(idOrSHA string) (*session.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.store.Get(sid)
+	sess, getErr := s.store.Get(sid)
+	if getErr == nil {
+		s.touchSessionAccessed(sess.ID)
+	}
+	return sess, getErr
 }
 
 // ── List ──

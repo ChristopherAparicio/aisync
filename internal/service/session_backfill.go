@@ -176,6 +176,15 @@ func (s *SessionService) buildWorktreeSiblingMap() map[string]string {
 	return m
 }
 
+// NormalizePaths rewrites stored absolute in-project file_changes paths to their
+// project-relative form. With dryRun it only reports what would change.
+func (s *SessionService) NormalizePaths(ctx context.Context, dryRun bool) (session.NormalizePathsStats, error) {
+	if err := ctx.Err(); err != nil {
+		return session.NormalizePathsStats{}, err
+	}
+	return s.store.NormalizeFilePaths(dryRun)
+}
+
 // ForkDetectionResult contains the results of a batch fork detection operation.
 type ForkDetectionResult struct {
 	SessionsScanned int
