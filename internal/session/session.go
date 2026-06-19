@@ -10,35 +10,39 @@ import "time"
 
 // Session represents a captured AI coding session.
 type Session struct {
-	ExportedAt      time.Time       `json:"exported_at"`
-	CreatedAt       time.Time       `json:"created_at"`
-	ProjectPath     string          `json:"project_path"`
-	RemoteURL       string          `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
-	ExportedBy      string          `json:"exported_by,omitempty"`
-	ParentID        ID              `json:"parent_id,omitempty"`
-	OwnerID         ID              `json:"owner_id,omitempty"`
-	StorageMode     StorageMode     `json:"storage_mode"`
-	Summary         string          `json:"summary,omitempty"`
-	ID              ID              `json:"id"`
-	Provider        ProviderName    `json:"provider"`
-	Agent           string          `json:"agent"`
-	Branch          string          `json:"branch,omitempty"`
-	CommitSHA       string          `json:"commit_sha,omitempty"`
-	Messages        []Message       `json:"messages,omitempty"`
-	Children        []Session       `json:"children,omitempty"`
-	Links           []Link          `json:"links,omitempty"`
-	FileChanges     []FileChange    `json:"file_changes,omitempty"`
-	TokenUsage      TokenUsage      `json:"token_usage"`
-	SessionType     string          `json:"session_type,omitempty"`      // classification tag: feature, bug, refactor, etc.
-	ProjectCategory string          `json:"project_category,omitempty"`  // project-level category: backend, frontend, ops, etc.
-	ForkedAtMessage int             `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
-	Status          SessionStatus   `json:"status,omitempty"`            // lifecycle status: active, idle, archived
-	Errors          []SessionError  `json:"errors,omitempty"`            // structured errors extracted from the session
-	Context         *SessionContext `json:"context,omitempty"`           // agent environment context (tools, skills, hooks, version)
-	Version         int             `json:"version"`
-	SourceUpdatedAt int64           `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
-	EstimatedCost   float64         `json:"-"` // API-equivalent cost in USD; set by service layer before Save, not serialized in payload
-	ActualCost      float64         `json:"-"` // actual provider-reported cost; computed from messages at Save time, not serialized
+	ExportedAt        time.Time         `json:"exported_at"`
+	CreatedAt         time.Time         `json:"created_at"`
+	ProjectPath       string            `json:"project_path"`
+	RemoteURL         string            `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
+	ExportedBy        string            `json:"exported_by,omitempty"`
+	ParentID          ID                `json:"parent_id,omitempty"`
+	OwnerID           ID                `json:"owner_id,omitempty"`
+	StorageMode       StorageMode       `json:"storage_mode"`
+	RetentionTier     RetentionTier     `json:"retention_tier,omitempty"`
+	RetentionFidelity RetentionFidelity `json:"retention_fidelity,omitempty"`
+	CompactedAt       time.Time         `json:"compacted_at"`
+	LastAccessedAt    time.Time         `json:"last_accessed_at"`
+	Summary           string            `json:"summary,omitempty"`
+	ID                ID                `json:"id"`
+	Provider          ProviderName      `json:"provider"`
+	Agent             string            `json:"agent"`
+	Branch            string            `json:"branch,omitempty"`
+	CommitSHA         string            `json:"commit_sha,omitempty"`
+	Messages          []Message         `json:"messages,omitempty"`
+	Children          []Session         `json:"children,omitempty"`
+	Links             []Link            `json:"links,omitempty"`
+	FileChanges       []FileChange      `json:"file_changes,omitempty"`
+	TokenUsage        TokenUsage        `json:"token_usage"`
+	SessionType       string            `json:"session_type,omitempty"`      // classification tag: feature, bug, refactor, etc.
+	ProjectCategory   string            `json:"project_category,omitempty"`  // project-level category: backend, frontend, ops, etc.
+	ForkedAtMessage   int               `json:"forked_at_message,omitempty"` // 1-based message index where this session was forked (via rewind)
+	Status            SessionStatus     `json:"status,omitempty"`            // lifecycle status: active, idle, archived
+	Errors            []SessionError    `json:"errors,omitempty"`            // structured errors extracted from the session
+	Context           *SessionContext   `json:"context,omitempty"`           // agent environment context (tools, skills, hooks, version)
+	Version           int               `json:"version"`
+	SourceUpdatedAt   int64             `json:"-"` // source provider's last-updated timestamp (epoch ms); not serialized
+	EstimatedCost     float64           `json:"-"` // API-equivalent cost in USD; set by service layer before Save, not serialized in payload
+	ActualCost        float64           `json:"-"` // actual provider-reported cost; computed from messages at Save time, not serialized
 }
 
 // SessionContext captures the agent environment context that was active during
@@ -82,27 +86,31 @@ type HookExecution struct {
 
 // Summary is a lightweight representation of a session for listings.
 type Summary struct {
-	CreatedAt       time.Time     `json:"created_at"`
-	UpdatedAt       time.Time     `json:"updated_at,omitempty"` // last update from source provider
-	ID              ID            `json:"id"`
-	ParentID        ID            `json:"parent_id,omitempty"`
-	OwnerID         ID            `json:"owner_id,omitempty"`
-	Provider        ProviderName  `json:"provider"`
-	Agent           string        `json:"agent"`
-	Branch          string        `json:"branch,omitempty"`
-	ProjectPath     string        `json:"project_path,omitempty"`
-	RemoteURL       string        `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
-	Summary         string        `json:"summary,omitempty"`
-	SessionType     string        `json:"session_type,omitempty"`     // classification tag
-	ProjectCategory string        `json:"project_category,omitempty"` // project-level category
-	Status          SessionStatus `json:"status,omitempty"`           // lifecycle: active, idle, archived
-	MessageCount    int           `json:"message_count"`
-	TotalTokens     int           `json:"total_tokens"`
-	ToolCallCount   int           `json:"tool_call_count"` // total tool invocations
-	ErrorCount      int           `json:"error_count"`     // tool calls with state=error
-	EstimatedCost   float64       `json:"estimated_cost"`  // API-equivalent cost in USD (denormalized)
-	ActualCost      float64       `json:"actual_cost"`     // actual provider-reported cost (denormalized)
-	Tags            []string      `json:"tags,omitempty"`  // user-defined manual tags (lowercase normalized)
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at,omitempty"` // last update from source provider
+	ID                ID                `json:"id"`
+	ParentID          ID                `json:"parent_id,omitempty"`
+	OwnerID           ID                `json:"owner_id,omitempty"`
+	Provider          ProviderName      `json:"provider"`
+	Agent             string            `json:"agent"`
+	Branch            string            `json:"branch,omitempty"`
+	ProjectPath       string            `json:"project_path,omitempty"`
+	RemoteURL         string            `json:"remote_url,omitempty"` // git remote origin URL (e.g. "github.com/org/repo")
+	Summary           string            `json:"summary,omitempty"`
+	SessionType       string            `json:"session_type,omitempty"`     // classification tag
+	ProjectCategory   string            `json:"project_category,omitempty"` // project-level category
+	Status            SessionStatus     `json:"status,omitempty"`           // lifecycle: active, idle, archived
+	RetentionTier     RetentionTier     `json:"retention_tier,omitempty"`
+	RetentionFidelity RetentionFidelity `json:"retention_fidelity,omitempty"`
+	CompactedAt       time.Time         `json:"compacted_at"`
+	LastAccessedAt    time.Time         `json:"last_accessed_at"`
+	MessageCount      int               `json:"message_count"`
+	TotalTokens       int               `json:"total_tokens"`
+	ToolCallCount     int               `json:"tool_call_count"` // total tool invocations
+	ErrorCount        int               `json:"error_count"`     // tool calls with state=error
+	EstimatedCost     float64           `json:"estimated_cost"`  // API-equivalent cost in USD (denormalized)
+	ActualCost        float64           `json:"actual_cost"`     // actual provider-reported cost (denormalized)
+	Tags              []string          `json:"tags,omitempty"`  // user-defined manual tags (lowercase normalized)
 }
 
 // TagCount associates a tag with the number of sessions carrying it.
@@ -1016,6 +1024,8 @@ type BlameEntry struct {
 	Branch     string       `json:"branch"`
 	Summary    string       `json:"summary,omitempty"`
 	ChangeType ChangeType   `json:"change_type"`
+	// FilePath: which file this change touched; set by GetSessionsByFile for multi-file grouping, empty single-file.
+	FilePath string `json:"file_path,omitempty"`
 }
 
 // BlameQuery contains parameters for a blame lookup.

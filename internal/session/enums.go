@@ -139,6 +139,69 @@ func (m StorageMode) String() string {
 	return string(m)
 }
 
+// RetentionTier describes where a session sits in the storage lifecycle.
+type RetentionTier string
+
+const (
+	// RetentionTierHot keeps the captured payload at its original fidelity.
+	RetentionTierHot RetentionTier = "hot"
+
+	// RetentionTierWarm keeps a restore-oriented compacted payload.
+	RetentionTierWarm RetentionTier = "warm"
+
+	// RetentionTierCold keeps long-term audit metadata only.
+	RetentionTierCold RetentionTier = "cold"
+)
+
+// RetentionFidelity describes how complete a retained payload is.
+type RetentionFidelity string
+
+const (
+	// RetentionFidelityFull means the payload has the full transcript.
+	RetentionFidelityFull RetentionFidelity = "full"
+
+	// RetentionFidelityCompact means thinking/reasoning has been dropped.
+	RetentionFidelityCompact RetentionFidelity = "compact"
+
+	// RetentionFidelitySummary means no transcript messages are retained.
+	RetentionFidelitySummary RetentionFidelity = "summary"
+
+	// RetentionFidelityWindowed means only a restore window and pinned messages remain.
+	RetentionFidelityWindowed RetentionFidelity = "windowed"
+)
+
+// DefaultRetentionFidelity returns the fidelity implied by a capture storage mode.
+func DefaultRetentionFidelity(mode StorageMode) RetentionFidelity {
+	switch mode {
+	case StorageModeFull:
+		return RetentionFidelityFull
+	case StorageModeSummary:
+		return RetentionFidelitySummary
+	default:
+		return RetentionFidelityCompact
+	}
+}
+
+// NormalizeRetentionTier returns a safe lifecycle tier.
+func NormalizeRetentionTier(t RetentionTier) RetentionTier {
+	switch t {
+	case RetentionTierWarm, RetentionTierCold:
+		return t
+	default:
+		return RetentionTierHot
+	}
+}
+
+// NormalizeRetentionFidelity returns a safe fidelity value.
+func NormalizeRetentionFidelity(f RetentionFidelity, mode StorageMode) RetentionFidelity {
+	switch f {
+	case RetentionFidelityFull, RetentionFidelityCompact, RetentionFidelitySummary, RetentionFidelityWindowed:
+		return f
+	default:
+		return DefaultRetentionFidelity(mode)
+	}
+}
+
 // ── SecretMode ──
 
 // SecretMode controls how detected secrets are handled.
