@@ -575,7 +575,10 @@ func TestEvalAB(t *testing.T) {
 		t.Fatal("no sessions loaded; cannot run A/B eval")
 	}
 
-	for _, f := range []string{"/tmp/eval-noisy.db", "/tmp/eval-clean.db"} {
+	for _, f := range []string{
+		"/tmp/eval-noisy.db", "/tmp/eval-noisy.db-wal", "/tmp/eval-noisy.db-shm",
+		"/tmp/eval-clean.db", "/tmp/eval-clean.db-wal", "/tmp/eval-clean.db-shm",
+	} {
 		_ = os.Remove(f)
 	}
 
@@ -647,13 +650,18 @@ func TestEvalAB(t *testing.T) {
 			t.Logf("warn: clean search %q: %v", q.Query, searchErr)
 		}
 
-		noisyIDs := make([]string, len(noisyRes.Hits))
-		for j, h := range noisyRes.Hits {
-			noisyIDs[j] = h.SessionID
+		var noisyIDs, cleanIDs []string
+		if noisyRes != nil {
+			noisyIDs = make([]string, len(noisyRes.Hits))
+			for j, h := range noisyRes.Hits {
+				noisyIDs[j] = h.SessionID
+			}
 		}
-		cleanIDs := make([]string, len(cleanRes.Hits))
-		for j, h := range cleanRes.Hits {
-			cleanIDs[j] = h.SessionID
+		if cleanRes != nil {
+			cleanIDs = make([]string, len(cleanRes.Hits))
+			for j, h := range cleanRes.Hits {
+				cleanIDs[j] = h.SessionID
+			}
 		}
 
 		results[i] = abQueryResult{

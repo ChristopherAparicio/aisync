@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "description": "Real AI5/OpenCode session-retrieval queries used to evaluate search quality.",
+  "queries": [
+    {
+      "id": "jarvis-center-not-hermes",
+      "query": "Hermes is not the center Jarvis is",
+      "category": "semantic-decision",
+      "expected_session_ids": ["ses_18a58f099ffekd5qFO55HLKJD8", "ses_18a710ffdffeFwjNM2LH5j2L3y"],
+      "notes": "Decision-level query where exact wording appears in a synthesis session."
+    },
+    {
+      "id": "hermes-agent-coding-main",
+      "query": "Hermes Agent Coding",
+      "category": "session-title",
+      "expected_session_ids": ["ses_18a710ffdffeFwjNM2LH5j2L3y"],
+      "notes": "Large house session; useful for measuring long-session representation."
+    },
+    {
+      "id": "swarm-session-task-id",
+      "query": "session task ID creation swarm",
+      "category": "code-investigation",
+      "expected_session_ids": ["ses_18a515410ffeh0NJibq2RJAAYj"],
+      "notes": "Specific subagent that inspected session/task ID creation in opencode-agent-swarm."
+    },
+    {
+      "id": "old-project-opencode-event-handler",
+      "query": "opencode event handler",
+      "category": "project-alias",
+      "expected_session_ids": [
+        "ses_1b3fca5a6ffe0JCw7V8s0J7K7M",
+        "ses_1b3fcf793ffeEc99pYVertGjI5",
+        "ses_1ba7c9e33ffeymPtyMwOhQUFd4",
+        "ses_1bad2d1b6ffef777MSI2ZqONvS",
+        "ses_1baadf3a8ffetafggCZPg2snrm"
+      ],
+      "notes": "Old project path/name before opencode-agent-swarm rename."
+    },
+    {
+      "id": "new-project-opencode-agent-swarm",
+      "query": "opencode agent swarm",
+      "category": "project-alias",
+      "expected_session_ids": [
+        "ses_17d942ab2ffeV415WTIyhkr1L3",
+        "ses_196b269bdffeERvFEQXeBPm9ev",
+        "ses_196b2d4ddffeDwkD0rDAoB9q96",
+        "ses_18a710ffdffeFwjNM2LH5j2L3y"
+      ],
+      "notes": "New project name plus house architecture session that referenced it."
+    },
+    {
+      "id": "cache-miss",
+      "query": "cache miss",
+      "category": "operations",
+      "expected_session_ids": ["ses_2a5bacd8bffeRwtxP21sQ4lWps"],
+      "notes": "Known AI5 cache miss investigation."
+    },
+    {
+      "id": "caveman-token-consumption",
+      "query": "caveman",
+      "category": "tool-evaluation",
+      "expected_session_ids": ["ses_1b70c4e63ffedJdWWYyNdhsuBx"],
+      "notes": "Should find the original Caveman token-consumption discussion, not later meta-eval sessions."
+    },
+    {
+      "id": "alerts-page",
+      "query": "alerts page",
+      "category": "feature-implementation",
+      "expected_session_ids": [
+        "ses_19b873a2bffei62oKOxIvNz0Ou",
+        "ses_19b9768c6ffeHri5Bs7EjAEIkM",
+        "ses_197bec2c5ffeG6rWhLfzwdR1n3"
+      ],
+      "notes": "AI5 alerts UI/table/modal implementation and redesign."
+    },
+    {
+      "id": "compaction-signal",
+      "query": "compaction",
+      "category": "system-event",
+      "expected_session_ids": [
+        "ses_2d3728615ffemepxJpUVMORlcm",
+        "ses_2d3722320ffenZ5ppoEn51Y6Oz",
+        "ses_19a15e015ffeUuX3KEDw4oXfAO"
+      ],
+      "notes": "Compaction detection and signal research."
+    },
+    {
+      "id": "handoff-livematch",
+      "query": "handoff livematch",
+      "category": "handoff",
+      "expected_session_ids": [
+        "ses_3040e316effeWmpL1QrET1u2Pn",
+        "ses_304036813ffenLLhY1AIxQvXaO"
+      ],
+      "notes": "Handoff-related search should retrieve the actual target sessions."
+    },
+    {
+      "id": "file-blame",
+      "query": "file blame",
+      "category": "file-history",
+      "expected_session_ids": [
+        "ses_2c53d2964ffemmYSGz0n5nAOvw",
+        "ses_2bba8ac6fffephDw5FfSi7PXL3",
+        "ses_2cf238f77ffecwGiHwaKzjEf1k"
+      ],
+      "notes": "Search side of file blame/session history feature."
+    },
+    {
+      "id": "session-history-timeline",
+      "query": "session history timeline",
+      "category": "session-analytics",
+      "expected_session_ids": [
+        "ses_2f5e06304ffeG9CawUOZg7FXzW",
+        "ses_2b328c5f2ffeekdNUSGQVR60td"
+      ],
+      "notes": "Session history and message-loading timeline analytics."
+    }
+  ]
+}
