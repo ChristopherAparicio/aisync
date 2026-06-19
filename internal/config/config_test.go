@@ -126,6 +126,61 @@ func TestRepoOverridesGlobal(t *testing.T) {
 	}
 }
 
+func TestResolveProjectDisplay_ProjectAlias(t *testing.T) {
+	cfg := mustNewConfig(t, "", "")
+	cfg.data.ProjectAliases = map[string]ProjectAliasConf{
+		"omogen": {
+			DisplayName: "Omogen",
+			Repository:  "monorepo",
+			Remotes:     []string{"Omogen-ai/backend", "Omogen-ai/frontend", "Omogen-ai/voiceagent"},
+		},
+	}
+
+	display := cfg.ResolveProjectDisplay(
+		"github.com/Omogen-ai/backend",
+		"/Users/u/.local/share/opencode/worktree/abc/quick-meadow",
+	)
+	if !display.Aliased {
+		t.Fatal("display.Aliased = false, want true")
+	}
+	if display.Project != "Omogen" || display.Repository != "monorepo" || display.Subproject != "backend" {
+		t.Fatalf("display = %+v, want Omogen/monorepo/backend", display)
+	}
+}
+
+func TestResolveProjectDisplay_PathAlias(t *testing.T) {
+	cfg := mustNewConfig(t, "", "")
+	cfg.data.ProjectAliases = map[string]ProjectAliasConf{
+		"omogen": {
+			DisplayName: "Omogen",
+			Repository:  "monorepo",
+			Paths:       []string{"opencode/worktree/28fea"},
+		},
+	}
+
+	display := cfg.ResolveProjectDisplay(
+		"",
+		"/Users/u/.local/share/opencode/worktree/28fea43df7/quick-meadow",
+	)
+	if !display.Aliased || display.Project != "Omogen" || display.Repository != "monorepo" || display.Subproject != "unknown" {
+		t.Fatalf("display = %+v, want aliased Omogen/monorepo/unknown", display)
+	}
+}
+
+func TestResolveProjectDisplay_Fallback(t *testing.T) {
+	cfg := mustNewConfig(t, "", "")
+	display := cfg.ResolveProjectDisplay(
+		"github.com/acme/web.git",
+		"/tmp/opencode/worktree/abc/branch-name",
+	)
+	if display.Aliased {
+		t.Fatal("display.Aliased = true, want false")
+	}
+	if display.Project != ".../abc/branch-name" || display.Repository != "acme/web" || display.Subproject != "web" {
+		t.Fatalf("display = %+v, want fallback project/repo/subproject", display)
+	}
+}
+
 func TestGet_UnknownKey(t *testing.T) {
 	dir := t.TempDir()
 	cfg := mustNewConfig(t, filepath.Join(dir, "global"), filepath.Join(dir, "repo"))
@@ -175,6 +230,16 @@ func TestGet_AllKeys(t *testing.T) {
 		{"dashboard.default_branch", ""},
 		{"server.url", "http://localhost:8371"},
 		{"database.path", "/tmp/test.db"},
+		{"retention.enabled", "false"},
+		{"retention.cron", "*/15 * * * *"},
+		{"retention.compact_after_idle", "48h"},
+		{"retention.max_tokens", "300000"},
+		{"retention.keep_user_messages", "true"},
+		{"retention.keep_compactions", "true"},
+		{"retention.keep_tool_outputs", "false"},
+		{"retention.keep_thinking", "false"},
+		{"retention.cold_enabled", "false"},
+		{"retention.archive_after_idle", "720h"},
 	}
 
 	for _, tt := range tests {
@@ -187,6 +252,26 @@ func TestGet_AllKeys(t *testing.T) {
 				t.Errorf("Get(%q) = %q, want %q", tt.key, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRetentionPolicy_ColdDefaultsAndSetters(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mustNewConfig(t, filepath.Join(dir, "global"), filepath.Join(dir, "repo"))
+
+	policy := cfg.GetRetentionPolicy()
+	if policy.ColdEnabled {
+		t.Fatal("ColdEnabled default = true, want false")
+	}
+	if policy.ArchiveAfterIdle != "720h" {
+		t.Fatalf("ArchiveAfterIdle default = %q, want 720h", policy.ArchiveAfterIdle)
+	}
+
+	mustSet(t, cfg, "retention.cold_enabled", "true")
+	mustSet(t, cfg, "retention.archive_after_idle", "1440h")
+	policy = cfg.GetRetentionPolicy()
+	if !policy.ColdEnabled || policy.ArchiveAfterIdle != "1440h" {
+		t.Fatalf("policy = %+v, want cold enabled with 1440h archive threshold", policy)
 	}
 }
 
@@ -1930,6 +2015,55 @@ func TestGitHub_SetAndGet(t *testing.T) {
 				t.Errorf("Get(%q) = %q, want %q", tt.key, got, tt.value)
 			}
 		})
+	}
+}
+
+func TestRetentionPolicy_DefaultsAndSetters(t *testing.T) {
+	dir := t.TempDir()
+	cfg := mustNewConfig(t, filepath.Join(dir, "global"), filepath.Join(dir, "repo"))
+
+	policy := cfg.GetRetentionPolicy()
+	if policy.Enabled {
+		t.Fatal("retention should be disabled by default")
+	}
+	if policy.CompactAfterIdle != "48h" || policy.MaxTokens != 300000 {
+		t.Fatalf("policy = %+v, want 48h and 300000 tokens", policy)
+	}
+	if !policy.KeepUserMessages || !policy.KeepCompactions || policy.KeepToolOutputs || policy.KeepThinking {
+		t.Fatalf("unexpected default retention keep flags: %+v", policy)
+	}
+
+	mustSet(t, cfg, "retention.enabled", "true")
+	mustSet(t, cfg, "retention.cron", "*/30 * * * *")
+	mustSet(t, cfg, "retention.compact_after_idle", "72h")
+	mustSet(t, cfg, "retention.max_tokens", "12345")
+	mustSet(t, cfg, "retention.keep_tool_outputs", "true")
+
+	policy = cfg.GetRetentionPolicy()
+	if !policy.Enabled || policy.Cron != "*/30 * * * *" || policy.CompactAfterIdle != "72h" || policy.MaxTokens != 12345 || !policy.KeepToolOutputs {
+		t.Fatalf("policy after setters = %+v", policy)
+	}
+}
+
+func TestRetentionPolicy_RepoWithoutRetentionDoesNotDisableGlobal(t *testing.T) {
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "global")
+	repoDir := filepath.Join(dir, "repo")
+
+	globalCfg := mustNewConfig(t, globalDir, "")
+	mustSet(t, globalCfg, "retention.enabled", "true")
+	mustSet(t, globalCfg, "retention.max_tokens", "456")
+	mustSave(t, globalCfg)
+
+	mustMkdirAll(t, repoDir)
+	if err := os.WriteFile(filepath.Join(repoDir, configFileName), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatalf("write repo config: %v", err)
+	}
+
+	merged := mustNewConfig(t, globalDir, repoDir)
+	policy := merged.GetRetentionPolicy()
+	if !policy.Enabled || policy.MaxTokens != 456 {
+		t.Fatalf("merged policy = %+v, want global enabled policy preserved", policy)
 	}
 }
 

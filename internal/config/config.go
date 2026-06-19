@@ -6,9 +6,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,31 +23,33 @@ const configFileName = "config.json"
 
 // configData is the JSON-serializable configuration structure.
 type configData struct {
-	StorageMode  string                           `json:"storage_mode"`
-	Providers    []string                         `json:"providers"`
-	Secrets      secrets                          `json:"secrets"`
-	Summarize    summarize                        `json:"summarize"`
-	Pricing      pricing                          `json:"pricing"`
-	LLM          llmConf                          `json:"llm"`
-	Analysis     analysisConf                     `json:"analysis"`
-	Tagging      taggingConf                      `json:"tagging"`
-	Project      projectConf                      `json:"project"`
-	Projects     map[string]ProjectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
-	Search       searchConf                       `json:"search"`
-	Webhooks     webhooksConf                     `json:"webhooks"`
-	Dashboard    dashboardConf                    `json:"dashboard"`
-	Server       serverConf                       `json:"server"`
-	Database     databaseConf                     `json:"database"`
-	Scheduler    schedulerConf                    `json:"scheduler"`
-	Errors       errorsConf                       `json:"errors"`
-	Features     featuresConf                     `json:"features"`
-	GitHub       githubConf                       `json:"github,omitempty"`
-	Owners       ownersConf                       `json:"owners,omitempty"`
-	Notification notificationConf                 `json:"notification,omitempty"`
-	Tools        toolsConf                        `json:"tools,omitempty"`
-	Telemetry    telemetryConf                    `json:"telemetry"`
-	Version      int                              `json:"version"`
-	AutoCapture  bool                             `json:"auto_capture"`
+	StorageMode    string                           `json:"storage_mode"`
+	Providers      []string                         `json:"providers"`
+	Secrets        secrets                          `json:"secrets"`
+	Summarize      summarize                        `json:"summarize"`
+	Pricing        pricing                          `json:"pricing"`
+	LLM            llmConf                          `json:"llm"`
+	Analysis       analysisConf                     `json:"analysis"`
+	Tagging        taggingConf                      `json:"tagging"`
+	Project        projectConf                      `json:"project"`
+	Projects       map[string]ProjectClassifierConf `json:"projects,omitempty"` // per-project classifiers keyed by remote_url or display name
+	ProjectAliases map[string]ProjectAliasConf      `json:"project_aliases,omitempty"`
+	Search         searchConf                       `json:"search"`
+	Webhooks       webhooksConf                     `json:"webhooks"`
+	Dashboard      dashboardConf                    `json:"dashboard"`
+	Server         serverConf                       `json:"server"`
+	Database       databaseConf                     `json:"database"`
+	Retention      retentionConf                    `json:"retention"`
+	Scheduler      schedulerConf                    `json:"scheduler"`
+	Errors         errorsConf                       `json:"errors"`
+	Features       featuresConf                     `json:"features"`
+	GitHub         githubConf                       `json:"github,omitempty"`
+	Owners         ownersConf                       `json:"owners,omitempty"`
+	Notification   notificationConf                 `json:"notification,omitempty"`
+	Tools          toolsConf                        `json:"tools,omitempty"`
+	Telemetry      telemetryConf                    `json:"telemetry"`
+	Version        int                              `json:"version"`
+	AutoCapture    bool                             `json:"auto_capture"`
 }
 
 // githubConf holds configuration for GitHub integration.
@@ -183,19 +187,59 @@ type projectConf struct {
 	AutoDetect bool     `json:"auto_detect"`          // auto-detect category from project files
 }
 
+// ProjectAliasConf maps raw session metadata to human-friendly project labels.
+type ProjectAliasConf struct {
+	DisplayName string   `json:"display_name,omitempty"`
+	Repository  string   `json:"repository,omitempty"`
+	Subproject  string   `json:"subproject,omitempty"`
+	Remotes     []string `json:"remotes,omitempty"`
+	Paths       []string `json:"paths,omitempty"`
+}
+
+// ProjectDisplay is the resolved display identity for a captured session.
+type ProjectDisplay struct {
+	Project    string
+	Repository string
+	Subproject string
+	Aliased    bool
+}
+
+// TicketSourceConf configures one ticket tracker source for a project.
+// Multiple sources let a project have e.g. Notion for features and GitHub issues for bugs.
+type TicketSourceConf struct {
+	// Name is the tracker identifier shown in output (e.g. "notion", "jira", "linear", "github").
+	Name string `json:"name,omitempty"`
+
+	// TicketPattern is a regex to extract ticket IDs for this source.
+	// Example: "OMO-\\d+" matches OMO-250, OMO-1234.
+	TicketPattern string `json:"ticket_pattern,omitempty"`
+
+	// TicketURL is a template URL for linking to tickets. Use {id} as placeholder.
+	// Example: "https://www.notion.so/omogen/{id}"
+	TicketURL string `json:"ticket_url,omitempty"`
+}
+
 // ProjectClassifierConf holds per-project classifier rules.
 // Keyed by remote URL display name (e.g. "Omogen-ai/backend") or project path.
 type ProjectClassifierConf struct {
 	// TicketPattern is a regex to extract ticket IDs from branch names, summaries, and commits.
 	// Example: "OMO-\\d+" matches OMO-250, OMO-1234.
+	// Legacy single-source field; use TicketSources for multi-source support.
 	TicketPattern string `json:"ticket_pattern,omitempty"`
 
 	// TicketSource identifies where tickets live (e.g. "notion", "jira", "linear", "github").
+	// Legacy single-source field; use TicketSources for multi-source support.
 	TicketSource string `json:"ticket_source,omitempty"`
 
 	// TicketURL is a template URL for linking to tickets. Use {id} as placeholder.
 	// Example: "https://www.notion.so/omogen/{id}"
+	// Legacy single-source field; use TicketSources for multi-source support.
 	TicketURL string `json:"ticket_url,omitempty"`
+
+	// TicketSources configures multiple ticket tracker sources for this project.
+	// When non-empty, ClassifySession iterates each source's pattern; the legacy
+	// TicketPattern/TicketSource/TicketURL fields are used as a fallback.
+	TicketSources []TicketSourceConf `json:"ticket_sources,omitempty"`
 
 	// Kinds is the work-item vocabulary used by `aisync items <kind>` for this
 	// project (e.g. ["feature", "bug", "chore", "epic"]). If empty,
@@ -331,6 +375,33 @@ type databaseConf struct {
 	Driver string `json:"driver"` // storage driver: "sqlite" (default); future: "postgres"
 }
 
+type retentionConf struct {
+	Enabled          *bool  `json:"enabled,omitempty"`
+	Cron             string `json:"cron,omitempty"`
+	CompactAfterIdle string `json:"compact_after_idle,omitempty"`
+	ArchiveAfterIdle string `json:"archive_after_idle,omitempty"`
+	MaxTokens        int    `json:"max_tokens,omitempty"`
+	KeepUserMessages *bool  `json:"keep_user_messages,omitempty"`
+	KeepCompactions  *bool  `json:"keep_compactions,omitempty"`
+	KeepToolOutputs  *bool  `json:"keep_tool_outputs,omitempty"`
+	KeepThinking     *bool  `json:"keep_thinking,omitempty"`
+	ColdEnabled      *bool  `json:"cold_enabled,omitempty"`
+}
+
+// RetentionPolicy is the resolved warm-tier lifecycle policy.
+type RetentionPolicy struct {
+	Enabled          bool
+	Cron             string
+	CompactAfterIdle string
+	ArchiveAfterIdle string
+	MaxTokens        int
+	KeepUserMessages bool
+	KeepCompactions  bool
+	KeepToolOutputs  bool
+	KeepThinking     bool
+	ColdEnabled      bool
+}
+
 // ── Scheduler ──
 
 // schedulerConf holds configuration for all scheduled tasks.
@@ -421,11 +492,19 @@ type notificationConf struct {
 	// Alert toggles (real-time)
 	AlertBudget  bool `json:"alert_budget,omitempty"`  // budget threshold alerts
 	AlertErrors  bool `json:"alert_errors,omitempty"`  // error spike alerts
+	AlertStalls  bool `json:"alert_stalls,omitempty"`  // stuck-session threshold alerts
 	AlertCapture bool `json:"alert_capture,omitempty"` // session captured (usually noisy)
 
 	// Error spike thresholds
 	ErrorThreshold  int `json:"error_threshold,omitempty"`   // errors to trigger spike alert (default: 10)
 	ErrorWindowMins int `json:"error_window_mins,omitempty"` // time window in minutes (default: 60)
+
+	// Stall alert thresholds (any one crossing fires the alert).
+	// A value <= 0 disables that rule.
+	StallLiveCount   int     `json:"stall_live_count,omitempty"`    // live stuck sessions (default: 5)
+	StallNewCount24h int     `json:"stall_new_count_24h,omitempty"` // new stalls in 24h (default: 25)
+	StallCostUSD24h  float64 `json:"stall_cost_usd_24h,omitempty"`  // USD lost in 24h (default: 1.0)
+	StallAlertCron   string  `json:"stall_alert_cron,omitempty"`    // cron schedule (default: "*/15 * * * *")
 
 	// Digest toggles (scheduled)
 	DigestDaily    bool `json:"digest_daily,omitempty"`    // daily digest to channel
@@ -482,6 +561,11 @@ var DefaultDashboardColumns = []string{
 }
 
 func defaultConfig() configData {
+	keepUserMessages := true
+	keepCompactions := true
+	keepToolOutputs := false
+	keepThinking := false
+	retentionEnabled := false
 	return configData{
 		Version:     1,
 		Providers:   []string{"claude-code", "opencode"},
@@ -516,6 +600,19 @@ func defaultConfig() configData {
 				"renovate*",
 				"github-actions*",
 			},
+		},
+		Notification: notificationConf{
+			AlertStalls: true,
+		},
+		Retention: retentionConf{
+			Enabled:          &retentionEnabled,
+			Cron:             "*/15 * * * *",
+			CompactAfterIdle: "48h",
+			MaxTokens:        300000,
+			KeepUserMessages: &keepUserMessages,
+			KeepCompactions:  &keepCompactions,
+			KeepToolOutputs:  &keepToolOutputs,
+			KeepThinking:     &keepThinking,
 		},
 	}
 }
@@ -604,9 +701,13 @@ func (c *Config) loadFrom(dir string) error {
 		if c.data.Projects == nil {
 			c.data.Projects = make(map[string]ProjectClassifierConf)
 		}
-		for k, v := range loaded.Projects {
-			c.data.Projects[k] = v
+		maps.Copy(c.data.Projects, loaded.Projects)
+	}
+	if len(loaded.ProjectAliases) > 0 {
+		if c.data.ProjectAliases == nil {
+			c.data.ProjectAliases = make(map[string]ProjectAliasConf)
 		}
+		maps.Copy(c.data.ProjectAliases, loaded.ProjectAliases)
 	}
 
 	// Search — merge search engine config.
@@ -669,6 +770,37 @@ func (c *Config) loadFrom(dir string) error {
 	}
 	if loaded.Database.Driver != "" {
 		c.data.Database.Driver = loaded.Database.Driver
+	}
+
+	if loaded.Retention.Enabled != nil {
+		c.data.Retention.Enabled = loaded.Retention.Enabled
+	}
+	if loaded.Retention.Cron != "" {
+		c.data.Retention.Cron = loaded.Retention.Cron
+	}
+	if loaded.Retention.CompactAfterIdle != "" {
+		c.data.Retention.CompactAfterIdle = loaded.Retention.CompactAfterIdle
+	}
+	if loaded.Retention.ArchiveAfterIdle != "" {
+		c.data.Retention.ArchiveAfterIdle = loaded.Retention.ArchiveAfterIdle
+	}
+	if loaded.Retention.MaxTokens > 0 {
+		c.data.Retention.MaxTokens = loaded.Retention.MaxTokens
+	}
+	if loaded.Retention.ColdEnabled != nil {
+		c.data.Retention.ColdEnabled = loaded.Retention.ColdEnabled
+	}
+	if loaded.Retention.KeepUserMessages != nil {
+		c.data.Retention.KeepUserMessages = loaded.Retention.KeepUserMessages
+	}
+	if loaded.Retention.KeepCompactions != nil {
+		c.data.Retention.KeepCompactions = loaded.Retention.KeepCompactions
+	}
+	if loaded.Retention.KeepToolOutputs != nil {
+		c.data.Retention.KeepToolOutputs = loaded.Retention.KeepToolOutputs
+	}
+	if loaded.Retention.KeepThinking != nil {
+		c.data.Retention.KeepThinking = loaded.Retention.KeepThinking
 	}
 
 	// Project
@@ -765,6 +897,7 @@ func (c *Config) loadFrom(dir string) error {
 	// Bools — always take loaded value
 	c.data.Notification.AlertBudget = loaded.Notification.AlertBudget
 	c.data.Notification.AlertErrors = loaded.Notification.AlertErrors
+	c.data.Notification.AlertStalls = loaded.Notification.AlertStalls
 	c.data.Notification.AlertCapture = loaded.Notification.AlertCapture
 	c.data.Notification.DigestDaily = loaded.Notification.DigestDaily
 	c.data.Notification.DigestWeekly = loaded.Notification.DigestWeekly
@@ -774,6 +907,18 @@ func (c *Config) loadFrom(dir string) error {
 	}
 	if loaded.Notification.ErrorWindowMins > 0 {
 		c.data.Notification.ErrorWindowMins = loaded.Notification.ErrorWindowMins
+	}
+	if loaded.Notification.StallLiveCount > 0 {
+		c.data.Notification.StallLiveCount = loaded.Notification.StallLiveCount
+	}
+	if loaded.Notification.StallNewCount24h > 0 {
+		c.data.Notification.StallNewCount24h = loaded.Notification.StallNewCount24h
+	}
+	if loaded.Notification.StallCostUSD24h > 0 {
+		c.data.Notification.StallCostUSD24h = loaded.Notification.StallCostUSD24h
+	}
+	if loaded.Notification.StallAlertCron != "" {
+		c.data.Notification.StallAlertCron = loaded.Notification.StallAlertCron
 	}
 	if loaded.Notification.DailyDigestCron != "" {
 		c.data.Notification.DailyDigestCron = loaded.Notification.DailyDigestCron
@@ -786,6 +931,112 @@ func (c *Config) loadFrom(dir string) error {
 	}
 
 	return nil
+}
+
+// ResolveProjectDisplay returns human-friendly labels for raw session metadata.
+func (c *Config) ResolveProjectDisplay(remoteURL, projectPath string) ProjectDisplay {
+	if c == nil {
+		return fallbackProjectDisplay(remoteURL, projectPath)
+	}
+
+	keys := make([]string, 0, len(c.data.ProjectAliases))
+	for key := range c.data.ProjectAliases {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		alias := c.data.ProjectAliases[key]
+		if !matchesProjectAlias(alias, remoteURL, projectPath) {
+			continue
+		}
+		project := alias.DisplayName
+		if project == "" {
+			project = key
+		}
+		return ProjectDisplay{
+			Project:    project,
+			Repository: firstNonEmpty(alias.Repository, repositoryName(remoteURL)),
+			Subproject: firstNonEmpty(alias.Subproject, subprojectName(remoteURL), "unknown"),
+			Aliased:    true,
+		}
+	}
+
+	return fallbackProjectDisplay(remoteURL, projectPath)
+}
+
+func matchesProjectAlias(alias ProjectAliasConf, remoteURL, projectPath string) bool {
+	remote := strings.ToLower(remoteURL)
+	project := strings.ToLower(projectPath)
+	for _, candidate := range alias.Remotes {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate != "" && strings.Contains(remote, candidate) {
+			return true
+		}
+	}
+	for _, candidate := range alias.Paths {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate != "" && strings.Contains(project, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func fallbackProjectDisplay(remoteURL, projectPath string) ProjectDisplay {
+	return ProjectDisplay{
+		Project:    shortProjectPath(projectPath),
+		Repository: repositoryName(remoteURL),
+		Subproject: firstNonEmpty(subprojectName(remoteURL), "unknown"),
+	}
+}
+
+func repositoryName(remoteURL string) string {
+	remote := strings.TrimSuffix(strings.TrimSpace(remoteURL), ".git")
+	if remote == "" {
+		return ""
+	}
+	remote = strings.TrimPrefix(remote, "https://")
+	remote = strings.TrimPrefix(remote, "http://")
+	if at := strings.LastIndex(remote, "@"); at >= 0 && at+1 < len(remote) {
+		remote = remote[at+1:]
+	}
+	remote = strings.ReplaceAll(remote, ":", "/")
+	parts := strings.Split(strings.Trim(remote, "/"), "/")
+	if len(parts) >= 2 {
+		return strings.Join(parts[len(parts)-2:], "/")
+	}
+	return strings.Trim(remote, "/")
+}
+
+func subprojectName(remoteURL string) string {
+	repo := repositoryName(remoteURL)
+	if repo == "" {
+		return ""
+	}
+	parts := strings.Split(repo, "/")
+	return parts[len(parts)-1]
+}
+
+func shortProjectPath(projectPath string) string {
+	if projectPath == "" {
+		return "-"
+	}
+	parts := strings.Split(strings.Trim(projectPath, "/"), "/")
+	if len(parts) <= 2 {
+		return projectPath
+	}
+	return ".../" + strings.Join(parts[len(parts)-2:], "/")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // Get retrieves a configuration value by key.
@@ -879,6 +1130,27 @@ func (c *Config) Get(key string) (string, error) {
 	case "database.driver":
 		return c.GetDatabaseDriver(), nil
 
+	case "retention.enabled":
+		return fmt.Sprintf("%v", boolConfigValue(c.data.Retention.Enabled, false)), nil
+	case "retention.cron":
+		return c.GetRetentionPolicy().Cron, nil
+	case "retention.compact_after_idle":
+		return c.GetRetentionPolicy().CompactAfterIdle, nil
+	case "retention.archive_after_idle":
+		return c.GetRetentionPolicy().ArchiveAfterIdle, nil
+	case "retention.max_tokens":
+		return strconv.Itoa(c.GetRetentionPolicy().MaxTokens), nil
+	case "retention.keep_user_messages":
+		return fmt.Sprintf("%v", c.GetRetentionPolicy().KeepUserMessages), nil
+	case "retention.keep_compactions":
+		return fmt.Sprintf("%v", c.GetRetentionPolicy().KeepCompactions), nil
+	case "retention.keep_tool_outputs":
+		return fmt.Sprintf("%v", c.GetRetentionPolicy().KeepToolOutputs), nil
+	case "retention.keep_thinking":
+		return fmt.Sprintf("%v", c.GetRetentionPolicy().KeepThinking), nil
+	case "retention.cold_enabled":
+		return fmt.Sprintf("%v", c.GetRetentionPolicy().ColdEnabled), nil
+
 	// Errors
 	case "errors.classifier":
 		return c.GetErrorsClassifier(), nil
@@ -958,12 +1230,22 @@ func (c *Config) Get(key string) (string, error) {
 		return fmt.Sprintf("%v", c.data.Notification.AlertBudget), nil
 	case "notification.alert_errors":
 		return fmt.Sprintf("%v", c.data.Notification.AlertErrors), nil
+	case "notification.alert_stalls":
+		return fmt.Sprintf("%v", c.data.Notification.AlertStalls), nil
 	case "notification.alert_capture":
 		return fmt.Sprintf("%v", c.data.Notification.AlertCapture), nil
 	case "notification.error_threshold":
 		return fmt.Sprintf("%d", c.GetNotificationErrorThreshold()), nil
 	case "notification.error_window_mins":
 		return fmt.Sprintf("%d", c.GetNotificationErrorWindowMins()), nil
+	case "notification.stall_live_count":
+		return fmt.Sprintf("%d", c.GetNotificationStallLiveCount()), nil
+	case "notification.stall_new_count_24h":
+		return fmt.Sprintf("%d", c.GetNotificationStallNewCount24h()), nil
+	case "notification.stall_cost_usd_24h":
+		return fmt.Sprintf("%.2f", c.GetNotificationStallCostUSD24h()), nil
+	case "notification.stall_alert_cron":
+		return c.GetNotificationStallAlertCron(), nil
 	case "notification.digest_daily":
 		return fmt.Sprintf("%v", c.data.Notification.DigestDaily), nil
 	case "notification.digest_weekly":
@@ -1187,6 +1469,46 @@ func (c *Config) Set(key string, value string) error {
 		}
 		c.data.Database.Driver = value
 
+	case "retention.enabled":
+		v := value == "true"
+		c.data.Retention.Enabled = &v
+	case "retention.cron":
+		if err := validateCronExpr(value); err != nil {
+			return fmt.Errorf("invalid retention.cron %q: %w", value, err)
+		}
+		c.data.Retention.Cron = value
+	case "retention.compact_after_idle":
+		if value == "" {
+			return fmt.Errorf("retention.compact_after_idle cannot be empty")
+		}
+		c.data.Retention.CompactAfterIdle = value
+	case "retention.archive_after_idle":
+		if value == "" {
+			return fmt.Errorf("retention.archive_after_idle cannot be empty")
+		}
+		c.data.Retention.ArchiveAfterIdle = value
+	case "retention.max_tokens":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 1 {
+			return fmt.Errorf("invalid retention.max_tokens %q: must be a positive integer", value)
+		}
+		c.data.Retention.MaxTokens = v
+	case "retention.cold_enabled":
+		v := value == "true"
+		c.data.Retention.ColdEnabled = &v
+	case "retention.keep_user_messages":
+		v := value == "true"
+		c.data.Retention.KeepUserMessages = &v
+	case "retention.keep_compactions":
+		v := value == "true"
+		c.data.Retention.KeepCompactions = &v
+	case "retention.keep_tool_outputs":
+		v := value == "true"
+		c.data.Retention.KeepToolOutputs = &v
+	case "retention.keep_thinking":
+		v := value == "true"
+		c.data.Retention.KeepThinking = &v
+
 	// Errors
 	case "errors.classifier":
 		if value != "deterministic" && value != "composite" {
@@ -1275,6 +1597,8 @@ func (c *Config) Set(key string, value string) error {
 		c.data.Notification.AlertBudget = value == "true"
 	case "notification.alert_errors":
 		c.data.Notification.AlertErrors = value == "true"
+	case "notification.alert_stalls":
+		c.data.Notification.AlertStalls = value == "true"
 	case "notification.alert_capture":
 		c.data.Notification.AlertCapture = value == "true"
 	case "notification.error_threshold":
@@ -1289,6 +1613,31 @@ func (c *Config) Set(key string, value string) error {
 			return fmt.Errorf("notification.error_window_mins must be a positive integer, got %q", value)
 		}
 		c.data.Notification.ErrorWindowMins = v
+	case "notification.stall_live_count":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("notification.stall_live_count must be a non-negative integer, got %q", value)
+		}
+		c.data.Notification.StallLiveCount = v
+	case "notification.stall_new_count_24h":
+		v, err := strconv.Atoi(value)
+		if err != nil || v < 0 {
+			return fmt.Errorf("notification.stall_new_count_24h must be a non-negative integer, got %q", value)
+		}
+		c.data.Notification.StallNewCount24h = v
+	case "notification.stall_cost_usd_24h":
+		v, err := strconv.ParseFloat(value, 64)
+		if err != nil || v < 0 {
+			return fmt.Errorf("notification.stall_cost_usd_24h must be a non-negative number, got %q", value)
+		}
+		c.data.Notification.StallCostUSD24h = v
+	case "notification.stall_alert_cron":
+		if value != "" {
+			if err := validateCronExpr(value); err != nil {
+				return fmt.Errorf("invalid notification.stall_alert_cron %q: %w", value, err)
+			}
+		}
+		c.data.Notification.StallAlertCron = value
 	case "notification.digest_daily":
 		c.data.Notification.DigestDaily = value == "true"
 	case "notification.digest_weekly":
@@ -1389,6 +1738,43 @@ func (c *Config) GetStorageMode() session.StorageMode {
 		return session.StorageModeCompact // safe default
 	}
 	return mode
+}
+
+// GetRetentionPolicy returns the resolved warm-tier retention policy.
+func (c *Config) GetRetentionPolicy() RetentionPolicy {
+	return RetentionPolicy{
+		Enabled:          boolConfigValue(c.data.Retention.Enabled, false),
+		Cron:             stringDefault(c.data.Retention.Cron, "*/15 * * * *"),
+		CompactAfterIdle: stringDefault(c.data.Retention.CompactAfterIdle, "48h"),
+		ArchiveAfterIdle: stringDefault(c.data.Retention.ArchiveAfterIdle, "720h"),
+		MaxTokens:        intDefault(c.data.Retention.MaxTokens, 300000),
+		KeepUserMessages: boolConfigValue(c.data.Retention.KeepUserMessages, true),
+		KeepCompactions:  boolConfigValue(c.data.Retention.KeepCompactions, true),
+		KeepToolOutputs:  boolConfigValue(c.data.Retention.KeepToolOutputs, false),
+		KeepThinking:     boolConfigValue(c.data.Retention.KeepThinking, false),
+		ColdEnabled:      boolConfigValue(c.data.Retention.ColdEnabled, false),
+	}
+}
+
+func boolConfigValue(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func stringDefault(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func intDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 // GetSecretsMode returns the secret detection mode.
@@ -2011,6 +2397,14 @@ func (c *Config) SetProjectClassifier(name string, pc ProjectClassifierConf) err
 			return fmt.Errorf("invalid ticket_pattern %q: %w", pc.TicketPattern, err)
 		}
 	}
+	// Validate all ticket_sources patterns.
+	for i, ts := range pc.TicketSources {
+		if ts.TicketPattern != "" {
+			if _, err := regexp.Compile(ts.TicketPattern); err != nil {
+				return fmt.Errorf("ticket_sources[%d] invalid ticket_pattern %q: %w", i, ts.TicketPattern, err)
+			}
+		}
+	}
 	// Validate budget if set.
 	if pc.Budget != nil {
 		if pc.Budget.MonthlyLimit < 0 {
@@ -2032,7 +2426,7 @@ func (c *Config) SetProjectClassifier(name string, pc ProjectClassifierConf) err
 
 // DeleteProjectClassifier removes a project classifier by name.
 func (c *Config) DeleteProjectClassifier(name string) error {
-	if c.data.Projects == nil || len(c.data.Projects) == 0 {
+	if len(c.data.Projects) == 0 {
 		return fmt.Errorf("no project classifiers configured")
 	}
 	if _, ok := c.data.Projects[name]; !ok {
@@ -2170,6 +2564,47 @@ func (c *Config) GetNotificationErrorWindowMins() int {
 		return 60
 	}
 	return c.data.Notification.ErrorWindowMins
+}
+
+// IsNotificationAlertStallsEnabled returns whether stuck-session alerts are enabled.
+func (c *Config) IsNotificationAlertStallsEnabled() bool {
+	return c.data.Notification.AlertStalls
+}
+
+// GetNotificationStallLiveCount returns the live stuck-session count threshold.
+// Default: 5. A value <= 0 disables the rule.
+func (c *Config) GetNotificationStallLiveCount() int {
+	if c.data.Notification.StallLiveCount == 0 {
+		return 5
+	}
+	return c.data.Notification.StallLiveCount
+}
+
+// GetNotificationStallNewCount24h returns the new-stalls-in-24h count threshold.
+// Default: 25. A value <= 0 disables the rule.
+func (c *Config) GetNotificationStallNewCount24h() int {
+	if c.data.Notification.StallNewCount24h == 0 {
+		return 25
+	}
+	return c.data.Notification.StallNewCount24h
+}
+
+// GetNotificationStallCostUSD24h returns the cost-lost-in-24h threshold in USD.
+// Default: 1.0. A value <= 0 disables the rule.
+func (c *Config) GetNotificationStallCostUSD24h() float64 {
+	if c.data.Notification.StallCostUSD24h == 0 {
+		return 1.0
+	}
+	return c.data.Notification.StallCostUSD24h
+}
+
+// GetNotificationStallAlertCron returns the cron schedule for stall alert checks.
+// Default: "*/15 * * * *" (every 15 minutes).
+func (c *Config) GetNotificationStallAlertCron() string {
+	if c.data.Notification.StallAlertCron == "" {
+		return "*/15 * * * *"
+	}
+	return c.data.Notification.StallAlertCron
 }
 
 // IsNotificationDigestDailyEnabled returns whether daily digests are enabled.
