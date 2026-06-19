@@ -20,12 +20,12 @@ Use cases:
 
 | Layer | What it does |
 |-------|-------------|
-| **Domain** | `BlameEntry` type (session summary + change type + agent + timestamp); `BlameQuery` with `FilePaths []string`; `ProjectFileEntry` with `LastAgent string` |
-| **Store (port)** | `GetSessionsByFile(query BlameQuery) → []BlameEntry` — single-file or multi-file SQL query; `FilesForProject(path, branch, limit) → []ProjectFileEntry` — CTE-based project scan |
-| **Service** | `Blame(ctx, BlameRequest) → *BlameResult` — routes to the right store method; handles optional restore shortcut |
-| **CLI** | `aisync blame [file...]` — multi-file args via `cobra.ArbitraryArgs`; `--project` flag; AGENT column in table output |
+| **Domain** | `BlameEntry` type (session summary + change type + agent + timestamp + `FilePath` for grouping); `BlameQuery` with `FilePaths []string`; `ProjectFileEntry` with `LastAgent string` |
+| **Store (port)** | `GetSessionsByFile(query BlameQuery) → []BlameEntry` — single-file or multi-file SQL query (multi-file selects `fc.file_path` into `BlameEntry.FilePath`); `FilesForProject(path, branch, limit) → []ProjectFileEntry` — CTE-based project scan |
+| **Service** | `Blame(ctx, BlameRequest) → *BlameResult` — routes to the right store method; groups multi-file results by file (`FilesGrouped`); handles optional restore shortcut; `ParseFileManifest([]byte) → []string` for manifest input |
+| **CLI** | `aisync blame [file...]` — multi-file args via `cobra.ArbitraryArgs`; `--files-from` manifest; `--project` flag; AGENT column; multi-file output grouped by file (FILE column) |
 | **API** | `GET /api/v1/blame?file=...` — JSON response |
-| **MCP** | `aisync_blame` tool — accepts `file` (string) or `files` (array); `files` takes priority |
+| **MCP** | `aisync_blame` tool — accepts `file` (string), `files` (array), or `files_from` (manifest path); `files`/`files_from` take priority |
 
 ### Domain Types
 
@@ -40,6 +40,7 @@ type BlameEntry struct {
     ChangeType session.ChangeType // created, modified, deleted, read
     CreatedAt  time.Time
     OwnerID    session.ID
+    FilePath   string             // json:"file_path,omitempty" — populated in multi-file mode for grouping
 }
 
 // BlameQuery contains parameters for a file blame lookup.
@@ -134,11 +135,39 @@ The CTE `last_session` uses `ROW_NUMBER()` partitioned by `file_path` to pick th
 | Condition | Store call | Result field |
 |-----------|-----------|-------------|
 | `ProjectPath != ""` and no file paths | `FilesForProject(path, branch, limit)` | `BlameResult.ProjectFiles` |
-| `len(FilePaths) > 0` | `GetSessionsByFile(BlameQuery{FilePaths: ...})` | `BlameResult.Entries` |
+| `len(FilePaths) > 0` | `GetSessionsByFile(BlameQuery{FilePaths: ...})` then `groupBlameByFile()` | `BlameResult.FilesGrouped` |
 | `FilePath != ""` | `GetSessionsByFile(BlameQuery{FilePath: ...})` | `BlameResult.Entries` (+ optional Restore) |
 | None set | error: "file path or project path is required" | — |
 
 The `--restore` shortcut only fires in single-file mode (`FilePath` set). It calls `SessionService.Restore()` with the session ID from the first entry.
+
+### Multi-file Grouping
+
+Multi-file blame returns results **grouped by file** rather than a flat entry list. `groupBlameByFile(files, entries, all)` buckets the store's `[]BlameEntry` by `BlameEntry.FilePath`, then emits one `FileBlame` per requested path, preserving the requested order and deduplicating repeated paths:
+
+```go
+type FileBlame struct {
+    File     string               `json:"file"`
+    Sessions []session.BlameEntry `json:"sessions"` // most-recent first; empty if file untouched
+}
+```
+
+Rules:
+
+- Entries arrive `created_at DESC` from the store, so each bucket stays most-recent-first (no re-sort, no N+1 — one query for all files).
+- A requested file with no matching entries yields an empty `Sessions` slice (the file still appears in the output).
+- When `all` is false, only the most recent session per file is kept (`sessions[:1]`).
+
+This unifies all multi-file inputs — variadic CLI args, MCP `files[]`, and `--files-from`/`files_from` manifests — on the same grouped shape. Single-file blame keeps the flat `Entries` shape so `--restore` composition is unchanged.
+
+### Manifest Input
+
+`ParseFileManifest(content []byte) ([]string, error)` reads a file list from a manifest, auto-detecting the format by the first non-whitespace byte:
+
+- Starts with `[` → parsed as a JSON array of strings (a malformed array is a hard error).
+- Otherwise → one path per line, skipping blank lines and `#` comments, trimming surrounding whitespace.
+
+Both the CLI (`--files-from`) and MCP (`files_from`) read the file from disk and merge the parsed paths into the file list before routing. The manifest path itself is never queried.
 
 ### Key Design Decisions
 
@@ -152,7 +181,7 @@ The `--restore` shortcut only fires in single-file mode (`FilePath` set). It cal
 
 5. **`--restore` is a convenience shortcut** — It calls `Blame()` to get the last session, then calls `Restore()` with that session ID. No new logic needed, just composition.
 
-6. **File path matching** — Paths stored in `file_changes` are relative to the project root (as captured by providers). The CLI normalizes the input path before querying.
+6. **File path matching (dual-format)** — `file_changes.file_path` uses two formats by design: files **inside** the project root are stored **relative** to it (e.g. `internal/storage/sqlite/sqlite.go`), while files **outside** the project root are kept **absolute** (e.g. `/etc/hosts`, `C:\tmp\x`). Normalization happens at the Store layer on write (`Save` + `ReplaceSessionFiles` call `session.NormalizeFilePath`), so the on-disk format is guaranteed regardless of the provider's input. On read, the Store expands each query path into both candidate forms via `session.BlameMatchCandidates(path, projectRoot)` and matches with `file_path IN (...)`, so a caller may pass either a relative path (matching `git status` output), an absolute path, or a path with a trailing slash — all resolve to the same stored row. Absolute-vs-relative is discriminated by whether the file lives under `project_path` (SQL: `file_path LIKE '/%' OR file_path LIKE '_:%'` for the Windows drive-letter case), never by a naive leading-slash check. Legacy rows captured before this scheme can be migrated in place with `aisync backfill normalize-paths` (idempotent; `--dry-run`/`--json` supported).
 
 7. **No line-level blame** — Unlike `git blame` which shows per-line authorship, `aisync blame` operates at the file level. Per-line attribution would require storing diffs, which is a Phase 6+ optimization.
 
@@ -165,8 +194,12 @@ aisync blame src/main.go
 # All sessions that touched a file
 aisync blame --all src/main.go
 
-# Sessions that touched multiple files (explicit list, no glob)
+# Sessions that touched multiple files (explicit list, no glob; output grouped by file)
 aisync blame src/a.go src/b.go
+
+# Read the file list from a manifest (auto-detects a JSON array or one path per line)
+aisync blame --files-from changed.txt
+aisync blame --all --files-from changed.json
 
 # Filter by branch
 aisync blame --branch feat/auth handler.go
@@ -181,25 +214,28 @@ aisync blame --json src/main.go
 aisync blame --project /path/to/project
 ```
 
-**File-mode table columns:** `SESSION_ID`, `PROVIDER`, `AGENT`, `BRANCH`, `CHANGE`, `DATE`, `SUMMARY`
+**Single-file table columns:** `SESSION_ID`, `PROVIDER`, `AGENT`, `BRANCH`, `CHANGE`, `DATE`, `SUMMARY`
+
+**Multi-file (grouped) table columns:** `FILE`, `SESSION_ID`, `PROVIDER`, `AGENT`, `BRANCH`, `CHANGE`, `DATE`, `SUMMARY` — rows are grouped by file; an untouched file still appears with empty session columns.
 
 **Project-mode table columns:** `FILE`, `SESSION_ID`, `AGENT`, `DATE`
 
-Empty agent values render as `"-"` in both table modes. `--quiet` prints only session IDs (file mode) or last session IDs (project mode). `--json` encodes the full entry list.
+Empty agent values render as `"-"` in all table modes. `--quiet` prints only session IDs (single-file and grouped modes) or last session IDs (project mode). `--json` encodes the flat `Entries` list in single-file mode and the `FilesGrouped` array (`[{file, sessions}]`) in multi-file mode.
 
 ## MCP Tool
 
-The `aisync_blame` MCP tool accepts either a single file or an array of files:
+The `aisync_blame` MCP tool accepts a single file, an array of files, or a manifest path:
 
 | Parameter | Type | Notes |
 |-----------|------|-------|
-| `file` | string | File path relative to project root; optional when `files` is set |
+| `file` | string | File path relative to project root; optional when `files` or `files_from` is set |
 | `files` | string[] | Multiple file paths; takes priority over `file` when both are provided |
+| `files_from` | string | Path to a manifest file (JSON array or one path per line, auto-detected); merged with `files` |
 | `branch` | string | Optional filter by git branch |
 | `provider` | string | Optional filter: `claude-code`, `opencode`, or `cursor` |
 | `all` | boolean | If true, return all sessions (default: most recent only) |
 
-At least one of `file` or `files` is required. Project mode is not available via MCP.
+At least one of `file`, `files`, or `files_from` is required. When `files`/`files_from` resolve to two or more paths, the response is grouped by file (`{file, sessions}` array), matching the CLI. Project mode is not available via MCP.
 
 ## Performance
 

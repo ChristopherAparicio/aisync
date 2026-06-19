@@ -35,3 +35,7 @@ vendor/
 
 # Playwright MCP cache
 .playwright-mcp/
+
+# Python bytecode
+__pycache__/
+*.pyc

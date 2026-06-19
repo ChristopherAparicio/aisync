@@ -93,6 +93,7 @@ With hooks installed (`aisync init` offers this), capture happens automatically 
 | `aisync mcp` | Start MCP server for AI tool integration (18 tools) |
 | `aisync items` | List tracker tickets (e.g. Notion) with their aggregated AI cost |
 | `aisync item` | Show one ticket: its sessions, tokens, and total cost |
+| `aisync retention` | Run retention compaction and inspect storage by tier |
 
 Run `aisync <command> --help` for detailed flags and usage.
 
@@ -105,8 +106,12 @@ aisync blame src/main.go
 # All sessions that touched a file
 aisync blame --all src/main.go
 
-# Sessions that touched multiple files (explicit list)
+# Sessions that touched multiple files (output is grouped by file)
 aisync blame src/a.go src/b.go
+
+# Read the file list from a manifest (auto-detects a JSON array or one path per line)
+aisync blame --files-from changed.txt
+aisync blame --all --files-from changed.json
 
 # Filter by branch
 aisync blame --branch feat/auth handler.go
@@ -120,6 +125,42 @@ aisync blame --json src/main.go
 # List every file touched in a project with its last agent
 aisync blame --project /path/to/project
 ```
+
+**Path matching.** `blame` accepts file paths in any form — relative (matching `git status` output), absolute, or with a trailing slash — and resolves them to the same stored entry. Internally, files inside a project are stored relative to the project root and out-of-project files stay absolute, so blame works consistently across machines and for sessions pulled from teammates.
+
+Sessions captured before this scheme used absolute paths. Migrate them in place with the idempotent backfill (run `--dry-run` first, ideally on a copy of the database):
+
+```bash
+aisync backfill normalize-paths --dry-run    # preview counts, no changes
+aisync backfill normalize-paths              # rewrite in-project absolute paths to relative
+```
+
+### Work Item Examples
+
+`items` and `item` report external tracker tickets (Notion, Jira, Linear, GitHub) linked to your AI sessions, with the aggregated cost of implementing each one. Tickets are extracted automatically from branch names and summaries using the project's `ticket_pattern` (see [Configuration](#configuration)).
+
+```bash
+# All tickets in the current project, sorted by cost
+aisync items
+
+# Filter by kind (feature, bug, refactor, ...)
+aisync items bug
+
+# Tickets across every project
+aisync items --all
+
+# Filter by an explicit project path
+aisync items --project /path/to/project
+
+# Detail for one ticket: its sessions, tokens, and total cost
+aisync item OMO-904
+
+# Machine-readable output
+aisync items --json
+aisync item OMO-904 --json
+```
+
+A work item is a **derived read-model**: aisync owns the session↔ticket mapping and the cost analytics, while the ticket's own metadata stays in the external tracker. A ticket's `kind` is derived either from the most frequent session type of its linked sessions (default) or from the ticket-ref prefix (`kind_from: "prefix"`, e.g. `BUG-12` → `bug`).
 
 ## Supported AI Providers
 
@@ -159,6 +200,27 @@ Control how much data is stored per session:
 | `full` | Everything (messages, tool calls, thinking) | 1-50 MB |
 | `compact` | User/assistant messages only | 100 KB - 2 MB |
 | `summary` | Auto summary + decisions + file list | 5-50 KB |
+
+### Retention
+
+Retention is opt-in and keeps restore context useful while reducing local database size. Hot sessions keep their original payload, warm sessions keep a windowed restore payload, and cold sessions keep audit metadata plus the summary.
+
+```bash
+aisync config set retention.enabled true
+aisync config set retention.compact_after_idle 48h
+aisync config set retention.max_tokens 300000
+
+aisync retention compact --dry-run   # preview warm/cold candidates
+aisync retention compact             # apply retention once
+aisync retention stats               # show sessions and payload bytes by tier
+```
+
+Cold archive is disabled by default because it removes transcript messages from already-warm sessions:
+
+```bash
+aisync config set retention.cold_enabled true
+aisync config set retention.archive_after_idle 720h
+```
 
 ### Team Sharing
 Push sessions to a shared `aisync/sessions` Git branch so colleagues can pull them. When someone takes over your branch, they get the full AI context.
@@ -301,9 +363,33 @@ aisync config set summarize.enabled true    # AI-powered summaries on every capt
 aisync config set summarize.model sonnet    # Specific model for summarization
 ```
 
+### Project Aliases
+
+Use `project_aliases` when raw git remotes or OpenCode worktree paths are too technical for humans. This keeps stored `remote_url` and `project_path` untouched, but changes CLI display for commands such as `aisync list --global` and `aisync show`.
+
+```json
+{
+  "project_aliases": {
+    "omogen": {
+      "display_name": "Omogen",
+      "repository": "monorepo",
+      "remotes": [
+        "Omogen-ai/backend",
+        "Omogen-ai/frontend",
+        "Omogen-ai/voiceagent"
+      ]
+    }
+  }
+}
+```
+
+With that config, a session captured from `github.com/Omogen-ai/backend` displays as project `Omogen`, repo `monorepo`, and subproject `backend`. If no alias matches, aisync falls back to the raw worktree/project path.
+
 ### Ticket Tracking (Work Items)
 
-Link AI sessions to external tracker tickets per project. Only `ticket_pattern` is required — everything else works out of the box.
+Link AI sessions to external tracker tickets per project. Only `ticket_pattern` (or at least one `ticket_sources` entry) is required — everything else works out of the box.
+
+**Single source (legacy, still fully supported):**
 
 ```json
 {
@@ -318,13 +404,64 @@ Link AI sessions to external tracker tickets per project. Only `ticket_pattern` 
 }
 ```
 
+**Multiple sources per project (`ticket_sources`):**
+
+Use `ticket_sources` when a project tracks work in more than one external system. Each entry has its own pattern, source name, and URL template. Classification iterates entries in order and uses the first matching pattern (first-match-wins).
+
+```json
+{
+  "projects": {
+    "acme/web": {
+      "ticket_sources": [
+        {
+          "name": "notion",
+          "ticket_pattern": "OMO-\\d+",
+          "ticket_url": "https://notion.so/acme/{id}"
+        },
+        {
+          "name": "jira",
+          "ticket_pattern": "PROJ-\\d+",
+          "ticket_url": "https://jira.example.com/browse/{id}"
+        }
+      ],
+      "kind_from": "session_type"
+    }
+  }
+}
+```
+
+Filter by source on the CLI:
+
+```bash
+aisync items --source notion         # only Notion tickets
+aisync item OMO-904 --source notion  # restrict detail to Notion source
+aisync items --project /path/to/repo --source jira
+```
+
+**Single-source fields:**
+
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `ticket_pattern` | (none) | Regex used to extract ticket refs from branch names and summaries |
 | `ticket_source` | `""` | Tracker name shown in output (`notion`, `jira`, `linear`, `github`) |
 | `ticket_url` | `""` | Link template; `{id}` is replaced by the ticket ref |
+
+**`ticket_sources` entry fields:**
+
+| Key | Meaning |
+|-----|---------|
+| `name` | Tracker identifier shown in output and used with `--source` filter |
+| `ticket_pattern` | Regex for this source's ticket IDs |
+| `ticket_url` | Link template; `{id}` is replaced by the ticket ref |
+
+**Other project classifier fields:**
+
+| Key | Default | Meaning |
+|-----|---------|---------|
 | `kinds` | built-in session types | Allowed kinds (`feature`, `bug`, `refactor`, ...) |
 | `kind_from` | `session_type` | How a ticket's kind is derived: `session_type` (most frequent type of linked sessions) or `prefix` (alphabetic ref prefix, e.g. `BUG-12` → `bug`) |
+
+**Fork-aware net cost:** When a session is a detected fork of another (sharing a common message prefix), `aisync item` subtracts the shared-prefix cost from the fork's contribution. This prevents the shared context from being counted twice when both the original and fork sessions are linked to the same ticket. The deduction is proportional to the ratio of shared tokens to the fork's total tokens.
 
 The project key matches the git remote display name (e.g. `acme/web`), the remote URL, or the project path. Run `aisync items` to see the result.
 
