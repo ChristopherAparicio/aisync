@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/internal/analysis"
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/search"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
@@ -37,6 +38,11 @@ type mockSessionService struct {
 	statsResult *service.StatsResult
 	statsErr    error
 	statsCalled bool
+
+	retentionResult *service.RetentionResult
+	retentionErr    error
+	retentionCalled bool
+	retentionReq    service.RetentionRequest
 }
 
 // ── Methods used by tasks ──
@@ -55,6 +61,12 @@ func (m *mockSessionService) CaptureAll(req service.CaptureRequest) ([]*service.
 func (m *mockSessionService) Stats(req service.StatsRequest) (*service.StatsResult, error) {
 	m.statsCalled = true
 	return m.statsResult, m.statsErr
+}
+
+func (m *mockSessionService) CompactIdleSessions(_ context.Context, req service.RetentionRequest) (*service.RetentionResult, error) {
+	m.retentionCalled = true
+	m.retentionReq = req
+	return m.retentionResult, m.retentionErr
 }
 
 // ── Stub methods (not used by tasks, must exist for interface satisfaction) ──
@@ -117,7 +129,7 @@ func (m *mockSessionService) Forecast(_ context.Context, _ service.ForecastReque
 func (m *mockSessionService) WorkItems(_ context.Context, _ service.WorkItemRequest) (*session.WorkItemList, error) {
 	return nil, nil
 }
-func (m *mockSessionService) WorkItem(_ context.Context, _ string) (*session.WorkItem, error) {
+func (m *mockSessionService) WorkItem(_ context.Context, _ string, _ ...service.WorkItemRequest) (*session.WorkItem, error) {
 	return nil, nil
 }
 func (m *mockSessionService) ListProjects(_ context.Context) ([]session.ProjectGroup, error) {
@@ -229,6 +241,9 @@ func (m *mockSessionService) BackfillRemoteURLs(_ context.Context) (*service.Bac
 func (m *mockSessionService) DetectForksBatch(_ context.Context) (*service.ForkDetectionResult, error) {
 	return &service.ForkDetectionResult{}, nil
 }
+func (m *mockSessionService) NormalizePaths(_ context.Context, _ bool) (session.NormalizePathsStats, error) {
+	return session.NormalizePathsStats{}, nil
+}
 
 // Manual tag stubs (PR2): the scheduler does not exercise tagging.
 func (m *mockSessionService) AddTags(_ context.Context, _ session.ID, _ []string) (int, error) {
@@ -313,6 +328,33 @@ func TestGCTask_Run_Error(t *testing.T) {
 	}
 	if !mock.gcCalled {
 		t.Error("GarbageCollect was not called")
+	}
+}
+
+func TestRetentionTask_Run_Success(t *testing.T) {
+	mock := &mockSessionService{
+		retentionResult: &service.RetentionResult{Compacted: 2},
+	}
+	policy := config.RetentionPolicy{Enabled: true, CompactAfterIdle: "48h", MaxTokens: 300000}
+	task := NewRetentionTask(RetentionTaskConfig{SessionService: mock, Policy: policy, Logger: log.Default()})
+
+	if err := task.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !mock.retentionCalled {
+		t.Fatal("CompactIdleSessions was not called")
+	}
+	if mock.retentionReq.Policy.CompactAfterIdle != "48h" || mock.retentionReq.Policy.MaxTokens != 300000 {
+		t.Fatalf("retention policy = %+v, want idle=48h max_tokens=300000", mock.retentionReq.Policy)
+	}
+}
+
+func TestRetentionTask_Run_Error(t *testing.T) {
+	mock := &mockSessionService{retentionErr: errors.New("retention failed")}
+	task := NewRetentionTask(RetentionTaskConfig{SessionService: mock, Policy: config.RetentionPolicy{Enabled: true}, Logger: log.Default()})
+
+	if err := task.Run(context.Background()); err == nil {
+		t.Fatal("expected error")
 	}
 }
 
