@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     project_path TEXT NOT NULL,
     parent_id TEXT,
     storage_mode TEXT NOT NULL DEFAULT 'compact',
+    retention_tier TEXT NOT NULL DEFAULT 'hot',
+    retention_fidelity TEXT NOT NULL DEFAULT '',
+    compacted_at TEXT NOT NULL DEFAULT '',
+    last_accessed_at TEXT NOT NULL DEFAULT '',
     summary TEXT,
     message_count INTEGER,
     total_tokens INTEGER,
@@ -198,9 +202,37 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+func stampRetentionDefaults(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	sess.RetentionTier = session.NormalizeRetentionTier(sess.RetentionTier)
+	sess.RetentionFidelity = session.NormalizeRetentionFidelity(sess.RetentionFidelity, sess.StorageMode)
+	if sess.LastAccessedAt.IsZero() {
+		sess.LastAccessedAt = sess.ExportedAt
+	}
+}
+
+func formatOptionalTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+func parseOptionalTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	t, _ := time.Parse("2006-01-02T15:04:05Z", value)
+	return t
+}
+
 // Save stores a session. If a session with the same ID exists, it is replaced.
-func (s *Store) Save(session *session.Session) error {
-	payload, err := json.Marshal(session)
+func (s *Store) Save(sess *session.Session) error {
+	stampRetentionDefaults(sess)
+
+	payload, err := json.Marshal(sess)
 	if err != nil {
 		return fmt.Errorf("marshaling session: %w", err)
 	}
@@ -217,16 +249,16 @@ func (s *Store) Save(session *session.Session) error {
 	defer func() { _ = tx.Rollback() }()
 
 	// Compute denormalized tool counters
-	toolCallCount, errorCount := countToolCalls(session)
+	toolCallCount, errorCount := countToolCalls(sess)
 
 	// Compute denormalized actual cost from provider-reported per-message costs.
 	// Estimated cost (API-equivalent) is set by the service layer before calling Save.
-	actualCost := computeActualCost(session)
+	actualCost := computeActualCost(sess)
 
 	// Upsert session
 	_, err = tx.Exec(`
-		INSERT INTO sessions (id, provider, agent, branch, commit_sha, project_path, remote_url, session_type, project_category, status, parent_id, owner_id, storage_mode, summary, message_count, total_tokens, tool_call_count, error_count, estimated_cost, actual_cost, source_updated_at, payload, created_at, exported_at, exported_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO sessions (id, provider, agent, branch, commit_sha, project_path, remote_url, session_type, project_category, status, parent_id, owner_id, storage_mode, retention_tier, retention_fidelity, compacted_at, last_accessed_at, summary, message_count, total_tokens, tool_call_count, error_count, estimated_cost, actual_cost, source_updated_at, payload, created_at, exported_at, exported_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			provider=excluded.provider, agent=excluded.agent, branch=excluded.branch,
 			commit_sha=excluded.commit_sha, project_path=excluded.project_path,
@@ -234,6 +266,10 @@ func (s *Store) Save(session *session.Session) error {
 			project_category=excluded.project_category, status=excluded.status,
 			parent_id=excluded.parent_id, owner_id=excluded.owner_id,
 			storage_mode=excluded.storage_mode,
+			retention_tier=excluded.retention_tier,
+			retention_fidelity=excluded.retention_fidelity,
+			compacted_at=excluded.compacted_at,
+			last_accessed_at=excluded.last_accessed_at,
 			summary=excluded.summary, message_count=excluded.message_count,
 			total_tokens=excluded.total_tokens,
 			tool_call_count=excluded.tool_call_count, error_count=excluded.error_count,
@@ -242,36 +278,37 @@ func (s *Store) Save(session *session.Session) error {
 			payload=excluded.payload,
 			created_at=excluded.created_at, exported_at=excluded.exported_at,
 			exported_by=excluded.exported_by`,
-		session.ID, session.Provider, session.Agent, session.Branch,
-		session.CommitSHA, session.ProjectPath, session.RemoteURL, session.SessionType, session.ProjectCategory, session.Status, session.ParentID, session.OwnerID,
-		session.StorageMode, session.Summary, len(session.Messages),
-		session.TokenUsage.TotalTokens, toolCallCount, errorCount, session.EstimatedCost, actualCost, session.SourceUpdatedAt, payload,
-		session.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		session.ExportedAt.Format("2006-01-02T15:04:05Z"),
-		session.ExportedBy,
+		sess.ID, sess.Provider, sess.Agent, sess.Branch,
+		sess.CommitSHA, sess.ProjectPath, sess.RemoteURL, sess.SessionType, sess.ProjectCategory, sess.Status, sess.ParentID, sess.OwnerID,
+		sess.StorageMode, sess.RetentionTier, sess.RetentionFidelity, formatOptionalTime(sess.CompactedAt), formatOptionalTime(sess.LastAccessedAt), sess.Summary, len(sess.Messages),
+		sess.TokenUsage.TotalTokens, toolCallCount, errorCount, sess.EstimatedCost, actualCost, sess.SourceUpdatedAt, payload,
+		sess.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		sess.ExportedAt.Format("2006-01-02T15:04:05Z"),
+		sess.ExportedBy,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting session: %w", err)
 	}
 
 	// Replace file changes
-	if _, err := tx.Exec("DELETE FROM file_changes WHERE session_id = ?", session.ID); err != nil {
+	if _, err := tx.Exec("DELETE FROM file_changes WHERE session_id = ?", sess.ID); err != nil {
 		return fmt.Errorf("deleting old file changes: %w", err)
 	}
-	for _, fc := range session.FileChanges {
+	for _, fc := range sess.FileChanges {
+		fp := session.NormalizeFilePath(fc.FilePath, sess.ProjectPath)
 		if _, err := tx.Exec("INSERT INTO file_changes (session_id, file_path, change_type, tool_name) VALUES (?, ?, ?, '')",
-			session.ID, fc.FilePath, fc.ChangeType); err != nil {
+			sess.ID, fp, fc.ChangeType); err != nil {
 			return fmt.Errorf("inserting file change: %w", err)
 		}
 	}
 
 	// Replace links
-	if _, err := tx.Exec("DELETE FROM session_links WHERE session_id = ?", session.ID); err != nil {
+	if _, err := tx.Exec("DELETE FROM session_links WHERE session_id = ?", sess.ID); err != nil {
 		return fmt.Errorf("deleting old links: %w", err)
 	}
-	for _, link := range session.Links {
+	for _, link := range sess.Links {
 		if _, err := tx.Exec("INSERT INTO session_links (session_id, link_type, link_ref) VALUES (?, ?, ?)",
-			session.ID, link.LinkType, link.Ref); err != nil {
+			sess.ID, link.LinkType, link.Ref); err != nil {
 			return fmt.Errorf("inserting link: %w", err)
 		}
 	}
@@ -289,11 +326,11 @@ func (s *Store) Save(session *session.Session) error {
 // Get retrieves a session by its ID.
 func (s *Store) Get(id session.ID) (*session.Session, error) {
 	var payload []byte
-	var remoteURL, sessionType, projectCategory, status string
+	var remoteURL, sessionType, projectCategory, status, retentionTier, retentionFidelity, compactedAt, lastAccessedAt string
 	var sourceUpdatedAt int64
 	err := s.db.QueryRow(
-		"SELECT payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, ''), COALESCE(source_updated_at, 0) FROM sessions WHERE id = ?", id,
-	).Scan(&payload, &remoteURL, &sessionType, &projectCategory, &status, &sourceUpdatedAt)
+		"SELECT payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, ''), COALESCE(source_updated_at, 0), COALESCE(retention_tier, ''), COALESCE(retention_fidelity, ''), COALESCE(compacted_at, ''), COALESCE(last_accessed_at, '') FROM sessions WHERE id = ?", id,
+	).Scan(&payload, &remoteURL, &sessionType, &projectCategory, &status, &sourceUpdatedAt, &retentionTier, &retentionFidelity, &compactedAt, &lastAccessedAt)
 	if err == sql.ErrNoRows {
 		return nil, session.ErrSessionNotFound
 	}
@@ -329,6 +366,19 @@ func (s *Store) Get(id session.ID) (*session.Session, error) {
 	if status != "" && sess.Status == "" {
 		sess.Status = session.SessionStatus(status)
 	}
+	if retentionTier != "" {
+		sess.RetentionTier = session.NormalizeRetentionTier(session.RetentionTier(retentionTier))
+	}
+	if retentionFidelity != "" {
+		sess.RetentionFidelity = session.NormalizeRetentionFidelity(session.RetentionFidelity(retentionFidelity), sess.StorageMode)
+	}
+	if !parseOptionalTime(compactedAt).IsZero() {
+		sess.CompactedAt = parseOptionalTime(compactedAt)
+	}
+	if !parseOptionalTime(lastAccessedAt).IsZero() {
+		sess.LastAccessedAt = parseOptionalTime(lastAccessedAt)
+	}
+	stampRetentionDefaults(&sess)
 
 	// Load links from DB (they may have been added after save)
 	links, err := s.loadLinks(id)
@@ -392,7 +442,8 @@ func (s *Store) GetBatch(ids []session.ID) (map[session.ID]*session.Session, err
 	// ── Query 1: session payloads + mutable columns ──
 	rows, err := s.db.Query(
 		"SELECT id, payload, COALESCE(remote_url, ''), COALESCE(session_type, ''), "+
-			"COALESCE(project_category, ''), COALESCE(status, ''), COALESCE(source_updated_at, 0) "+
+			"COALESCE(project_category, ''), COALESCE(status, ''), COALESCE(source_updated_at, 0), "+
+			"COALESCE(retention_tier, ''), COALESCE(retention_fidelity, ''), COALESCE(compacted_at, ''), COALESCE(last_accessed_at, '') "+
 			"FROM sessions WHERE id IN ("+inClause+")", args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch querying sessions: %w", err)
@@ -402,9 +453,9 @@ func (s *Store) GetBatch(ids []session.ID) (map[session.ID]*session.Session, err
 		for rows.Next() {
 			var id string
 			var payload []byte
-			var remoteURL, sessionType, projectCategory, status string
+			var remoteURL, sessionType, projectCategory, status, retentionTier, retentionFidelity, compactedAt, lastAccessedAt string
 			var sourceUpdatedAt int64
-			if scanErr := rows.Scan(&id, &payload, &remoteURL, &sessionType, &projectCategory, &status, &sourceUpdatedAt); scanErr != nil {
+			if scanErr := rows.Scan(&id, &payload, &remoteURL, &sessionType, &projectCategory, &status, &sourceUpdatedAt, &retentionTier, &retentionFidelity, &compactedAt, &lastAccessedAt); scanErr != nil {
 				log.Printf("[GetBatch] scan error: %v", scanErr)
 				continue
 			}
@@ -444,6 +495,19 @@ func (s *Store) GetBatch(ids []session.ID) (map[session.ID]*session.Session, err
 			if status != "" && sess.Status == "" {
 				sess.Status = session.SessionStatus(status)
 			}
+			if retentionTier != "" {
+				sess.RetentionTier = session.NormalizeRetentionTier(session.RetentionTier(retentionTier))
+			}
+			if retentionFidelity != "" {
+				sess.RetentionFidelity = session.NormalizeRetentionFidelity(session.RetentionFidelity(retentionFidelity), sess.StorageMode)
+			}
+			if parsed := parseOptionalTime(compactedAt); !parsed.IsZero() {
+				sess.CompactedAt = parsed
+			}
+			if parsed := parseOptionalTime(lastAccessedAt); !parsed.IsZero() {
+				sess.LastAccessedAt = parsed
+			}
+			stampRetentionDefaults(&sess)
 
 			result[session.ID(id)] = &sess
 		}
@@ -542,7 +606,7 @@ func (s *Store) CountByBranch(projectPath string, branch string) (int, error) {
 
 // List returns session summaries matching the given options.
 func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
-	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, COALESCE(estimated_cost, 0), COALESCE(actual_cost, 0), created_at, COALESCE(source_updated_at, 0), COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, '') FROM sessions WHERE 1=1"
+	query := "SELECT id, provider, agent, branch, summary, message_count, total_tokens, tool_call_count, error_count, COALESCE(estimated_cost, 0), COALESCE(actual_cost, 0), created_at, COALESCE(source_updated_at, 0), COALESCE(owner_id, ''), COALESCE(parent_id, ''), COALESCE(project_path, ''), COALESCE(remote_url, ''), COALESCE(session_type, ''), COALESCE(project_category, ''), COALESCE(status, ''), COALESCE(storage_mode, ''), COALESCE(retention_tier, ''), COALESCE(retention_fidelity, ''), COALESCE(compacted_at, ''), COALESCE(last_accessed_at, '') FROM sessions WHERE 1=1"
 	args := []interface{}{}
 
 	if opts.ProjectPath != "" {
@@ -592,15 +656,20 @@ func (s *Store) List(opts session.ListOptions) ([]session.Summary, error) {
 	var summaries []session.Summary
 	for rows.Next() {
 		var ss session.Summary
-		var createdAt string
+		var createdAt, storageMode, compactedAt, lastAccessedAt string
 		var updatedAtMs int64
-		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &ss.EstimatedCost, &ss.ActualCost, &createdAt, &updatedAtMs, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType, &ss.ProjectCategory, &ss.Status); err != nil {
+		if err := rows.Scan(&ss.ID, &ss.Provider, &ss.Agent, &ss.Branch, &ss.Summary, &ss.MessageCount, &ss.TotalTokens, &ss.ToolCallCount, &ss.ErrorCount, &ss.EstimatedCost, &ss.ActualCost, &createdAt, &updatedAtMs, &ss.OwnerID, &ss.ParentID, &ss.ProjectPath, &ss.RemoteURL, &ss.SessionType, &ss.ProjectCategory, &ss.Status, &storageMode, &ss.RetentionTier, &ss.RetentionFidelity, &compactedAt, &lastAccessedAt); err != nil {
 			return nil, fmt.Errorf("scanning session row: %w", err)
 		}
 		ss.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
 		if updatedAtMs > 0 {
 			ss.UpdatedAt = time.UnixMilli(updatedAtMs)
 		}
+		ss.RetentionTier = session.NormalizeRetentionTier(ss.RetentionTier)
+		mode, _ := session.ParseStorageMode(storageMode)
+		ss.RetentionFidelity = session.NormalizeRetentionFidelity(ss.RetentionFidelity, mode)
+		ss.CompactedAt = parseOptionalTime(compactedAt)
+		ss.LastAccessedAt = parseOptionalTime(lastAccessedAt)
 		summaries = append(summaries, ss)
 	}
 
@@ -668,6 +737,158 @@ func (s *Store) UpdateRemoteURL(id session.ID, remoteURL string) error {
 	// Invalidate project/stats cache since project grouping may change.
 	_ = s.InvalidateCache("stats:")
 	return nil
+}
+
+// TouchSessionAccessed records that a session was read or restored.
+func (s *Store) TouchSessionAccessed(id session.ID, at time.Time) error {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	result, err := s.db.Exec("UPDATE sessions SET last_accessed_at = ? WHERE id = ?", formatOptionalTime(at), id)
+	if err != nil {
+		return fmt.Errorf("touching session access time: %w", err)
+	}
+	if rowsAffected, _ := result.RowsAffected(); rowsAffected == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
+// UpdateSessionRetention rewrites only the payload and retention metadata.
+func (s *Store) UpdateSessionRetention(sess *session.Session) error {
+	stampRetentionDefaults(sess)
+	payload, err := json.Marshal(sess)
+	if err != nil {
+		return fmt.Errorf("marshaling retained session: %w", err)
+	}
+	payload, err = compressPayload(payload)
+	if err != nil {
+		return fmt.Errorf("compressing retained session payload: %w", err)
+	}
+
+	result, err := s.db.Exec(`
+		UPDATE sessions
+		SET payload = ?, storage_mode = ?, retention_tier = ?, retention_fidelity = ?, compacted_at = ?, last_accessed_at = ?
+		WHERE id = ?`, payload, sess.StorageMode, sess.RetentionTier, sess.RetentionFidelity,
+		formatOptionalTime(sess.CompactedAt), formatOptionalTime(sess.LastAccessedAt), sess.ID)
+	if err != nil {
+		return fmt.Errorf("updating retained session: %w", err)
+	}
+	if rowsAffected, _ := result.RowsAffected(); rowsAffected == 0 {
+		return session.ErrSessionNotFound
+	}
+	_ = s.InvalidateCache("stats:")
+	_ = s.InvalidateCache("forecast:")
+	return nil
+}
+
+// ListWarmCompactionCandidates returns hot sessions old enough to inspect.
+func (s *Store) ListWarmCompactionCandidates(cutoff time.Time, limit int) ([]session.Summary, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.Query(`
+		SELECT id, created_at, COALESCE(source_updated_at, 0), COALESCE(last_accessed_at, ''),
+		       COALESCE(storage_mode, ''), COALESCE(retention_tier, ''), COALESCE(retention_fidelity, ''),
+		       COALESCE(compacted_at, ''), COALESCE(project_path, ''), COALESCE(branch, '')
+		FROM sessions
+		WHERE created_at <= ?
+		  AND (retention_tier = '' OR retention_tier = ?)
+		  AND (compacted_at = '' OR compacted_at IS NULL)
+		ORDER BY created_at ASC
+		LIMIT ?`, cutoff.UTC().Format("2006-01-02T15:04:05Z"), session.RetentionTierHot, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing warm compaction candidates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var summaries []session.Summary
+	for rows.Next() {
+		var sm session.Summary
+		var createdAt, lastAccessedAt, storageMode, compactedAt string
+		var updatedAtMs int64
+		if scanErr := rows.Scan(&sm.ID, &createdAt, &updatedAtMs, &lastAccessedAt, &storageMode,
+			&sm.RetentionTier, &sm.RetentionFidelity, &compactedAt, &sm.ProjectPath, &sm.Branch); scanErr != nil {
+			return nil, fmt.Errorf("scanning warm compaction candidate: %w", scanErr)
+		}
+		sm.CreatedAt = parseOptionalTime(createdAt)
+		if updatedAtMs > 0 {
+			sm.UpdatedAt = time.UnixMilli(updatedAtMs)
+		}
+		mode, _ := session.ParseStorageMode(storageMode)
+		sm.RetentionTier = session.NormalizeRetentionTier(sm.RetentionTier)
+		sm.RetentionFidelity = session.NormalizeRetentionFidelity(sm.RetentionFidelity, mode)
+		sm.CompactedAt = parseOptionalTime(compactedAt)
+		sm.LastAccessedAt = parseOptionalTime(lastAccessedAt)
+		summaries = append(summaries, sm)
+	}
+	return summaries, rows.Err()
+}
+
+// ListColdCompactionCandidates returns warm sessions old enough to archive.
+func (s *Store) ListColdCompactionCandidates(cutoff time.Time, limit int) ([]session.Summary, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.Query(`
+		SELECT id, created_at, COALESCE(source_updated_at, 0), COALESCE(last_accessed_at, ''),
+		       COALESCE(storage_mode, ''), COALESCE(retention_tier, ''), COALESCE(retention_fidelity, ''),
+		       COALESCE(compacted_at, ''), COALESCE(project_path, ''), COALESCE(branch, '')
+		FROM sessions
+		WHERE created_at <= ?
+		  AND retention_tier = ?
+		ORDER BY created_at ASC
+		LIMIT ?`, cutoff.UTC().Format("2006-01-02T15:04:05Z"), session.RetentionTierWarm, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing cold compaction candidates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var summaries []session.Summary
+	for rows.Next() {
+		var sm session.Summary
+		var createdAt, lastAccessedAt, storageMode, compactedAt string
+		var updatedAtMs int64
+		if scanErr := rows.Scan(&sm.ID, &createdAt, &updatedAtMs, &lastAccessedAt, &storageMode,
+			&sm.RetentionTier, &sm.RetentionFidelity, &compactedAt, &sm.ProjectPath, &sm.Branch); scanErr != nil {
+			return nil, fmt.Errorf("scanning cold compaction candidate: %w", scanErr)
+		}
+		sm.CreatedAt = parseOptionalTime(createdAt)
+		if updatedAtMs > 0 {
+			sm.UpdatedAt = time.UnixMilli(updatedAtMs)
+		}
+		mode, _ := session.ParseStorageMode(storageMode)
+		sm.RetentionTier = session.NormalizeRetentionTier(sm.RetentionTier)
+		sm.RetentionFidelity = session.NormalizeRetentionFidelity(sm.RetentionFidelity, mode)
+		sm.CompactedAt = parseOptionalTime(compactedAt)
+		sm.LastAccessedAt = parseOptionalTime(lastAccessedAt)
+		summaries = append(summaries, sm)
+	}
+	return summaries, rows.Err()
+}
+
+// RetentionStorageStats reports compressed payload bytes grouped by tier.
+func (s *Store) RetentionStorageStats() ([]session.RetentionTierStorageStats, error) {
+	rows, err := s.db.Query(`
+		SELECT COALESCE(retention_tier, ''), COUNT(*), COALESCE(SUM(LENGTH(payload)), 0)
+		FROM sessions
+		GROUP BY COALESCE(retention_tier, '')`)
+	if err != nil {
+		return nil, fmt.Errorf("querying retention storage stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stats []session.RetentionTierStorageStats
+	for rows.Next() {
+		var tier session.RetentionTier
+		var entry session.RetentionTierStorageStats
+		if scanErr := rows.Scan(&tier, &entry.Sessions, &entry.Bytes); scanErr != nil {
+			return nil, fmt.Errorf("scanning retention storage stats: %w", scanErr)
+		}
+		entry.Tier = session.NormalizeRetentionTier(tier)
+		stats = append(stats, entry)
+	}
+	return stats, rows.Err()
 }
 
 // ListSessionsWithEmptyRemoteURL returns sessions that need their remote_url
@@ -1956,7 +2177,7 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 	where := " WHERE " + strings.Join(conditions, " AND ")
 
 	q := `SELECT s.id, s.provider, s.branch, s.summary, s.created_at,
-	             COALESCE(s.agent, ''), COALESCE(s.owner_id, ''), fc.change_type
+	             COALESCE(s.agent, ''), COALESCE(s.owner_id, ''), fc.change_type, fc.file_path
 	      FROM sessions s
 	      JOIN file_changes fc ON fc.session_id = s.id` + where + `
 	      ORDER BY s.created_at DESC`
@@ -1976,7 +2197,7 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 		var e session.BlameEntry
 		var createdAt string
 		if err := rows.Scan(&e.SessionID, &e.Provider, &e.Branch, &e.Summary,
-			&createdAt, &e.Agent, &e.OwnerID, &e.ChangeType); err != nil {
+			&createdAt, &e.Agent, &e.OwnerID, &e.ChangeType, &e.FilePath); err != nil {
 			return nil, fmt.Errorf("scanning blame entry: %w", err)
 		}
 		e.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
@@ -1995,7 +2216,7 @@ func (s *Store) GetSessionsByFile(query session.BlameQuery) ([]session.BlameEntr
 
 // ReplaceSessionFiles atomically replaces all file_changes for a session.
 // Used by the file-blame extractor after parsing tool calls.
-func (s *Store) ReplaceSessionFiles(sessionID session.ID, records []session.SessionFileRecord) error {
+func (s *Store) ReplaceSessionFiles(sessionID session.ID, projectRoot string, records []session.SessionFileRecord) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -2013,8 +2234,9 @@ func (s *Store) ReplaceSessionFiles(sessionID session.ID, records []session.Sess
 	defer func() { _ = stmt.Close() }()
 
 	for _, r := range records {
-		if _, err := stmt.Exec(r.SessionID, r.FilePath, r.ChangeType, r.ToolName); err != nil {
-			return fmt.Errorf("inserting file record %q: %w", r.FilePath, err)
+		fp := session.NormalizeFilePath(r.FilePath, projectRoot)
+		if _, err := stmt.Exec(r.SessionID, fp, r.ChangeType, r.ToolName); err != nil {
+			return fmt.Errorf("inserting file record %q: %w", fp, err)
 		}
 	}
 
@@ -2048,6 +2270,109 @@ func (s *Store) GetSessionFileChanges(sessionID session.ID) ([]session.SessionFi
 		records = []session.SessionFileRecord{}
 	}
 	return records, nil
+}
+
+type normalizeUpdate struct {
+	rowID int64
+	path  string
+}
+
+// NormalizeFilePaths rewrites stored absolute in-project file_changes paths to
+// their project-relative form, anchored at each row's session.project_path. It
+// only scans absolute rows (POSIX "/..." or Windows "C:..."), so already-relative
+// rows are never touched and re-runs are idempotent. With dryRun it computes the
+// same stats without writing.
+func (s *Store) NormalizeFilePaths(dryRun bool) (session.NormalizePathsStats, error) {
+	var stats session.NormalizePathsStats
+
+	// Scan only absolute rows. SQL LIKE '_:%' matches a single leading char
+	// followed by ':' (Windows drive roots like "C:..."); '/%' matches POSIX
+	// absolute paths. Relative paths match neither, so they stay untouched.
+	rows, err := s.db.Query(
+		`SELECT fc.rowid, fc.file_path, COALESCE(s.project_path, '')
+		 FROM file_changes fc
+		 JOIN sessions s ON s.id = fc.session_id
+		 WHERE fc.file_path LIKE '/%' OR fc.file_path LIKE '_:%'`,
+	)
+	if err != nil {
+		return stats, fmt.Errorf("scanning absolute file paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Collect first, write after closing the cursor: SQLite cannot run UPDATEs
+	// while a SELECT cursor is open on the same connection.
+	var updates []normalizeUpdate
+
+	for rows.Next() {
+		var rowID int64
+		var filePath, projectPath string
+		if err := rows.Scan(&rowID, &filePath, &projectPath); err != nil {
+			return stats, fmt.Errorf("scanning normalize candidate: %w", err)
+		}
+		stats.Scanned++
+
+		if projectPath == "" {
+			stats.Skipped++
+			continue
+		}
+
+		normalized := session.NormalizeFilePath(filePath, projectPath)
+		if normalized == filePath {
+			stats.KeptAbsolute++
+			continue
+		}
+		stats.Normalized++
+		updates = append(updates, normalizeUpdate{rowID: rowID, path: normalized})
+	}
+	if err := rows.Err(); err != nil {
+		return stats, err
+	}
+	if err := rows.Close(); err != nil {
+		return stats, err
+	}
+
+	if dryRun || len(updates) == 0 {
+		return stats, nil
+	}
+
+	// Apply updates in batched transactions to bound memory/lock duration on
+	// large databases (the production DB has tens of thousands of rows).
+	const batchSize = 1000
+	for start := 0; start < len(updates); start += batchSize {
+		end := start + batchSize
+		if end > len(updates) {
+			end = len(updates)
+		}
+		if err := s.applyNormalizeBatch(updates[start:end]); err != nil {
+			return stats, err
+		}
+	}
+
+	return stats, nil
+}
+
+// applyNormalizeBatch updates a slice of file_changes rows to their normalized
+// path within a single transaction, keyed by rowid for precision.
+func (s *Store) applyNormalizeBatch(batch []normalizeUpdate) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin normalize tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare("UPDATE file_changes SET file_path = ? WHERE rowid = ?")
+	if err != nil {
+		return fmt.Errorf("preparing normalize update: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, u := range batch {
+		if _, err := stmt.Exec(u.path, u.rowID); err != nil {
+			return fmt.Errorf("updating file_changes rowid %d: %w", u.rowID, err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 // CountSessionsWithFiles returns how many sessions have at least one file_changes row.
@@ -2181,12 +2506,19 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 	}
 
 	// Only include files that were actually written (created/modified/deleted),
-	// not merely read. Also filter to files under the project directory.
-	where := "WHERE s.project_path = ? AND fc.file_path LIKE ? AND fc.change_type IN ('created','modified','deleted')"
-	args := []any{projectPath, strings.TrimSuffix(projectPath, "/") + "/%"}
+	// not merely read. Match in-project files in BOTH storage forms: legacy
+	// absolute-under-project and the new project-relative form. Out-of-project
+	// files stay absolute and never match the relative branch, which excludes
+	// POSIX '/...' and Windows 'X:...' drive-prefixed paths.
+	root := strings.TrimSuffix(projectPath, "/")
+	where := "WHERE s.project_path = ?" +
+		" AND (fc.file_path LIKE ? OR (fc.file_path NOT LIKE '/%' AND fc.file_path NOT LIKE '_:%'))" +
+		" AND fc.change_type IN ('created','modified','deleted')"
+	args := []any{projectPath, root + "/%"}
 	if dirPrefix != "" {
-		where += " AND fc.file_path LIKE ?"
-		args = append(args, dirPrefix+"%")
+		relPrefix := session.NormalizeFilePath(dirPrefix, projectPath)
+		where += " AND (fc.file_path LIKE ? OR fc.file_path LIKE ?)"
+		args = append(args, dirPrefix+"%", relPrefix+"%")
 	}
 	args = append(args, limit)
 
@@ -2246,6 +2578,9 @@ func (s *Store) FilesForProject(projectPath string, dirPrefix string, limit int)
 		e.LastSessionTime, _ = time.Parse("2006-01-02T15:04:05Z", lastTime)
 		e.LastProvider = session.ProviderName(provider)
 		e.LastChangeType = session.ChangeType(changeType)
+		if !session.IsAbsolutePath(e.FilePath) {
+			e.FilePath = root + "/" + e.FilePath
+		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -3990,6 +4325,26 @@ func runMigrations(db *sql.DB) error {
 	// Migration 038: cron_jobs — persisted scheduled cron jobs from providers.
 	if err := migration038(db); err != nil {
 		return err
+	}
+
+	// Migration 039: retention metadata for hot/warm/cold storage lifecycle.
+	for _, col := range []struct{ name, ddl string }{
+		{"retention_tier", "ALTER TABLE sessions ADD COLUMN retention_tier TEXT NOT NULL DEFAULT 'hot'"},
+		{"retention_fidelity", "ALTER TABLE sessions ADD COLUMN retention_fidelity TEXT NOT NULL DEFAULT ''"},
+		{"compacted_at", "ALTER TABLE sessions ADD COLUMN compacted_at TEXT NOT NULL DEFAULT ''"},
+		{"last_accessed_at", "ALTER TABLE sessions ADD COLUMN last_accessed_at TEXT NOT NULL DEFAULT ''"},
+	} {
+		if !columnExists(db, "sessions", col.name) {
+			if _, err := db.Exec(col.ddl); err != nil {
+				return fmt.Errorf("migration 039 (sessions.%s): %w", col.name, err)
+			}
+		}
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_retention_tier ON sessions(retention_tier)"); err != nil {
+		return fmt.Errorf("migration 039 (retention_tier index): %w", err)
+	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_last_accessed ON sessions(last_accessed_at)"); err != nil {
+		return fmt.Errorf("migration 039 (last_accessed_at index): %w", err)
 	}
 
 	return nil

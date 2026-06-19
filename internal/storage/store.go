@@ -132,11 +132,17 @@ type SessionWriter interface {
 	DeleteOlderThan(before time.Time) (int, error)
 
 	// ReplaceSessionFiles atomically replaces all file changes for a session.
-	// Used by the file-blame extractor after parsing tool calls.
-	ReplaceSessionFiles(sessionID session.ID, records []session.SessionFileRecord) error
+	// Used by the file-blame extractor after parsing tool calls. projectRoot
+	// normalizes in-project absolute paths to project-relative on write.
+	ReplaceSessionFiles(sessionID session.ID, projectRoot string, records []session.SessionFileRecord) error
 
 	// GetSessionFileChanges returns all file change records for a session.
 	GetSessionFileChanges(sessionID session.ID) ([]session.SessionFileRecord, error)
+
+	// NormalizeFilePaths rewrites stored absolute in-project file_changes paths
+	// to their project-relative form. With dryRun it only counts. Used by the
+	// `aisync backfill normalize-paths` migration.
+	NormalizeFilePaths(dryRun bool) (session.NormalizePathsStats, error)
 
 	// CountSessionsWithFiles returns how many sessions have file-blame data.
 	CountSessionsWithFiles() (int, error)

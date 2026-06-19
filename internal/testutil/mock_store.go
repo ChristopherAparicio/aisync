@@ -56,6 +56,9 @@ type MockStore struct {
 	// ProjectFileEntries is the return value for FilesForProject.
 	ProjectFileEntries []session.ProjectFileEntry
 
+	// NormalizePathsStats is the return value for NormalizeFilePaths.
+	NormalizePathsStats session.NormalizePathsStats
+
 	// PRSessions maps "owner/repo#number" → summaries for GetSessionsForPR.
 	PRSessions map[string][]session.Summary
 
@@ -94,6 +97,9 @@ type MockStore struct {
 
 	// SessionLinks stores session-to-session links added via LinkSessions.
 	SessionLinks []session.SessionLink
+
+	// ForkRelations stores fork relationships added via SaveForkRelation.
+	ForkRelations []session.ForkRelation
 
 	// ── Recommendation tracking fields ──
 
@@ -269,12 +275,34 @@ func (m *MockStore) ListSessionsWithEmptyRemoteURL(limit int) ([]session.Backfil
 	return candidates, nil
 }
 
-func (m *MockStore) SaveForkRelation(_ session.ForkRelation) error { return nil }
-func (m *MockStore) GetForkRelations(_ session.ID) ([]session.ForkRelation, error) {
-	return nil, nil
+func (m *MockStore) SaveForkRelation(rel session.ForkRelation) error {
+	for i, existing := range m.ForkRelations {
+		if existing.OriginalID == rel.OriginalID && existing.ForkID == rel.ForkID {
+			m.ForkRelations[i] = rel
+			return nil
+		}
+	}
+	m.ForkRelations = append(m.ForkRelations, rel)
+	return nil
 }
-func (m *MockStore) ListAllForkRelations() ([]session.ForkRelation, error) { return nil, nil }
-func (m *MockStore) GetTotalDeduplication() (int, int, error)              { return 0, 0, nil }
+
+func (m *MockStore) GetForkRelations(id session.ID) ([]session.ForkRelation, error) {
+	var result []session.ForkRelation
+	for _, rel := range m.ForkRelations {
+		if rel.OriginalID == id || rel.ForkID == id {
+			result = append(result, rel)
+		}
+	}
+	return result, nil
+}
+
+func (m *MockStore) ListAllForkRelations() ([]session.ForkRelation, error) {
+	out := make([]session.ForkRelation, len(m.ForkRelations))
+	copy(out, m.ForkRelations)
+	return out, nil
+}
+
+func (m *MockStore) GetTotalDeduplication() (int, int, error) { return 0, 0, nil }
 
 func (m *MockStore) SaveObjective(_ session.SessionObjective) error { return nil }
 func (m *MockStore) GetObjective(_ session.ID) (*session.SessionObjective, error) {
@@ -414,7 +442,7 @@ func (m *MockStore) FilesForProject(_ string, _ string, _ int) ([]session.Projec
 
 // ── Lifecycle ──
 
-func (m *MockStore) ReplaceSessionFiles(_ session.ID, _ []session.SessionFileRecord) error {
+func (m *MockStore) ReplaceSessionFiles(_ session.ID, _ string, _ []session.SessionFileRecord) error {
 	return nil
 }
 func (m *MockStore) GetSessionFileChanges(id session.ID) ([]session.SessionFileRecord, error) {
@@ -436,6 +464,9 @@ func (m *MockStore) GetSessionFileChanges(id session.ID) ([]session.SessionFileR
 		}
 	}
 	return records, nil
+}
+func (m *MockStore) NormalizeFilePaths(_ bool) (session.NormalizePathsStats, error) {
+	return m.NormalizePathsStats, nil
 }
 func (m *MockStore) CountSessionsWithFiles() (int, error) { return 0, nil }
 
@@ -1427,9 +1458,9 @@ func (m *MockStore) UnacknowledgedNotificationCount() (int, error) {
 	return n, nil
 }
 
-func (m *MockStore) UpsertCronJob(job *session.CronJob) error { return nil }
+func (m *MockStore) UpsertCronJob(job *session.CronJob) error                { return nil }
 func (m *MockStore) ListCronJobs(provider string) ([]session.CronJob, error) { return nil, nil }
-func (m *MockStore) GetCronJob(jobID string) (*session.CronJob, error) { return nil, nil }
+func (m *MockStore) GetCronJob(jobID string) (*session.CronJob, error)       { return nil, nil }
 
 func matchNotificationLogFilter(e session.NotificationLogEntry, f session.NotificationLogFilter) bool {
 	if !f.Since.IsZero() && e.DispatchedAt.Before(f.Since) {

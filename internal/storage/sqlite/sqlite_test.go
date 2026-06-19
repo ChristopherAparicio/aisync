@@ -106,6 +106,74 @@ func TestSaveAndGet(t *testing.T) {
 	}
 }
 
+func TestRetentionMetadataRoundTrip(t *testing.T) {
+	store := mustOpenStore(t)
+	sess := testSession("sess-retention")
+	compactedAt := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	lastAccessedAt := compactedAt.Add(-time.Hour)
+	sess.RetentionTier = session.RetentionTierWarm
+	sess.RetentionFidelity = session.RetentionFidelityWindowed
+	sess.CompactedAt = compactedAt
+	sess.LastAccessedAt = lastAccessedAt
+
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	got, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.RetentionTier != session.RetentionTierWarm || got.RetentionFidelity != session.RetentionFidelityWindowed {
+		t.Fatalf("retention = %s/%s, want warm/windowed", got.RetentionTier, got.RetentionFidelity)
+	}
+	if !got.CompactedAt.Equal(compactedAt) || !got.LastAccessedAt.Equal(lastAccessedAt) {
+		t.Fatalf("retention times = %s/%s", got.CompactedAt, got.LastAccessedAt)
+	}
+}
+
+func TestUpdateSessionRetentionPreservesSummaryCounters(t *testing.T) {
+	store := mustOpenStore(t)
+	sess := testSession("sess-retain-update")
+	sess.Messages = append(sess.Messages,
+		session.Message{ID: "assistant-1", Role: session.RoleAssistant, InputTokens: 100, OutputTokens: 25, ToolCalls: []session.ToolCall{{ID: "tool-1", Name: "bash", Output: "large"}}},
+		session.Message{ID: "assistant-2", Role: session.RoleAssistant, InputTokens: 200, OutputTokens: 50},
+	)
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	retained, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	retained.Messages = retained.Messages[:1]
+	retained.RetentionTier = session.RetentionTierWarm
+	retained.RetentionFidelity = session.RetentionFidelityWindowed
+	retained.CompactedAt = time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	if err := store.UpdateSessionRetention(retained); err != nil {
+		t.Fatalf("UpdateSessionRetention() error = %v", err)
+	}
+
+	got, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if len(got.Messages) != 1 {
+		t.Fatalf("retained payload messages = %d, want 1", len(got.Messages))
+	}
+	summaries, err := store.List(session.ListOptions{All: true})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("summaries = %d, want 1", len(summaries))
+	}
+	if summaries[0].MessageCount != 3 || summaries[0].ToolCallCount != 1 || summaries[0].TotalTokens != 1500 {
+		t.Fatalf("summary counters = messages:%d tools:%d tokens:%d, want original 3/1/1500", summaries[0].MessageCount, summaries[0].ToolCallCount, summaries[0].TotalTokens)
+	}
+}
+
 func TestGet_NotFound(t *testing.T) {
 	store := mustOpenStore(t)
 
@@ -1599,6 +1667,131 @@ func TestGetSessionsByFile_FilterByProvider(t *testing.T) {
 	if entries[0].SessionID != "blame-prov-2" {
 		t.Errorf("SessionID = %q, want blame-prov-2", entries[0].SessionID)
 	}
+}
+
+func TestSave_NormalizesInProjectPaths(t *testing.T) {
+	store := mustOpenStore(t)
+
+	sess := testSession("save-norm-1")
+	sess.ProjectPath = "/home/user/myproj"
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "/home/user/myproj/src/handler.go", ChangeType: session.ChangeModified},
+		{FilePath: "/tmp/screenshot.png", ChangeType: session.ChangeRead},
+		{FilePath: "already/relative.go", ChangeType: session.ChangeCreated},
+	}
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	records, err := store.GetSessionFileChanges("save-norm-1")
+	if err != nil {
+		t.Fatalf("GetSessionFileChanges() error = %v", err)
+	}
+
+	got := make(map[string]bool, len(records))
+	for _, r := range records {
+		got[r.FilePath] = true
+	}
+
+	if !got["src/handler.go"] {
+		t.Errorf("in-project absolute path not normalized to relative; got stored paths %v", got)
+	}
+	if !got["/tmp/screenshot.png"] {
+		t.Errorf("out-of-project absolute path should stay absolute; got %v", got)
+	}
+	if !got["already/relative.go"] {
+		t.Errorf("already-relative path should be unchanged (idempotent); got %v", got)
+	}
+}
+
+func TestNormalizeFilePaths(t *testing.T) {
+	store := mustOpenStore(t)
+
+	withProject := testSession("norm-with-project")
+	withProject.ProjectPath = "/home/user/myproj"
+	withProject.FileChanges = nil
+	if err := store.Save(withProject); err != nil {
+		t.Fatalf("Save(withProject) error = %v", err)
+	}
+
+	noProject := testSession("norm-no-project")
+	noProject.ProjectPath = ""
+	noProject.FileChanges = nil
+	if err := store.Save(noProject); err != nil {
+		t.Fatalf("Save(noProject) error = %v", err)
+	}
+
+	// Insert legacy absolute rows directly, bypassing Save's normalization, to
+	// simulate data captured before path normalization existed.
+	insert := func(sessionID, filePath string) {
+		t.Helper()
+		if _, err := store.db.Exec(
+			"INSERT INTO file_changes (session_id, file_path, change_type, tool_name) VALUES (?, ?, ?, ?)",
+			sessionID, filePath, "modified", "Edit",
+		); err != nil {
+			t.Fatalf("insert %q: %v", filePath, err)
+		}
+	}
+	insert("norm-with-project", "/home/user/myproj/src/handler.go")
+	insert("norm-with-project", "/tmp/external.log")
+	insert("norm-with-project", "already/relative.go")
+	insert("norm-no-project", "/opt/tool/x.go")
+
+	wantStats := session.NormalizePathsStats{Scanned: 3, Normalized: 1, KeptAbsolute: 1, Skipped: 1}
+
+	dryStats, err := store.NormalizeFilePaths(true)
+	if err != nil {
+		t.Fatalf("NormalizeFilePaths(dryRun) error = %v", err)
+	}
+	if dryStats != wantStats {
+		t.Errorf("dry-run stats = %+v, want %+v", dryStats, wantStats)
+	}
+
+	dryPaths := pathSet(t, store, "norm-with-project")
+	if !dryPaths["/home/user/myproj/src/handler.go"] {
+		t.Errorf("dry-run must not modify the DB; got %v", dryPaths)
+	}
+
+	gotStats, err := store.NormalizeFilePaths(false)
+	if err != nil {
+		t.Fatalf("NormalizeFilePaths(false) error = %v", err)
+	}
+	if gotStats != wantStats {
+		t.Errorf("apply stats = %+v, want %+v", gotStats, wantStats)
+	}
+
+	after := pathSet(t, store, "norm-with-project")
+	if !after["src/handler.go"] {
+		t.Errorf("in-project path not normalized to relative; got %v", after)
+	}
+	if !after["/tmp/external.log"] {
+		t.Errorf("out-of-project path should stay absolute; got %v", after)
+	}
+	if !after["already/relative.go"] {
+		t.Errorf("relative path should be untouched; got %v", after)
+	}
+
+	reStats, err := store.NormalizeFilePaths(false)
+	if err != nil {
+		t.Fatalf("NormalizeFilePaths(re-run) error = %v", err)
+	}
+	wantReStats := session.NormalizePathsStats{Scanned: 2, Normalized: 0, KeptAbsolute: 1, Skipped: 1}
+	if reStats != wantReStats {
+		t.Errorf("idempotent re-run stats = %+v, want %+v", reStats, wantReStats)
+	}
+}
+
+func pathSet(t *testing.T, store *Store, sessionID session.ID) map[string]bool {
+	t.Helper()
+	records, err := store.GetSessionFileChanges(sessionID)
+	if err != nil {
+		t.Fatalf("GetSessionFileChanges(%q) error = %v", sessionID, err)
+	}
+	set := make(map[string]bool, len(records))
+	for _, r := range records {
+		set[r.FilePath] = true
+	}
+	return set
 }
 
 // ── FilesForProject ──
@@ -4226,6 +4419,17 @@ func TestGetSessionsByFile_MultiFile(t *testing.T) {
 	}
 	if ids["t3-multi-c"] {
 		t.Error("t3-multi-c (multi/c.go) should NOT be in results")
+	}
+
+	byFile := map[string]string{}
+	for _, e := range entries {
+		byFile[e.FilePath] = string(e.SessionID)
+	}
+	if byFile["multi/a.go"] != "t3-multi-a" {
+		t.Errorf("entry FilePath grouping: multi/a.go -> %q, want t3-multi-a", byFile["multi/a.go"])
+	}
+	if byFile["multi/b.go"] != "t3-multi-b" {
+		t.Errorf("entry FilePath grouping: multi/b.go -> %q, want t3-multi-b", byFile["multi/b.go"])
 	}
 }
 
