@@ -1,0 +1,201 @@
+{{define "sessions_health.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}aisync -- Sessions Health{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item">&#x1F3E0; Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item">&#x1F4CB; Sessions</a></li>
+      <li><a href="/sessions/health" class="sidebar-nav-item active">&#x1FA7A; Health</a></li>
+      <li><a href="/analytics" class="sidebar-nav-item">&#x1F4CA; Analytics</a></li>
+      <li><a href="/errors/unclassified" class="sidebar-nav-item">&#x26A0; Errors</a></li>
+    </ul>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-title">Last {{.Lookback}}</div>
+    <div class="sidebar-stat">
+      <span class="sidebar-stat-value">{{.Stats.TotalCount}}</span>
+      <span class="sidebar-stat-label">stalls</span>
+    </div>
+    <div class="sidebar-stat">
+      <span class="sidebar-stat-value">{{.Stats.LiveCount}}</span>
+      <span class="sidebar-stat-label">live now</span>
+    </div>
+    <div class="sidebar-stat">
+      <span class="sidebar-stat-value">{{.Stats.CostLostUSD}}</span>
+      <span class="sidebar-stat-label">cost lost</span>
+    </div>
+    <div class="sidebar-stat">
+      <span class="sidebar-stat-value">{{.Stats.TokensLost}}</span>
+      <span class="sidebar-stat-label">tokens lost</span>
+    </div>
+  </div>
+
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/projects{{.Path}}" class="sidebar-item">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
+{{define "content"}}
+<div class="section-title">Sessions Health</div>
+<p class="section-subtitle" style="color:var(--color-text-secondary);margin-bottom:1.5rem;">
+  Stuck subagents and aborted/errored messages detected in OpenCode.
+  Live stalls are tools running for &gt;15min without completing. Sealed stalls record
+  the wasted tokens and cost from past aborts and provider errors.
+</p>
+
+<div class="metric-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:2rem;">
+  <div class="metric-card">
+    <div class="metric-label">Live stalls</div>
+    <div class="metric-value">{{.Stats.LiveCount}}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Total ({{.Lookback}})</div>
+    <div class="metric-value">{{.Stats.TotalCount}}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Cost lost</div>
+    <div class="metric-value">{{.Stats.CostLostUSD}}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Tokens lost</div>
+    <div class="metric-value">{{.Stats.TokensLost}}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Time stuck</div>
+    <div class="metric-value">{{.Stats.DurationHrs}}</div>
+  </div>
+</div>
+
+{{if or .RootCauseRows .ProviderRows}}
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1.5rem;margin-bottom:2rem;">
+  {{if .RootCauseRows}}
+  <div>
+    <h3 style="margin-bottom:0.5rem;">By root cause</h3>
+    <table class="data-table">
+      <thead>
+        <tr><th>Cause</th><th style="text-align:right">Count</th><th style="text-align:right">Tokens</th><th style="text-align:right">Cost</th></tr>
+      </thead>
+      <tbody>
+        {{range .RootCauseRows}}
+        <tr>
+          <td><code>{{.Label}}</code></td>
+          <td style="text-align:right">{{.Count}}</td>
+          <td style="text-align:right">{{.TokensLost}}</td>
+          <td style="text-align:right">{{.CostLostUSD}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+  {{if .ProviderRows}}
+  <div>
+    <h3 style="margin-bottom:0.5rem;">By provider</h3>
+    <table class="data-table">
+      <thead>
+        <tr><th>Provider</th><th style="text-align:right">Count</th><th style="text-align:right">Tokens</th><th style="text-align:right">Cost</th></tr>
+      </thead>
+      <tbody>
+        {{range .ProviderRows}}
+        <tr>
+          <td>{{.Label}}</td>
+          <td style="text-align:right">{{.Count}}</td>
+          <td style="text-align:right">{{.TokensLost}}</td>
+          <td style="text-align:right">{{.CostLostUSD}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+<h3 style="margin-top:1.5rem;">Live stalls ({{len .LiveStalls}})</h3>
+{{if not .LiveStalls}}
+<div class="empty-state" style="padding:1.5rem;">
+  <div class="empty-state-text">No live stalls right now.</div>
+  <div class="empty-state-hint">All running tools are within the 15-minute threshold.</div>
+</div>
+{{else}}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Provider session</th>
+      <th>Tool</th>
+      <th>Agent</th>
+      <th>Model</th>
+      <th>Stuck for</th>
+      <th>Started</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .LiveStalls}}
+    <tr>
+      <td><code title="{{.ProviderSessionID}}">{{.ProviderShort}}</code></td>
+      <td>{{.ToolName}}</td>
+      <td>{{.Agent}}</td>
+      <td>{{.Model}}</td>
+      <td><span class="badge badge-warn">{{.DurationHuman}}</span></td>
+      <td title="{{.StartedAt}}">{{.TimeAgo}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
+
+<h3 style="margin-top:2rem;">Recent sealed stalls ({{len .RecentStalls}})</h3>
+{{if not .RecentStalls}}
+<div class="empty-state" style="padding:1.5rem;">
+  <div class="empty-state-text">No sealed stalls in the last {{.Lookback}}.</div>
+</div>
+{{else}}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Provider session</th>
+      <th>Cause</th>
+      <th>Tool</th>
+      <th>Model</th>
+      <th style="text-align:right">Duration</th>
+      <th style="text-align:right">Tokens</th>
+      <th style="text-align:right">Cost</th>
+      <th>Started</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .RecentStalls}}
+    <tr>
+      <td><code title="{{.ProviderSessionID}}">{{.ProviderShort}}</code></td>
+      <td><span class="badge badge-{{.RootCauseClass}}">{{.RootCause}}</span></td>
+      <td>{{.ToolName}}</td>
+      <td>{{.Model}}</td>
+      <td style="text-align:right">{{.DurationHuman}}</td>
+      <td style="text-align:right">{{.TokensLost}}</td>
+      <td style="text-align:right">{{.CostLostUSD}}</td>
+      <td title="{{.StartedAt}}">{{.TimeAgo}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

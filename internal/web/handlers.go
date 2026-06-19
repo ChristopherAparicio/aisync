@@ -9659,6 +9659,390 @@ func (s *Server) handleSessionTagRemove(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+type sessionsHealthPage struct {
+	Nav             string
+	SidebarProjects []sidebarProject
+	Stats           sessionsHealthStats
+	LiveStalls      []stallView
+	RecentStalls    []stallView
+	RootCauseRows   []stallStatsRowView
+	ProviderRows    []stallStatsRowView
+	Lookback        string
+}
+
+type sessionsHealthStats struct {
+	TotalCount  int
+	LiveCount   int
+	TokensLost  string
+	CostLostUSD string
+	DurationHrs string
+}
+
+type stallView struct {
+	ID                int64
+	ProviderSessionID string
+	ProviderShort     string
+	Provider          string
+	Model             string
+	Agent             string
+	ParentSessionID   string
+	ToolName          string
+	RootCause         string
+	RootCauseClass    string
+	DurationHuman     string
+	TokensLost        string
+	CostLostUSD       string
+	StartedAt         string
+	TimeAgo           string
+	ErrorMessage      string
+	Live              bool
+}
+
+type stallStatsRowView struct {
+	Label       string
+	Count       int
+	TokensLost  string
+	CostLostUSD string
+}
+
+func (s *Server) handleSessionsHealth(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	data := sessionsHealthPage{
+		Nav:      "sessions-health",
+		Lookback: "7d",
+	}
+	data.SidebarProjects = s.buildSidebarProjects(ctx, "")
+
+	if s.store == nil {
+		s.render(w, "sessions_health.html", data)
+		return
+	}
+
+	since := time.Now().Add(-7 * 24 * time.Hour)
+	filter := session.StallFilter{Since: since, Limit: 500}
+
+	stats, err := s.store.StallStats(filter)
+	if err != nil {
+		s.logger.Printf("[sessions_health] StallStats: %v", err)
+	} else {
+		data.Stats = sessionsHealthStats{
+			TotalCount:  stats.TotalCount,
+			LiveCount:   stats.LiveCount,
+			TokensLost:  formatTokensShort(int(stats.TokensLost)),
+			CostLostUSD: formatCostValue(stats.CostLostUSD),
+			DurationHrs: fmt.Sprintf("%.1fh", float64(stats.TotalDurationMs)/3600000),
+		}
+		for cause, row := range stats.ByRootCause {
+			data.RootCauseRows = append(data.RootCauseRows, stallStatsRowView{
+				Label:       string(cause),
+				Count:       row.Count,
+				TokensLost:  formatTokensShort(int(row.TokensLost)),
+				CostLostUSD: formatCostValue(row.CostLostUSD),
+			})
+		}
+		sort.Slice(data.RootCauseRows, func(i, j int) bool {
+			return data.RootCauseRows[i].Count > data.RootCauseRows[j].Count
+		})
+		for provider, row := range stats.ByProvider {
+			data.ProviderRows = append(data.ProviderRows, stallStatsRowView{
+				Label:       provider,
+				Count:       row.Count,
+				TokensLost:  formatTokensShort(int(row.TokensLost)),
+				CostLostUSD: formatCostValue(row.CostLostUSD),
+			})
+		}
+		sort.Slice(data.ProviderRows, func(i, j int) bool {
+			return data.ProviderRows[i].Count > data.ProviderRows[j].Count
+		})
+	}
+
+	live, err := s.store.ListLiveStalls()
+	if err != nil {
+		s.logger.Printf("[sessions_health] ListLiveStalls: %v", err)
+	} else {
+		now := time.Now()
+		for _, st := range live {
+			data.LiveStalls = append(data.LiveStalls, toStallView(st, now))
+		}
+	}
+
+	recent, err := s.store.ListStalls(filter)
+	if err != nil {
+		s.logger.Printf("[sessions_health] ListStalls: %v", err)
+	} else {
+		now := time.Now()
+		for _, st := range recent {
+			if st.IsLive() {
+				continue
+			}
+			data.RecentStalls = append(data.RecentStalls, toStallView(st, now))
+			if len(data.RecentStalls) >= 100 {
+				break
+			}
+		}
+	}
+
+	s.render(w, "sessions_health.html", data)
+}
+
+func toStallView(st session.SessionStall, now time.Time) stallView {
+	shortID := st.ProviderSessionID
+	if len(shortID) > 16 {
+		shortID = shortID[:16] + "…"
+	}
+	var dur time.Duration
+	if st.EndedAt != nil {
+		dur = st.EndedAt.Sub(st.StartedAt)
+	} else {
+		dur = now.Sub(st.StartedAt)
+	}
+	return stallView{
+		ID:                st.ID,
+		ProviderSessionID: st.ProviderSessionID,
+		ProviderShort:     shortID,
+		Provider:          st.Provider,
+		Model:             st.Model,
+		Agent:             st.Agent,
+		ParentSessionID:   st.ParentSessionID,
+		ToolName:          st.ToolName,
+		RootCause:         string(st.RootCause),
+		RootCauseClass:    rootCauseClass(st.RootCause),
+		DurationHuman:     humanDuration(dur),
+		TokensLost:        formatTokensShort(int(st.TokensLost)),
+		CostLostUSD:       formatCostValue(st.CostLostUSD),
+		StartedAt:         st.StartedAt.Format("2006-01-02 15:04"),
+		TimeAgo:           humanTimeAgo(now, st.StartedAt),
+		ErrorMessage:      st.ErrorMessage,
+		Live:              st.IsLive(),
+	}
+}
+
+func rootCauseClass(c session.StallRootCause) string {
+	switch c {
+	case session.StallRootCauseStreamStall:
+		return "warn"
+	case session.StallRootCauseAborted,
+		session.StallRootCauseRateLimit429,
+		session.StallRootCauseProviderError:
+		return "danger"
+	default:
+		return ""
+	}
+}
+
+func humanDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%.1fh", d.Hours())
+	}
+	return fmt.Sprintf("%.1fd", d.Hours()/24)
+}
+
+// ── Alerts ──
+
+type alertsPage struct {
+	Nav              string
+	SidebarProjects  []sidebarProject
+	Rows             []alertRowView
+	UnackCount       int
+	FilterEventTypes []string
+	FilterSeverities []string
+	FilterProject    string
+	OnlyUnack        bool
+	EventTypeOptions []string
+	SeverityOptions  []string
+}
+
+type alertRowView struct {
+	ID              int64
+	EventType       string
+	Severity        string
+	SeverityClass   string
+	Project         string
+	Title           string
+	Summary         string
+	DispatchedAt    string
+	DispatchedAgo   string
+	IsAcked         bool
+	AckedBy         string
+	AckedAt         string
+	PayloadJSON     string
+	DedupKey        string
+}
+
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	data := alertsPage{
+		Nav:              "alerts",
+		EventTypeOptions: []string{"stall_alert", "error_spike", "budget_alert", "session_captured", "daily_digest", "weekly_digest"},
+		SeverityOptions:  []string{"info", "warning", "critical"},
+	}
+	data.SidebarProjects = s.buildSidebarProjects(ctx, "")
+
+	if s.store == nil {
+		s.render(w, "alerts.html", data)
+		return
+	}
+
+	q := r.URL.Query()
+	data.FilterEventTypes = q["event_type"]
+	data.FilterSeverities = q["severity"]
+	data.FilterProject = q.Get("project")
+	if raw := q.Get("only_unack"); raw == "" {
+		data.OnlyUnack = true
+	} else {
+		data.OnlyUnack = raw == "1" || raw == "true"
+	}
+
+	limit := 200
+	if raw := q.Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+
+	filter := session.NotificationLogFilter{
+		EventTypes: data.FilterEventTypes,
+		Severities: data.FilterSeverities,
+		OnlyUnack:  data.OnlyUnack,
+		Limit:      limit,
+	}
+	if data.FilterProject != "" {
+		filter.Projects = []string{data.FilterProject}
+	}
+
+	entries, err := s.store.ListNotificationLogs(filter)
+	if err != nil {
+		s.logger.Printf("[alerts] ListNotificationLogs: %v", err)
+	} else {
+		now := time.Now()
+		for _, e := range entries {
+			data.Rows = append(data.Rows, toAlertRowView(e, now))
+		}
+	}
+
+	count, err := s.store.UnacknowledgedNotificationCount()
+	if err != nil {
+		s.logger.Printf("[alerts] UnacknowledgedNotificationCount: %v", err)
+	} else {
+		data.UnackCount = count
+	}
+
+	s.render(w, "alerts.html", data)
+}
+
+func (s *Server) handleAckAlert(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	idRaw := r.PathValue("id")
+	id, err := strconv.ParseInt(idRaw, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	actor := alertActor(r)
+	if err := s.store.AcknowledgeNotification(id, actor, time.Now()); err != nil {
+		s.logger.Printf("[alerts] AcknowledgeNotification(%d): %v", id, err)
+		http.Error(w, "ack failed", http.StatusInternalServerError)
+		return
+	}
+
+	redirectBackToAlerts(w, r)
+}
+
+func (s *Server) handleAckAllAlerts(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	actor := alertActor(r)
+	n, err := s.store.AcknowledgeAllNotifications(actor, time.Now())
+	if err != nil {
+		s.logger.Printf("[alerts] AcknowledgeAllNotifications: %v", err)
+		http.Error(w, "ack-all failed", http.StatusInternalServerError)
+		return
+	}
+	s.logger.Printf("[alerts] ack-all by %s: %d row(s)", actor, n)
+
+	redirectBackToAlerts(w, r)
+}
+
+func alertActor(r *http.Request) string {
+	if user := r.Header.Get("X-Forwarded-User"); user != "" {
+		return user
+	}
+	if user := r.Header.Get("X-User"); user != "" {
+		return user
+	}
+	return "web"
+}
+
+func redirectBackToAlerts(w http.ResponseWriter, r *http.Request) {
+	target := "/alerts"
+	if ref := r.Header.Get("Referer"); ref != "" {
+		if u, err := url.Parse(ref); err == nil && strings.HasPrefix(u.Path, "/alerts") {
+			target = u.RequestURI()
+		}
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func toAlertRowView(e session.NotificationLogEntry, now time.Time) alertRowView {
+	row := alertRowView{
+		ID:            e.ID,
+		EventType:     e.EventType,
+		Severity:      e.Severity,
+		SeverityClass: severityClass(e.Severity),
+		Project:       e.Project,
+		Title:         e.Title,
+		Summary:       e.Summary,
+		DispatchedAt:  e.DispatchedAt.Format("2006-01-02 15:04"),
+		DispatchedAgo: humanTimeAgo(now, e.DispatchedAt),
+		DedupKey:      e.DedupKey,
+	}
+	if strings.TrimSpace(e.PayloadJSON) != "" {
+		var v interface{}
+		if json.Unmarshal([]byte(e.PayloadJSON), &v) == nil {
+			if b, err := json.MarshalIndent(v, "", "  "); err == nil {
+				row.PayloadJSON = string(b)
+			} else {
+				row.PayloadJSON = e.PayloadJSON
+			}
+		} else {
+			row.PayloadJSON = e.PayloadJSON
+		}
+	}
+	if e.AcknowledgedAt != nil {
+		row.IsAcked = true
+		row.AckedBy = e.AcknowledgedBy
+		row.AckedAt = e.AcknowledgedAt.Format("2006-01-02 15:04")
+	}
+	return row
+}
+
+func severityClass(sev string) string {
+	switch strings.ToLower(sev) {
+	case "critical":
+		return "danger"
+	case "warning":
+		return "warn"
+	default:
+		return "info"
+	}
+}
+
 // ── Inter-agent exchange view (H3) ──
 
 // ExchangeEntry is one message in the merged inter-agent exchange timeline.
@@ -9712,7 +10096,7 @@ func buildExchangeTimeline(parent *session.Session, children []session.Session) 
 }
 
 func stripSentinelContent(s string) string {
-	if len(s) >= 2 && s[0] == ' ' && s[1] == '' {
+	if len(s) >= 2 && s[0] == '\x00' && s[1] == '\x01' {
 		return s[2:]
 	}
 	return s
@@ -9782,6 +10166,23 @@ func (s *Server) handleSessionExchanges(w http.ResponseWriter, r *http.Request) 
 	s.render(w, "exchanges.html", data)
 }
 
+type cronPage struct {
+	Nav  string
+	Jobs []session.CronJob
+}
+
+func (s *Server) handleCron(w http.ResponseWriter, r *http.Request) {
+	var jobs []session.CronJob
+	if s.store != nil {
+		if list, err := s.store.ListCronJobs(""); err == nil {
+			jobs = list
+		} else {
+			s.logger.Printf("cron: list jobs: %v", err)
+		}
+	}
+	s.render(w, "cron.html", cronPage{Nav: "cron", Jobs: jobs})
+}
+
 // handleSessionExchangesMore returns the next batch of child session messages for a session (HTMX partial).
 func (s *Server) handleSessionExchangesMore(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -9843,20 +10244,4 @@ func (s *Server) handleSessionExchangesMore(w http.ResponseWriter, r *http.Reque
 	data := moreData{Entries: entries, HasMore: hasMore, MoreURL: nextURL}
 
 	s.renderPartial(w, "exchanges_more_partial.html", data)
-}
-type cronPage struct {
-	Nav  string
-	Jobs []session.CronJob
-}
-
-func (s *Server) handleCron(w http.ResponseWriter, r *http.Request) {
-	var jobs []session.CronJob
-	if s.store != nil {
-		if list, err := s.store.ListCronJobs(""); err == nil {
-			jobs = list
-		} else {
-			s.logger.Printf("cron: list jobs: %v", err)
-		}
-	}
-	s.render(w, "cron.html", cronPage{Nav: "cron", Jobs: jobs})
 }

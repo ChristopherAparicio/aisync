@@ -1,0 +1,252 @@
+{{define "alerts.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "title"}}aisync -- Alerts{{end}}
+
+{{define "sidebar"}}
+<aside class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">Navigation</div>
+    <ul class="sidebar-nav">
+      <li><a href="/" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F3E0;</span> Home</a></li>
+      <li><a href="/sessions" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4CB;</span> Sessions</a></li>
+      <li><a href="/sessions/health" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1FA7A;</span> Health</a></li>
+      <li><a href="/alerts" class="sidebar-nav-item active"><span class="sidebar-nav-icon">&#x1F514;</span> Alerts</a></li>
+      <li><a href="/analytics" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x1F4CA;</span> Analytics</a></li>
+      <li><a href="/errors/unclassified" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#x26A0;</span> Errors</a></li>
+    </ul>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-title">Status</div>
+    <div class="sidebar-stat">
+      <span class="sidebar-stat-value">{{.UnackCount}}</span>
+      <span class="sidebar-stat-label">unacknowledged</span>
+    </div>
+  </div>
+
+  {{if .SidebarProjects}}
+  <div class="sidebar-section">
+    <div class="sidebar-title">Projects</div>
+    <ul class="sidebar-list">
+      {{range .SidebarProjects}}
+      <a href="/projects{{.Path}}" class="sidebar-item">
+        <span class="sidebar-dot"></span>
+        <span class="sidebar-item-name">{{.Name}}</span>
+        <span class="sidebar-item-count">{{.SessionCount}}</span>
+      </a>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</aside>
+{{end}}
+
+{{define "content"}}
+<h1 class="alerts-section-title">
+  Alerts
+  {{if gt .UnackCount 0}}
+  <span class="badge badge-danger">{{.UnackCount}} unacknowledged</span>
+  {{end}}
+</h1>
+<p class="alerts-intro">
+  Every notification dispatched by aisync (stall alerts, error spikes, budget warnings, daily/weekly digests) is recorded here.
+  Click any row to inspect the full payload. Acknowledge an alert to hide it from the active list.
+</p>
+
+<form method="GET" action="/alerts" class="alerts-filter-bar">
+  <div class="alerts-filter-field">
+    <label class="alerts-filter-label" for="alerts-event-type">Event type</label>
+    <select id="alerts-event-type" name="event_type" multiple size="3">
+      {{$selectedTypes := .FilterEventTypes}}
+      {{range .EventTypeOptions}}
+      <option value="{{.}}" {{range $selectedTypes}}{{if eq . $}}selected{{end}}{{end}}>{{.}}</option>
+      {{end}}
+    </select>
+  </div>
+  <div class="alerts-filter-field">
+    <label class="alerts-filter-label" for="alerts-severity">Severity</label>
+    <select id="alerts-severity" name="severity" multiple size="3">
+      {{$selectedSev := .FilterSeverities}}
+      {{range .SeverityOptions}}
+      <option value="{{.}}" {{range $selectedSev}}{{if eq . $}}selected{{end}}{{end}}>{{.}}</option>
+      {{end}}
+    </select>
+  </div>
+  <div class="alerts-filter-field">
+    <label class="alerts-filter-label" for="alerts-project">Project</label>
+    <input id="alerts-project" type="text" name="project" value="{{.FilterProject}}" placeholder="/path/to/project">
+  </div>
+  <div class="alerts-filter-field">
+    <span class="alerts-filter-label">Scope</span>
+    <label class="alerts-checkbox">
+      <input type="checkbox" name="only_unack" value="1" {{if .OnlyUnack}}checked{{end}}>
+      Only unacknowledged
+    </label>
+  </div>
+  <div class="alerts-filter-actions">
+    <button type="submit" class="btn btn-primary">Filter</button>
+    <a href="/alerts" class="btn btn-ghost">Reset</a>
+  </div>
+</form>
+
+{{if and .OnlyUnack (gt .UnackCount 0)}}
+<div class="alerts-toolbar">
+  <form method="POST" action="/alerts/ack-all"
+        onsubmit="return confirm('Acknowledge all {{.UnackCount}} unacknowledged alerts?');">
+    <button type="submit" class="btn btn-danger">Acknowledge all ({{.UnackCount}})</button>
+  </form>
+</div>
+{{end}}
+
+{{if not .Rows}}
+<div class="alerts-empty">
+  <div class="alerts-empty-icon">
+    {{if .OnlyUnack}}&#x2705;{{else}}&#x1F50D;{{end}}
+  </div>
+  <div class="alerts-empty-title">
+    {{if .OnlyUnack}}No unacknowledged alerts.{{else}}No alerts match the current filters.{{end}}
+  </div>
+  <div class="alerts-empty-hint">
+    {{if .OnlyUnack}}You're all caught up.{{else}}Try widening the filter or check back later.{{end}}
+  </div>
+</div>
+{{else}}
+<div class="alerts-table-card">
+  <table class="alerts-table alerts-table-dense">
+    <thead>
+      <tr>
+        <th class="col-sev">Severity</th>
+        <th class="col-time">Time</th>
+        <th class="col-event">Event</th>
+        <th class="col-scope">Scope</th>
+        <th class="col-message">Message</th>
+        <th class="col-status">Status</th>
+        <th class="col-actions"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}
+      <tr>
+        <td class="col-sev">
+          <label for="modal-{{.ID}}" class="alerts-row-link">
+            <span class="badge badge-{{.SeverityClass}}">{{.Severity}}</span>
+          </label>
+        </td>
+        <td class="col-time">
+          <label for="modal-{{.ID}}" class="alerts-row-link" title="{{.DispatchedAt}}">
+            <span class="alerts-time">{{.DispatchedAgo}}</span>
+          </label>
+        </td>
+        <td class="col-event">
+          <label for="modal-{{.ID}}" class="alerts-row-link">
+            <code>{{.EventType}}</code>
+          </label>
+        </td>
+        <td class="col-scope">
+          <label for="modal-{{.ID}}" class="alerts-row-link">
+            {{if .Project}}<span class="alerts-project">{{.Project}}</span>{{else}}<span class="alerts-project-global">&mdash;</span>{{end}}
+          </label>
+        </td>
+        <td class="col-message">
+          <label for="modal-{{.ID}}" class="alerts-row-link" title="{{.Title}}">
+            {{.Title}}
+          </label>
+        </td>
+        <td class="col-status">
+          <label for="modal-{{.ID}}" class="alerts-row-link">
+            {{if .IsAcked}}
+            <span class="badge badge-neutral">Acked by {{.AckedBy}}</span>
+            <div class="alerts-ack-meta">{{.AckedAt}}</div>
+            {{else}}
+            <span class="badge badge-warn">Unack</span>
+            {{end}}
+          </label>
+        </td>
+        <td class="col-actions">
+          {{if not .IsAcked}}
+          <form method="POST" action="/alerts/{{.ID}}/ack">
+            <button type="submit" class="btn btn-sm">Ack</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+{{range .Rows}}
+<input type="checkbox" id="modal-{{.ID}}" class="modal-toggle" aria-hidden="true">
+<div class="modal-overlay" role="dialog" aria-modal="true">
+  <label for="modal-{{.ID}}" class="modal-backdrop" aria-label="Close"></label>
+  <div class="modal-content">
+    <div class="modal-header">
+      <div class="modal-header-meta">
+        <span class="badge badge-{{.SeverityClass}}">{{.Severity}}</span>
+        <code class="modal-event-type">{{.EventType}}</code>
+        {{if .Project}}<span class="modal-scope">{{.Project}}</span>{{else}}<span class="modal-scope modal-scope-global">global</span>{{end}}
+      </div>
+      <label for="modal-{{.ID}}" class="modal-close" aria-label="Close" tabindex="0">&times;</label>
+    </div>
+
+    <div class="modal-body">
+      <div class="modal-row">
+        <div class="modal-row-label">Dispatched</div>
+        <div class="modal-row-value">
+          <span>{{.DispatchedAt}}</span>
+          <span class="modal-row-muted">({{.DispatchedAgo}})</span>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-label">Title</div>
+        <div class="modal-section-title">{{.Title}}</div>
+      </div>
+
+      {{if .Summary}}
+      <div class="modal-section">
+        <div class="modal-section-label">Summary</div>
+        <div class="modal-summary">{{.Summary}}</div>
+      </div>
+      {{end}}
+
+      {{if .DedupKey}}
+      <div class="modal-row">
+        <div class="modal-row-label">Dedup key</div>
+        <div class="modal-row-value"><code>{{.DedupKey}}</code></div>
+      </div>
+      {{end}}
+
+      {{if .PayloadJSON}}
+      <div class="modal-section">
+        <div class="modal-section-label">Payload</div>
+        <pre class="modal-payload"><code>{{.PayloadJSON}}</code></pre>
+      </div>
+      {{end}}
+
+      {{if .IsAcked}}
+      <div class="modal-row">
+        <div class="modal-row-label">Acknowledged</div>
+        <div class="modal-row-value">
+          by <strong>{{.AckedBy}}</strong>
+          <span class="modal-row-muted">at {{.AckedAt}}</span>
+        </div>
+      </div>
+      {{end}}
+    </div>
+
+    <div class="modal-footer">
+      <label for="modal-{{.ID}}" class="btn btn-ghost">Close</label>
+      {{if not .IsAcked}}
+      <form method="POST" action="/alerts/{{.ID}}/ack" class="modal-ack-form">
+        <button type="submit" class="btn btn-primary">Acknowledge</button>
+      </form>
+      {{end}}
+    </div>
+  </div>
+</div>
+{{end}}
+{{end}}
+{{end}}
