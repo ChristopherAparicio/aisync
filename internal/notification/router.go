@@ -23,6 +23,7 @@ type RoutingConfig struct {
 type AlertConfig struct {
 	Budget          bool // budget threshold alerts
 	Errors          bool // error spike alerts
+	Stalls          bool // stuck-session threshold alerts
 	Capture         bool // session captured notifications (usually noisy)
 	ErrorThreshold  int  // number of errors to trigger a spike alert
 	ErrorWindowMins int  // time window in minutes for error spike detection
@@ -67,6 +68,12 @@ func (r *DefaultRouter) Route(event Event) []Recipient {
 
 	case EventErrorSpike:
 		if !r.cfg.Alerts.Errors {
+			return nil
+		}
+		return r.projectRecipients(event)
+
+	case EventStallSpike:
+		if !r.cfg.Alerts.Stalls {
 			return nil
 		}
 		return r.projectRecipients(event)

@@ -26,6 +26,8 @@ func (f *Formatter) Format(event notification.Event) (notification.RenderedMessa
 		blocks, fallback = f.formatBudgetAlert(event)
 	case notification.EventErrorSpike:
 		blocks, fallback = f.formatErrorSpike(event)
+	case notification.EventStallSpike:
+		blocks, fallback = f.formatStallSpike(event)
 	case notification.EventSessionCaptured:
 		blocks, fallback = f.formatSessionCaptured(event)
 	case notification.EventDailyDigest:
@@ -120,6 +122,44 @@ func (f *Formatter) formatErrorSpike(event notification.Event) ([]block, string)
 
 	return blocks, fmt.Sprintf("Error spike: %s — %d errors in %d min",
 		event.Project, data.ErrorCount, data.WindowMinutes)
+}
+
+func (f *Formatter) formatStallSpike(event notification.Event) ([]block, string) {
+	data, ok := event.Data.(notification.StallSpikeData)
+	if !ok {
+		return []block{section("Stall spike (invalid data)")}, "Stall spike"
+	}
+
+	emoji := ":warning:"
+	if event.Severity == notification.SeverityCritical {
+		emoji = ":rotating_light:"
+	}
+
+	title := fmt.Sprintf("%s *Stuck Sessions Alert*", emoji)
+	details := fmt.Sprintf("*%d live* stuck sessions | *%d new* in 24h | *$%.2f* lost in 24h",
+		data.LiveCount, data.NewStalls24h, data.CostLost24h)
+
+	blocks := []block{
+		section(title),
+		section(details),
+	}
+
+	if len(data.Reasons) > 0 {
+		blocks = append(blocks, contextBlock("Triggers: "+strings.Join(data.Reasons, " · ")))
+	}
+	if data.TopRootCause != "" || data.TopProvider != "" {
+		parts := make([]string, 0, 2)
+		if data.TopRootCause != "" {
+			parts = append(parts, "root cause: "+data.TopRootCause)
+		}
+		if data.TopProvider != "" {
+			parts = append(parts, "provider: "+data.TopProvider)
+		}
+		blocks = append(blocks, contextBlock("Top "+strings.Join(parts, " · ")))
+	}
+
+	return blocks, fmt.Sprintf("Stuck sessions: %d live, %d new in 24h, $%.2f lost",
+		data.LiveCount, data.NewStalls24h, data.CostLost24h)
 }
 
 func (f *Formatter) formatSessionCaptured(event notification.Event) ([]block, string) {

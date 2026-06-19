@@ -23,6 +23,7 @@ const (
 	// Real-time alerts
 	EventBudgetAlert     EventType = "budget.alert"
 	EventErrorSpike      EventType = "error.spike"
+	EventStallSpike      EventType = "stall.spike"
 	EventSessionCaptured EventType = "session.captured"
 
 	// Scheduled digests
@@ -96,6 +97,24 @@ type ErrorSpikeData struct {
 	WindowMinutes int      `json:"window_minutes"` // detection window size
 	Sessions      []string `json:"sessions"`       // affected session IDs
 	ErrorTypes    []string `json:"error_types"`    // distinct error categories
+}
+
+// StallSpikeData is the payload for EventStallSpike.
+//
+// Fired by the StallAlertTask when one or more stall thresholds are crossed:
+//   - LiveCount: number of currently-live (un-sealed) stuck sessions
+//   - NewStalls24h: total stalls detected in the rolling 24h window
+//   - CostLost24h: cumulative USD cost lost in the rolling 24h window
+type StallSpikeData struct {
+	LiveCount       int            `json:"live_count"`
+	NewStalls24h    int            `json:"new_stalls_24h"`
+	CostLost24h     float64        `json:"cost_lost_24h"`
+	TokensLost24h   int64          `json:"tokens_lost_24h"`
+	TopRootCause    string         `json:"top_root_cause,omitempty"`
+	TopProvider     string         `json:"top_provider,omitempty"`
+	RootCauseCounts map[string]int `json:"root_cause_counts,omitempty"`
+	ProviderCounts  map[string]int `json:"provider_counts,omitempty"`
+	Reasons         []string       `json:"reasons"`
 }
 
 // SessionCapturedData is the payload for EventSessionCaptured.
