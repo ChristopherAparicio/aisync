@@ -226,37 +226,52 @@ func runList(opts *Options) error {
 
 	// Show project column when scope is global (it carries useful context),
 	// otherwise show the branch column.
+	idWidth := maxIDWidth(summaries)
 	if opts.Global {
-		fmt.Fprintf(out, "%-12s  %-12s  %-30s  %8s  %8s  %s\n",
+		fmt.Fprintf(out, "%-*s  %-12s  %-30s  %8s  %8s  %s\n",
+			idWidth,
 			"ID", "PROVIDER", "PROJECT", "MESSAGES", "TOKENS", "CAPTURED")
-		fmt.Fprintf(out, "%-12s  %-12s  %-30s  %8s  %8s  %s\n",
+		fmt.Fprintf(out, "%-*s  %-12s  %-30s  %8s  %8s  %s\n",
+			idWidth,
 			"----", "--------", "-------", "--------", "------", "--------")
 		for _, s := range summaries {
-			id := truncate(string(s.ID), 12)
+			id := string(s.ID)
 			prov := truncate(string(s.Provider), 12)
-			proj := truncate(shortProject(s.ProjectPath), 30)
-			fmt.Fprintf(out, "%-12s  %-12s  %-30s  %8d  %8s  %s\n",
-				id, prov, proj, s.MessageCount, formatTokens(s.TotalTokens), timeAgo(s.CreatedAt))
+			proj := truncate(projectDisplayName(opts.Factory, s.RemoteURL, s.ProjectPath), 30)
+			fmt.Fprintf(out, "%-*s  %-12s  %-30s  %8d  %8s  %s\n",
+				idWidth, id, prov, proj, s.MessageCount, formatTokens(s.TotalTokens), timeAgo(s.CreatedAt))
 		}
 		return nil
 	}
 
-	fmt.Fprintf(out, "%-12s  %-12s  %-24s  %8s  %8s  %s\n",
+	fmt.Fprintf(out, "%-*s  %-12s  %-24s  %8s  %8s  %s\n",
+		idWidth,
 		"ID", "PROVIDER", "BRANCH", "MESSAGES", "TOKENS", "CAPTURED")
-	fmt.Fprintf(out, "%-12s  %-12s  %-24s  %8s  %8s  %s\n",
+	fmt.Fprintf(out, "%-*s  %-12s  %-24s  %8s  %8s  %s\n",
+		idWidth,
 		"----", "--------", "------", "--------", "------", "--------")
 
 	for _, s := range summaries {
-		id := truncate(string(s.ID), 12)
+		id := string(s.ID)
 		prov := truncate(string(s.Provider), 12)
 		br := truncate(s.Branch, 24)
 		captured := timeAgo(s.CreatedAt)
 
-		fmt.Fprintf(out, "%-12s  %-12s  %-24s  %8d  %8s  %s\n",
-			id, prov, br, s.MessageCount, formatTokens(s.TotalTokens), captured)
+		fmt.Fprintf(out, "%-*s  %-12s  %-24s  %8d  %8s  %s\n",
+			idWidth, id, prov, br, s.MessageCount, formatTokens(s.TotalTokens), captured)
 	}
 
 	return nil
+}
+
+func maxIDWidth(summaries []session.Summary) int {
+	width := len("ID")
+	for _, s := range summaries {
+		if n := len(string(s.ID)); n > width {
+			width = n
+		}
+	}
+	return width
 }
 
 // writeEmptyMessage prints a context-aware "no sessions found" message.
@@ -334,6 +349,21 @@ func shortProject(p string) string {
 		return p
 	}
 	return ".../" + strings.Join(parts[len(parts)-2:], "/")
+}
+
+func projectDisplayName(factory *cmdutil.Factory, remoteURL, projectPath string) string {
+	if factory == nil {
+		return shortProject(projectPath)
+	}
+	cfg, err := factory.Config()
+	if err != nil {
+		return shortProject(projectPath)
+	}
+	display := cfg.ResolveProjectDisplay(remoteURL, projectPath)
+	if display.Project == "" {
+		return shortProject(projectPath)
+	}
+	return display.Project
 }
 
 // writeJSON emits the summaries as a JSON array.

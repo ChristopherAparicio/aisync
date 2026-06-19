@@ -2,6 +2,8 @@ package blamecmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +47,7 @@ func TestNewCmdBlame_flags(t *testing.T) {
 	f := &cmdutil.Factory{IOStreams: ios}
 	cmd := NewCmdBlame(f)
 
-	flags := []string{"all", "restore", "branch", "provider", "json", "quiet", "project"}
+	flags := []string{"all", "restore", "branch", "provider", "json", "quiet", "project", "files-from"}
 	for _, name := range flags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("expected --%s flag", name)
@@ -224,13 +226,13 @@ func TestBlame_quietOutput(t *testing.T) {
 	}
 }
 
-// TestBlame_multipleFiles verifies that multiple positional args are all passed to the service
-// and that AGENT column appears in the table output.
+// TestBlame_multipleFiles verifies multi-file mode renders the grouped-by-file table with a FILE
+// column and that the AGENT column and per-file sessions appear.
 func TestBlame_multipleFiles(t *testing.T) {
 	store := testutil.NewMockStore()
 	store.BlameEntries = []session.BlameEntry{
-		{SessionID: "sess-a", Provider: session.ProviderClaudeCode, Agent: "jarvis", Branch: "main", ChangeType: session.ChangeModified, CreatedAt: time.Now()},
-		{SessionID: "sess-b", Provider: session.ProviderOpenCode, Agent: "", Branch: "main", ChangeType: session.ChangeCreated, CreatedAt: time.Now()},
+		{SessionID: "sess-a", Provider: session.ProviderClaudeCode, Agent: "jarvis", Branch: "main", ChangeType: session.ChangeModified, FilePath: "src/a.go", CreatedAt: time.Now()},
+		{SessionID: "sess-b", Provider: session.ProviderOpenCode, Agent: "", Branch: "main", ChangeType: session.ChangeCreated, FilePath: "src/b.go", CreatedAt: time.Now()},
 	}
 	f, ios := blameTestFactory(t, store)
 
@@ -250,11 +252,97 @@ func TestBlame_multipleFiles(t *testing.T) {
 	if !strings.Contains(output, "sess-a") || !strings.Contains(output, "sess-b") {
 		t.Errorf("expected both sessions in multi-file output, got: %s", output)
 	}
+	if !strings.Contains(output, "FILE") {
+		t.Errorf("expected FILE column header in grouped multi-file output, got: %s", output)
+	}
+	if !strings.Contains(output, "src/a.go") || !strings.Contains(output, "src/b.go") {
+		t.Errorf("expected both file paths in grouped output, got: %s", output)
+	}
 	if !strings.Contains(output, "AGENT") {
 		t.Errorf("expected AGENT column header in multi-file output, got: %s", output)
 	}
 	if !strings.Contains(output, "jarvis") {
 		t.Errorf("expected agent 'jarvis' in output, got: %s", output)
+	}
+}
+
+// TestBlame_filesFromLineManifest verifies --files-from reads a one-path-per-line manifest
+// (skipping blanks and # comments) and renders the grouped-by-file table.
+func TestBlame_filesFromLineManifest(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "ff-a", Provider: session.ProviderClaudeCode, Agent: "jarvis", Branch: "main", ChangeType: session.ChangeModified, FilePath: "src/a.go", CreatedAt: time.Now()},
+		{SessionID: "ff-b", Provider: session.ProviderOpenCode, Branch: "main", ChangeType: session.ChangeCreated, FilePath: "src/b.go", CreatedAt: time.Now()},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	manifest := filepath.Join(t.TempDir(), "files.txt")
+	if err := os.WriteFile(manifest, []byte("src/a.go\n# a comment\n\nsrc/b.go\n"), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	opts := &Options{
+		IO:        ios,
+		Factory:   f,
+		FilesFrom: manifest,
+		All:       true,
+	}
+
+	if err := runBlame(opts); err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	for _, want := range []string{"FILE", "src/a.go", "src/b.go", "ff-a", "ff-b"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected %q in --files-from output, got:\n%s", want, output)
+		}
+	}
+}
+
+// TestBlame_filesFromJSONManifest verifies --files-from auto-detects a JSON array manifest.
+func TestBlame_filesFromJSONManifest(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.BlameEntries = []session.BlameEntry{
+		{SessionID: "jf-a", Provider: session.ProviderClaudeCode, FilePath: "src/a.go", CreatedAt: time.Now()},
+		{SessionID: "jf-b", Provider: session.ProviderOpenCode, FilePath: "src/b.go", CreatedAt: time.Now()},
+	}
+	f, ios := blameTestFactory(t, store)
+
+	manifest := filepath.Join(t.TempDir(), "files.json")
+	if err := os.WriteFile(manifest, []byte(`["src/a.go", "src/b.go"]`), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	opts := &Options{
+		IO:        ios,
+		Factory:   f,
+		FilesFrom: manifest,
+		All:       true,
+	}
+
+	if err := runBlame(opts); err != nil {
+		t.Fatalf("runBlame() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	for _, want := range []string{"src/a.go", "src/b.go", "jf-a", "jf-b"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected %q in JSON --files-from output, got:\n%s", want, output)
+		}
+	}
+}
+
+// TestBlame_filesFromMissingFile verifies a missing manifest path returns an error.
+func TestBlame_filesFromMissingFile(t *testing.T) {
+	f, ios := blameTestFactory(t, nil)
+	opts := &Options{
+		IO:        ios,
+		Factory:   f,
+		FilesFrom: filepath.Join(t.TempDir(), "does-not-exist.txt"),
+	}
+	if err := runBlame(opts); err == nil {
+		t.Fatal("expected error for missing --files-from manifest, got nil")
 	}
 }
 

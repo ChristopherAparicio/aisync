@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -23,6 +24,7 @@ type Options struct {
 	Factory *cmdutil.Factory
 
 	FilePaths   []string
+	FilesFrom   string
 	ProjectPath string
 	Branch      string
 	Provider    string
@@ -52,6 +54,7 @@ Examples:
   aisync blame src/main.go                    # last session that touched this file
   aisync blame --all src/main.go              # all sessions that touched this file
   aisync blame src/a.go src/b.go              # sessions that touched multiple files
+  aisync blame --files-from changed.txt       # read file list from a manifest (JSON array or one path per line)
   aisync blame --branch feat/auth handler.go  # filter by branch
   aisync blame --restore handler.go           # restore the last session that touched this file
   aisync blame --json src/main.go             # machine-readable output
@@ -70,12 +73,25 @@ Examples:
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output results as JSON")
 	cmd.Flags().BoolVarP(&opts.Quiet, "quiet", "q", false, "Only print session IDs")
 	cmd.Flags().StringVar(&opts.ProjectPath, "project", "", "Show all files touched in this project path")
+	cmd.Flags().StringVar(&opts.FilesFrom, "files-from", "", "Read file paths from a manifest (JSON array or one path per line); merged with positional args")
 
 	return cmd
 }
 
 func runBlame(opts *Options) error {
 	out := opts.IO.Out
+
+	if opts.FilesFrom != "" {
+		content, readErr := os.ReadFile(opts.FilesFrom)
+		if readErr != nil {
+			return fmt.Errorf("reading files manifest: %w", readErr)
+		}
+		manifestFiles, parseErr := service.ParseFileManifest(content)
+		if parseErr != nil {
+			return parseErr
+		}
+		opts.FilePaths = append(opts.FilePaths, manifestFiles...)
+	}
 
 	isProjectMode := opts.ProjectPath != ""
 
@@ -139,7 +155,64 @@ func runBlame(opts *Options) error {
 	if isProjectMode {
 		return renderProjectView(opts, result)
 	}
+	if result.FilesGrouped != nil {
+		return renderGroupedFileMode(opts, result)
+	}
 	return renderFileMode(opts, result)
+}
+
+func renderGroupedFileMode(opts *Options, result *service.BlameResult) error {
+	out := opts.IO.Out
+
+	if opts.JSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(result.FilesGrouped)
+	}
+
+	if opts.Quiet {
+		for _, g := range result.FilesGrouped {
+			for _, e := range g.Sessions {
+				fmt.Fprintln(out, e.SessionID)
+			}
+		}
+		return nil
+	}
+
+	header := "Last AI session per file:"
+	if opts.All {
+		header = "All AI sessions grouped by file:"
+	}
+	fmt.Fprintf(out, "%s\n\n", header)
+
+	fmt.Fprintf(out, "%-30s  %-12s  %-12s  %-12s  %-20s  %-8s  %-12s  %s\n",
+		"FILE", "SESSION_ID", "PROVIDER", "AGENT", "BRANCH", "CHANGE", "DATE", "SUMMARY")
+	fmt.Fprintf(out, "%-30s  %-12s  %-12s  %-12s  %-20s  %-8s  %-12s  %s\n",
+		"----", "----------", "--------", "-----", "------", "------", "----", "-------")
+
+	for _, g := range result.FilesGrouped {
+		file := truncate(g.File, 30)
+		if len(g.Sessions) == 0 {
+			fmt.Fprintf(out, "%-30s  %s\n", file, "(no sessions)")
+			continue
+		}
+		for _, e := range g.Sessions {
+			id := truncate(string(e.SessionID), 12)
+			prov := truncate(string(e.Provider), 12)
+			agent := e.Agent
+			if agent == "" {
+				agent = "-"
+			}
+			br := truncate(e.Branch, 20)
+			change := truncate(string(e.ChangeType), 8)
+			date := timeAgo(e.CreatedAt)
+			summary := truncate(e.Summary, 30)
+
+			fmt.Fprintf(out, "%-30s  %-12s  %-12s  %-12s  %-20s  %-8s  %-12s  %s\n",
+				file, id, prov, agent, br, change, date, summary)
+		}
+	}
+	return nil
 }
 
 func renderProjectView(opts *Options, result *service.BlameResult) error {

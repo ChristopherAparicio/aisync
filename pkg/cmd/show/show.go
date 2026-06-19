@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
@@ -82,7 +83,18 @@ func runShow(opts *Options, idArg string) error {
 		fmt.Fprintf(out, "Remote:   %s\n", sess.RemoteURL)
 	}
 	if sess.ProjectPath != "" {
-		fmt.Fprintf(out, "Project:  %s\n", sess.ProjectPath)
+		if display := resolveDisplay(opts.Factory, sess.RemoteURL, sess.ProjectPath); display.Aliased {
+			fmt.Fprintf(out, "Project:  %s\n", display.Project)
+			if display.Repository != "" {
+				fmt.Fprintf(out, "Repo:     %s\n", display.Repository)
+			}
+			if display.Subproject != "" {
+				fmt.Fprintf(out, "Subproj:  %s\n", display.Subproject)
+			}
+			fmt.Fprintf(out, "Worktree: %s\n", sess.ProjectPath)
+		} else {
+			fmt.Fprintf(out, "Project:  %s\n", sess.ProjectPath)
+		}
 	}
 	if !sess.CreatedAt.IsZero() {
 		fmt.Fprintf(out, "Captured: %s\n", sess.CreatedAt.Format("2006-01-02 15:04:05"))
@@ -269,6 +281,17 @@ func runShow(opts *Options, idArg string) error {
 	}
 
 	return nil
+}
+
+func resolveDisplay(factory *cmdutil.Factory, remoteURL, projectPath string) config.ProjectDisplay {
+	if factory == nil {
+		return config.ProjectDisplay{}
+	}
+	cfg, err := factory.Config()
+	if err != nil {
+		return config.ProjectDisplay{}
+	}
+	return cfg.ResolveProjectDisplay(remoteURL, projectPath)
 }
 
 func formatNumber(n int) string {

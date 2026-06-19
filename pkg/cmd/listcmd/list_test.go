@@ -2,11 +2,14 @@ package listcmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ChristopherAparicio/aisync/git"
+	"github.com/ChristopherAparicio/aisync/internal/config"
 	"github.com/ChristopherAparicio/aisync/internal/service"
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/storage"
@@ -27,6 +30,9 @@ func listTestFactory(t *testing.T, store *testutil.MockStore) (*cmdutil.Factory,
 
 	f := &cmdutil.Factory{
 		IOStreams: ios,
+		ConfigFunc: func() (*config.Config, error) {
+			return config.New("", "")
+		},
 		GitFunc:   func() (*git.Client, error) { return gitClient, nil },
 		StoreFunc: func() (storage.Store, error) { return store, nil },
 		SessionServiceFunc: func() (service.SessionServicer, error) {
@@ -38,6 +44,19 @@ func listTestFactory(t *testing.T, store *testutil.MockStore) (*cmdutil.Factory,
 	}
 
 	return f, ios
+}
+
+func listTestConfig(t *testing.T, body string) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.New(dir, "")
+	if err != nil {
+		t.Fatalf("config.New: %v", err)
+	}
+	return cfg
 }
 
 func TestTruncate(t *testing.T) {
@@ -170,12 +189,51 @@ func TestList_withSessions(t *testing.T) {
 	}
 
 	output := ios.Out.(*bytes.Buffer).String()
-	// ID is truncated to 12 chars: "test-sessio…"
-	if !strings.Contains(output, "test-sessio") {
-		t.Error("expected session ID in output")
+	if !strings.Contains(output, "test-session-1") {
+		t.Error("expected full session ID in output")
 	}
 	if !strings.Contains(output, "claude-code") {
 		t.Error("expected provider name in output")
+	}
+}
+
+func TestList_globalUsesProjectAlias(t *testing.T) {
+	store := testutil.NewMockStore()
+	store.Summaries = []session.Summary{
+		{
+			ID:           "ses-omogen",
+			Provider:     session.ProviderOpenCode,
+			ProjectPath:  "/home/u/.local/share/opencode/worktree/abc/quick-meadow",
+			RemoteURL:    "github.com/Omogen-ai/backend",
+			MessageCount: 44,
+			TotalTokens:  4206301,
+			CreatedAt:    time.Now(),
+		},
+	}
+
+	f, ios := listTestFactory(t, store)
+	cfg := listTestConfig(t, `{
+		"project_aliases": {
+			"omogen": {
+				"display_name": "Omogen",
+				"repository": "monorepo",
+				"remotes": ["Omogen-ai/backend", "Omogen-ai/frontend", "Omogen-ai/voiceagent"]
+			}
+		}
+	}`)
+	f.ConfigFunc = func() (*config.Config, error) { return cfg, nil }
+
+	opts := &Options{IO: ios, Factory: f, Global: true}
+	if err := runList(opts); err != nil {
+		t.Fatalf("runList() error = %v", err)
+	}
+
+	output := ios.Out.(*bytes.Buffer).String()
+	if !strings.Contains(output, "Omogen") {
+		t.Errorf("expected aliased project name, got:\n%s", output)
+	}
+	if strings.Contains(output, "quick-meadow") {
+		t.Errorf("expected worktree path to be hidden in PROJECT column, got:\n%s", output)
 	}
 }
 

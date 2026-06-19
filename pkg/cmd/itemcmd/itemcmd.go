@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ChristopherAparicio/aisync/internal/service"
+	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 	"github.com/ChristopherAparicio/aisync/pkg/iostreams"
 )
@@ -24,6 +26,7 @@ type Options struct {
 	Ref         string
 	Kind        string
 	ProjectPath string
+	Source      string
 	All         bool
 	JSON        bool
 }
@@ -42,10 +45,11 @@ An optional kind argument filters by work-item kind (feature, bug, ...).
 By default only the current project's tickets are shown; use --all for every project.
 
 Examples:
-  aisync items                 # all tickets in the current project, sorted by cost
-  aisync items bug             # only bugs
-  aisync items feature --json  # features, machine-readable
-  aisync items --all           # tickets across every project`,
+  aisync items                       # all tickets in the current project, sorted by cost
+  aisync items bug                   # only bugs
+  aisync items feature --json        # features, machine-readable
+  aisync items --all                 # tickets across every project
+  aisync items --source notion       # only tickets from the notion source`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if len(args) == 1 {
@@ -58,6 +62,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output results as JSON")
 	cmd.Flags().BoolVarP(&opts.All, "all", "a", false, "List tickets across all projects (default: current project only)")
 	cmd.Flags().StringVar(&opts.ProjectPath, "project", "", "Filter by an explicit project path")
+	cmd.Flags().StringVar(&opts.Source, "source", "", "Filter by ticket source (e.g. notion, jira, linear, github)")
 
 	return cmd
 }
@@ -73,8 +78,10 @@ func NewCmdItem(f *cmdutil.Factory) *cobra.Command {
 usage and estimated implementation cost.
 
 Examples:
-  aisync item OMO-904          # detail for ticket OMO-904
-  aisync item OMO-904 --json   # machine-readable`,
+  aisync item OMO-904                # detail for ticket OMO-904
+  aisync item OMO-904 --json         # machine-readable
+  aisync item OMO-904 --project /p   # restrict to one project
+  aisync item OMO-904 --source notion # restrict to notion source`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			opts.Ref = args[0]
@@ -83,6 +90,8 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&opts.ProjectPath, "project", "", "Filter by an explicit project path")
+	cmd.Flags().StringVar(&opts.Source, "source", "", "Filter by ticket source (e.g. notion, jira, linear, github)")
 
 	return cmd
 }
@@ -95,7 +104,7 @@ func runItems(opts *Options) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	req := service.WorkItemRequest{Kind: opts.Kind}
+	req := service.WorkItemRequest{Kind: opts.Kind, Source: opts.Source}
 	switch {
 	case opts.ProjectPath != "":
 		req.ProjectPath = opts.ProjectPath
@@ -139,12 +148,18 @@ func runItem(opts *Options) error {
 		return fmt.Errorf("initializing service: %w", err)
 	}
 
-	item, err := svc.WorkItem(context.Background(), opts.Ref)
+	item, err := svc.WorkItem(context.Background(), opts.Ref, service.WorkItemRequest{
+		ProjectPath: opts.ProjectPath,
+		Source:      opts.Source,
+	})
 	if err != nil {
 		return err
 	}
+	return printWorkItem(out, item, opts.JSON)
+}
 
-	if opts.JSON {
+func printWorkItem(out io.Writer, item *session.WorkItem, asJSON bool) error {
+	if asJSON {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(item)

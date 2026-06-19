@@ -29,6 +29,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/llmfactory"
 	"github.com/ChristopherAparicio/aisync/internal/llmqueue"
 	"github.com/ChristopherAparicio/aisync/internal/notification"
+	"github.com/ChristopherAparicio/aisync/internal/notification/adapter/notifstore"
 	notifslack "github.com/ChristopherAparicio/aisync/internal/notification/adapter/slack"
 	notifwebhook "github.com/ChristopherAparicio/aisync/internal/notification/adapter/webhook"
 	"github.com/ChristopherAparicio/aisync/internal/pricing"
@@ -39,6 +40,7 @@ import (
 	"github.com/ChristopherAparicio/aisync/internal/session"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver"
 	"github.com/ChristopherAparicio/aisync/internal/skillresolver/llmanalyzer"
+	"github.com/ChristopherAparicio/aisync/internal/stalldetector"
 	"github.com/ChristopherAparicio/aisync/internal/web"
 	"github.com/ChristopherAparicio/aisync/pkg/cmdutil"
 )
@@ -548,6 +550,24 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 				appCfg.GetSchedulerGCCron(), appCfg.GetSchedulerGCRetentionDays())
 		}
 
+		retentionPolicy := appCfg.GetRetentionPolicy()
+		if retentionPolicy.Enabled {
+			if compactor, ok := sessionSvc.(scheduler.RetentionCompactor); ok {
+				entries = append(entries, scheduler.Entry{
+					Schedule: retentionPolicy.Cron,
+					Task: scheduler.NewRetentionTask(scheduler.RetentionTaskConfig{
+						SessionService: compactor,
+						Policy:         retentionPolicy,
+						Logger:         logger,
+					}),
+				})
+				logger.Printf("scheduled task: retention_compact (%s, idle=%s, max_tokens=%d)",
+					retentionPolicy.Cron, retentionPolicy.CompactAfterIdle, retentionPolicy.MaxTokens)
+			} else {
+				logger.Println("retention_compact skipped: session service does not support local compaction")
+			}
+		}
+
 		// Capture-all task — periodically captures from all providers.
 		if appCfg.GetSchedulerCaptureAllEnabled() {
 			entries = append(entries, scheduler.Entry{
@@ -590,6 +610,33 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 				}),
 			})
 			logger.Println("scheduled task: hotspots_compute (15 3 * * *)")
+		}
+
+		// Stall-detector task — every 5 minutes, scans OpenCode's live SQLite
+		// DB for stuck tools (running >15min) + errored messages (aborted,
+		// 429, provider errors). Upserts into session_stalls and seals rows
+		// that are no longer live. OpenCode-only; skipped if opencode.db
+		// is missing.
+		if storeSched, storeErr := f.Store(); storeErr == nil {
+			ocDBPath := opencodeDBPath()
+			if ocDBPath != "" {
+				if _, statErr := os.Stat(ocDBPath); statErr == nil {
+					entries = append(entries, scheduler.Entry{
+						Schedule: "*/5 * * * *", // every 5 minutes
+						Task: scheduler.NewStallDetectorTask(scheduler.StallDetectorTaskConfig{
+							Store:          storeSched,
+							OpenCodeDBPath: ocDBPath,
+							Threshold:      stalldetector.DefaultThreshold,
+							Lookback:       stalldetector.DefaultLookback,
+							Pricing:        pricing.DefaultCatalog(),
+							Logger:         logger,
+						}),
+					})
+					logger.Printf("scheduled task: stall_detector (*/5 * * * *, db=%s)", ocDBPath)
+				} else {
+					logger.Printf("stall_detector skipped: opencode.db not found at %s", ocDBPath)
+				}
+			}
 		}
 
 		// Backfill remote URLs task — resolves git remote URLs for sessions that lack them.
@@ -658,11 +705,23 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 			logger.Printf("scheduled task: registry_scan (%s)", cronExpr)
 		}
 
-		// ── Notification service (optional, shared across scheduler tasks) ──
+		// ── Notification service (always-on internal log + optional external channels) ──
+		// notifstore persists every event so /alerts and `aisync alerts` work
+		// without any external channel configured.
 		var notifSvc *notification.Service
 		var slackClient *notifslack.Client
-		if appCfg.IsNotificationEnabled() {
+		{
 			var channels []notification.ChannelWithFormatter
+
+			if notifStoreSched, notifStoreErr := f.Store(); notifStoreErr == nil {
+				if storeClient := notifstore.NewClient(notifStoreSched); storeClient != nil {
+					channels = append(channels, notification.ChannelWithFormatter{
+						Channel:   storeClient,
+						Formatter: notifstore.NewFormatter(),
+					})
+					logger.Println("notification channel: notifstore (always-on)")
+				}
+			}
 
 			slackClient = notifslack.NewClient(notifslack.ClientConfig{
 				WebhookURL: appCfg.GetNotificationSlackWebhookURL(),
@@ -673,6 +732,7 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 					Channel:   slackClient,
 					Formatter: notifslack.NewFormatter(),
 				})
+				logger.Println("notification channel: slack")
 			}
 
 			whClient := notifwebhook.NewClient(notifwebhook.ClientConfig{
@@ -684,33 +744,36 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 					Channel:   whClient,
 					Formatter: notifwebhook.NewFormatter(),
 				})
+				logger.Println("notification channel: webhook")
 			}
 
-			router := notification.NewDefaultRouter(notification.RoutingConfig{
-				DefaultChannel:  appCfg.GetNotificationDefaultChannel(),
-				ProjectChannels: appCfg.GetNotificationProjectChannels(),
-				Alerts: notification.AlertConfig{
-					Budget:          appCfg.IsNotificationAlertBudgetEnabled(),
-					Errors:          appCfg.IsNotificationAlertErrorsEnabled(),
-					Capture:         appCfg.IsNotificationAlertCaptureEnabled(),
-					ErrorThreshold:  appCfg.GetNotificationErrorThreshold(),
-					ErrorWindowMins: appCfg.GetNotificationErrorWindowMins(),
-				},
-				Digest: notification.DigestConfig{
-					Daily:    appCfg.IsNotificationDigestDailyEnabled(),
-					Weekly:   appCfg.IsNotificationDigestWeeklyEnabled(),
-					Personal: appCfg.IsNotificationDigestPersonalEnabled(),
-				},
-			})
+			if len(channels) > 0 {
+				router := notification.NewDefaultRouter(notification.RoutingConfig{
+					DefaultChannel:  appCfg.GetNotificationDefaultChannel(),
+					ProjectChannels: appCfg.GetNotificationProjectChannels(),
+					Alerts: notification.AlertConfig{
+						Budget:          appCfg.IsNotificationAlertBudgetEnabled(),
+						Errors:          appCfg.IsNotificationAlertErrorsEnabled(),
+						Capture:         appCfg.IsNotificationAlertCaptureEnabled(),
+						ErrorThreshold:  appCfg.GetNotificationErrorThreshold(),
+						ErrorWindowMins: appCfg.GetNotificationErrorWindowMins(),
+					},
+					Digest: notification.DigestConfig{
+						Daily:    appCfg.IsNotificationDigestDailyEnabled(),
+						Weekly:   appCfg.IsNotificationDigestWeeklyEnabled(),
+						Personal: appCfg.IsNotificationDigestPersonalEnabled(),
+					},
+				})
 
-			notifSvc = notification.NewService(notification.ServiceConfig{
-				Channels:     channels,
-				Router:       router,
-				Deduplicator: notification.NewDeduplicator(notification.DeduplicatorConfig{}),
-				Logger:       logger,
-			})
-			if notifSvc != nil {
-				logger.Println("notification service initialized")
+				notifSvc = notification.NewService(notification.ServiceConfig{
+					Channels:     channels,
+					Router:       router,
+					Deduplicator: notification.NewDeduplicator(notification.DeduplicatorConfig{}),
+					Logger:       logger,
+				})
+				if notifSvc != nil {
+					logger.Println("notification service initialized")
+				}
 			}
 		}
 
@@ -747,6 +810,31 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 					}),
 				})
 				logger.Println("scheduled task: error_spike (*/15 * * * *)")
+			}
+		}
+
+		// Stall-alert task — evaluates configured thresholds against
+		// session_stalls and fires EventStallSpike when a rule crosses.
+		// Registered only when stall alerts are enabled AND a notification
+		// service is configured.
+		if appCfg.IsNotificationAlertStallsEnabled() && notifSvc != nil {
+			if storeSched, storeErr := f.Store(); storeErr == nil {
+				cron := appCfg.GetNotificationStallAlertCron()
+				entries = append(entries, scheduler.Entry{
+					Schedule: cron,
+					Task: scheduler.NewStallAlertTask(scheduler.StallAlertTaskConfig{
+						Store:        storeSched,
+						NotifService: notifSvc,
+						Thresholds: stalldetector.AlertThresholds{
+							LiveCount:    appCfg.GetNotificationStallLiveCount(),
+							NewStalls24h: appCfg.GetNotificationStallNewCount24h(),
+							CostLost24h:  appCfg.GetNotificationStallCostUSD24h(),
+						},
+						DashboardURL: dashboardURL,
+						Logger:       logger,
+					}),
+				})
+				logger.Printf("scheduled task: stall_alert (%s)", cron)
 			}
 		}
 
@@ -936,6 +1024,7 @@ func runServe(f *cmdutil.Factory, addr string, webOnly bool) error {
 				sched.WarmUp(
 					"cost_backfill",
 					"analytics_backfill",
+					"stall_detector",
 				)
 			}
 		}
@@ -1089,4 +1178,15 @@ func (a *slackResolverAdapter) LookupByEmail(email string) (*scheduler.SlackUser
 		Name:     user.Name,
 		RealName: user.RealName,
 	}, nil
+}
+
+func opencodeDBPath() string {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "opencode", "opencode.db")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "opencode", "opencode.db")
 }

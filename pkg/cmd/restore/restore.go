@@ -431,6 +431,12 @@ func runRestore(opts *Options) error {
 
 	fmt.Fprintf(out, "Restored session %s\n", result.Session.ID)
 	fmt.Fprintf(out, "  Provider: %s\n", result.Session.Provider)
+	if result.Fidelity != "" {
+		fmt.Fprintf(out, "  Fidelity: %s\n", result.Fidelity)
+	}
+	if result.Warning != "" {
+		fmt.Fprintf(out, "  Warning:  %s\n", result.Warning)
+	}
 
 	switch result.Method {
 	case "native":
@@ -468,6 +474,12 @@ func renderDryRunPreview(w io.Writer, preview *service.DryRunPreview) error {
 		fmt.Fprintf(w, "  Summary:    %s\n", preview.Summary)
 	}
 	fmt.Fprintf(w, "  Method:     %s\n", preview.Method)
+	if preview.Fidelity != "" {
+		fmt.Fprintf(w, "  Fidelity:   %s\n", preview.Fidelity)
+	}
+	if preview.Warning != "" {
+		fmt.Fprintf(w, "  Warning:    %s\n", preview.Warning)
+	}
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  Messages:   %d\n", preview.MessageCount)
 	fmt.Fprintf(w, "  Tool calls: %d\n", preview.ToolCallCount)

@@ -20,15 +20,18 @@ func NewCmdBackfill(f *cmdutil.Factory) *cobra.Command {
 		Long: `Run data quality maintenance tasks on existing sessions.
 
 These commands fix historical data that may be incomplete:
-  remote-url   Resolve git remote URLs for sessions missing them
-  forks        Detect fork relationships across all sessions
-  events       Extract session events and recompute analytics buckets`,
+  remote-url       Resolve git remote URLs for sessions missing them
+  forks            Detect fork relationships across all sessions
+  events           Extract session events and recompute analytics buckets
+  files            Extract file operations from session tool calls
+  normalize-paths  Rewrite absolute in-project file paths to project-relative`,
 	}
 
 	cmd.AddCommand(newCmdBackfillRemoteURL(f))
 	cmd.AddCommand(newCmdBackfillForks(f))
 	cmd.AddCommand(newCmdBackfillEvents(f))
 	cmd.AddCommand(newCmdBackfillFiles(f))
+	cmd.AddCommand(newCmdBackfillNormalizePaths(f))
 
 	return cmd
 }

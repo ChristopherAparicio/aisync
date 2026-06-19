@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/agentscmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/alertscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/analyzecmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/authcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/backfillcmd"
@@ -36,9 +37,11 @@ import (
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/replaycmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/restore"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/retentioncmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/rewindcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/secrets"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd"
+	"github.com/ChristopherAparicio/aisync/pkg/cmd/sessionscmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/setupcmd"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/show"
 	"github.com/ChristopherAparicio/aisync/pkg/cmd/skillobservecmd"
@@ -115,12 +118,15 @@ func NewCmdRoot(f *cmdutil.Factory, version string) *cobra.Command {
 	cmd.AddCommand(usagecmd.NewCmdUsage(f))
 	cmd.AddCommand(setupcmd.NewCmdSetup(f))
 	cmd.AddCommand(projectcmd.NewCmdProject(f))
+	cmd.AddCommand(sessionscmd.NewCmdSessions(f))
+	cmd.AddCommand(alertscmd.NewCmdAlerts(f))
 	cmd.AddCommand(userscmd.NewCmdUsers(f))
 	cmd.AddCommand(diagnosecmd.NewCmdDiagnose(f))
 	cmd.AddCommand(inspectcmd.NewCmdInspect(f))
 	cmd.AddCommand(modulecmd.NewCmdModule(f))
 	cmd.AddCommand(recommendcmd.NewCmdRecommend(f))
 	cmd.AddCommand(skillobservecmd.NewCmdSkillObserve(f))
+	cmd.AddCommand(retentioncmd.NewCmdRetention(f))
 
 	return cmd
 }
