@@ -1,0 +1,6 @@
+=== RUN   TestLinkCronRuns_Orphan
+--- PASS: TestLinkCronRuns_Orphan (0.00s)
+=== RUN   TestMapMessage_SentinelDecoded
+--- PASS: TestMapMessage_SentinelDecoded (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/hermes	0.220s

@@ -1,0 +1,3 @@
+2026/06/15 00:08:12 [search] FTS5 engine initialized
+No AI sessions found for file "nonexistent/file.go"
+exit:0

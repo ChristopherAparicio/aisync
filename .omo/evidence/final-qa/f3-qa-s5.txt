@@ -1,0 +1,7 @@
+2026/06/15 00:07:27 [search] FTS5 engine initialized
+AI sessions that touched "internal/a.go" (2 found):
+
+SESSION_ID    PROVIDER      AGENT         BRANCH                    CHANGE    DATE          SUMMARY
+----------    --------      -----         ------                    ------    ----          -------
+ses-empty-1   opencode      -             main                      modified  162d ago      No agent session
+ses-jarvis-1  opencode      jarvis        main                      modified  164d ago      Jarvis worked on A

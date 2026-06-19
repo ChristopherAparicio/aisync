@@ -1,0 +1,105 @@
+aisync Preflight Probe Output — 2026-06-13
+==========================================
+
+=== A2: efficiency probe (with real session ID ses_13f9635c3ffeIEEtehCHc0vKR2) ===
+
+$ aisync efficiency ses_13f9635c3ffeIEEtehCHc0vKR2
+2026/06/13 12:05:00 [search] FTS5 engine initialized
+Error: LLM efficiency analysis: ollama HTTP 404: {"error":"model 'qwen3.5:35b' not found"}
+EXIT:1
+
+=== A2: stats --cost probe (alternative cost command, no LLM needed) ===
+
+$ aisync stats --cost
+2026/06/13 12:05:08 [search] FTS5 engine initialized
+=== Overall Statistics ===
+  Sessions:  387
+  Messages:  201937
+  Tokens:    37964.1M
+  Cost:      $7280.68
+
+=== By Provider ===
+  opencode       387 sessions
+
+=== By Branch ===
+  BRANCH                          SESSIONS    TOKENS        COST
+  master                               251  32298.5M    $7280.68
+                                       136   5665.6M       $0.00
+
+=== Most Touched Files ===
+   112  /Users/guardix/dev/aisync/internal/session/session.go
+    77  /Users/guardix/dev/aisync/internal/service/session.go
+    75  /Users/guardix/dev/aisync/internal/provider/opencode/opencode.go
+    73  /Users/guardix/dev/aisync/internal/storage/store.go
+EXIT:0
+
+=== A4: FTS --search probe ===
+
+$ aisync list --search "authentication token"
+2026/06/13 12:04:58 [search] FTS5 engine initialized
+# 16 session(s) — scope: branch "master" — filters: search="authentication token"
+
+ID                              PROVIDER      BRANCH                    MESSAGES    TOKENS  CAPTURED
+----                            --------      ------                    --------    ------  --------
+ses_2d67dcd94ffeSj9xMvaC5cmepl  opencode      master                          10      873k  79 days ago
+ses_2d8b9ed6cffeEImtCdFFjyYw8T  opencode      master                           9      577k  79 days ago
+ses_13fab74c4ffegCtGzbMJ2eZ7zn  opencode      master                           3       20k  31 min ago
+ses_2b56780bcffeIrvAY9CqqxBNxl  opencode      master                          12     1108k  72 days ago
+ses_2b5668765ffeiOvCDKZFfR4uoQ  opencode      master                          15      737k  72 days ago
+ses_2b11fd385ffemrTRYF4wN5lxKg  opencode      master                          10      757k  71 days ago
+ses_279b4692fffe2nb8etHO0N2MnF  opencode      master                          11      946k  61 days ago
+ses_2d1d536a5ffe4fGzP3c41PmCEb  opencode      master                          11      657k  78 days ago
+ses_2aff06992ffeCMrQsvC81prgF1  opencode      master                           4       57k  71 days ago
+ses_2b2dae945ffeRRWHfRE739XA7p  opencode      master                           9      521k  72 days ago
+ses_2b7edfe80ffeoCm6lpocf2QDp9  opencode      master                           8      212k  73 days ago
+ses_279b90abdffeB20djWZoiTU6xh  opencode      master                          12      825k  61 days ago
+ses_13fabc59cffe3gvadO99P2W0OA  opencode      master                           8      430k  31 min ago
+ses_2d64e4e08ffeibQkCgtt9cakoV  opencode      master                          21     1136k  78 days ago
+ses_2d67bda72fferVKDWAK7AxoDeP  opencode      master                          10      635k  79 days ago
+ses_20cb4f368ffeSOQpXkUO6w17sK  opencode      master                          38     1931k  39 days ago
+EXIT:0
+
+ANALYSIS: 16 results returned for "authentication token". Top result summary:
+"Investigate pricing & billing (@explore subagent)" — clearly unrelated to authentication.
+FTS5 is matching on full raw message content (truncated at 50k chars), not summaries.
+This produces false positives. The --search flag exits 0 but results are unreliable.
+VERDICT: AVOID(buggy) — do not use as primary search path in skills.
+
+=== A4: --provider filter + --json probe ===
+
+$ aisync list --provider opencode --limit 5 --json
+2026/06/13 12:04:48 [search] FTS5 engine initialized
+[
+  {
+    "created_at": "2026-06-13T11:56:59Z",
+    "updated_at": "2026-06-13T11:57:16.985+02:00",
+    "id": "ses_13f9635c3ffeIEEtehCHc0vKR2",
+    "owner_id": "8259d828-baed-4861-adc3-ee1073f6b38a",
+    "provider": "opencode",
+    "agent": "oracle",
+    "branch": "master",
+    "project_path": "/Users/guardix/dev/aisync",
+    "remote_url": "github.com/Omogen-ai/backend",
+    "summary": "Verify the plan at (@oracle subagent)",
+    "status": "active",
+    "message_count": 3,
+    "total_tokens": 141803,
+    "tool_call_count": 1,
+    "error_count": 0,
+    "estimated_cost": 0.3251121,
+    "actual_cost": 0.3251121
+  },
+  ... (5 results total, all valid JSON objects)
+]
+EXIT:0
+
+=== A4: --branch filter probe ===
+
+$ aisync list --branch master --limit 3
+2026/06/13 12:04:59 [search] FTS5 engine initialized
+ID                              PROVIDER      BRANCH                    MESSAGES    TOKENS  CAPTURED
+----                            --------      ------                    --------    ------  --------
+ses_13f9635c3ffeIEEtehCHc0vKR2  opencode      master                           3      141k  just now
+ses_13fa09ac1ffeNSjeDgJWBW4GPk  opencode      master                           3      142k  just now
+ses_13fa6b977ffer0U5nsYSSfGwcu  opencode      master                           3      129k  just now
+EXIT:0

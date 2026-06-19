@@ -1,0 +1,4 @@
+=== RUN   TestFixture
+--- PASS: TestFixture (0.01s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/hermes	0.244s

@@ -1,0 +1,30 @@
+Task 5 - Migration 038 + CronJobStore interface + MockStore stubs
+Date: 2026-05-30
+
+== Files Changed ==
+- internal/storage/sqlite/sqlite.go
+  - Added migration038() standalone function: creates cron_jobs table (19 columns)
+  - Registered migration038(db) call in runMigrations() after migration 036
+  - Added SQLite stub methods: UpsertCronJob, ListCronJobs, GetCronJob (to be implemented by T10)
+
+- internal/storage/store.go
+  - Added CronJobStore interface (UpsertCronJob, ListCronJobs, GetCronJob)
+  - Embedded CronJobStore in the Store composition interface
+
+- internal/testutil/mock_store.go
+  - Added stub methods: UpsertCronJob, ListCronJobs, GetCronJob
+  - Compile-time check var _ storage.Store = (*MockStore)(nil) satisfied
+
+== Build Output ==
+$ go build ./...
+BUILD: OK
+
+== Test Output ==
+$ go test ./internal/storage/...
+?       github.com/ChristopherAparicio/aisync/internal/storage  [no test files]
+ok      github.com/ChristopherAparicio/aisync/internal/storage/sqlite   7.710s
+
+== Notes ==
+- Migration 037 did not exist; 038 was appended directly after 036 in runMigrations
+- session.CronJob struct already existed in internal/session/cron_job.go (created by T4)
+- SQLite store stubs return nil/nil; full implementation deferred to T10

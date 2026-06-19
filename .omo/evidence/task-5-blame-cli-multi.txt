@@ -1,0 +1,76 @@
+Task 5: blamecmd — multi-file args, --project flag, AGENT column
+Date: 2026-06-14
+Commit: feat(blame): CLI multi-file args, --project, AGENT column
+
+## TDD Protocol
+
+### RED (failing tests written first)
+Added to pkg/cmd/blamecmd/blamecmd_test.go:
+  - Updated all existing tests: FilePath → FilePaths
+  - Added TestBlame_noArgsNoProject
+  - Added TestBlame_multipleFiles
+  - Added TestBlame_agentEmptyRendersAsDash
+  - Added TestBlame_projectMode
+  - Added TestBlame_projectModeJSON
+  - Added TestBlame_projectModeQuiet
+  - Added TestBlame_quietModeNoAgentColumn
+  - Updated TestNewCmdBlame_flags: added "project" to expected flags
+
+RED confirmation:
+  $ go test ./pkg/cmd/blamecmd/ -v
+  # github.com/ChristopherAparicio/aisync/pkg/cmd/blamecmd [build failed]
+  pkg/cmd/blamecmd/blamecmd_test.go:81:3: unknown field FilePaths in struct literal of type Options
+  pkg/cmd/blamecmd/blamecmd_test.go:326:3: unknown field ProjectPath in struct literal of type Options
+  (and 9 more)
+
+### GREEN (implementation)
+Changes to pkg/cmd/blamecmd/blamecmd.go:
+  - Options.FilePath string → removed
+  - Options.FilePaths []string → added
+  - Options.ProjectPath string → added (for --project flag)
+  - cobra.ExactArgs(1) → cobra.ArbitraryArgs
+  - RunE: opts.FilePaths = args
+  - --project flag registered via StringVar
+  - runBlame: manual validation (no args + no --project → error)
+  - runBlame: effectiveProjectPath = gitClient.TopLevel() overridden by opts.ProjectPath
+  - runBlame: single file uses req.FilePath (preserves --restore); multi-file uses req.FilePaths
+  - runBlame: delegates to renderProjectView or renderFileMode
+  - renderProjectView: FILE|SESSION_ID|AGENT|DATE table; --json encodes ProjectFiles; --quiet prints LastSessionIDs
+  - renderFileMode: SESSION_ID|PROVIDER|AGENT|BRANCH|CHANGE|DATE|SUMMARY table; empty agent → "-"
+
+### GREEN confirmation
+  $ go test ./pkg/cmd/blamecmd/ -v
+  === RUN   TestNewCmdBlame_flags              --- PASS
+  === RUN   TestBlame_noArgsNoProject          --- PASS
+  === RUN   TestBlame_noResults                --- PASS
+  === RUN   TestBlame_tableOutput              --- PASS
+  === RUN   TestBlame_allFlag                  --- PASS
+  === RUN   TestBlame_jsonOutput               --- PASS
+  === RUN   TestBlame_quietOutput              --- PASS
+  === RUN   TestBlame_multipleFiles            --- PASS
+  === RUN   TestBlame_agentEmptyRendersAsDash  --- PASS
+  === RUN   TestBlame_projectMode              --- PASS
+  === RUN   TestBlame_projectModeJSON          --- PASS
+  === RUN   TestBlame_projectModeQuiet         --- PASS
+  === RUN   TestBlame_quietModeNoAgentColumn   --- PASS
+  PASS
+  ok  github.com/ChristopherAparicio/aisync/pkg/cmd/blamecmd  1.562s
+  (13 tests, all PASS)
+
+## Build
+  $ make build
+  go build -trimpath -ldflags "-s -w -X main.version=0.1.0-dev" -o bin/aisync ./cmd/aisync
+  Exit code: 0
+  bin/aisync produced: YES
+
+## LSP Diagnostics
+  blamecmd.go:  no errors
+  blamecmd_test.go: no errors
+
+## Constraints verified
+  - --quiet never emits AGENT column (TestBlame_quietModeNoAgentColumn PASS)
+  - empty agent renders as "-" not "" (TestBlame_agentEmptyRendersAsDash PASS)
+  - --json file-mode encodes Entries; --json project-mode encodes ProjectFiles (TestBlame_projectModeJSON PASS)
+  - --restore preserved: single file uses req.FilePath, not FilePaths (service Restore shortcut intact)
+  - No new sub-command added; --project is a flag on existing blame command
+  - cobra.ArbitraryArgs + manual validation (not MinimumNArgs) because --project+0 files is valid

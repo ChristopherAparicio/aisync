@@ -1,0 +1,315 @@
+F2 — Code Quality Review
+Generated: 2026-05-30
+Reviewer: Sisyphus-Junior (claude-sonnet-4-6)
+
+════════════════════════════════════════════════════════════════
+SECTION 1: BUILD
+════════════════════════════════════════════════════════════════
+Command: go build ./... 2>&1; echo "EXIT:$?"
+Exit code: 0
+Errors: none
+Result: PASS
+
+════════════════════════════════════════════════════════════════
+SECTION 2: VET
+════════════════════════════════════════════════════════════════
+Command: go vet ./... 2>&1; echo "EXIT:$?"
+Exit code: 0
+Warnings: none
+Result: PASS
+
+════════════════════════════════════════════════════════════════
+SECTION 3: TESTS — FULL SUITE (go test ./... | grep -E "^ok|^FAIL" | sort)
+════════════════════════════════════════════════════════════════
+ok  github.com/ChristopherAparicio/aisync/client
+ok  github.com/ChristopherAparicio/aisync/git
+ok  github.com/ChristopherAparicio/aisync/internal/analysis
+ok  github.com/ChristopherAparicio/aisync/internal/analysis/anthropic
+ok  github.com/ChristopherAparicio/aisync/internal/analysis/llm
+ok  github.com/ChristopherAparicio/aisync/internal/analysis/ollama
+ok  github.com/ChristopherAparicio/aisync/internal/analysis/opencode
+ok  github.com/ChristopherAparicio/aisync/internal/analysis/tooleff
+ok  github.com/ChristopherAparicio/aisync/internal/api
+ok  github.com/ChristopherAparicio/aisync/internal/auth
+ok  github.com/ChristopherAparicio/aisync/internal/benchmark
+ok  github.com/ChristopherAparicio/aisync/internal/capture
+ok  github.com/ChristopherAparicio/aisync/internal/categorizer
+ok  github.com/ChristopherAparicio/aisync/internal/config
+ok  github.com/ChristopherAparicio/aisync/internal/converter
+ok  github.com/ChristopherAparicio/aisync/internal/diagnostic
+ok  github.com/ChristopherAparicio/aisync/internal/diagnostic/modules/example
+ok  github.com/ChristopherAparicio/aisync/internal/e2e
+ok  github.com/ChristopherAparicio/aisync/internal/errorclass
+ok  github.com/ChristopherAparicio/aisync/internal/gitsync
+ok  github.com/ChristopherAparicio/aisync/internal/gittree
+ok  github.com/ChristopherAparicio/aisync/internal/hooks
+ok  github.com/ChristopherAparicio/aisync/internal/identity
+ok  github.com/ChristopherAparicio/aisync/internal/ingest/ollama
+ok  github.com/ChristopherAparicio/aisync/internal/llm/claude
+ok  github.com/ChristopherAparicio/aisync/internal/llmqueue
+ok  github.com/ChristopherAparicio/aisync/internal/mcp
+ok  github.com/ChristopherAparicio/aisync/internal/notification
+ok  github.com/ChristopherAparicio/aisync/internal/notification/adapter/notifstore
+ok  github.com/ChristopherAparicio/aisync/internal/notification/adapter/slack
+ok  github.com/ChristopherAparicio/aisync/internal/platform
+ok  github.com/ChristopherAparicio/aisync/internal/platform/github
+ok  github.com/ChristopherAparicio/aisync/internal/pricing
+ok  github.com/ChristopherAparicio/aisync/internal/provider
+ok  github.com/ChristopherAparicio/aisync/internal/provider/claude
+ok  github.com/ChristopherAparicio/aisync/internal/provider/cursor
+ok  github.com/ChristopherAparicio/aisync/internal/provider/hermes
+ok  github.com/ChristopherAparicio/aisync/internal/provider/opencode
+ok  github.com/ChristopherAparicio/aisync/internal/registry
+ok  github.com/ChristopherAparicio/aisync/internal/replay
+ok  github.com/ChristopherAparicio/aisync/internal/restore
+ok  github.com/ChristopherAparicio/aisync/internal/restore/filter
+ok  github.com/ChristopherAparicio/aisync/internal/scheduler
+ok  github.com/ChristopherAparicio/aisync/internal/search/elastic
+ok  github.com/ChristopherAparicio/aisync/internal/search/fts5
+ok  github.com/ChristopherAparicio/aisync/internal/secrets
+ok  github.com/ChristopherAparicio/aisync/internal/secrets/scanplugin
+ok  github.com/ChristopherAparicio/aisync/internal/service
+ok  github.com/ChristopherAparicio/aisync/internal/session
+ok  github.com/ChristopherAparicio/aisync/internal/sessionevent
+ok  github.com/ChristopherAparicio/aisync/internal/skillobs
+ok  github.com/ChristopherAparicio/aisync/internal/skillresolver
+ok  github.com/ChristopherAparicio/aisync/internal/skillresolver/llmanalyzer
+ok  github.com/ChristopherAparicio/aisync/internal/stalldetector
+ok  github.com/ChristopherAparicio/aisync/internal/storage/sqlite
+ok  github.com/ChristopherAparicio/aisync/internal/tagger
+ok  github.com/ChristopherAparicio/aisync/internal/telemetry
+ok  github.com/ChristopherAparicio/aisync/internal/tui
+ok  github.com/ChristopherAparicio/aisync/internal/web
+ok  github.com/ChristopherAparicio/aisync/internal/webhooks
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/agentscmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/analyzecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/backfillcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/blamecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/capture
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/commentcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/config
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/diagnosecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/diffcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/efficiencycmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/errorscmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/explaincmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/export
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/factory
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/gccmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/hooks
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/importcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/initcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/inspectcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/linkcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/listcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/mcpcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/modulecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/projectcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/recommendcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/restore
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/rewindcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/root
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/secrets
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/show
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/skillobservecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/statscmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/status
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/synccmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/tagcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/toolusagecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/tuicmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/validatecmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmd/webcmd
+ok  github.com/ChristopherAparicio/aisync/pkg/cmdutil
+
+Total: 96 packages ok, 0 FAIL
+Result: PASS
+
+════════════════════════════════════════════════════════════════
+SECTION 4: TODO/FIXME/HACK SCAN (new Hermes files)
+════════════════════════════════════════════════════════════════
+Command: rg -n "TODO|FIXME|HACK|XXX" internal/provider/hermes/ internal/storage/sqlite/cron_job_store.go internal/web/handlers.go internal/session/cron_job.go
+Result: no matches
+Result: CLEAN
+
+════════════════════════════════════════════════════════════════
+SECTION 5: FILE-BY-FILE CODE QUALITY FINDINGS
+════════════════════════════════════════════════════════════════
+
+── internal/provider/hermes/hermes.go ──
+
+ISSUE F2-1 [P1 — swallowed error, functional concern]
+  Location: Export() lines 103-108
+  Code:
+    msgs, msgErr := p.reader.listMessages(string(sessionID))
+    if msgErr == nil {
+        for _, hm := range msgs {
+            result.Messages = append(result.Messages, mapMessage(hm))
+        }
+    }
+  Problem: If listMessages fails, msgErr is silently discarded. The caller
+  receives a session struct with zero messages and no indication anything
+  went wrong. A corrupt DB page or schema mismatch would be invisible.
+  Fix: propagate msgErr (or at minimum log it at warn level).
+
+ISSUE F2-2 [P1 — swallowed error, functional concern]
+  Location: Export() lines 111-114
+  Code:
+    children, err := p.loadChildSessions(string(sessionID), mode)
+    if err == nil && len(children) > 0 {
+        result.Children = children
+    }
+  Problem: Same pattern — loadChildSessions error is dropped. The session
+  is returned without children and no error surfaced.
+  Note: err is reused from the earlier p.reader.readSession call (line 93).
+  The re-assignment on line 111 shadows the earlier check. Both the
+  shadowing and the silent drop are worth fixing together.
+  Fix: `if err != nil { return nil, fmt.Errorf("hermes: loading children: %w", err) }`
+
+ISSUE F2-3 [P2 — resource leak]
+  Location: New() line 32-34, no corresponding close anywhere
+  Code:
+    if dbr, err := newDBReader(hermesHome); err == nil {
+        p.reader = dbr
+    }
+  Problem: The *sql.DB opened inside newDBReader is never closed.
+  Provider has no Close() method and does not implement io.Closer.
+  In the CLI use-case this is benign (process exits), but in the long-
+  running `aisync serve` path the connection leaks for the server lifetime.
+  Fix: Add Close() error method to Provider; call p.reader.close() from it;
+  have the server defer provider.Close() at startup.
+
+ISSUE F2-4 [P3 — minor]
+  Location: lines 38-41, 138-142, 144-147
+  Trivial doc comments that restate the signature:
+    "// Name returns the provider identifier."
+    "// CanImport reports that Hermes does not support session import."
+    "// Import always returns an error because Hermes is read-only."
+  Matches existing codebase style (opencode adapter has the same pattern),
+  so not a blocking concern — noted for consistency.
+
+── internal/provider/hermes/dbreader.go ──
+
+ISSUE F2-5 [P2 — copy-paste, maintainability]
+  Location: listSessions (lines 62-98), readSession (101-131),
+            findChildSessions (165-203)
+  Problem: The 22-column SELECT list and the matching 22-field rows.Scan(...)
+  call are triplicated verbatim. Any Hermes schema change (new column added
+  or renamed) requires three coordinated edits. One missed edit causes a
+  runtime scan error.
+  Fix: Extract a scanSession(rows *sql.Rows) (hermesSession, error) helper
+  (or a const sessionColumns string + scanSessionRow func) shared by all
+  three query functions.
+
+No panics, no SQL injection risks (all queries use ? placeholders).
+Unused columns: none — all 22 selected columns are mapped in mapSession/
+mapMessage (ToolName, FinishReason are selected but not used in domain
+mapping; they remain in the struct for completeness — acceptable).
+
+── internal/provider/hermes/cron.go ──
+
+CLEAN. No swallowed errors, no dead code. The partial-decode tolerance
+is well-implemented via token walking. Missing-file returns (nil, nil)
+as documented. Log message on malformed JSON is appropriate.
+
+── internal/storage/sqlite/cron_job_store.go ──
+
+CLEAN. All queries parameterized (no SQL injection risk). NULL handling
+correct via sql.NullFloat64. timeToNullFloat64 is a clear, scoped helper.
+Boolean-to-int conversion (repeatInt/enabledInt) is the standard SQLite
+pattern for this codebase. raw_json as the authoritative store with
+indexed shadow columns is consistent with the design intent.
+
+── internal/web/handlers.go (handleCron, handleSessionExchanges, related) ──
+
+ISSUE F2-6 [P2 — duplicated logic]
+  Location: handleSessionExchanges lines 10131-10142
+            handleSessionExchangesMore lines 10207-10217
+  Problem: The fallback children-loading block (get links from store,
+  filter by SessionLinkDelegatedTo + SourceSessionID == sess.ID, fetch
+  each child) is copy-pasted identically into both handlers.
+  Fix: Extract to a private helper:
+    func (s *Server) loadExchangeChildren(sess *session.Session) []session.Session
+
+ISSUE F2-7 [P2 — three copies of one function]
+  Location: handlers.go stripSentinelContent (lines 10098-10103)
+            hermes/sentinel.go stripSentinel (lines 6-10)
+            (and service package per learnings.md)
+  Problem: Three independent implementations of the same 4-line sentinel-
+  strip function. Learnings note intentional isolation ("independent copy
+  from service package as required"), but three copies create drift risk
+  if the sentinel bytes ever change.
+  Fix (optional, low urgency): Export stripSentinel from a shared internal
+  package (e.g. internal/session or internal/provider/hermes) so handlers.go
+  can import it, or at minimum document the intentional duplication with a
+  comment in each copy.
+
+ISSUE F2-8 [P3 — minor inconsistency]
+  Location: handleSessionExchangesMore lines 10239-10243
+  Code:
+    type moreData struct {
+        Entries []ExchangeEntry
+        HasMore bool
+        MoreURL string
+    }
+  Problem: All other handlers in this file use named top-level page structs.
+  This anonymous inline struct is the only exception; it makes the type
+  harder to find if tests need to reference it.
+  Fix: Promote to a named type exchangeMoreData at the top of the exchanges
+  section, alongside exchangePage.
+
+handleCron: CLEAN (10 lines, nil-store guard, log-on-error, render).
+
+════════════════════════════════════════════════════════════════
+SECTION 6: AI SLOP PATTERNS CHECK
+════════════════════════════════════════════════════════════════
+
+Excessive comments: NOT FOUND. Comments are purposeful. cron.go block
+  comment documents genuine tolerances. reader.go interface comments
+  describe the contract for mock implementations. Not gratuitous.
+
+Over-abstraction / unused interfaces: NOT FOUND. The reader interface
+  in reader.go is used by both the production dbReader and test fixtures.
+  No unused interfaces or types found.
+
+Copy-paste between opencode and hermes adapters: PARTIAL.
+  The structural scaffolding of newDBReader/close/schema-check is similar
+  in both adapters, but this is the expected pattern for any SQLite adapter
+  in this codebase. The actual SQL differs materially (different schemas,
+  column names, table names). The only clear copy-paste issue between the
+  two packages is the close() method (identical 3-line body) — not worth
+  extracting given it is unexported. No action needed here beyond F2-5.
+
+════════════════════════════════════════════════════════════════
+SECTION 7: FINDINGS SUMMARY
+════════════════════════════════════════════════════════════════
+
+P1 (functional — should fix before merge):
+  F2-1  hermes.go Export(): listMessages error swallowed
+  F2-2  hermes.go Export(): loadChildSessions error swallowed + err shadowing
+
+P2 (maintainability — should fix soon):
+  F2-3  hermes/dbreader.go: *sql.DB connection never closed (no Provider.Close)
+  F2-5  hermes/dbreader.go: 22-column SELECT triplicated, no scanSession helper
+  F2-6  handlers.go: fallback children-loading block duplicated in two handlers
+  F2-7  sentinel strip function exists in 3 independent copies
+
+P3 (minor style — nice to fix):
+  F2-4  hermes.go: trivial doc comments on Name/CanImport/Import
+  F2-8  handlers.go: anonymous moreData struct should be a named type
+
+Files reviewed: 7
+Files clean:    3  (cron.go, cron_job_store.go, handleCron section)
+Files with issues: 4 (hermes.go, dbreader.go, handlers.go exchanges section, sentinel.go)
+
+════════════════════════════════════════════════════════════════
+VERDICT: CONDITIONAL APPROVE
+════════════════════════════════════════════════════════════════
+Build PASS, Vet PASS, Tests 96/96 PASS.
+P1 issues (F2-1, F2-2) are swallowed errors that make Export() silently
+wrong on DB read failures. They should be fixed before the implementation
+is declared done, but they do not break the happy path or any current test.
+P2/P3 issues are maintainability concerns that can be addressed in a
+follow-up. No security issues, no panics, no dead code, no SQL injection.

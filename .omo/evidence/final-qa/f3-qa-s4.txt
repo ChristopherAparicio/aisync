@@ -1,0 +1,2 @@
+2026/06/15 00:07:26 [search] FTS5 engine initialized
+ses-empty-1

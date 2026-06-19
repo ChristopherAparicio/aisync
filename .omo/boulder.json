@@ -1,0 +1,472 @@
+{
+  "schema_version": 2,
+  "active_work_id": "ai5-blame-file-attribution-ae6db368",
+  "works": {
+    "hermes-ai5-integration-56d412a7": {
+      "work_id": "hermes-ai5-integration-56d412a7",
+      "active_plan": "/Users/guardix/dev/aisync/.omo/plans/hermes-ai5-integration.md",
+      "plan_name": "hermes-ai5-integration",
+      "status": "completed",
+      "started_at": "2026-05-30T10:16:07.471Z",
+      "updated_at": "2026-05-30T12:36:36.620Z",
+      "session_ids": [
+        "opencode:ses_19aff520cffeuAed5NDIzTD8Hn"
+      ],
+      "session_origins": {
+        "opencode:ses_19aff520cffeuAed5NDIzTD8Hn": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "`handleCron` handler in `internal/web/handlers.go`",
+          "session_id": "ses_18756bb2fffexOdTGff3nPo5as",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "started_at": "2026-05-30T10:19:32.301Z",
+          "ended_at": "2026-05-30T11:39:19.807Z",
+          "elapsed_ms": 4787506,
+          "status": "completed",
+          "updated_at": "2026-05-30T11:39:19.807Z"
+        },
+        "todo:7": {
+          "task_key": "todo:7",
+          "task_label": "7",
+          "task_title": "Hermes adapter (Provider impl): session + token + cost mapping",
+          "session_id": "ses_1878acdd3ffe9i1J14x8t0JBrp",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-05-30T10:43:10.034Z",
+          "started_at": "2026-05-30T10:40:48.326Z",
+          "status": "completed",
+          "ended_at": "2026-05-30T10:43:10.034Z",
+          "elapsed_ms": 141708
+        },
+        "todo:8": {
+          "task_key": "todo:8",
+          "task_label": "8",
+          "task_title": "Hermes message / tool-call / reasoning / content (sentinel) mapping",
+          "session_id": "ses_187833924ffe36761QpRg2g8hR",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-05-30T10:51:57.623Z",
+          "started_at": "2026-05-30T10:51:09.394Z",
+          "status": "completed",
+          "ended_at": "2026-05-30T10:51:57.623Z",
+          "elapsed_ms": 48229
+        },
+        "todo:11": {
+          "task_key": "todo:11",
+          "task_label": "11",
+          "task_title": "Register `hermes` in factory + import/capture discovery",
+          "session_id": "ses_1877a80adffe7za4e19E0rPNER",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-05-30T11:02:07.730Z",
+          "started_at": "2026-05-30T10:57:29.857Z",
+          "status": "completed",
+          "ended_at": "2026-05-30T11:02:07.730Z",
+          "elapsed_ms": 277873
+        },
+        "todo:14": {
+          "task_key": "todo:14",
+          "task_label": "14",
+          "task_title": "Hermes delegation detection tests",
+          "session_id": "ses_1877245d1ffeOX7t25ZO9G2KD6",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "updated_at": "2026-05-30T11:12:01.119Z",
+          "started_at": "2026-05-30T11:06:52.214Z",
+          "status": "completed",
+          "ended_at": "2026-05-30T11:12:01.119Z",
+          "elapsed_ms": 308905
+        },
+        "todo:15": {
+          "task_key": "todo:15",
+          "task_label": "15",
+          "task_title": "Cron tasks web handler + route + nav",
+          "session_id": "ses_187565bb9ffeL9jYDDzHxgUKnj",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "started_at": "2026-05-30T11:22:44.832Z",
+          "status": "completed",
+          "updated_at": "2026-05-30T11:46:48.855Z",
+          "ended_at": "2026-05-30T11:46:48.855Z",
+          "elapsed_ms": 1444023
+        },
+        "todo:16": {
+          "task_key": "todo:16",
+          "task_label": "16",
+          "task_title": "Cron tasks template (CSS-only)",
+          "session_id": "ses_1874705e8ffe5bfeSOSAUMYW4Q",
+          "agent": "Sisyphus-Junior",
+          "category": "visual-engineering",
+          "updated_at": "2026-05-30T12:21:34.491Z",
+          "started_at": "2026-05-30T11:55:40.604Z",
+          "status": "completed",
+          "ended_at": "2026-05-30T12:21:34.491Z",
+          "elapsed_ms": 1553887
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "**Plan Compliance Audit** — `oracle`",
+          "session_id": "ses_1872801c6ffezYFC3eCy0qFicB",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-05-30T12:24:31.360Z",
+          "status": "completed",
+          "updated_at": "2026-05-30T12:32:45.987Z",
+          "ended_at": "2026-05-30T12:32:45.987Z",
+          "elapsed_ms": 494627
+        },
+        "final-wave:f4": {
+          "task_key": "final-wave:f4",
+          "task_label": "F4",
+          "task_title": "**Scope Fidelity Check** — `deep`",
+          "session_id": "ses_1871f619dffefqtkdrLu3EZnaD",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-05-30T12:35:41.663Z",
+          "started_at": "2026-05-30T12:35:29.986Z",
+          "status": "completed",
+          "ended_at": "2026-05-30T12:35:41.663Z",
+          "elapsed_ms": 11677
+        }
+      },
+      "ended_at": "2026-05-30T12:36:36.620Z",
+      "elapsed_ms": 8429149
+    },
+    "aisync-agent-skills-b27e5cb8": {
+      "work_id": "aisync-agent-skills-b27e5cb8",
+      "active_plan": "/Users/guardix/dev/aisync/.omo/plans/aisync-agent-skills.md",
+      "plan_name": "aisync-agent-skills",
+      "status": "completed",
+      "started_at": "2026-06-13T10:01:48.715Z",
+      "updated_at": "2026-06-13T10:32:10.691Z",
+      "session_ids": [
+        "opencode:ses_250d66998ffeZVUPHMoD6RxTPg"
+      ],
+      "session_origins": {
+        "opencode:ses_250d66998ffeZVUPHMoD6RxTPg": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "Preflight capability matrix — validate A1–A4 and probe every command",
+          "session_id": "opencode:ses_13f90323cffeQ3304B9w0ovpiL",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-low",
+          "updated_at": "2026-06-13T10:08:28.006Z",
+          "started_at": "2026-06-13T10:07:20.251Z",
+          "status": "completed",
+          "ended_at": "2026-06-13T10:08:28.006Z",
+          "elapsed_ms": 67755
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "Author `aisync-session-finder/SKILL.md` (list / search / blame / inspect / show / restore / resume)",
+          "session_id": "opencode:ses_13f88e742ffe30cY2aTR72ampx",
+          "agent": "Sisyphus-Junior",
+          "category": "writing",
+          "updated_at": "2026-06-13T10:18:23.984Z",
+          "started_at": "2026-06-13T10:14:44.519Z",
+          "status": "completed",
+          "ended_at": "2026-06-13T10:18:23.984Z",
+          "elapsed_ms": 219465
+        },
+        "todo:6": {
+          "task_key": "todo:6",
+          "task_label": "6",
+          "task_title": "Add `make install-skills` symlink target + deploy to global",
+          "session_id": "opencode:ses_13f81a084ffexDTb61EJeykfaz",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-13T10:22:33.024Z",
+          "started_at": "2026-06-13T10:22:09.848Z",
+          "status": "completed",
+          "ended_at": "2026-06-13T10:22:33.024Z",
+          "elapsed_ms": 23176
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "**Plan Compliance Audit** — `oracle`",
+          "session_id": "opencode:ses_13f77bb5fffetiVOGEmP8iyKc1",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "started_at": "2026-06-13T10:24:42.709Z",
+          "status": "completed",
+          "updated_at": "2026-06-13T10:31:13.916Z",
+          "ended_at": "2026-06-13T10:31:13.916Z",
+          "elapsed_ms": 391207
+        }
+      },
+      "ended_at": "2026-06-13T10:32:10.691Z",
+      "elapsed_ms": 1821976
+    },
+    "ai5-search-v2-b2baa995": {
+      "work_id": "ai5-search-v2-b2baa995",
+      "active_plan": "/Users/guardix/dev/aisync/.omo/plans/ai5-search-v2.md",
+      "plan_name": "ai5-search-v2",
+      "status": "completed",
+      "started_at": "2026-06-13T13:48:51.548Z",
+      "updated_at": "2026-06-13T20:42:04.616Z",
+      "session_ids": [
+        "opencode:ses_250d66998ffeZVUPHMoD6RxTPg"
+      ],
+      "session_origins": {
+        "opencode:ses_250d66998ffeZVUPHMoD6RxTPg": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "Ajouter le flag `IsCompactionSummary` à la struct `Message`",
+          "session_id": "opencode:ses_13ec03455ffeme34BC9opnYe2f",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-13T14:10:36.557Z",
+          "started_at": "2026-06-13T13:53:00.787Z",
+          "status": "completed",
+          "ended_at": "2026-06-13T14:10:36.557Z",
+          "elapsed_ms": 1055770
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "Extraction du texte de résumé de compaction (OpenCode)",
+          "session_id": "opencode:ses_13d7bf6edffe3YbKug8nwWTGG7",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "started_at": "2026-06-13T14:16:45.160Z",
+          "status": "completed",
+          "updated_at": "2026-06-13T19:52:48.458Z",
+          "ended_at": "2026-06-13T19:52:48.458Z",
+          "elapsed_ms": 20163298
+        },
+        "todo:7": {
+          "task_key": "todo:7",
+          "task_label": "7",
+          "task_title": "Réindex sur copie DB + run A/B éval + assertion seuils + rapport",
+          "session_id": "opencode:ses_13d739461ffet6o7Zi191MJWGK",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-06-13T20:23:13.798Z",
+          "started_at": "2026-06-13T20:22:26.768Z",
+          "status": "completed",
+          "ended_at": "2026-06-13T20:23:13.798Z",
+          "elapsed_ms": 47030
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "**Plan Compliance Audit** — `oracle`",
+          "session_id": "opencode:ses_13d5852a8ffeo6n3HE9j3eGKlv",
+          "agent": "oracle",
+          "updated_at": "2026-06-13T20:41:18.821Z",
+          "started_at": "2026-06-13T20:24:59.152Z",
+          "status": "completed",
+          "ended_at": "2026-06-13T20:41:18.821Z",
+          "elapsed_ms": 979669
+        }
+      },
+      "ended_at": "2026-06-13T20:42:04.616Z",
+      "elapsed_ms": 24793068
+    },
+    "ai5-blame-file-attribution-ae6db368": {
+      "work_id": "ai5-blame-file-attribution-ae6db368",
+      "active_plan": "/Users/guardix/dev/aisync/.omo/plans/ai5-blame-file-attribution.md",
+      "plan_name": "ai5-blame-file-attribution",
+      "status": "completed",
+      "started_at": "2026-06-14T21:22:18.804Z",
+      "updated_at": "2026-06-14T22:14:50.994Z",
+      "session_ids": [
+        "opencode:ses_250d66998ffeZVUPHMoD6RxTPg"
+      ],
+      "session_origins": {
+        "opencode:ses_250d66998ffeZVUPHMoD6RxTPg": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "session.go — ajouter `BlameEntry.Agent` + `BlameQuery.FilePaths`",
+          "session_id": "opencode:ses_137fa0ef5ffekAN2x4leMiw6Rj",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-14T21:29:29.386Z",
+          "started_at": "2026-06-14T21:28:37.604Z",
+          "status": "completed",
+          "ended_at": "2026-06-14T21:29:29.386Z",
+          "elapsed_ms": 51782
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "sqlite.go — `GetSessionsByFile` (agent + multi-fichiers) + `FilesForProject` (agent) + iface/mock",
+          "session_id": "opencode:ses_137f44be3ffe3D8EYzl6UC5bss",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-06-14T21:40:36.875Z",
+          "started_at": "2026-06-14T21:40:00.056Z",
+          "status": "completed",
+          "ended_at": "2026-06-14T21:40:36.875Z",
+          "elapsed_ms": 36819
+        },
+        "todo:4": {
+          "task_key": "todo:4",
+          "task_label": "4",
+          "task_title": "session_blame.go — `BlameRequest.FilePaths` + logique multi-fichiers + mode projet",
+          "session_id": "opencode:ses_137ea9147ffeQh4b6E7O65TQ1u",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "updated_at": "2026-06-14T21:47:47.811Z",
+          "started_at": "2026-06-14T21:47:24.970Z",
+          "status": "completed",
+          "ended_at": "2026-06-14T21:47:47.811Z",
+          "elapsed_ms": 22841
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "blamecmd.go — multi-args variadiques + flag `--project` + colonne `AGENT`",
+          "session_id": "opencode:ses_137e3b553ffe9kymBw6obc01VH",
+          "agent": "Sisyphus-Junior",
+          "category": "unspecified-high",
+          "updated_at": "2026-06-14T21:59:45.319Z",
+          "started_at": "2026-06-14T21:59:05.309Z",
+          "status": "completed",
+          "ended_at": "2026-06-14T21:59:45.319Z",
+          "elapsed_ms": 40010
+        },
+        "todo:7": {
+          "task_key": "todo:7",
+          "task_label": "7",
+          "task_title": "docs — `architecture/blame.md` + README : agent / multi-fichiers / `--project`",
+          "session_id": "opencode:ses_137d8d46bffej5HuPR2ygYKrwW",
+          "agent": "Sisyphus-Junior",
+          "category": "writing",
+          "updated_at": "2026-06-14T22:04:22.700Z",
+          "started_at": "2026-06-14T22:03:58.002Z",
+          "status": "completed",
+          "ended_at": "2026-06-14T22:04:22.700Z",
+          "elapsed_ms": 24698
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "**Plan Compliance Audit** — `oracle`",
+          "session_id": "opencode:ses_137cf8349ffeSCV3RpvURU1o1S",
+          "agent": "oracle",
+          "started_at": "2026-06-14T22:06:08.121Z",
+          "status": "completed",
+          "updated_at": "2026-06-14T22:13:40.293Z",
+          "ended_at": "2026-06-14T22:13:40.293Z",
+          "elapsed_ms": 452172
+        }
+      },
+      "ended_at": "2026-06-14T22:14:50.994Z",
+      "elapsed_ms": 3152190
+    }
+  },
+  "active_plan": "/Users/guardix/dev/aisync/.omo/plans/ai5-blame-file-attribution.md",
+  "started_at": "2026-06-14T21:22:18.804Z",
+  "status": "completed",
+  "updated_at": "2026-06-14T22:14:50.994Z",
+  "session_ids": [
+    "opencode:ses_250d66998ffeZVUPHMoD6RxTPg"
+  ],
+  "session_origins": {
+    "opencode:ses_250d66998ffeZVUPHMoD6RxTPg": "direct"
+  },
+  "plan_name": "ai5-blame-file-attribution",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "session.go — ajouter `BlameEntry.Agent` + `BlameQuery.FilePaths`",
+      "session_id": "opencode:ses_137fa0ef5ffekAN2x4leMiw6Rj",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-06-14T21:29:29.386Z",
+      "started_at": "2026-06-14T21:28:37.604Z",
+      "status": "completed",
+      "ended_at": "2026-06-14T21:29:29.386Z",
+      "elapsed_ms": 51782
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "sqlite.go — `GetSessionsByFile` (agent + multi-fichiers) + `FilesForProject` (agent) + iface/mock",
+      "session_id": "opencode:ses_137f44be3ffe3D8EYzl6UC5bss",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-06-14T21:40:36.875Z",
+      "started_at": "2026-06-14T21:40:00.056Z",
+      "status": "completed",
+      "ended_at": "2026-06-14T21:40:36.875Z",
+      "elapsed_ms": 36819
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "session_blame.go — `BlameRequest.FilePaths` + logique multi-fichiers + mode projet",
+      "session_id": "opencode:ses_137ea9147ffeQh4b6E7O65TQ1u",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-06-14T21:47:47.811Z",
+      "started_at": "2026-06-14T21:47:24.970Z",
+      "status": "completed",
+      "ended_at": "2026-06-14T21:47:47.811Z",
+      "elapsed_ms": 22841
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "blamecmd.go — multi-args variadiques + flag `--project` + colonne `AGENT`",
+      "session_id": "opencode:ses_137e3b553ffe9kymBw6obc01VH",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-06-14T21:59:45.319Z",
+      "started_at": "2026-06-14T21:59:05.309Z",
+      "status": "completed",
+      "ended_at": "2026-06-14T21:59:45.319Z",
+      "elapsed_ms": 40010
+    },
+    "todo:7": {
+      "task_key": "todo:7",
+      "task_label": "7",
+      "task_title": "docs — `architecture/blame.md` + README : agent / multi-fichiers / `--project`",
+      "session_id": "opencode:ses_137d8d46bffej5HuPR2ygYKrwW",
+      "agent": "Sisyphus-Junior",
+      "category": "writing",
+      "updated_at": "2026-06-14T22:04:22.700Z",
+      "started_at": "2026-06-14T22:03:58.002Z",
+      "status": "completed",
+      "ended_at": "2026-06-14T22:04:22.700Z",
+      "elapsed_ms": 24698
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "**Plan Compliance Audit** — `oracle`",
+      "session_id": "opencode:ses_137cf8349ffeSCV3RpvURU1o1S",
+      "agent": "oracle",
+      "started_at": "2026-06-14T22:06:08.121Z",
+      "status": "completed",
+      "updated_at": "2026-06-14T22:13:40.293Z",
+      "ended_at": "2026-06-14T22:13:40.293Z",
+      "elapsed_ms": 452172
+    }
+  },
+  "agent": "atlas",
+  "ended_at": "2026-06-14T22:14:50.994Z",
+  "elapsed_ms": 3152190
+}

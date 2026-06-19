@@ -1,0 +1,70 @@
+=== RUN   TestEvalAB
+    eval_test.go:571: loaded 9 eval queries from fixture
+    eval_test.go:573: found 5014 session summaries
+    eval_test.go:573: loaded 5014 full sessions
+    eval_test.go:599: warn: noisy index ses_13f2540edffeIQz64qs3zBbXwO: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14e4a407cffeAbIeL3AfmtZsTl: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14f1c8261ffeJ30uqAN0LcDria: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_145128f03ffemE72rzRHqVYDjt: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14ca8b937ffezyJ38Cm48lBt0D: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14de4f63fffeCwMN4BbJUnWHlo: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14f6e3e61ffehGe1RRTG1p1yIH: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_13ef7fec9ffe7UN1gFJY0qy7f1: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_148ad9505ffexvuAh68Tbjv92z: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14a255cd1ffeKwcpa6Gk71cPbG: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14f519da7ffenYcB701L7ZXRYu: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_13d7bf6edffe3YbKug8nwWTGG7: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_13f88e742ffe30cY2aTR72ampx: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14f65cdecffelwPdJ9lKe01Znr: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_144bd2759ffe4mjGulnGyme6oA: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14f420d1affeiC60UvaTyxxpnU: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14cade63dffebvLd0BcLp2leMy: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14e1e2b4effepEf000hc6TJZ0X: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14289d0f1ffe6BJVOcrQ77hvcB: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14855baf4ffePQdJPodaKzlN5H: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_14a826e4cffer75s5Ss0KYA0yO: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_1424e6eb0ffeRu5Z7tG4jYS8GU: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_13f0bcb7cffeYRBt632rUgIz6l: disk I/O error (5898)
+    eval_test.go:599: warn: noisy index ses_13ef53709ffe66GcatHtJZDmpB: disk I/O error (5898)
+    eval_test.go:635: noisy index: 142.72 MB, reindex: 2m8.045s
+    eval_test.go:636: clean index: 61.95 MB, reindex: 1m27.708s
+    eval_test.go:637: size ratio (clean/noisy): 43.4%
+    eval_test.go:664: [domain] "authentication": noisy=0.50 clean=0.50
+    eval_test.go:664: [domain] "database migration": noisy=0.00 clean=0.00
+    eval_test.go:664: [domain] "docker": noisy=0.00 clean=0.00
+    eval_test.go:664: [project] "omogen": noisy=0.00 clean=0.00
+    eval_test.go:664: [project] "cycloplan": noisy=0.00 clean=0.00
+    eval_test.go:664: [project] "aisync": noisy=0.00 clean=0.50
+    eval_test.go:664: [path] "internal/storage/store.go": noisy=0.00 clean=0.00
+    eval_test.go:664: [path] "apps/authent": noisy=0.00 clean=1.00
+    eval_test.go:664: [command] "git rebase": noisy=0.00 clean=0.00
+=== RUN   TestEvalAB/DomainProject
+    eval_test.go:677: [domain] "authentication": noisy=0.50 clean=0.50
+    eval_test.go:677: [domain] "database migration": noisy=0.00 clean=0.00
+    eval_test.go:677: [domain] "docker": noisy=0.00 clean=0.00
+    eval_test.go:677: [project] "omogen": noisy=0.00 clean=0.00
+    eval_test.go:677: [project] "cycloplan": noisy=0.00 clean=0.00
+    eval_test.go:677: [project] "aisync": noisy=0.00 clean=0.50
+    eval_test.go:684: domain+project: noisy avg P@10=0.083, clean avg P@10=0.167
+=== RUN   TestEvalAB/PathCommand
+    eval_test.go:695: [path] "internal/storage/store.go": clean P@10=0.00 (expected [ses_2d10f533effeDi56cuLr1LvrnB])
+    eval_test.go:697: NOTE [path] "internal/storage/store.go": expected IDs not in clean top-10; see report for root cause
+    eval_test.go:695: [path] "apps/authent": clean P@10=1.00 (expected [ses_2bcbebecdffeWlT6BVTcyNhIcZ])
+    eval_test.go:695: [command] "git rebase": clean P@10=0.00 (expected [ses_2d9e6b50affeADSfj1QVkViMZk ses_2db719795ffecFr9IrTpmTauRO])
+    eval_test.go:697: NOTE [command] "git rebase": expected IDs not in clean top-10; see report for root cause
+=== NAME  TestEvalAB
+    eval_test.go:703: clean index 43.4% of noisy size (want <= 40%)
+    eval_test.go:706: report written to ../../.omo/evidence/task-7-ab-report.md
+--- FAIL: TestEvalAB (255.02s)
+    --- PASS: TestEvalAB/DomainProject (0.00s)
+    --- PASS: TestEvalAB/PathCommand (0.00s)
+FAIL
+FAIL	github.com/ChristopherAparicio/aisync/internal/search	255.493s
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/elastic	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/fts5	(cached) [no tests to run]
+?   	github.com/ChristopherAparicio/aisync/internal/search/like	[no test files]
+FAIL

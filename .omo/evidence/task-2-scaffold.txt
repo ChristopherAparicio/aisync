@@ -1,0 +1,27 @@
+=== aisync-session-finder ===
+---
+name: aisync-session-finder
+description: Use aisync to find, inspect, and restore AI coding sessions
+---
+
+## Getting Started
+
+> Full content coming in skill authoring task.
+=== aisync-stats ===
+---
+name: aisync-stats
+description: Use aisync to get token usage, costs, and tool statistics
+---
+
+## Getting Started
+
+> Full content coming in skill authoring task.
+=== aisync-analyze ===
+---
+name: aisync-analyze
+description: Use aisync to analyze session health, diagnose errors, and validate sessions
+---
+
+## Getting Started
+
+> Full content coming in skill authoring task.

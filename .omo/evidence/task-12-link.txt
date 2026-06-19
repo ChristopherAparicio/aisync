@@ -1,0 +1,10 @@
+=== RUN   TestLinkCronRuns_Match
+--- PASS: TestLinkCronRuns_Match (0.00s)
+=== RUN   TestLinkCronRuns_Orphan
+--- PASS: TestLinkCronRuns_Orphan (0.00s)
+=== RUN   TestLinkCronRuns_NonCronSkipped
+--- PASS: TestLinkCronRuns_NonCronSkipped (0.00s)
+=== RUN   TestLinkCronRuns_MultiSegment
+--- PASS: TestLinkCronRuns_MultiSegment (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/hermes	(cached)

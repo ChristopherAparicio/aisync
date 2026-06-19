@@ -1,0 +1,6 @@
+=== RUN   TestBlameEntry_JSONIncludesAgent
+--- PASS: TestBlameEntry_JSONIncludesAgent (0.00s)
+=== RUN   TestBlameQuery_CompileWithFilePathAndFilePaths
+--- PASS: TestBlameQuery_CompileWithFilePathAndFilePaths (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/session	0.178s

@@ -1,0 +1,13 @@
+=== RUN   TestIngest_ExplicitDelegatedFrom_CreatesLink
+--- PASS: TestIngest_ExplicitDelegatedFrom_CreatesLink (0.00s)
+=== RUN   TestIngest_HeuristicDelegation_ToolCallWithSessionID
+--- PASS: TestIngest_HeuristicDelegation_ToolCallWithSessionID (0.00s)
+=== RUN   TestIngest_HeuristicDelegation_UnknownTool_NoLink
+--- PASS: TestIngest_HeuristicDelegation_UnknownTool_NoLink (0.00s)
+=== RUN   TestIngest_HeuristicDelegation_SelfLink_Skipped
+--- PASS: TestIngest_HeuristicDelegation_SelfLink_Skipped (0.00s)
+=== RUN   TestIngest_HeuristicDelegation_SentinelPrefixedDelegateTask
+--- PASS: TestIngest_HeuristicDelegation_SentinelPrefixedDelegateTask (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/service	(cached)
+?   	github.com/ChristopherAparicio/aisync/internal/service/remote	[no test files]

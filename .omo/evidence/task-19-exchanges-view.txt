@@ -1,0 +1,11 @@
+=== T19: Exchanges View ===
+
+--- go build ./... ---
+BUILD OK
+
+--- go test ./internal/web/ ---
+ok  	github.com/ChristopherAparicio/aisync/internal/web	3.529s
+
+--- Files changed ---
+ internal/web/templates/session_detail.html | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)

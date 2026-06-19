@@ -1,0 +1,18 @@
+=== aisync-session-finder ===
+/Users/guardix/dev/aisync/.opencode/skills/aisync-session-finder
+SYMLINK: OK
+---
+name: aisync-session-finder
+description: Use aisync to find, inspect, restore and resume AI coding sessions. Load this skill when asked: "which session worked on X?", "find the session that touched this file", "show me what happened in session <id>", "restore a past session", "resume work on branch Y", or "which sessions are on this branch/PR/tag".
+=== aisync-stats ===
+/Users/guardix/dev/aisync/.opencode/skills/aisync-stats
+SYMLINK: OK
+---
+name: aisync-stats
+description: Use aisync to get token usage, costs, tool statistics, and usage forecasts for AI coding sessions. Load this skill when asked: "how many tokens did this session use?", "what did this cost?", "which tools were called most?", "show me usage stats for this project/branch", "forecast my AI usage", or "compare token usage across sessions".
+=== aisync-analyze ===
+/Users/guardix/dev/aisync/.opencode/skills/aisync-analyze
+SYMLINK: OK
+---
+name: aisync-analyze
+description: Use aisync to analyze session health, diagnose errors, validate sessions, and detect off-topic drift. Load this skill when asked: "why did this session fail?", "diagnose what went wrong in session <id>", "find sessions with errors", "validate this session or database", "did this session go off-topic?", or "check the health of my sessions".

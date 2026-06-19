@@ -1,0 +1,10 @@
+=== RUN   TestMapMessage_Basic
+--- PASS: TestMapMessage_Basic (0.00s)
+=== RUN   TestMapMessage_SentinelDecoded
+--- PASS: TestMapMessage_SentinelDecoded (0.00s)
+=== RUN   TestMapMessage_ToolCall
+--- PASS: TestMapMessage_ToolCall (0.00s)
+=== RUN   TestMapMessage_Reasoning
+--- PASS: TestMapMessage_Reasoning (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/hermes	0.396s

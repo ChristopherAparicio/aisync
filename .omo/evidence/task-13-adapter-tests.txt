@@ -1,0 +1,64 @@
+Task 13 — Hermes adapter end-to-end tests
+==========================================
+Date: 2026-05-30
+
+File created: internal/provider/hermes/adapter_test.go
+Package: hermes (same-package access)
+
+Tests written
+-------------
+TestAdapter_Sessions
+  - Opens fixture DB via testdata.NewFixtureDB(t), uses filepath.Dir to get hermesHome
+  - Calls provider.Detect("", "")
+  - Asserts: len >= 2 root sessions; all Provider == session.ProviderHermes
+  - Finds fixture-parent-001; asserts TotalTokens==1500, EstimatedCost==0.05, ActualCost==0.045
+
+TestAdapter_Messages
+  - Calls provider.Export("fixture-parent-001", StorageModeCompact)
+  - Asserts: len(Messages) >= 2
+  - Finds message with ToolCalls[0].Name == "delegate_task"
+  - Finds sentinel message containing "hello from sentinel"; verifies no \x00\x01 prefix
+
+TestAdapter_ChildLineage
+  - Calls provider.Export("fixture-parent-001", StorageModeCompact)
+  - Asserts: len(Children) == 1; Children[0].ID == "fixture-child-001"
+  - Asserts: Children[0].ParentID == "fixture-parent-001"
+
+TestAdapter_NullTolerant
+  - Creates a custom minimal DB with NULL estimated_cost_usd and actual_cost_usd
+  - user_id explicitly set to "" (plain string cannot scan NULL in database/sql)
+  - Calls provider.Export("null-session-001", StorageModeCompact)
+  - Asserts: no error, EstimatedCost == 0, ActualCost == 0
+
+Test run output
+---------------
+=== RUN   TestAdapter_Sessions
+--- PASS: TestAdapter_Sessions (0.01s)
+=== RUN   TestAdapter_Messages
+--- PASS: TestAdapter_Messages (0.01s)
+=== RUN   TestAdapter_ChildLineage
+--- PASS: TestAdapter_ChildLineage (0.01s)
+=== RUN   TestAdapter_NullTolerant
+--- PASS: TestAdapter_NullTolerant (0.00s)
+PASS
+ok  github.com/ChristopherAparicio/aisync/internal/provider/hermes  0.767s
+
+Full suite (16/16 pass, 0 regressions)
+---------------------------------------
+TestAdapter_Sessions, TestAdapter_Messages, TestAdapter_ChildLineage, TestAdapter_NullTolerant
+TestParseCronJobs_Normal, TestParseCronJobs_MissingFile, TestParseCronJobs_Truncated
+TestLinkCronRuns_Match, TestLinkCronRuns_Orphan, TestLinkCronRuns_NonCronSkipped, TestLinkCronRuns_MultiSegment
+TestFixture
+TestMapMessage_Basic, TestMapMessage_SentinelDecoded, TestMapMessage_ToolCall, TestMapMessage_Reasoning
+
+LSP diagnostics: no issues on adapter_test.go
+
+Key decisions
+-------------
+1. user_id column must be provided as "" (not omitted) in the NullTolerant fixture
+   because hermesSession.UserID is a plain string and database/sql cannot scan NULL
+   into a non-pointer string type.
+2. NullTolerant test uses a separate hand-built DB rather than the shared fixture
+   so the NULL condition can be injected cleanly without modifying NewFixtureDB.
+3. Detect() correctly filters fixture-child-001 (has ParentSessionID) — only 2 root
+   sessions returned: fixture-parent-001 and cron_job123_1700000000.

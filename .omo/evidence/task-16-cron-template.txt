@@ -1,0 +1,28 @@
+=== T16: cron-template CSS polish ===
+
+go build ./... -> exit 0 (clean)
+
+--- Classes appended to internal/web/static/css/style.css (lines 7806-7937) ---
+.fw-medium
+.page-subtitle
+.table-container
+.data-table (+ th, td, tr:last, tbody tr:hover, code)
+.badge-success
+.badge-error
+.badge-muted
+.exchange-entry (+ adjacent, hover, p)
+.exchange-agent
+.exchange-role
+.badge-delegated
+
+--- CSS variables used (all pre-existing in :root) ---
+--bg, --bg-card, --bg-hover, --border, --text, --text-muted,
+--accent, --accent-light, --green, --red, --yellow, --radius, --shadow
+
+--- Templates verified ---
+internal/web/templates/cron.html       — all referenced classes now defined
+internal/web/templates/exchanges.html  — all referenced classes now defined
+internal/web/templates/exchanges_more_partial.html — all referenced classes now defined
+
+--- Class presence grep ---
+$(grep -nE "^\.(fw-medium|page-subtitle|table-container|data-table|badge-success|badge-error|badge-muted|exchange-entry|exchange-agent|exchange-role|badge-delegated)" internal/web/static/css/style.css)

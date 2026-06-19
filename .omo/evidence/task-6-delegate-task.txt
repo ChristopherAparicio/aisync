@@ -1,0 +1,15 @@
+# github.com/ChristopherAparicio/aisync/internal/service [github.com/ChristopherAparicio/aisync/internal/service.test]
+internal/service/analysis_test.go:68:13: cannot use store (variable of type *mockStore) as storage.Store value in struct literal: *mockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/analysis_test.go:114:13: cannot use store (variable of type *mockStore) as storage.Store value in struct literal: *mockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/analysis_test.go:137:57: cannot use store (variable of type *mockStore) as storage.Store value in struct literal: *mockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/analysis_test.go:150:57: cannot use store (variable of type *mockStore) as storage.Store value in struct literal: *mockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/analysis_test.go:166:57: cannot use store (variable of type *mockStore) as storage.Store value in struct literal: *mockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/analysis_test.go:421:13: cannot use store (variable of type *mockStore) as storage.Store value in struct literal: *mockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/session_dedup_test.go:102:12: cannot use store (variable of type *dedupMockStore) as storage.Store value in struct literal: *dedupMockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/session_dedup_test.go:150:12: cannot use store (variable of type *dedupMockStore) as storage.Store value in struct literal: *dedupMockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/session_dedup_test.go:202:55: cannot use store (variable of type *dedupMockStore) as storage.Store value in struct literal: *dedupMockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/session_dedup_test.go:284:55: cannot use store (variable of type *dedupMockStore) as storage.Store value in struct literal: *dedupMockStore does not implement storage.Store (missing method AcknowledgeAllNotifications)
+internal/service/session_dedup_test.go:284:55: too many errors
+FAIL	github.com/ChristopherAparicio/aisync/internal/service [build failed]
+?   	github.com/ChristopherAparicio/aisync/internal/service/remote	[no test files]
+FAIL

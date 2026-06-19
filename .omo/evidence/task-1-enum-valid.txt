@@ -1,0 +1,946 @@
+=== RUN   TestComputeAnalytics_emptySession
+--- PASS: TestComputeAnalytics_emptySession (0.00s)
+=== RUN   TestComputeAnalytics_schemaVersionStamped
+--- PASS: TestComputeAnalytics_schemaVersionStamped (0.00s)
+=== RUN   TestComputeAnalytics_flatCacheFieldsFromTokenUsage
+--- PASS: TestComputeAnalytics_flatCacheFieldsFromTokenUsage (0.00s)
+=== RUN   TestComputeAnalytics_peakAndDominantModelSkipsFirstMessage
+--- PASS: TestComputeAnalytics_peakAndDominantModelSkipsFirstMessage (0.00s)
+=== RUN   TestComputeAnalytics_dominantModelPicksMostFrequentAssistant
+--- PASS: TestComputeAnalytics_dominantModelPicksMostFrequentAssistant (0.00s)
+=== RUN   TestComputeAnalytics_peakSaturationWithPricing
+--- PASS: TestComputeAnalytics_peakSaturationWithPricing (0.00s)
+=== RUN   TestComputeAnalytics_peakSaturationCappedAt100
+--- PASS: TestComputeAnalytics_peakSaturationCappedAt100 (0.00s)
+=== RUN   TestComputeAnalytics_noSaturationWithoutPricing
+--- PASS: TestComputeAnalytics_noSaturationWithoutPricing (0.00s)
+=== RUN   TestComputeAnalytics_compactionDetected
+--- PASS: TestComputeAnalytics_compactionDetected (0.00s)
+=== RUN   TestComputeAnalytics_cacheMissGapDetection
+--- PASS: TestComputeAnalytics_cacheMissGapDetection (0.00s)
+=== RUN   TestComputeAnalytics_noCacheMissForGapUnderTTL
+--- PASS: TestComputeAnalytics_noCacheMissForGapUnderTTL (0.00s)
+=== RUN   TestComputeAnalytics_backendFromFirstProviderID
+--- PASS: TestComputeAnalytics_backendFromFirstProviderID (0.00s)
+=== RUN   TestComputeAnalytics_backendEmptyWhenNoProviderID
+--- PASS: TestComputeAnalytics_backendEmptyWhenNoProviderID (0.00s)
+=== RUN   TestComputeAnalytics_forkDeduplicationProportional
+--- PASS: TestComputeAnalytics_forkDeduplicationProportional (0.00s)
+=== RUN   TestComputeAnalytics_noForkMeansDedupEqualsEstimated
+--- PASS: TestComputeAnalytics_noForkMeansDedupEqualsEstimated (0.00s)
+=== RUN   TestComputeAnalytics_forkWithZeroSharedTokensFallsBackToEstimated
+--- PASS: TestComputeAnalytics_forkWithZeroSharedTokensFallsBackToEstimated (0.00s)
+=== RUN   TestComputeAnalytics_richStructsPopulatedForRealisticSession
+--- PASS: TestComputeAnalytics_richStructsPopulatedForRealisticSession (0.00s)
+=== RUN   TestComputeAnalytics_promptDataNilWhenNoSystemPromptEstimate
+--- PASS: TestComputeAnalytics_promptDataNilWhenNoSystemPromptEstimate (0.00s)
+=== RUN   TestComputeAnalytics_fitnessDataNilWhenNoSessionType
+--- PASS: TestComputeAnalytics_fitnessDataNilWhenNoSessionType (0.00s)
+=== RUN   TestComputeAnalytics_fitnessDataNilWhenNoDominantModel
+--- PASS: TestComputeAnalytics_fitnessDataNilWhenNoDominantModel (0.00s)
+=== RUN   TestComputeAnalytics_agentUsageSingleRow
+--- PASS: TestComputeAnalytics_agentUsageSingleRow (0.00s)
+=== RUN   TestComputeAnalytics_agentUsageUnknownFallback
+--- PASS: TestComputeAnalytics_agentUsageUnknownFallback (0.00s)
+=== RUN   TestComputeAnalytics_estimatedAndActualCostCopiedFromSession
+--- PASS: TestComputeAnalytics_estimatedAndActualCostCopiedFromSession (0.00s)
+=== RUN   TestComputeAnalytics_tokenGrowthPerMessage
+--- PASS: TestComputeAnalytics_tokenGrowthPerMessage (0.00s)
+=== RUN   TestComputeAnalytics_forecastMsgAtFirstCompaction
+--- PASS: TestComputeAnalytics_forecastMsgAtFirstCompaction (0.00s)
+=== RUN   TestComputeAnalytics_doesNotMutateSession
+--- PASS: TestComputeAnalytics_doesNotMutateSession (0.00s)
+=== RUN   TestNormalizeCommand_paths
+--- PASS: TestNormalizeCommand_paths (0.00s)
+=== RUN   TestNormalizeCommand_digits
+--- PASS: TestNormalizeCommand_digits (0.00s)
+=== RUN   TestNormalizeCommand_quotedStrings
+--- PASS: TestNormalizeCommand_quotedStrings (0.00s)
+=== RUN   TestNormalizeCommand_UUIDs
+--- PASS: TestNormalizeCommand_UUIDs (0.00s)
+=== RUN   TestNormalizeCommand_SHAs
+--- PASS: TestNormalizeCommand_SHAs (0.00s)
+=== RUN   TestNormalizeCommand_combined
+--- PASS: TestNormalizeCommand_combined (0.00s)
+=== RUN   TestNormalizeCommand_whitespace
+--- PASS: TestNormalizeCommand_whitespace (0.00s)
+=== RUN   TestFindCommandPatterns_basic
+--- PASS: TestFindCommandPatterns_basic (0.00s)
+=== RUN   TestFindCommandPatterns_minCountFilter
+--- PASS: TestFindCommandPatterns_minCountFilter (0.00s)
+=== RUN   TestFindCommandPatterns_minLengthFilter
+--- PASS: TestFindCommandPatterns_minLengthFilter (0.00s)
+=== RUN   TestFindCommandPatterns_empty
+--- PASS: TestFindCommandPatterns_empty (0.00s)
+=== RUN   TestFindCommandPatterns_sortedByTotalChars
+--- PASS: TestFindCommandPatterns_sortedByTotalChars (0.00s)
+=== RUN   TestExtractBaseCommand_JSONInput
+=== RUN   TestExtractBaseCommand_JSONInput/git_status
+=== RUN   TestExtractBaseCommand_JSONInput/ls
+=== RUN   TestExtractBaseCommand_JSONInput/cd
+=== RUN   TestExtractBaseCommand_JSONInput/go_test
+=== RUN   TestExtractBaseCommand_JSONInput/npm_install
+=== RUN   TestExtractBaseCommand_JSONInput/docker_build
+=== RUN   TestExtractBaseCommand_JSONInput/gh_pr
+=== RUN   TestExtractBaseCommand_JSONInput/sudo_apt
+=== RUN   TestExtractBaseCommand_JSONInput/env_prefix
+=== RUN   TestExtractBaseCommand_JSONInput/full_path
+=== RUN   TestExtractBaseCommand_JSONInput/not_bash
+=== RUN   TestExtractBaseCommand_JSONInput/empty_command
+=== RUN   TestExtractBaseCommand_JSONInput/empty_input
+=== RUN   TestExtractBaseCommand_JSONInput/shell_tool
+--- PASS: TestExtractBaseCommand_JSONInput (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/git_status (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/ls (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/cd (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/go_test (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/npm_install (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/docker_build (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/gh_pr (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/sudo_apt (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/env_prefix (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/full_path (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/not_bash (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/empty_command (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/empty_input (0.00s)
+    --- PASS: TestExtractBaseCommand_JSONInput/shell_tool (0.00s)
+=== RUN   TestExtractBaseCommand_PlainInput
+--- PASS: TestExtractBaseCommand_PlainInput (0.00s)
+=== RUN   TestComputeCommandStats
+--- PASS: TestComputeCommandStats (0.00s)
+=== RUN   TestComputeImageStats
+--- PASS: TestComputeImageStats (0.00s)
+=== RUN   TestComputeCommandStats_Empty
+--- PASS: TestComputeCommandStats_Empty (0.00s)
+=== RUN   TestComputeImageStats_Empty
+--- PASS: TestComputeImageStats_Empty (0.00s)
+=== RUN   TestDetectCompactions_noMessages
+--- PASS: TestDetectCompactions_noMessages (0.00s)
+=== RUN   TestDetectCompactions_noCompaction
+--- PASS: TestDetectCompactions_noCompaction (0.00s)
+=== RUN   TestDetectCompactions_belowMinBaseline
+--- PASS: TestDetectCompactions_belowMinBaseline (0.00s)
+=== RUN   TestDetectCompactions_singleCompaction
+--- PASS: TestDetectCompactions_singleCompaction (0.00s)
+=== RUN   TestDetectCompactions_sawtooth
+--- PASS: TestDetectCompactions_sawtooth (0.00s)
+=== RUN   TestDetectCompactions_cacheInvalidation
+--- PASS: TestDetectCompactions_cacheInvalidation (0.00s)
+=== RUN   TestDetectCompactions_cacheNotInvalidated
+--- PASS: TestDetectCompactions_cacheNotInvalidated (0.00s)
+=== RUN   TestDetectCompactions_costEstimation
+--- PASS: TestDetectCompactions_costEstimation (0.00s)
+=== RUN   TestDetectCompactions_costZeroRate
+--- PASS: TestDetectCompactions_costZeroRate (0.00s)
+=== RUN   TestDetectCompactions_skipsZeroTokenMessages
+--- PASS: TestDetectCompactions_skipsZeroTokenMessages (0.00s)
+=== RUN   TestDetectCompactions_exactThreshold
+--- PASS: TestDetectCompactions_exactThreshold (0.00s)
+=== RUN   TestDetectCompactions_50PercentNowTriggers
+--- PASS: TestDetectCompactions_50PercentNowTriggers (0.00s)
+=== RUN   TestDetectCompactions_justBelowThreshold
+--- PASS: TestDetectCompactions_justBelowThreshold (0.00s)
+=== RUN   TestDetectCompactions_messageIndices
+--- PASS: TestDetectCompactions_messageIndices (0.00s)
+=== RUN   TestDetectCompactions_fillAndRecoveryStats
+--- PASS: TestDetectCompactions_fillAndRecoveryStats (0.00s)
+=== RUN   TestDetectCompactions_multipleCompactionCosts
+--- PASS: TestDetectCompactions_multipleCompactionCosts (0.00s)
+=== RUN   TestDetectCompactions_productionLikeScenario
+--- PASS: TestDetectCompactions_productionLikeScenario (0.00s)
+=== RUN   TestDetectCompactions_OpenCodePattern49Percent
+--- PASS: TestDetectCompactions_OpenCodePattern49Percent (0.00s)
+=== RUN   TestDetectCompactions_SecondaryTrigger_LargeAbsoluteDrop
+--- PASS: TestDetectCompactions_SecondaryTrigger_LargeAbsoluteDrop (0.00s)
+=== RUN   TestDetectCompactions_SecondaryTrigger_RequiresCacheInvalidation
+--- PASS: TestDetectCompactions_SecondaryTrigger_RequiresCacheInvalidation (0.00s)
+=== RUN   TestDetectCompactions_TwoPassCascade
+--- PASS: TestDetectCompactions_TwoPassCascade (0.00s)
+=== RUN   TestDetectCompactions_TwoPassCascade_TooFarApart
+--- PASS: TestDetectCompactions_TwoPassCascade_TooFarApart (0.00s)
+=== RUN   TestDetectCompactions_CompactionsPerUserMessage
+--- PASS: TestDetectCompactions_CompactionsPerUserMessage (0.00s)
+=== RUN   TestDetectCompactions_LastQuartileRate
+--- PASS: TestDetectCompactions_LastQuartileRate (0.00s)
+=== RUN   TestDetectCompactions_DetectionCoverage_Full
+--- PASS: TestDetectCompactions_DetectionCoverage_Full (0.00s)
+=== RUN   TestDetectCompactions_DetectionCoverage_None
+--- PASS: TestDetectCompactions_DetectionCoverage_None (0.00s)
+=== RUN   TestMedianFloat64_empty
+--- PASS: TestMedianFloat64_empty (0.00s)
+=== RUN   TestMedianFloat64_odd
+--- PASS: TestMedianFloat64_odd (0.00s)
+=== RUN   TestMedianFloat64_even
+--- PASS: TestMedianFloat64_even (0.00s)
+=== RUN   TestMedianFloat64_single
+--- PASS: TestMedianFloat64_single (0.00s)
+=== RUN   TestBuildErrorTimeline_noErrors
+--- PASS: TestBuildErrorTimeline_noErrors (0.00s)
+=== RUN   TestBuildErrorTimeline_positionsErrors
+--- PASS: TestBuildErrorTimeline_positionsErrors (0.00s)
+=== RUN   TestBuildErrorTimeline_detectsEscalation
+--- PASS: TestBuildErrorTimeline_detectsEscalation (0.00s)
+=== RUN   TestClassifyPhase
+--- PASS: TestClassifyPhase (0.00s)
+=== RUN   TestAnalyzePhases_tooShort
+--- PASS: TestAnalyzePhases_tooShort (0.00s)
+=== RUN   TestAnalyzePhases_healthy
+--- PASS: TestAnalyzePhases_healthy (0.00s)
+=== RUN   TestAnalyzePhases_cleanStartLateCrash
+--- PASS: TestAnalyzePhases_cleanStartLateCrash (0.00s)
+=== RUN   TestAnalyzePhases_errorFromStart
+--- PASS: TestAnalyzePhases_errorFromStart (0.00s)
+=== RUN   TestBuildToolReport_noTools
+--- PASS: TestBuildToolReport_noTools (0.00s)
+=== RUN   TestBuildToolReport_countsAndSorts
+--- PASS: TestBuildToolReport_countsAndSorts (0.00s)
+=== RUN   TestComputeVerdict_healthy
+--- PASS: TestComputeVerdict_healthy (0.00s)
+=== RUN   TestComputeVerdict_broken
+--- PASS: TestComputeVerdict_broken (0.00s)
+=== RUN   TestComputeVerdict_degraded
+--- PASS: TestComputeVerdict_degraded (0.00s)
+=== RUN   TestComputeRestoreAdvice_healthySession
+--- PASS: TestComputeRestoreAdvice_healthySession (0.00s)
+=== RUN   TestComputeRestoreAdvice_withTurningPoint
+--- PASS: TestComputeRestoreAdvice_withTurningPoint (0.00s)
+=== RUN   TestComputeRestoreAdvice_noRewind
+--- PASS: TestComputeRestoreAdvice_noRewind (0.00s)
+=== RUN   TestSortToolReportEntries
+--- PASS: TestSortToolReportEntries (0.00s)
+=== RUN   TestComputeModelEfficiency_BasicMetrics
+--- PASS: TestComputeModelEfficiency_BasicMetrics (0.00s)
+=== RUN   TestComputeModelEfficiency_ZeroCost
+--- PASS: TestComputeModelEfficiency_ZeroCost (0.00s)
+=== RUN   TestComputeModelEfficiency_HighErrorRate
+--- PASS: TestComputeModelEfficiency_HighErrorRate (0.00s)
+=== RUN   TestComputeModelEfficiency_OversizedModel
+--- PASS: TestComputeModelEfficiency_OversizedModel (0.00s)
+=== RUN   TestComputeModelEfficiency_NoToolCalls
+--- PASS: TestComputeModelEfficiency_NoToolCalls (0.00s)
+=== RUN   TestContextUtilizationScore
+--- PASS: TestContextUtilizationScore (0.00s)
+=== RUN   TestScoreToGrade
+--- PASS: TestScoreToGrade (0.00s)
+=== RUN   TestClamp
+--- PASS: TestClamp (0.00s)
+=== RUN   TestParseProviderName
+=== RUN   TestParseProviderName/valid_claude-code
+=== RUN   TestParseProviderName/valid_opencode
+=== RUN   TestParseProviderName/valid_cursor
+=== RUN   TestParseProviderName/case_insensitive
+=== RUN   TestParseProviderName/trimmed
+=== RUN   TestParseProviderName/invalid_provider
+=== RUN   TestParseProviderName/empty_string
+--- PASS: TestParseProviderName (0.00s)
+    --- PASS: TestParseProviderName/valid_claude-code (0.00s)
+    --- PASS: TestParseProviderName/valid_opencode (0.00s)
+    --- PASS: TestParseProviderName/valid_cursor (0.00s)
+    --- PASS: TestParseProviderName/case_insensitive (0.00s)
+    --- PASS: TestParseProviderName/trimmed (0.00s)
+    --- PASS: TestParseProviderName/invalid_provider (0.00s)
+    --- PASS: TestParseProviderName/empty_string (0.00s)
+=== RUN   TestProviderName_Valid
+=== RUN   TestProviderName_Valid/claude-code_is_valid
+=== RUN   TestProviderName_Valid/opencode_is_valid
+=== RUN   TestProviderName_Valid/cursor_is_valid
+=== RUN   TestProviderName_Valid/unknown_is_invalid
+=== RUN   TestProviderName_Valid/empty_is_invalid
+--- PASS: TestProviderName_Valid (0.00s)
+    --- PASS: TestProviderName_Valid/claude-code_is_valid (0.00s)
+    --- PASS: TestProviderName_Valid/opencode_is_valid (0.00s)
+    --- PASS: TestProviderName_Valid/cursor_is_valid (0.00s)
+    --- PASS: TestProviderName_Valid/unknown_is_invalid (0.00s)
+    --- PASS: TestProviderName_Valid/empty_is_invalid (0.00s)
+=== RUN   TestParseStorageMode
+=== RUN   TestParseStorageMode/full
+=== RUN   TestParseStorageMode/compact
+=== RUN   TestParseStorageMode/summary
+=== RUN   TestParseStorageMode/case_insensitive
+=== RUN   TestParseStorageMode/invalid
+--- PASS: TestParseStorageMode (0.00s)
+    --- PASS: TestParseStorageMode/full (0.00s)
+    --- PASS: TestParseStorageMode/compact (0.00s)
+    --- PASS: TestParseStorageMode/summary (0.00s)
+    --- PASS: TestParseStorageMode/case_insensitive (0.00s)
+    --- PASS: TestParseStorageMode/invalid (0.00s)
+=== RUN   TestParseSecretMode
+=== RUN   TestParseSecretMode/mask
+=== RUN   TestParseSecretMode/warn
+=== RUN   TestParseSecretMode/block
+=== RUN   TestParseSecretMode/invalid
+--- PASS: TestParseSecretMode (0.00s)
+    --- PASS: TestParseSecretMode/mask (0.00s)
+    --- PASS: TestParseSecretMode/warn (0.00s)
+    --- PASS: TestParseSecretMode/block (0.00s)
+    --- PASS: TestParseSecretMode/invalid (0.00s)
+=== RUN   TestParseMessageRole
+=== RUN   TestParseMessageRole/user
+=== RUN   TestParseMessageRole/assistant
+=== RUN   TestParseMessageRole/system
+=== RUN   TestParseMessageRole/invalid
+--- PASS: TestParseMessageRole (0.00s)
+    --- PASS: TestParseMessageRole/user (0.00s)
+    --- PASS: TestParseMessageRole/assistant (0.00s)
+    --- PASS: TestParseMessageRole/system (0.00s)
+    --- PASS: TestParseMessageRole/invalid (0.00s)
+=== RUN   TestParseChangeType
+=== RUN   TestParseChangeType/created
+=== RUN   TestParseChangeType/modified
+=== RUN   TestParseChangeType/deleted
+=== RUN   TestParseChangeType/read
+=== RUN   TestParseChangeType/invalid
+--- PASS: TestParseChangeType (0.00s)
+    --- PASS: TestParseChangeType/created (0.00s)
+    --- PASS: TestParseChangeType/modified (0.00s)
+    --- PASS: TestParseChangeType/deleted (0.00s)
+    --- PASS: TestParseChangeType/read (0.00s)
+    --- PASS: TestParseChangeType/invalid (0.00s)
+=== RUN   TestParseLinkType
+=== RUN   TestParseLinkType/branch
+=== RUN   TestParseLinkType/commit
+=== RUN   TestParseLinkType/pr
+=== RUN   TestParseLinkType/invalid
+--- PASS: TestParseLinkType (0.00s)
+    --- PASS: TestParseLinkType/branch (0.00s)
+    --- PASS: TestParseLinkType/commit (0.00s)
+    --- PASS: TestParseLinkType/pr (0.00s)
+    --- PASS: TestParseLinkType/invalid (0.00s)
+=== RUN   TestParseToolState
+=== RUN   TestParseToolState/pending
+=== RUN   TestParseToolState/running
+=== RUN   TestParseToolState/completed
+=== RUN   TestParseToolState/error
+=== RUN   TestParseToolState/invalid
+--- PASS: TestParseToolState (0.00s)
+    --- PASS: TestParseToolState/pending (0.00s)
+    --- PASS: TestParseToolState/running (0.00s)
+    --- PASS: TestParseToolState/completed (0.00s)
+    --- PASS: TestParseToolState/error (0.00s)
+    --- PASS: TestParseToolState/invalid (0.00s)
+=== RUN   TestParseID
+=== RUN   TestParseID/valid_uuid
+=== RUN   TestParseID/any_non-empty_string
+=== RUN   TestParseID/empty_is_invalid
+--- PASS: TestParseID (0.00s)
+    --- PASS: TestParseID/valid_uuid (0.00s)
+    --- PASS: TestParseID/any_non-empty_string (0.00s)
+    --- PASS: TestParseID/empty_is_invalid (0.00s)
+=== RUN   TestNewID
+--- PASS: TestNewID (0.00s)
+=== RUN   TestProviderName_String
+--- PASS: TestProviderName_String (0.00s)
+=== RUN   TestStorageMode_String
+--- PASS: TestStorageMode_String (0.00s)
+=== RUN   TestExtractFileOperations_WriteOp
+--- PASS: TestExtractFileOperations_WriteOp (0.00s)
+=== RUN   TestExtractFileOperations_MCPWrite
+--- PASS: TestExtractFileOperations_MCPWrite (0.00s)
+=== RUN   TestExtractFileOperations_EditOp
+--- PASS: TestExtractFileOperations_EditOp (0.00s)
+=== RUN   TestExtractFileOperations_MCPEdit
+--- PASS: TestExtractFileOperations_MCPEdit (0.00s)
+=== RUN   TestExtractFileOperations_ReadOp
+--- PASS: TestExtractFileOperations_ReadOp (0.00s)
+=== RUN   TestExtractFileOperations_MCPRead
+--- PASS: TestExtractFileOperations_MCPRead (0.00s)
+=== RUN   TestExtractFileOperations_ReadWithFilePath
+--- PASS: TestExtractFileOperations_ReadWithFilePath (0.00s)
+=== RUN   TestExtractFileOperations_BashRM
+--- PASS: TestExtractFileOperations_BashRM (0.00s)
+=== RUN   TestExtractFileOperations_BashTouch
+--- PASS: TestExtractFileOperations_BashTouch (0.00s)
+=== RUN   TestExtractFileOperations_BashCat
+--- PASS: TestExtractFileOperations_BashCat (0.00s)
+=== RUN   TestExtractFileOperations_BashCP
+--- PASS: TestExtractFileOperations_BashCP (0.00s)
+=== RUN   TestExtractFileOperations_BashSedInPlace
+--- PASS: TestExtractFileOperations_BashSedInPlace (0.00s)
+=== RUN   TestExtractFileOperations_BashChainedCommands
+--- PASS: TestExtractFileOperations_BashChainedCommands (0.00s)
+=== RUN   TestExtractFileOperations_MergeUpgrade
+--- PASS: TestExtractFileOperations_MergeUpgrade (0.00s)
+=== RUN   TestExtractFileOperations_MergeNoDowngrade
+--- PASS: TestExtractFileOperations_MergeNoDowngrade (0.00s)
+=== RUN   TestExtractFileOperations_SkipsGlob
+--- PASS: TestExtractFileOperations_SkipsGlob (0.00s)
+=== RUN   TestExtractFileOperations_SkipsGrep
+--- PASS: TestExtractFileOperations_SkipsGrep (0.00s)
+=== RUN   TestExtractFileOperations_SkipsPlaywright
+--- PASS: TestExtractFileOperations_SkipsPlaywright (0.00s)
+=== RUN   TestExtractFileOperations_SkipsNotion
+--- PASS: TestExtractFileOperations_SkipsNotion (0.00s)
+=== RUN   TestExtractFileOperations_MultipleMessages
+--- PASS: TestExtractFileOperations_MultipleMessages (0.00s)
+=== RUN   TestExtractFileOperations_EmptyInput
+--- PASS: TestExtractFileOperations_EmptyInput (0.00s)
+=== RUN   TestExtractFileOperations_EmptyToolInput
+--- PASS: TestExtractFileOperations_EmptyToolInput (0.00s)
+=== RUN   TestExtractFileOperations_BashNoFileArgs
+--- PASS: TestExtractFileOperations_BashNoFileArgs (0.00s)
+=== RUN   TestExtractFileOperations_BashWithFlags
+--- PASS: TestExtractFileOperations_BashWithFlags (0.00s)
+=== RUN   TestFileOperationsToChanges
+--- PASS: TestFileOperationsToChanges (0.00s)
+=== RUN   TestComputeFileStats
+--- PASS: TestComputeFileStats (0.00s)
+=== RUN   TestComputeFileStats_Empty
+--- PASS: TestComputeFileStats_Empty (0.00s)
+=== RUN   TestNormalizeToolName
+=== RUN   TestNormalizeToolName/Write
+=== RUN   TestNormalizeToolName/mcp_write
+=== RUN   TestNormalizeToolName/Edit
+=== RUN   TestNormalizeToolName/mcp_edit
+=== RUN   TestNormalizeToolName/Read
+=== RUN   TestNormalizeToolName/mcp_read
+=== RUN   TestNormalizeToolName/Bash
+=== RUN   TestNormalizeToolName/mcp_bash
+=== RUN   TestNormalizeToolName/shell
+=== RUN   TestNormalizeToolName/terminal
+=== RUN   TestNormalizeToolName/execute_command
+=== RUN   TestNormalizeToolName/Glob
+=== RUN   TestNormalizeToolName/mcp_glob
+=== RUN   TestNormalizeToolName/Grep
+=== RUN   TestNormalizeToolName/mcp_grep
+=== RUN   TestNormalizeToolName/mcp_playwright_browser_click
+=== RUN   TestNormalizeToolName/mcp_notionApi_API-post-search
+=== RUN   TestNormalizeToolName/mcp_sentry_search_issues
+=== RUN   TestNormalizeToolName/mcp_langfuse-local_list_datasets
+=== RUN   TestNormalizeToolName/mcp_context7_resolve-library-id
+=== RUN   TestNormalizeToolName/unknown_tool
+--- PASS: TestNormalizeToolName (0.00s)
+    --- PASS: TestNormalizeToolName/Write (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_write (0.00s)
+    --- PASS: TestNormalizeToolName/Edit (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_edit (0.00s)
+    --- PASS: TestNormalizeToolName/Read (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_read (0.00s)
+    --- PASS: TestNormalizeToolName/Bash (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_bash (0.00s)
+    --- PASS: TestNormalizeToolName/shell (0.00s)
+    --- PASS: TestNormalizeToolName/terminal (0.00s)
+    --- PASS: TestNormalizeToolName/execute_command (0.00s)
+    --- PASS: TestNormalizeToolName/Glob (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_glob (0.00s)
+    --- PASS: TestNormalizeToolName/Grep (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_grep (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_playwright_browser_click (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_notionApi_API-post-search (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_sentry_search_issues (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_langfuse-local_list_datasets (0.00s)
+    --- PASS: TestNormalizeToolName/mcp_context7_resolve-library-id (0.00s)
+    --- PASS: TestNormalizeToolName/unknown_tool (0.00s)
+=== RUN   TestLooksLikeFilePath
+=== RUN   TestLooksLikeFilePath//tmp/test.txt
+=== RUN   TestLooksLikeFilePath/src/main.go
+=== RUN   TestLooksLikeFilePath/file.txt
+=== RUN   TestLooksLikeFilePath/~/Documents/notes.md
+=== RUN   TestLooksLikeFilePath/-rf
+=== RUN   TestLooksLikeFilePath/--force
+=== RUN   TestLooksLikeFilePath/#00
+=== RUN   TestLooksLikeFilePath/.
+=== RUN   TestLooksLikeFilePath/..
+=== RUN   TestLooksLikeFilePath//
+=== RUN   TestLooksLikeFilePath/http://example.com
+=== RUN   TestLooksLikeFilePath/https://github.com/foo
+=== RUN   TestLooksLikeFilePath/hello
+=== RUN   TestLooksLikeFilePath/git
+=== RUN   TestLooksLikeFilePath/status
+--- PASS: TestLooksLikeFilePath (0.00s)
+    --- PASS: TestLooksLikeFilePath//tmp/test.txt (0.00s)
+    --- PASS: TestLooksLikeFilePath/src/main.go (0.00s)
+    --- PASS: TestLooksLikeFilePath/file.txt (0.00s)
+    --- PASS: TestLooksLikeFilePath/~/Documents/notes.md (0.00s)
+    --- PASS: TestLooksLikeFilePath/-rf (0.00s)
+    --- PASS: TestLooksLikeFilePath/--force (0.00s)
+    --- PASS: TestLooksLikeFilePath/#00 (0.00s)
+    --- PASS: TestLooksLikeFilePath/. (0.00s)
+    --- PASS: TestLooksLikeFilePath/.. (0.00s)
+    --- PASS: TestLooksLikeFilePath// (0.00s)
+    --- PASS: TestLooksLikeFilePath/http://example.com (0.00s)
+    --- PASS: TestLooksLikeFilePath/https://github.com/foo (0.00s)
+    --- PASS: TestLooksLikeFilePath/hello (0.00s)
+    --- PASS: TestLooksLikeFilePath/git (0.00s)
+    --- PASS: TestLooksLikeFilePath/status (0.00s)
+=== RUN   TestCleanFilePath
+=== RUN   TestCleanFilePath//Users/me/file.go
+=== RUN   TestCleanFilePath/__/tmp/test.txt__
+=== RUN   TestCleanFilePath//path/with/trailing/
+=== RUN   TestCleanFilePath//
+=== RUN   TestCleanFilePath/#00
+--- PASS: TestCleanFilePath (0.00s)
+    --- PASS: TestCleanFilePath//Users/me/file.go (0.00s)
+    --- PASS: TestCleanFilePath/__/tmp/test.txt__ (0.00s)
+    --- PASS: TestCleanFilePath//path/with/trailing/ (0.00s)
+    --- PASS: TestCleanFilePath// (0.00s)
+    --- PASS: TestCleanFilePath/#00 (0.00s)
+=== RUN   TestChangePriority
+--- PASS: TestChangePriority (0.00s)
+=== RUN   TestSplitBashCommands
+=== RUN   TestSplitBashCommands/touch_a.txt_&&_rm_b.txt
+=== RUN   TestSplitBashCommands/ls;_pwd
+=== RUN   TestSplitBashCommands/touch_a.txt_&&_rm_b.txt;_echo_done
+=== RUN   TestSplitBashCommands/simple_command
+=== RUN   TestSplitBashCommands/#00
+--- PASS: TestSplitBashCommands (0.00s)
+    --- PASS: TestSplitBashCommands/touch_a.txt_&&_rm_b.txt (0.00s)
+    --- PASS: TestSplitBashCommands/ls;_pwd (0.00s)
+    --- PASS: TestSplitBashCommands/touch_a.txt_&&_rm_b.txt;_echo_done (0.00s)
+    --- PASS: TestSplitBashCommands/simple_command (0.00s)
+    --- PASS: TestSplitBashCommands/#00 (0.00s)
+=== RUN   TestApplyFilters_empty
+--- PASS: TestApplyFilters_empty (0.00s)
+=== RUN   TestApplyFilters_chain
+--- PASS: TestApplyFilters_chain (0.00s)
+=== RUN   TestApplyFilters_errorStopsChain
+--- PASS: TestApplyFilters_errorStopsChain (0.00s)
+=== RUN   TestCopySession_deepCopy
+--- PASS: TestCopySession_deepCopy (0.00s)
+=== RUN   TestAnalyzeModelFitness_Empty
+--- PASS: TestAnalyzeModelFitness_Empty (0.00s)
+=== RUN   TestAnalyzeModelFitness_NoValidData
+--- PASS: TestAnalyzeModelFitness_NoValidData (0.00s)
+=== RUN   TestAnalyzeModelFitness_SingleModelSingleType
+--- PASS: TestAnalyzeModelFitness_SingleModelSingleType (0.00s)
+=== RUN   TestAnalyzeModelFitness_MultipleModels
+--- PASS: TestAnalyzeModelFitness_MultipleModels (0.00s)
+=== RUN   TestAnalyzeModelFitness_MultipleTaskTypes
+--- PASS: TestAnalyzeModelFitness_MultipleTaskTypes (0.00s)
+=== RUN   TestAnalyzeModelFitness_ErrorRateImpact
+--- PASS: TestAnalyzeModelFitness_ErrorRateImpact (0.00s)
+=== RUN   TestAnalyzeModelFitness_RetryRateImpact
+--- PASS: TestAnalyzeModelFitness_RetryRateImpact (0.00s)
+=== RUN   TestComputeFitnessScore_PerfectProfile
+--- PASS: TestComputeFitnessScore_PerfectProfile (0.00s)
+=== RUN   TestComputeFitnessScore_TerribleProfile
+--- PASS: TestComputeFitnessScore_TerribleProfile (0.00s)
+=== RUN   TestComputeFitnessScore_Bounds
+--- PASS: TestComputeFitnessScore_Bounds (0.00s)
+=== RUN   TestLog10Approx
+--- PASS: TestLog10Approx (0.00s)
+=== RUN   TestLog10Approx_Zero
+--- PASS: TestLog10Approx_Zero (0.00s)
+=== RUN   TestBuildFitnessRecommendations_NoModels
+--- PASS: TestBuildFitnessRecommendations_NoModels (0.00s)
+=== RUN   TestBuildFitnessRecommendations_SignificantGap
+--- PASS: TestBuildFitnessRecommendations_SignificantGap (0.00s)
+=== RUN   TestBuildFitnessRecommendations_CostSaving
+--- PASS: TestBuildFitnessRecommendations_CostSaving (0.00s)
+=== RUN   TestBuildFitnessRecommendations_MaxFive
+--- PASS: TestBuildFitnessRecommendations_MaxFive (0.00s)
+=== RUN   TestAnalyzeModelFitness_AvgMetrics
+--- PASS: TestAnalyzeModelFitness_AvgMetrics (0.00s)
+=== RUN   TestForecastSaturation_EmptyInput
+--- PASS: TestForecastSaturation_EmptyInput (0.00s)
+=== RUN   TestForecastSaturation_SingleSession_NoCompaction
+--- PASS: TestForecastSaturation_SingleSession_NoCompaction (0.00s)
+=== RUN   TestForecastSaturation_CompactedSessions
+--- PASS: TestForecastSaturation_CompactedSessions (0.00s)
+=== RUN   TestForecastSaturation_MultiModel
+--- PASS: TestForecastSaturation_MultiModel (0.00s)
+=== RUN   TestForecastSaturation_Histogram
+--- PASS: TestForecastSaturation_Histogram (0.00s)
+=== RUN   TestForecastSaturation_SkipSessionsWithoutEnoughData
+--- PASS: TestForecastSaturation_SkipSessionsWithoutEnoughData (0.00s)
+=== RUN   TestForecastSaturation_Recommendation
+=== RUN   TestForecastSaturation_Recommendation/majority_compacted
+=== RUN   TestForecastSaturation_Recommendation/frequent_compaction
+=== RUN   TestForecastSaturation_Recommendation/high_utilization
+=== RUN   TestForecastSaturation_Recommendation/underutilized
+=== RUN   TestForecastSaturation_Recommendation/balanced
+--- PASS: TestForecastSaturation_Recommendation (0.00s)
+    --- PASS: TestForecastSaturation_Recommendation/majority_compacted (0.00s)
+    --- PASS: TestForecastSaturation_Recommendation/frequent_compaction (0.00s)
+    --- PASS: TestForecastSaturation_Recommendation/high_utilization (0.00s)
+    --- PASS: TestForecastSaturation_Recommendation/underutilized (0.00s)
+    --- PASS: TestForecastSaturation_Recommendation/balanced (0.00s)
+=== RUN   TestForecastSaturation_PeakUtilizationCappedAt100
+--- PASS: TestForecastSaturation_PeakUtilizationCappedAt100 (0.00s)
+=== RUN   TestMeanInt
+--- PASS: TestMeanInt (0.00s)
+=== RUN   TestMedianInt
+--- PASS: TestMedianInt (0.00s)
+=== RUN   TestBuildCompactionHistogram
+=== RUN   TestBuildCompactionHistogram/empty
+=== RUN   TestBuildCompactionHistogram/single
+=== RUN   TestBuildCompactionHistogram/two_buckets
+=== RUN   TestBuildCompactionHistogram/all_in_one
+--- PASS: TestBuildCompactionHistogram (0.00s)
+    --- PASS: TestBuildCompactionHistogram/empty (0.00s)
+    --- PASS: TestBuildCompactionHistogram/single (0.00s)
+    --- PASS: TestBuildCompactionHistogram/two_buckets (0.00s)
+    --- PASS: TestBuildCompactionHistogram/all_in_one (0.00s)
+=== RUN   TestItoa
+--- PASS: TestItoa (0.00s)
+=== RUN   TestDetectForks_BasicFork
+--- PASS: TestDetectForks_BasicFork (0.00s)
+=== RUN   TestDetectForks_NoOverlap
+--- PASS: TestDetectForks_NoOverlap (0.00s)
+=== RUN   TestDetectForks_LowOverlap
+--- PASS: TestDetectForks_LowOverlap (0.00s)
+=== RUN   TestDetectForks_MultipleForks
+--- PASS: TestDetectForks_MultipleForks (0.00s)
+=== RUN   TestDetectForks_EmptyMessages
+--- PASS: TestDetectForks_EmptyMessages (0.00s)
+=== RUN   TestDetectForks_SingleSession
+--- PASS: TestDetectForks_SingleSession (0.00s)
+=== RUN   TestDetectForks_Nil
+--- PASS: TestDetectForks_Nil (0.00s)
+=== RUN   TestCommonPrefixLen
+=== RUN   TestCommonPrefixLen/identical
+=== RUN   TestCommonPrefixLen/prefix
+=== RUN   TestCommonPrefixLen/no_overlap
+=== RUN   TestCommonPrefixLen/empty
+=== RUN   TestCommonPrefixLen/different_lengths
+--- PASS: TestCommonPrefixLen (0.00s)
+    --- PASS: TestCommonPrefixLen/identical (0.00s)
+    --- PASS: TestCommonPrefixLen/prefix (0.00s)
+    --- PASS: TestCommonPrefixLen/no_overlap (0.00s)
+    --- PASS: TestCommonPrefixLen/empty (0.00s)
+    --- PASS: TestCommonPrefixLen/different_lengths (0.00s)
+=== RUN   TestMessageContentHash
+--- PASS: TestMessageContentHash (0.00s)
+=== RUN   TestAnalyzeFreshness_NoCompaction
+--- PASS: TestAnalyzeFreshness_NoCompaction (0.00s)
+=== RUN   TestAnalyzeFreshness_WithOneCompaction
+--- PASS: TestAnalyzeFreshness_WithOneCompaction (0.00s)
+=== RUN   TestAnalyzeFreshness_MultipleCompactions
+--- PASS: TestAnalyzeFreshness_MultipleCompactions (0.00s)
+=== RUN   TestAnalyzeFreshness_EmptySession
+--- PASS: TestAnalyzeFreshness_EmptySession (0.00s)
+=== RUN   TestAnalyzeFreshness_OptimalMessageIdx
+--- PASS: TestAnalyzeFreshness_OptimalMessageIdx (0.00s)
+=== RUN   TestAggregateFreshness_Basic
+--- PASS: TestAggregateFreshness_Basic (0.00s)
+=== RUN   TestAggregateFreshness_Empty
+--- PASS: TestAggregateFreshness_Empty (0.00s)
+=== RUN   TestAggregateFreshness_DepthStats
+--- PASS: TestAggregateFreshness_DepthStats (0.00s)
+=== RUN   TestFreshnessRecommendation_NoCompaction
+--- PASS: TestFreshnessRecommendation_NoCompaction (0.00s)
+=== RUN   TestFreshnessRecommendation_HighErrorGrowth
+--- PASS: TestFreshnessRecommendation_HighErrorGrowth (0.00s)
+=== RUN   TestComputeHotspots_emptySession
+--- PASS: TestComputeHotspots_emptySession (0.00s)
+=== RUN   TestComputeHotspots_commandAggregation
+--- PASS: TestComputeHotspots_commandAggregation (0.00s)
+=== RUN   TestComputeHotspots_topByOutput
+--- PASS: TestComputeHotspots_topByOutput (0.00s)
+=== RUN   TestComputeHotspots_topCappedAt10
+--- PASS: TestComputeHotspots_topCappedAt10 (0.00s)
+=== RUN   TestComputeHotspots_avgOutput
+--- PASS: TestComputeHotspots_avgOutput (0.00s)
+=== RUN   TestComputeHotspots_expensiveMessages
+--- PASS: TestComputeHotspots_expensiveMessages (0.00s)
+=== RUN   TestComputeHotspots_expensiveMessagesCappedAt5
+--- PASS: TestComputeHotspots_expensiveMessagesCappedAt5 (0.00s)
+=== RUN   TestComputeHotspots_skillFootprints
+--- PASS: TestComputeHotspots_skillFootprints (0.00s)
+=== RUN   TestComputeHotspots_skillNameVariants
+--- PASS: TestComputeHotspots_skillNameVariants (0.00s)
+=== RUN   TestComputeHotspots_skillNoNameField
+--- PASS: TestComputeHotspots_skillNoNameField (0.00s)
+=== RUN   TestComputeHotspots_totalOutputBytes
+--- PASS: TestComputeHotspots_totalOutputBytes (0.00s)
+=== RUN   TestComputeHotspots_compactionDataForwarded
+--- PASS: TestComputeHotspots_compactionDataForwarded (0.00s)
+=== RUN   TestComputeHotspots_noTokenData
+--- PASS: TestComputeHotspots_noTokenData (0.00s)
+=== RUN   TestComputeHotspots_nonCommandToolCallsSkipped
+--- PASS: TestComputeHotspots_nonCommandToolCallsSkipped (0.00s)
+=== RUN   TestComputeHotspots_fullIntegration
+--- PASS: TestComputeHotspots_fullIntegration (0.00s)
+=== RUN   TestIsSkillTool
+--- PASS: TestIsSkillTool (0.00s)
+=== RUN   TestExtractSkillNameFromTC
+--- PASS: TestExtractSkillNameFromTC (0.00s)
+=== RUN   TestParseJSON
+--- PASS: TestParseJSON (0.00s)
+=== RUN   TestDetectOverload_TooFewMessages
+--- PASS: TestDetectOverload_TooFewMessages (0.00s)
+=== RUN   TestDetectOverload_HealthySession
+--- PASS: TestDetectOverload_HealthySession (0.00s)
+=== RUN   TestDetectOverload_DecliningOutputRatio
+--- PASS: TestDetectOverload_DecliningOutputRatio (0.00s)
+=== RUN   TestDetectOverload_IncreasingErrors
+--- PASS: TestDetectOverload_IncreasingErrors (0.00s)
+=== RUN   TestDetectOverload_ToolRetries
+--- PASS: TestDetectOverload_ToolRetries (0.00s)
+=== RUN   TestDetectOverload_Overloaded
+--- PASS: TestDetectOverload_Overloaded (0.00s)
+=== RUN   TestDetectOverload_InflectionPoint
+--- PASS: TestDetectOverload_InflectionPoint (0.00s)
+=== RUN   TestDetectToolRetries
+=== RUN   TestDetectToolRetries/no_retries
+=== RUN   TestDetectToolRetries/exactly_3_same
+=== RUN   TestDetectToolRetries/4_same_(still_1_retry_sequence)
+=== RUN   TestDetectToolRetries/across_messages
+=== RUN   TestDetectToolRetries/two_separate_retry_sequences
+--- PASS: TestDetectToolRetries (0.00s)
+    --- PASS: TestDetectToolRetries/no_retries (0.00s)
+    --- PASS: TestDetectToolRetries/exactly_3_same (0.00s)
+    --- PASS: TestDetectToolRetries/4_same_(still_1_retry_sequence) (0.00s)
+    --- PASS: TestDetectToolRetries/across_messages (0.00s)
+    --- PASS: TestDetectToolRetries/two_separate_retry_sequences (0.00s)
+=== RUN   TestBuildOverloadReason
+=== RUN   TestBuildOverloadReason/healthy
+=== RUN   TestBuildOverloadReason/declining_output
+=== RUN   TestBuildOverloadReason/error_growth
+=== RUN   TestBuildOverloadReason/retries
+--- PASS: TestBuildOverloadReason (0.00s)
+    --- PASS: TestBuildOverloadReason/healthy (0.00s)
+    --- PASS: TestBuildOverloadReason/declining_output (0.00s)
+    --- PASS: TestBuildOverloadReason/error_growth (0.00s)
+    --- PASS: TestBuildOverloadReason/retries (0.00s)
+=== RUN   TestSession_JSONRoundTrip
+--- PASS: TestSession_JSONRoundTrip (0.00s)
+=== RUN   TestSession_JSONOmitsEmpty
+--- PASS: TestSession_JSONOmitsEmpty (0.00s)
+=== RUN   TestSession_WithChildren
+--- PASS: TestSession_WithChildren (0.00s)
+=== RUN   TestSystemPromptEstimate_EmptyMessages
+--- PASS: TestSystemPromptEstimate_EmptyMessages (0.00s)
+=== RUN   TestSystemPromptEstimate_NoAssistant
+--- PASS: TestSystemPromptEstimate_NoAssistant (0.00s)
+=== RUN   TestSystemPromptEstimate_MethodA_CacheWrite
+--- PASS: TestSystemPromptEstimate_MethodA_CacheWrite (0.00s)
+=== RUN   TestSystemPromptEstimate_MethodA_CacheWriteSmallerThanUser
+--- PASS: TestSystemPromptEstimate_MethodA_CacheWriteSmallerThanUser (0.00s)
+=== RUN   TestSystemPromptEstimate_MethodB_InputMinusUser
+--- PASS: TestSystemPromptEstimate_MethodB_InputMinusUser (0.00s)
+=== RUN   TestSystemPromptEstimate_MethodB_TooSmall
+--- PASS: TestSystemPromptEstimate_MethodB_TooSmall (0.00s)
+=== RUN   TestSystemPromptEstimate_Fallback_RawInput
+--- PASS: TestSystemPromptEstimate_Fallback_RawInput (0.00s)
+=== RUN   TestSystemPromptEstimate_Fallback_TooSmall
+--- PASS: TestSystemPromptEstimate_Fallback_TooSmall (0.00s)
+=== RUN   TestRoughTokenEstimate
+--- PASS: TestRoughTokenEstimate (0.00s)
+=== RUN   TestAnalyzeSystemPromptImpact_Empty
+--- PASS: TestAnalyzeSystemPromptImpact_Empty (0.00s)
+=== RUN   TestAnalyzeSystemPromptImpact_AllZero
+--- PASS: TestAnalyzeSystemPromptImpact_AllZero (0.00s)
+=== RUN   TestAnalyzeSystemPromptImpact_BasicStats
+--- PASS: TestAnalyzeSystemPromptImpact_BasicStats (0.00s)
+=== RUN   TestAnalyzeSystemPromptImpact_SizeBuckets
+--- PASS: TestAnalyzeSystemPromptImpact_SizeBuckets (0.00s)
+=== RUN   TestAnalyzeSystemPromptImpact_CostPct
+--- PASS: TestAnalyzeSystemPromptImpact_CostPct (0.00s)
+=== RUN   TestComputePromptTrend_Growing
+--- PASS: TestComputePromptTrend_Growing (0.00s)
+=== RUN   TestComputePromptTrend_Stable
+--- PASS: TestComputePromptTrend_Stable (0.00s)
+=== RUN   TestComputePromptTrend_Shrinking
+--- PASS: TestComputePromptTrend_Shrinking (0.00s)
+=== RUN   TestComputePromptTrend_TooFewSessions
+--- PASS: TestComputePromptTrend_TooFewSessions (0.00s)
+=== RUN   TestBuildPromptRecommendation_LargeWithHighErrors
+--- PASS: TestBuildPromptRecommendation_LargeWithHighErrors (0.00s)
+=== RUN   TestBuildPromptRecommendation_GrowingTrend
+--- PASS: TestBuildPromptRecommendation_GrowingTrend (0.00s)
+=== RUN   TestBuildPromptRecommendation_VeryLargeAvg
+--- PASS: TestBuildPromptRecommendation_VeryLargeAvg (0.00s)
+=== RUN   TestBuildPromptRecommendation_NormalRange
+--- PASS: TestBuildPromptRecommendation_NormalRange (0.00s)
+=== RUN   TestFormatTokenCount
+--- PASS: TestFormatTokenCount (0.00s)
+=== RUN   TestFormatPct
+--- PASS: TestFormatPct (0.00s)
+=== RUN   TestBuildCostTreemap_Empty
+--- PASS: TestBuildCostTreemap_Empty (0.00s)
+=== RUN   TestBuildCostTreemap_EmptyMap
+--- PASS: TestBuildCostTreemap_EmptyMap (0.00s)
+=== RUN   TestBuildCostTreemap_SingleBackendSingleModel
+--- PASS: TestBuildCostTreemap_SingleBackendSingleModel (0.00s)
+=== RUN   TestBuildCostTreemap_MultiBackendMultiModel
+--- PASS: TestBuildCostTreemap_MultiBackendMultiModel (0.00s)
+=== RUN   TestBuildCostTreemap_TokensAggregation
+--- PASS: TestBuildCostTreemap_TokensAggregation (0.00s)
+=== RUN   TestBuildCostTreemap_SortDescending
+--- PASS: TestBuildCostTreemap_SortDescending (0.00s)
+=== RUN   TestValidate_emptySession
+--- PASS: TestValidate_emptySession (0.00s)
+=== RUN   TestValidate_healthySession
+--- PASS: TestValidate_healthySession (0.00s)
+=== RUN   TestValidate_orphanToolUse_endOfConversation
+--- PASS: TestValidate_orphanToolUse_endOfConversation (0.00s)
+=== RUN   TestValidate_orphanToolUse_midConversation
+--- PASS: TestValidate_orphanToolUse_midConversation (0.00s)
+=== RUN   TestValidate_consecutiveRoles
+--- PASS: TestValidate_consecutiveRoles (0.00s)
+=== RUN   TestValidate_emptyMessage
+--- PASS: TestValidate_emptyMessage (0.00s)
+=== RUN   TestValidate_missingTimestamp
+--- PASS: TestValidate_missingTimestamp (0.00s)
+=== RUN   TestValidate_toolUseResolvedByToolCalls
+--- PASS: TestValidate_toolUseResolvedByToolCalls (0.00s)
+=== RUN   TestValidate_multipleOrphans_suggestsEarliestRewind
+--- PASS: TestValidate_multipleOrphans_suggestsEarliestRewind (0.00s)
+=== RUN   TestValidate_contentBlockToolUse
+--- PASS: TestValidate_contentBlockToolUse (0.00s)
+=== RUN   TestValidate_FirstErrorIndex
+--- PASS: TestValidate_FirstErrorIndex (0.00s)
+=== RUN   TestValidate_FirstErrorIndex_noErrors
+--- PASS: TestValidate_FirstErrorIndex_noErrors (0.00s)
+=== RUN   TestValidate_IssuesByType
+--- PASS: TestValidate_IssuesByType (0.00s)
+=== RUN   TestValidate_realWorldScenario_message57
+    validate_test.go:454: Found orphan: Message 56: tool_use "Write" (toolu_01Y8RHuuTm1YtrAR49d5zZz6) has no matching tool_result — detected at message 58
+--- PASS: TestValidate_realWorldScenario_message57 (0.00s)
+=== RUN   TestClassifyTokenWaste_EmptySession
+--- PASS: TestClassifyTokenWaste_EmptySession (0.00s)
+=== RUN   TestClassifyTokenWaste_AllProductive
+--- PASS: TestClassifyTokenWaste_AllProductive (0.00s)
+=== RUN   TestClassifyTokenWaste_WithRetries
+--- PASS: TestClassifyTokenWaste_WithRetries (0.00s)
+=== RUN   TestClassifyTokenWaste_WithCompaction
+--- PASS: TestClassifyTokenWaste_WithCompaction (0.00s)
+=== RUN   TestClassifyTokenWaste_WithCacheMiss
+--- PASS: TestClassifyTokenWaste_WithCacheMiss (0.00s)
+=== RUN   TestClassifyTokenWaste_IdleContext
+--- PASS: TestClassifyTokenWaste_IdleContext (0.00s)
+=== RUN   TestClassifyTokenWaste_Percentages
+--- PASS: TestClassifyTokenWaste_Percentages (0.00s)
+=== RUN   TestAggregateWaste
+--- PASS: TestAggregateWaste (0.00s)
+=== RUN   TestIdentifyRetryMessages
+--- PASS: TestIdentifyRetryMessages (0.00s)
+=== RUN   TestIdentifyCacheMissMessages
+--- PASS: TestIdentifyCacheMissMessages (0.00s)
+=== RUN   TestDetectCacheMisses_NoMessages
+--- PASS: TestDetectCacheMisses_NoMessages (0.00s)
+=== RUN   TestDetectCacheMisses_NoMisses
+--- PASS: TestDetectCacheMisses_NoMisses (0.00s)
+=== RUN   TestDetectCacheMisses_SingleMiss
+--- PASS: TestDetectCacheMisses_SingleMiss (0.00s)
+=== RUN   TestDetectCacheMisses_MultipleMisses
+--- PASS: TestDetectCacheMisses_MultipleMisses (0.00s)
+=== RUN   TestErrorCategory_Valid
+=== RUN   TestErrorCategory_Valid/provider_error
+=== RUN   TestErrorCategory_Valid/rate_limit
+=== RUN   TestErrorCategory_Valid/context_overflow
+=== RUN   TestErrorCategory_Valid/auth_error
+=== RUN   TestErrorCategory_Valid/validation
+=== RUN   TestErrorCategory_Valid/tool_error
+=== RUN   TestErrorCategory_Valid/network_error
+=== RUN   TestErrorCategory_Valid/aborted
+=== RUN   TestErrorCategory_Valid/unknown
+=== RUN   TestErrorCategory_Valid/invalid_category
+=== RUN   TestErrorCategory_Valid/#00
+--- PASS: TestErrorCategory_Valid (0.00s)
+    --- PASS: TestErrorCategory_Valid/provider_error (0.00s)
+    --- PASS: TestErrorCategory_Valid/rate_limit (0.00s)
+    --- PASS: TestErrorCategory_Valid/context_overflow (0.00s)
+    --- PASS: TestErrorCategory_Valid/auth_error (0.00s)
+    --- PASS: TestErrorCategory_Valid/validation (0.00s)
+    --- PASS: TestErrorCategory_Valid/tool_error (0.00s)
+    --- PASS: TestErrorCategory_Valid/network_error (0.00s)
+    --- PASS: TestErrorCategory_Valid/aborted (0.00s)
+    --- PASS: TestErrorCategory_Valid/unknown (0.00s)
+    --- PASS: TestErrorCategory_Valid/invalid_category (0.00s)
+    --- PASS: TestErrorCategory_Valid/#00 (0.00s)
+=== RUN   TestErrorCategory_IsExternal
+=== RUN   TestErrorCategory_IsExternal/provider_error
+=== RUN   TestErrorCategory_IsExternal/rate_limit
+=== RUN   TestErrorCategory_IsExternal/network_error
+=== RUN   TestErrorCategory_IsExternal/tool_error
+=== RUN   TestErrorCategory_IsExternal/context_overflow
+=== RUN   TestErrorCategory_IsExternal/auth_error
+=== RUN   TestErrorCategory_IsExternal/aborted
+=== RUN   TestErrorCategory_IsExternal/unknown
+--- PASS: TestErrorCategory_IsExternal (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/provider_error (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/rate_limit (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/network_error (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/tool_error (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/context_overflow (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/auth_error (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/aborted (0.00s)
+    --- PASS: TestErrorCategory_IsExternal/unknown (0.00s)
+=== RUN   TestErrorSource_Valid
+=== RUN   TestErrorSource_Valid/provider
+=== RUN   TestErrorSource_Valid/tool
+=== RUN   TestErrorSource_Valid/client
+=== RUN   TestErrorSource_Valid/invalid
+=== RUN   TestErrorSource_Valid/#00
+--- PASS: TestErrorSource_Valid (0.00s)
+    --- PASS: TestErrorSource_Valid/provider (0.00s)
+    --- PASS: TestErrorSource_Valid/tool (0.00s)
+    --- PASS: TestErrorSource_Valid/client (0.00s)
+    --- PASS: TestErrorSource_Valid/invalid (0.00s)
+    --- PASS: TestErrorSource_Valid/#00 (0.00s)
+=== RUN   TestSessionError_IsExternal
+--- PASS: TestSessionError_IsExternal (0.00s)
+=== RUN   TestNewSessionErrorSummary
+--- PASS: TestNewSessionErrorSummary (0.00s)
+=== RUN   TestNewSessionErrorSummary_Empty
+--- PASS: TestNewSessionErrorSummary_Empty (0.00s)
+=== RUN   TestClassifyTool
+=== RUN   TestClassifyTool/bash
+=== RUN   TestClassifyTool/Read
+=== RUN   TestClassifyTool/Write
+=== RUN   TestClassifyTool/Edit
+=== RUN   TestClassifyTool/Glob
+=== RUN   TestClassifyTool/Grep
+=== RUN   TestClassifyTool/task
+=== RUN   TestClassifyTool/webfetch
+=== RUN   TestClassifyTool/mcp__notion__search
+=== RUN   TestClassifyTool/mcp__sentry__get_issue
+=== RUN   TestClassifyTool/mcp__langfuse__fetch_traces
+=== RUN   TestClassifyTool/mcp__unknown-server__do_thing
+=== RUN   TestClassifyTool/notionApi_API-post-search
+=== RUN   TestClassifyTool/notionApi_API-get-block-children
+=== RUN   TestClassifyTool/sentry_search_issues
+=== RUN   TestClassifyTool/sentry_get_sentry_resource
+=== RUN   TestClassifyTool/langfuse-local_fetch_traces
+=== RUN   TestClassifyTool/langfuse-prod_get_prompt
+=== RUN   TestClassifyTool/langfuse_list_datasets
+=== RUN   TestClassifyTool/context7_resolve-library-id
+=== RUN   TestClassifyTool/context7_query-docs
+=== RUN   TestClassifyTool/anthropic-max-auth_check_status
+--- PASS: TestClassifyTool (0.00s)
+    --- PASS: TestClassifyTool/bash (0.00s)
+    --- PASS: TestClassifyTool/Read (0.00s)
+    --- PASS: TestClassifyTool/Write (0.00s)
+    --- PASS: TestClassifyTool/Edit (0.00s)
+    --- PASS: TestClassifyTool/Glob (0.00s)
+    --- PASS: TestClassifyTool/Grep (0.00s)
+    --- PASS: TestClassifyTool/task (0.00s)
+    --- PASS: TestClassifyTool/webfetch (0.00s)
+    --- PASS: TestClassifyTool/mcp__notion__search (0.00s)
+    --- PASS: TestClassifyTool/mcp__sentry__get_issue (0.00s)
+    --- PASS: TestClassifyTool/mcp__langfuse__fetch_traces (0.00s)
+    --- PASS: TestClassifyTool/mcp__unknown-server__do_thing (0.00s)
+    --- PASS: TestClassifyTool/notionApi_API-post-search (0.00s)
+    --- PASS: TestClassifyTool/notionApi_API-get-block-children (0.00s)
+    --- PASS: TestClassifyTool/sentry_search_issues (0.00s)
+    --- PASS: TestClassifyTool/sentry_get_sentry_resource (0.00s)
+    --- PASS: TestClassifyTool/langfuse-local_fetch_traces (0.00s)
+    --- PASS: TestClassifyTool/langfuse-prod_get_prompt (0.00s)
+    --- PASS: TestClassifyTool/langfuse_list_datasets (0.00s)
+    --- PASS: TestClassifyTool/context7_resolve-library-id (0.00s)
+    --- PASS: TestClassifyTool/context7_query-docs (0.00s)
+    --- PASS: TestClassifyTool/anthropic-max-auth_check_status (0.00s)
+=== RUN   TestIsMCPTool
+--- PASS: TestIsMCPTool (0.00s)
+=== RUN   TestMCPServerName
+--- PASS: TestMCPServerName (0.00s)
+=== RUN   TestSetExtraMCPPrefixes
+--- PASS: TestSetExtraMCPPrefixes (0.00s)
+=== RUN   TestSetExtraMCPPrefixes_OverridesBuiltin
+--- PASS: TestSetExtraMCPPrefixes_OverridesBuiltin (0.00s)
+=== RUN   TestSetExtraMCPPrefixes_SortedLongestFirst
+--- PASS: TestSetExtraMCPPrefixes_SortedLongestFirst (0.00s)
+=== RUN   TestRegisterMCPServerPrefixes
+--- PASS: TestRegisterMCPServerPrefixes (0.00s)
+=== RUN   TestRegisterMCPServerPrefixes_SkipsExisting
+--- PASS: TestRegisterMCPServerPrefixes_SkipsExisting (0.00s)
+=== RUN   TestRegisterMCPServerPrefixes_MergesWithExtra
+--- PASS: TestRegisterMCPServerPrefixes_MergesWithExtra (0.00s)
+=== RUN   TestResetExtraMCPPrefixes
+--- PASS: TestResetExtraMCPPrefixes (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/session	0.402s
+
+--- go build ./... ---
+go build exit code: 0

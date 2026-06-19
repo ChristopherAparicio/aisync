@@ -1,0 +1,12 @@
+=== RUN   TestCompactionMarker
+=== RUN   TestCompactionMarker/nominal
+=== RUN   TestCompactionMarker/multiple_markers
+=== RUN   TestCompactionMarker/non_compacted
+--- PASS: TestCompactionMarker (0.00s)
+    --- PASS: TestCompactionMarker/nominal (0.00s)
+    --- PASS: TestCompactionMarker/multiple_markers (0.00s)
+    --- PASS: TestCompactionMarker/non_compacted (0.00s)
+=== RUN   TestCompactionOrphan
+--- PASS: TestCompactionOrphan (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/opencode	(cached)

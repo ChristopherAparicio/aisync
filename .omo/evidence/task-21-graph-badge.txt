@@ -1,0 +1,10 @@
+BUILD OK
+
+--- Manual QA: GET /graph render ---
+HTTP 200, 3.2 MB page
+badge-provider count: 3367 (1 hermes-styled, 3366 plain)
+sg-badge-exchanges count: 178 (one per node with children)
+exchanges anchors resolve to /sessions/{id}/exchanges
+
+--- go test ./internal/web/... ---
+ok internal/web 4.218s

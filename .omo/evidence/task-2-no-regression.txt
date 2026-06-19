@@ -1,0 +1,104 @@
+=== RUN   TestExtractFileOperations_WriteOp
+--- PASS: TestExtractFileOperations_WriteOp (0.00s)
+=== RUN   TestExtractFileOperations_MCPWrite
+--- PASS: TestExtractFileOperations_MCPWrite (0.00s)
+=== RUN   TestExtractFileOperations_EditOp
+--- PASS: TestExtractFileOperations_EditOp (0.00s)
+=== RUN   TestExtractFileOperations_MCPEdit
+--- PASS: TestExtractFileOperations_MCPEdit (0.00s)
+=== RUN   TestExtractFileOperations_ReadOp
+--- PASS: TestExtractFileOperations_ReadOp (0.00s)
+=== RUN   TestExtractFileOperations_MCPRead
+--- PASS: TestExtractFileOperations_MCPRead (0.00s)
+=== RUN   TestExtractFileOperations_ReadWithFilePath
+--- PASS: TestExtractFileOperations_ReadWithFilePath (0.00s)
+=== RUN   TestExtractFileOperations_BashRM
+--- PASS: TestExtractFileOperations_BashRM (0.00s)
+=== RUN   TestExtractFileOperations_BashTouch
+--- PASS: TestExtractFileOperations_BashTouch (0.00s)
+=== RUN   TestExtractFileOperations_BashCat
+--- PASS: TestExtractFileOperations_BashCat (0.00s)
+=== RUN   TestExtractFileOperations_BashCP
+--- PASS: TestExtractFileOperations_BashCP (0.00s)
+=== RUN   TestExtractFileOperations_BashSedInPlace
+--- PASS: TestExtractFileOperations_BashSedInPlace (0.00s)
+=== RUN   TestExtractFileOperations_BashChainedCommands
+--- PASS: TestExtractFileOperations_BashChainedCommands (0.00s)
+=== RUN   TestExtractFileOperations_MergeUpgrade
+--- PASS: TestExtractFileOperations_MergeUpgrade (0.00s)
+=== RUN   TestProjectFileEntry_JSONIncludesLastAgent
+--- PASS: TestProjectFileEntry_JSONIncludesLastAgent (0.00s)
+=== RUN   TestExtractFileOperations_MergeNoDowngrade
+--- PASS: TestExtractFileOperations_MergeNoDowngrade (0.00s)
+=== RUN   TestExtractFileOperations_SkipsGlob
+--- PASS: TestExtractFileOperations_SkipsGlob (0.00s)
+=== RUN   TestExtractFileOperations_SkipsGrep
+--- PASS: TestExtractFileOperations_SkipsGrep (0.00s)
+=== RUN   TestExtractFileOperations_SkipsPlaywright
+--- PASS: TestExtractFileOperations_SkipsPlaywright (0.00s)
+=== RUN   TestExtractFileOperations_SkipsNotion
+--- PASS: TestExtractFileOperations_SkipsNotion (0.00s)
+=== RUN   TestExtractFileOperations_MultipleMessages
+--- PASS: TestExtractFileOperations_MultipleMessages (0.00s)
+=== RUN   TestExtractFileOperations_EmptyInput
+--- PASS: TestExtractFileOperations_EmptyInput (0.00s)
+=== RUN   TestExtractFileOperations_EmptyToolInput
+--- PASS: TestExtractFileOperations_EmptyToolInput (0.00s)
+=== RUN   TestExtractFileOperations_BashNoFileArgs
+--- PASS: TestExtractFileOperations_BashNoFileArgs (0.00s)
+=== RUN   TestExtractFileOperations_BashWithFlags
+--- PASS: TestExtractFileOperations_BashWithFlags (0.00s)
+=== RUN   TestFileOperationsToChanges
+--- PASS: TestFileOperationsToChanges (0.00s)
+=== RUN   TestComputeFileStats
+--- PASS: TestComputeFileStats (0.00s)
+=== RUN   TestComputeFileStats_Empty
+--- PASS: TestComputeFileStats_Empty (0.00s)
+=== RUN   TestLooksLikeFilePath
+=== RUN   TestLooksLikeFilePath//tmp/test.txt
+=== RUN   TestLooksLikeFilePath/src/main.go
+=== RUN   TestLooksLikeFilePath/file.txt
+=== RUN   TestLooksLikeFilePath/~/Documents/notes.md
+=== RUN   TestLooksLikeFilePath/-rf
+=== RUN   TestLooksLikeFilePath/--force
+=== RUN   TestLooksLikeFilePath/#00
+=== RUN   TestLooksLikeFilePath/.
+=== RUN   TestLooksLikeFilePath/..
+=== RUN   TestLooksLikeFilePath//
+=== RUN   TestLooksLikeFilePath/http://example.com
+=== RUN   TestLooksLikeFilePath/https://github.com/foo
+=== RUN   TestLooksLikeFilePath/hello
+=== RUN   TestLooksLikeFilePath/git
+=== RUN   TestLooksLikeFilePath/status
+--- PASS: TestLooksLikeFilePath (0.00s)
+    --- PASS: TestLooksLikeFilePath//tmp/test.txt (0.00s)
+    --- PASS: TestLooksLikeFilePath/src/main.go (0.00s)
+    --- PASS: TestLooksLikeFilePath/file.txt (0.00s)
+    --- PASS: TestLooksLikeFilePath/~/Documents/notes.md (0.00s)
+    --- PASS: TestLooksLikeFilePath/-rf (0.00s)
+    --- PASS: TestLooksLikeFilePath/--force (0.00s)
+    --- PASS: TestLooksLikeFilePath/#00 (0.00s)
+    --- PASS: TestLooksLikeFilePath/. (0.00s)
+    --- PASS: TestLooksLikeFilePath/.. (0.00s)
+    --- PASS: TestLooksLikeFilePath// (0.00s)
+    --- PASS: TestLooksLikeFilePath/http://example.com (0.00s)
+    --- PASS: TestLooksLikeFilePath/https://github.com/foo (0.00s)
+    --- PASS: TestLooksLikeFilePath/hello (0.00s)
+    --- PASS: TestLooksLikeFilePath/git (0.00s)
+    --- PASS: TestLooksLikeFilePath/status (0.00s)
+=== RUN   TestCleanFilePath
+=== RUN   TestCleanFilePath//Users/me/file.go
+=== RUN   TestCleanFilePath/__/tmp/test.txt__
+=== RUN   TestCleanFilePath//path/with/trailing/
+=== RUN   TestCleanFilePath//
+=== RUN   TestCleanFilePath/#00
+--- PASS: TestCleanFilePath (0.00s)
+    --- PASS: TestCleanFilePath//Users/me/file.go (0.00s)
+    --- PASS: TestCleanFilePath/__/tmp/test.txt__ (0.00s)
+    --- PASS: TestCleanFilePath//path/with/trailing/ (0.00s)
+    --- PASS: TestCleanFilePath// (0.00s)
+    --- PASS: TestCleanFilePath/#00 (0.00s)
+=== RUN   TestBlameQuery_CompileWithFilePathAndFilePaths
+--- PASS: TestBlameQuery_CompileWithFilePathAndFilePaths (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/session	0.280s

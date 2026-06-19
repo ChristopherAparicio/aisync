@@ -1,0 +1,48 @@
+Task 7: hermes Provider — session/token/cost mapping
+====================================================
+Date: 2026-05-30
+
+Command: go build ./internal/provider/hermes/...
+Working directory: /Users/guardix/dev/aisync
+
+Output:
+(none — clean build)
+
+Exit code: 0
+
+Files created:
+  internal/provider/hermes/hermes.go
+
+Interface compliance verified:
+  provider.Provider satisfied by *Provider:
+    - Name() session.ProviderName
+    - Detect(projectPath string, branch string) ([]session.Summary, error)
+    - Export(sessionID session.ID, mode session.StorageMode) (*session.Session, error)
+    - CanImport() bool
+    - Import(s *session.Session) error
+
+LSP diagnostics: no errors
+
+mapSession() field coverage:
+  ID             = session.ID(hs.ID)
+  Provider       = session.ProviderHermes
+  Agent          = hs.Model (fallback: hs.Source)
+  ParentID       = session.ID(hs.ParentSessionID.String) when Valid
+  CreatedAt      = time.Unix(int64(hs.StartedAt), 0)   [float64 epoch seconds]
+  Summary        = hs.Title.String when Valid
+  ExportedBy     = "aisync"
+  StorageMode    = session.StorageModeCompact
+  Version        = 1
+  TokenUsage.InputTokens  = hs.InputTokens
+  TokenUsage.OutputTokens = hs.OutputTokens
+  TokenUsage.CacheRead    = hs.CacheReadTokens
+  TokenUsage.CacheWrite   = hs.CacheWriteTokens
+  TokenUsage.TotalTokens  = InputTokens+OutputTokens+CacheRead+CacheWrite+ReasoningTokens
+  EstimatedCost  = hs.EstimatedCostUSD.Float64 when Valid
+  ActualCost     = hs.ActualCostUSD.Float64 when Valid
+
+Notes:
+  - ReasoningTokens included in TotalTokens; no dedicated field in session.TokenUsage
+  - CanImport() = false (read-only provider)
+  - Detect() returns all root sessions (Hermes has no project tracking)
+  - reader nil-guard in both Detect() and Export() handles missing state.db gracefully

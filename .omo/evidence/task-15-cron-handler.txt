@@ -1,0 +1,43 @@
+Task 15 — /cron web page
+Date: 2026-05-30
+
+=== Changes Made ===
+
+1. internal/web/funcs.go
+   - Added fmtTimePtr(*time.Time) string helper function
+   - Registered as "fmtTimePtr" in templateFuncs() FuncMap
+   - Delegates to existing timeAgo(*t) after nil guard; returns "—" for nil
+
+2. internal/web/handlers.go (end of file, after handleSessionExchanges)
+   - Added cronPage struct { Nav string; Jobs []session.CronJob }
+   - Added (s *Server) handleCron(w, r): calls s.store.ListCronJobs(""), guards nil store,
+     logs errors, renders "cron.html" with cronPage{Nav:"cron"}
+
+3. internal/web/server.go
+   - Added {"templates/cron.html"} to pageSpecs slice (after exchanges.html entry)
+   - Added mux.HandleFunc("GET /cron", s.handleCron) in RegisterRoutes (after /alerts)
+
+4. internal/web/templates/layout.html
+   - Added <li><a href="/cron" class="{{if eq .Nav "cron"}}active{{end}}">Cron</a></li>
+     after the Alerts nav link, before the Settings gear icon
+
+5. internal/web/templates/cron.html (new file)
+   - Defines {{define "title"}} and {{define "content"}} blocks
+   - Empty state when .Jobs is empty
+   - data-table with 7 columns: Name, Schedule, Enabled, State, Last Status, Last Run, Next Run
+   - ScheduleDisplay preferred over Schedule; fmtTimePtr for *time.Time columns
+   - Badge classes: badge-success (enabled/success), badge-error (error), badge-muted (other)
+
+=== Build Output ===
+$ go build ./...
+(exit 0, no output)
+
+=== Test Output ===
+$ go test ./internal/web/...
+ok      github.com/ChristopherAparicio/aisync/internal/web      4.126s
+
+=== Notes ===
+- No new CSS variables or hex colors introduced; all class names from existing dashboard
+- No JavaScript added; server-rendered HTML only
+- CronJobStore interface unchanged
+- fmtTimePtr nil guard returns em dash "—" consistent with other nil-time patterns in templates

@@ -1,0 +1,12 @@
+2026/06/15 00:07:06 [search] FTS5 engine initialized
+[
+  {
+    "created_at": "2026-01-03T10:00:00Z",
+    "session_id": "ses-empty-1",
+    "provider": "opencode",
+    "agent": "",
+    "branch": "main",
+    "summary": "No agent session",
+    "change_type": "modified"
+  }
+]

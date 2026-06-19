@@ -1,0 +1,114 @@
+F3 — Real Agent QA + Trigger Check
+Date: 2026-06-13
+Binary: /Users/guardix/go/bin/aisync
+
+=== SYMLINK VERIFICATION ===
+
+aisync-session-finder: SYMLINK OK
+aisync-session-finder/SKILL.md: READABLE OK
+  -> /Users/guardix/dev/aisync/.opencode/skills/aisync-session-finder
+
+aisync-stats: SYMLINK OK
+aisync-stats/SKILL.md: READABLE OK
+  -> /Users/guardix/dev/aisync/.opencode/skills/aisync-stats
+
+aisync-analyze: SYMLINK OK
+aisync-analyze/SKILL.md: READABLE OK
+  -> /Users/guardix/dev/aisync/.opencode/skills/aisync-analyze
+
+Symlinks: [3/3 OK]
+
+=== SKILL FLOW RESULTS ===
+
+--- Flow 1: aisync-session-finder — "find sessions on the main branch" ---
+Routing: "find sessions on a branch" -> aisync list --branch <branch> --limit 10
+Command: aisync list --branch master --limit 5 --json
+Exit: 0
+Result: JSON array with 5 sessions, each containing id, provider, branch, total_tokens, etc.
+Sample: ses_13f8119a6ffeQC4eqPFkAHlbT8 (opencode, branch=master, tokens=1190335)
+PASS
+
+--- Flow 2: aisync-session-finder — "which sessions touched README.md" ---
+Routing: "which sessions touched a file" -> aisync blame <file>
+Command: aisync blame README.md
+Exit: 0
+Result: Found 1 session (ses_32ecb00…, opencode, deleted 96d ago, [WIP] Test Session ID)
+Note: "no sessions found" would also be valid; got a real match.
+PASS
+
+--- Flow 3: aisync-stats — "how many tokens have I used total" ---
+Routing: "Overall token/session stats" -> aisync stats
+Command: aisync stats
+Exit: 0
+Result: Sessions=395, Messages=202103, Tokens=37976.5M; breakdown by provider and branch shown
+PASS
+
+--- Flow 4: aisync-stats — "what is the cost breakdown" ---
+Routing: "Cost breakdown" -> aisync stats --cost
+Command: aisync stats --cost
+Exit: 0
+Result: Total Cost=$7267.43; master branch=$7267.43; no-branch sessions=$0.00
+PASS
+
+--- Flow 5: aisync-analyze — "find sessions that had errors recently" ---
+Routing: "find sessions with errors" -> aisync errors --limit 10 --json
+Command: aisync errors --recent --limit 5
+Exit: 0
+Result: 5 recent error sessions returned (tool_error x4, aborted x1); clean tabular output
+PASS
+
+--- Flow 6: aisync-analyze — "quick health check on this session" ---
+Session: ses_13f8119a6ffeQC4eqPFkAHlbT8 (from: aisync list --quiet | head -1)
+Routing: "quick health check (offline)" -> aisync diagnose <id>
+Command: aisync diagnose ses_13f8119a6ffeQC4eqPFkAHlbT8
+Exit: 0
+Result: Score=54/100 Grade=D, DEGRADED (low saturation+efficiency). Health breakdown provided.
+  Error:30/30 Cache:15/20 Completion:8/15 Efficiency:1/10 Saturation:0/25
+  22 tool calls, 0 errors. Phase analysis: healthy across all phases.
+PASS
+
+=== SKILL FLOWS SUMMARY ===
+Flow 1 (session-finder: find on branch): PASS
+Flow 2 (session-finder: blame file): PASS
+Flow 3 (stats: token count): PASS
+Flow 4 (stats: cost breakdown): PASS
+Flow 5 (analyze: find errors): PASS
+Flow 6 (analyze: diagnose session): PASS
+
+Skill flows [6/6 PASS]
+
+=== SKILL-OBSERVE OUTPUT ===
+Session: ses_13f8119a6ffeQC4eqPFkAHlbT8
+Exit: 0
+
+=== SKILL OBSERVATION ===
+Session:      ses_13f8119a6ffeQC4eqPFkAHlbT8
+Project:      /Users/guardix/dev/aisync
+Messages:     15
+Capabilities: 27 (from registry scan)
+
+Available (2) — all skills known for this project
+  opencode-sessions, replay-tester
+
+Recommended (2) — skills the keyword recommender matched on user messages
+  opencode-sessions, replay-tester
+
+Loaded (0) — skills actually detected as loaded during the session
+  (none)
+
+Missed (2) — recommended but NOT loaded — potential gap
+  opencode-sessions, replay-tester
+
+Discovered (0) — loaded but NOT recommended — recommender coverage gap
+
+Note: aisync-session-finder, aisync-stats, aisync-analyze are not in the skill-observe
+registry scan because skill-observe reads the project's skills config (opencode.json/AGENTS.md),
+not the ~/.config/opencode/skills/ symlinks. The 27 capabilities are from the aisync agent
+registry. This is expected behavior — skill-observe is a coverage signal, not a gate.
+
+=== VERDICT ===
+Symlinks [3/3 OK]
+Skill flows [6/6 PASS]
+skill-observe [ran — exit 0 — 27 capabilities, 2 recommended, 0 loaded for session]
+
+VERDICT: APPROVE

@@ -1,0 +1,4 @@
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/hermes	0.238s
+ok  	github.com/ChristopherAparicio/aisync/internal/service	0.636s
+ok  	github.com/ChristopherAparicio/aisync/internal/storage/sqlite	6.085s
+ok  	github.com/ChristopherAparicio/aisync/internal/web	4.341s

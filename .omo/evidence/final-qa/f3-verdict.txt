@@ -1,0 +1,53 @@
+F3 — Real Manual QA Evidence Summary
+Date: 2026-05-30
+Daemon: NOT running on :8371 — all QA via httptest harness
+
+=== A. Hermes Provider Tests: 16/16 PASS ===
+TestAdapter_Sessions         PASS
+TestAdapter_Messages         PASS
+TestAdapter_ChildLineage     PASS
+TestAdapter_NullTolerant     PASS
+TestParseCronJobs_Normal     PASS
+TestParseCronJobs_MissingFile PASS
+TestParseCronJobs_Truncated  PASS
+TestLinkCronRuns_Match       PASS
+TestLinkCronRuns_Orphan      PASS
+TestLinkCronRuns_NonCronSkipped PASS
+TestLinkCronRuns_MultiSegment PASS
+TestFixture                  PASS
+TestMapMessage_Basic         PASS
+TestMapMessage_SentinelDecoded PASS
+TestMapMessage_ToolCall      PASS
+TestMapMessage_Reasoning     PASS
+
+=== B. E2E TestHermesE2E: 4/4 subtests PASS ===
+/sessions — lists fixture-parent-001            200 PASS
+/sessions/fixture-parent-001/exchanges — 200    200 PASS
+/cron — responds 200 with fixture-cron-job      200 PASS
+/graph — responds 200                           200 PASS
+
+=== C. Web Exchange Tests: 8/8 PASS ===
+TestExchanges_Empty             PASS
+TestExchanges_MergedOrdering    PASS
+TestExchanges_AgentTagging      PASS
+TestExchanges_ChildCap          PASS
+TestExchanges_MissingChildSkip  PASS
+TestExchanges_SentinelDecoded   PASS
+TestExchangesMore_NextBatch     PASS
+TestExchangesMore_OffsetPastEnd PASS
+
+=== D. Edge Cases: 5/5 PASS ===
+1. Empty jobs.json (missing file) → nil,nil (no error)    PASS  [TestParseCronJobs_MissingFile]
+2. Orphan cron session (no matching job) → Orphan=true     PASS  [TestLinkCronRuns_Orphan]
+3. Session with no children → 200, empty-state            PASS  [TestExchanges_Empty]
+4. Sentinel content (\x00\x01 prefix) stripped            PASS  [TestMapMessage_SentinelDecoded, TestExchanges_SentinelDecoded]
+5. Truncated/malformed jobs.json → partial decode, no panic PASS [TestParseCronJobs_Truncated]
+
+=== E. Full Package Sweep ===
+ok  internal/provider/hermes
+ok  internal/service
+ok  internal/storage/sqlite
+ok  internal/web
+
+=== VERDICT: APPROVE ===
+All scenarios pass. No failures. No regressions.

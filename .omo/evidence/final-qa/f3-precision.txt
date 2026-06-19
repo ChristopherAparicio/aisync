@@ -1,0 +1,25 @@
+=== RUN   TestPrecisionAtK
+=== RUN   TestPrecisionAtK/ThreeOfTen
+=== RUN   TestPrecisionAtK/ZeroOfTen
+=== RUN   TestPrecisionAtK/TenOfTen
+=== RUN   TestPrecisionAtK/KCapsLookup
+=== RUN   TestPrecisionAtK/KExceedsResults
+=== RUN   TestPrecisionAtK/EmptyExpected
+=== RUN   TestPrecisionAtK/EmptyResults
+--- PASS: TestPrecisionAtK (0.00s)
+    --- PASS: TestPrecisionAtK/ThreeOfTen (0.00s)
+    --- PASS: TestPrecisionAtK/ZeroOfTen (0.00s)
+    --- PASS: TestPrecisionAtK/TenOfTen (0.00s)
+    --- PASS: TestPrecisionAtK/KCapsLookup (0.00s)
+    --- PASS: TestPrecisionAtK/KExceedsResults (0.00s)
+    --- PASS: TestPrecisionAtK/EmptyExpected (0.00s)
+    --- PASS: TestPrecisionAtK/EmptyResults (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search	0.218s
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/elastic	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/fts5	0.405s [no tests to run]
+?   	github.com/ChristopherAparicio/aisync/internal/search/like	[no test files]

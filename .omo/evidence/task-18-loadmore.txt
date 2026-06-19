@@ -1,0 +1,26 @@
+# Task 18 — handleSessionExchangesMore (load-more partial)
+
+## Changes
+
+### internal/web/handlers.go
+- Added `handleSessionExchangesMore` after `handleSessionExchanges` (end of file)
+- Handler reads `id` from path, `offset` from query (default 10), loads session via `s.sessionSvc.Get`
+- Falls back to `s.store.GetLinkedSessions` (filtered by SessionLinkDelegatedTo + SourceSessionID == sess.ID) when sess.Children is empty
+- Slices children[offset:offset+10], calls `buildExchangeTimeline(sess, batch)` (reused from T17)
+- Returns 200 OK with empty body when offset >= len(children)
+- Renders via `s.renderPartial(w, "exchanges_more_partial.html", data)`
+
+### internal/web/server.go
+- Added `"templates/exchanges_more_partial.html"` to partials ParseFS list (line ~139)
+- Registered `mux.HandleFunc("GET /partials/session-exchanges/{id}", s.handleSessionExchangesMore)` after the session-messages partial route
+
+### internal/web/templates/exchanges_more_partial.html
+- New file: defines `{{define "exchanges_more_partial.html"}}` block
+- Renders each ExchangeEntry with agent, role, content, delegation badge
+- Appends HTMX sentinel div (`hx-trigger="revealed"`) when HasMore is true for infinite-scroll
+
+## Build
+go build ./... — exit 0 (no output)
+
+## LSP
+Diagnostics clean on handlers.go and server.go

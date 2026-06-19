@@ -1,0 +1,16 @@
+## QA: .opencode/skills/README.md
+
+# grep -c "aisync-session-finder|aisync-stats|aisync-analyze" .opencode/skills/README.md
+4
+# (>= 3: PASS)
+
+# grep -i "install-skills" .opencode/skills/README.md README.md | head -5
+.opencode/skills/README.md:make install-skills
+.opencode/skills/README.md:make uninstall-skills
+README.md:make install-skills
+# (install-skills in both files: PASS)
+
+# grep -i "search|fts" .opencode/skills/README.md | head -5
+**FTS5 `--search` is unreliable** (as of aisync 0.1.0-dev): the full-text search engine exits 0 but returns false positives. It matches raw truncated message content rather than summaries, and the OR operator is broken. The `aisync-session-finder` skill routes to metadata filters (`--branch`, `--provider`, `--tag`, `--since`) and `aisync blame` instead.
+A fix is tracked in `.omo/plans/ai5-search-architecture.md`.
+# (FTS limitation note present: PASS)

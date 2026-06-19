@@ -1,0 +1,33 @@
+=== Task 9: ParseCronJobs ===
+Date: 2026-05-30
+
+--- go build ./internal/provider/hermes/... ---
+(no output — success)
+
+--- go test ./internal/provider/hermes/... -run TestParseCron -v ---
+=== RUN   TestParseCronJobs_Normal
+--- PASS: TestParseCronJobs_Normal (0.00s)
+=== RUN   TestParseCronJobs_MissingFile
+--- PASS: TestParseCronJobs_MissingFile (0.00s)
+=== RUN   TestParseCronJobs_Truncated
+2026/05/30 12:39:32 hermes: cron: malformed jobs.json (...): unexpected end of JSON input - returning partial results
+--- PASS: TestParseCronJobs_Truncated (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/hermes	0.383s
+
+--- go test ./internal/provider/hermes/... -v (full suite) ---
+=== RUN   TestParseCronJobs_Normal
+--- PASS: TestParseCronJobs_Normal (0.00s)
+=== RUN   TestParseCronJobs_MissingFile
+--- PASS: TestParseCronJobs_MissingFile (0.00s)
+=== RUN   TestParseCronJobs_Truncated
+2026/05/30 12:39:41 hermes: cron: malformed jobs.json (...): unexpected end of JSON input - returning partial results
+--- PASS: TestParseCronJobs_Truncated (0.00s)
+=== RUN   TestFixture
+--- PASS: TestFixture (0.01s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/provider/hermes	0.227s
+
+--- Files created ---
+internal/provider/hermes/cron.go       (ParseCronJobs + partialDecodeCronJobs)
+internal/provider/hermes/cron_test.go  (TestParseCronJobs_Normal/MissingFile/Truncated)

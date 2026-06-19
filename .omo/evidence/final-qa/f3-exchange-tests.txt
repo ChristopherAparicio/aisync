@@ -1,0 +1,26 @@
+=== RUN   TestExchanges_Empty
+[aisync-web] 2026/05/30 14:24:47 GET /sessions/xchg-empty-1/exchanges 200 1ms
+--- PASS: TestExchanges_Empty (0.04s)
+=== RUN   TestExchanges_MergedOrdering
+[aisync-web] 2026/05/30 14:24:47 GET /sessions/xchg-ord-parent/exchanges 200 1ms
+--- PASS: TestExchanges_MergedOrdering (0.03s)
+=== RUN   TestExchanges_AgentTagging
+[aisync-web] 2026/05/30 14:24:47 GET /sessions/xchg-tag-parent/exchanges 200 0s
+--- PASS: TestExchanges_AgentTagging (0.03s)
+=== RUN   TestExchanges_ChildCap
+[aisync-web] 2026/05/30 14:24:47 GET /sessions/xchg-cap-parent/exchanges 200 0s
+--- PASS: TestExchanges_ChildCap (0.03s)
+=== RUN   TestExchanges_MissingChildSkip
+[aisync-web] 2026/05/30 14:24:47 GET /sessions/xchg-miss-parent/exchanges 200 0s
+--- PASS: TestExchanges_MissingChildSkip (0.03s)
+=== RUN   TestExchanges_SentinelDecoded
+[aisync-web] 2026/05/30 14:24:47 GET /sessions/xchg-sentinel-1/exchanges 200 0s
+--- PASS: TestExchanges_SentinelDecoded (0.03s)
+=== RUN   TestExchangesMore_NextBatch
+[aisync-web] 2026/05/30 14:24:47 GET /partials/session-exchanges/xchg-more-parent 200 0s
+--- PASS: TestExchangesMore_NextBatch (0.03s)
+=== RUN   TestExchangesMore_OffsetPastEnd
+[aisync-web] 2026/05/30 14:24:47 GET /partials/session-exchanges/xchg-past-parent 200 0s
+--- PASS: TestExchangesMore_OffsetPastEnd (0.03s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/web	0.526s

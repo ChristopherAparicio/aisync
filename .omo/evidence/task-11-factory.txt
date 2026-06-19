@@ -1,0 +1,14 @@
+## go build ./...
+exit=0
+stdout:
+
+stderr:
+
+
+## go test ./pkg/cmd/factory/...
+exit=0
+stdout:
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/factory	(cached)
+
+stderr:
+

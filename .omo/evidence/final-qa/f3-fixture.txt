@@ -1,0 +1,12 @@
+=== RUN   TestEvalHarness_LoadFixture
+    eval_test.go:246: loaded 9 eval queries from fixture
+--- PASS: TestEvalHarness_LoadFixture (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search	0.610s
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/elastic	0.194s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/search/fts5	0.362s [no tests to run]
+?   	github.com/ChristopherAparicio/aisync/internal/search/like	[no test files]

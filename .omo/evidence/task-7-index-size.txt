@@ -1,3 +1,3 @@
-noisy_db: /tmp/eval-noisy.db  142.77 MB  reindex: 2m4.12s
-clean_db: /tmp/eval-clean.db  46.24 MB  reindex: 41.532s
-ratio (clean/noisy): 32.4%
+noisy_db: /tmp/eval-noisy.db  143.11 MB  reindex: 2m34.047s
+clean_db: /tmp/eval-clean.db  46.70 MB  reindex: 49.687s
+ratio (clean/noisy): 32.6%

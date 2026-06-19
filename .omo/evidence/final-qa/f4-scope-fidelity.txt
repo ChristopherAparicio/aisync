@@ -1,0 +1,75 @@
+ internal/config/config.go                        | 102 +++
+ internal/notification/adapter/slack/formatter.go |  40 ++
+ internal/notification/domain.go                  |  19 +
+ internal/notification/router.go                  |   7 +
+ internal/service/session_ingest.go               |  22 +-
+ internal/service/session_test.go                 |  73 ++
+ internal/session/enums.go                        |   2 +
+ internal/storage/sqlite/sqlite.go                | 148 ++++
+ internal/storage/store.go                        |  81 +++
+ internal/testutil/mock_store.go                  | 266 ++++++++
+ internal/web/funcs.go                            |   6 +
+ internal/web/handlers.go                         | 587 ++++++++++++++++
+ internal/web/server.go                           |  12 +
+ internal/web/static/css/style.css                | 824 +++++++++++++++++++++++
+ internal/web/templates/layout.html               |   2 +
+ internal/web/templates/session_detail.html       |   5 +-
+ internal/web/templates/session_graph.html        |   3 +-
+ pkg/cmd/capture/capture.go                       |   6 +-
+ pkg/cmd/capture/capture_test.go                  |  51 ++
+ pkg/cmd/factory/default.go                       |   2 +
+ pkg/cmd/root/root.go                             |   4 +
+ pkg/cmd/servecmd/serve.go                        | 134 +++-
+ 22 files changed, 2362 insertions(+), 34 deletions(-)
+
+=== GIT STATUS (all untracked/modified) ===
+ M internal/config/config.go
+ M internal/notification/adapter/slack/formatter.go
+ M internal/notification/domain.go
+ M internal/notification/router.go
+ M internal/service/session_ingest.go
+ M internal/service/session_test.go
+ M internal/session/enums.go
+ M internal/storage/sqlite/sqlite.go
+ M internal/storage/store.go
+ M internal/testutil/mock_store.go
+ M internal/web/funcs.go
+ M internal/web/handlers.go
+ M internal/web/server.go
+ M internal/web/static/css/style.css
+ M internal/web/templates/layout.html
+ M internal/web/templates/session_detail.html
+ M internal/web/templates/session_graph.html
+ M pkg/cmd/capture/capture.go
+ M pkg/cmd/capture/capture_test.go
+ M pkg/cmd/factory/default.go
+ M pkg/cmd/root/root.go
+ M pkg/cmd/servecmd/serve.go
+?? .omo/
+?? .playwright-mcp/
+?? alerts-table-v2.png
+?? alerts-table.png
+?? internal/e2e/hermes_e2e_test.go
+?? internal/notification/adapter/notifstore/
+?? internal/provider/hermes/
+?? internal/scheduler/stall_alert_task.go
+?? internal/scheduler/stall_alert_task_test.go
+?? internal/scheduler/stall_detector_task.go
+?? internal/scheduler/stall_detector_task_test.go
+?? internal/session/cron_job.go
+?? internal/session/notification_log.go
+?? internal/session/stall.go
+?? internal/stalldetector/
+?? internal/storage/sqlite/cron_job_store.go
+?? internal/storage/sqlite/cron_job_store_test.go
+?? internal/storage/sqlite/notification_log_store.go
+?? internal/storage/sqlite/notification_log_store_test.go
+?? internal/storage/sqlite/session_stall_store.go
+?? internal/web/exchanges_test.go
+?? internal/web/templates/alerts.html
+?? internal/web/templates/cron.html
+?? internal/web/templates/exchanges.html
+?? internal/web/templates/exchanges_more_partial.html
+?? internal/web/templates/sessions_health.html
+?? pkg/cmd/alertscmd/
+?? pkg/cmd/sessionscmd/

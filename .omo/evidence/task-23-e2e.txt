@@ -1,0 +1,16 @@
+=== RUN   TestHermesE2E
+=== RUN   TestHermesE2E/sessions_lists_hermes_session
+[aisync-web] 2026/05/30 14:05:27 GET /sessions 200 1ms
+=== RUN   TestHermesE2E/exchanges_responds_200_with_content
+[aisync-web] 2026/05/30 14:05:27 GET /sessions/fixture-parent-001/exchanges 200 0s
+=== RUN   TestHermesE2E/cron_responds_200_with_job
+[aisync-web] 2026/05/30 14:05:27 GET /cron 200 0s
+=== RUN   TestHermesE2E/graph_responds_200
+[aisync-web] 2026/05/30 14:05:27 GET /graph 200 0s
+--- PASS: TestHermesE2E (0.04s)
+    --- PASS: TestHermesE2E/sessions_lists_hermes_session (0.00s)
+    --- PASS: TestHermesE2E/exchanges_responds_200_with_content (0.00s)
+    --- PASS: TestHermesE2E/cron_responds_200_with_job (0.00s)
+    --- PASS: TestHermesE2E/graph_responds_200 (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/e2e	(cached)

@@ -1,0 +1,44 @@
+F4 Re-run: Scope Fidelity Check (corrected context)
+Date: 2026-05-30
+
+H1 Deliverables (T1-T3, T6-T8, T11, T13-T14, T22): PASS
+  - ProviderHermes enum: present in internal/session/enums.go
+  - internal/provider/hermes/: adapter_test.go, cron_test.go, cron.go, cronlink_test.go, cronlink.go, dbreader.go, fixture_test.go, hermes.go, messages_test.go, reader.go, sentinel.go, testdata
+  - delegate_task + stripSentinel: present in internal/service/session_ingest.go
+  - hermes.New: present in pkg/cmd/factory/default.go
+  - hermes flag: present in pkg/cmd/capture/capture.go
+
+H2 Deliverables (T4-T5, T9-T10, T12, T15-T16): PASS
+  - internal/session/cron_job.go: present
+  - migration038 (cron_jobs table): present in sqlite.go
+  - internal/storage/sqlite/cron_job_store.go: present
+  - CronJobStore interface: present in internal/storage/store.go
+  - internal/provider/hermes/cron.go + cronlink.go: present
+  - GET /cron + handleCron: present in internal/web/server.go
+  - internal/web/templates/cron.html: present
+
+H3 Deliverables (T17-T20): PASS
+  - buildExchangeTimeline + handleSessionExchanges: present in internal/web/handlers.go
+  - exchanges.html + exchanges_more_partial.html: present
+  - TestExchanges* tests: present in internal/web/exchanges_test.go
+
+Delegation (T21): PASS
+  - badge-hermes + exchanges link: present in session_graph.html
+
+E2E (T23): PASS
+  - TestHermesE2E: present in internal/e2e/hermes_e2e_test.go
+
+Hermes Guardrails:
+  - No "trajectory" references in hermes package (non-test): CLEAN
+  - No dbwriter.go: CLEAN (does not exist)
+  - Only migration038 in scope: CLEAN (035/036 are pre-existing, 038 is Hermes-only)
+
+Build: PASS (go build ./... exit 0)
+Tests: PASS (hermes 0.392s ok, e2e 1.291s ok)
+
+Pre-existing work correctly excluded from scope evaluation:
+  - stalldetector/, scheduler/stall_*, session/stall.go, notification_log.go,
+    session_stall_store.go, notification_log_store.go, notifstore/,
+    alerts.html, sessions_health.html, migrations 035/036 — NOT evaluated
+
+Tasks [23/23] | Hermes Guardrails [6/6] | Build [PASS] | VERDICT: APPROVE

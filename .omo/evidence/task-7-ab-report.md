@@ -18,9 +18,9 @@
 
 | Index | Size (MB) | Reindex Time |
 |-------|----------|--------------|
-| noisy | 142.77 | 2m4.12s |
-| clean | 46.24 | 41.532s |
-| ratio | 32.4% | — |
+| noisy | 143.11 | 2m34.047s |
+| clean | 46.70 | 49.687s |
+| ratio | 32.6% | — |
 
 ## Zero-Regression Check (path + command)
 
@@ -32,4 +32,4 @@
 
 - domain+project avg noisy P@10: 0.083
 - domain+project avg clean P@10: 0.167
-- size: noisy=142.77 MB → clean=46.24 MB (32.4% of noisy)
+- size: noisy=143.11 MB → clean=46.70 MB (32.6% of noisy)

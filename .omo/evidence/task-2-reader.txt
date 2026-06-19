@@ -1,0 +1,24 @@
+Task 2 — Hermes Reader Evidence
+================================
+Date: 2026-05-30
+
+Files created:
+  internal/provider/hermes/reader.go
+  internal/provider/hermes/dbreader.go
+
+go build ./internal/provider/hermes/...
+  exit 0 (no output)
+
+go vet ./internal/provider/hermes/...
+  exit 0 (no output)
+
+Interface methods implemented:
+  listSessions() ([]hermesSession, error)
+  readSession(id string) (*hermesSession, error)
+  listMessages(sessionID string) ([]hermesMessage, error)
+  findChildSessions(parentID string) ([]hermesSession, error)
+  close() error
+
+DSN pattern: dbPath + "?_pragma=journal_mode(WAL)&_pragma=query_only(ON)"
+Schema check: validates 'sessions' and 'messages' tables via sqlite_master (2/2 required).
+Driver: modernc.org/sqlite v1.45.0 (already in go.mod)

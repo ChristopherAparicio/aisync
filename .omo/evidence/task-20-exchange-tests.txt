@@ -1,0 +1,58 @@
+Task 20 — Exchange Handler Tests
+Run date: 2026-05-30
+
+Command: go test ./internal/web/... -run TestExchanges -v -timeout 120s
+
+=== RUN   TestExchanges_Empty
+[aisync-web] GET /sessions/xchg-empty-1/exchanges 200 1ms
+--- PASS: TestExchanges_Empty (0.04s)
+
+=== RUN   TestExchanges_MergedOrdering
+[aisync-web] GET /sessions/xchg-ord-parent/exchanges 200 0s
+--- PASS: TestExchanges_MergedOrdering (0.03s)
+
+=== RUN   TestExchanges_AgentTagging
+[aisync-web] GET /sessions/xchg-tag-parent/exchanges 200 0s
+--- PASS: TestExchanges_AgentTagging (0.03s)
+
+=== RUN   TestExchanges_ChildCap
+[aisync-web] GET /sessions/xchg-cap-parent/exchanges 200 0s
+--- PASS: TestExchanges_ChildCap (0.04s)
+
+=== RUN   TestExchanges_MissingChildSkip
+[aisync-web] GET /sessions/xchg-miss-parent/exchanges 200 0s
+--- PASS: TestExchanges_MissingChildSkip (0.04s)
+
+=== RUN   TestExchanges_SentinelDecoded
+[aisync-web] GET /sessions/xchg-sentinel-1/exchanges 200 0s
+--- PASS: TestExchanges_SentinelDecoded (0.04s)
+
+=== RUN   TestExchangesMore_NextBatch
+[aisync-web] GET /partials/session-exchanges/xchg-more-parent 200 0s
+--- PASS: TestExchangesMore_NextBatch (0.03s)
+
+=== RUN   TestExchangesMore_OffsetPastEnd
+[aisync-web] GET /partials/session-exchanges/xchg-past-parent 200 0s
+--- PASS: TestExchangesMore_OffsetPastEnd (0.03s)
+
+PASS
+ok  github.com/ChristopherAparicio/aisync/internal/web  0.751s
+
+Full suite (no regressions):
+ok  github.com/ChristopherAparicio/aisync/internal/web  3.809s
+
+LSP diagnostics: clean on handlers.go and exchanges_test.go
+
+Files changed:
+- internal/web/handlers.go: added stripSentinelContent() + called in buildExchangeTimeline()
+- internal/web/exchanges_test.go: new file, 8 tests
+
+Test coverage summary:
+  TestExchanges_Empty          — childless/messageless session returns 200 + empty-state text
+  TestExchanges_MergedOrdering — parent + child messages sorted by Timestamp across sources
+  TestExchanges_AgentTagging   — each entry carries correct Agent name from its source session
+  TestExchanges_ChildCap       — 12 children: 10 inline, HasMore=true, MoreURL present
+  TestExchanges_MissingChildSkip — dangling link to deleted child is skipped, 200 returned
+  TestExchanges_SentinelDecoded  — \x00\x01 prefix stripped from Content before render
+  TestExchangesMore_NextBatch    — offset=10 returns children[10:12], no further HasMore
+  TestExchangesMore_OffsetPastEnd — offset past end returns 200 with empty body

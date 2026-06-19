@@ -1,0 +1,50 @@
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/analyzecmd	3.104s
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/authcmd	[no test files]
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/backfillcmd	3.752s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/blamecmd	4.752s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/capture	5.853s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/commentcmd	4.549s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/config	3.811s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/diagnosecmd	3.387s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/diffcmd	3.466s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/efficiencycmd	3.260s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/errorscmd	2.131s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/explaincmd	2.478s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/export	2.294s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/factory	2.338s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/gccmd	3.013s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/hooks	3.364s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/importcmd	3.234s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/initcmd	4.212s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/inspectcmd	6.685s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/linkcmd	4.508s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/listcmd	5.428s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/mcpcmd	3.588s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/modulecmd	3.971s
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/pricescmd	[no test files]
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/projectcmd	4.040s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/recommendcmd	4.257s
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/replaycmd	[no test files]
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/restore	5.688s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/resumecmd	7.035s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/rewindcmd	3.994s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/root	2.793s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/secrets	2.993s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/servecmd	3.463s
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/sessionscmd	[no test files]
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/setupcmd	[no test files]
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/show	3.914s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/skillobservecmd	3.712s
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/skillscmd	[no test files]
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/statscmd	3.981s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/status	4.601s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/synccmd	5.760s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/tagcmd	4.706s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/toolusagecmd	3.774s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/tuicmd	3.537s
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/usagecmd	[no test files]
+?   	github.com/ChristopherAparicio/aisync/pkg/cmd/userscmd	[no test files]
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/validatecmd	4.402s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmd/webcmd	3.940s
+ok  	github.com/ChristopherAparicio/aisync/pkg/cmdutil	4.205s
+?   	github.com/ChristopherAparicio/aisync/pkg/iostreams	[no test files]

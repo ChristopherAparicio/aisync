@@ -1,0 +1,16 @@
+second install: OK
+global symlink count after reinstall: 3
+uninstall: OK
+global symlink count after uninstall: 0
+repo skill count intact: 3
+restore install: OK
+global symlink count after restore: 3
+ls -la ~/.config/opencode/skills:
+total 0
+drwxr-xr-x@  7 guardix  staff   224 Jun 13 12:20 .
+drwxr-xr-x@ 43 guardix  staff  1376 Jun  2 13:34 ..
+lrwxr-xr-x@  1 guardix  staff    57 Jun 13 12:20 aisync-analyze -> /Users/guardix/dev/aisync/.opencode/skills/aisync-analyze
+lrwxr-xr-x@  1 guardix  staff    64 Jun 13 12:20 aisync-session-finder -> /Users/guardix/dev/aisync/.opencode/skills/aisync-session-finder
+lrwxr-xr-x@  1 guardix  staff    55 Jun 13 12:20 aisync-stats -> /Users/guardix/dev/aisync/.opencode/skills/aisync-stats
+drwxr-xr-x@  4 guardix  staff   128 Mar 11 11:47 opencode-sessions
+drwxr-xr-x@  3 guardix  staff    96 Mar 11 14:11 replay-tester

@@ -1,0 +1,5 @@
+=== RUN   TestExchanges_Empty
+[aisync-web] 2026/05/30 14:25:15 GET /sessions/xchg-empty-1/exchanges 200 1ms
+--- PASS: TestExchanges_Empty (0.03s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/web	0.304s

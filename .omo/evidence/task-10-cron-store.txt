@@ -1,0 +1,15 @@
+=== RUN   TestCronJobStore_UpsertAndGet
+--- PASS: TestCronJobStore_UpsertAndGet (0.03s)
+=== RUN   TestCronJobStore_Upsert_Idempotent
+--- PASS: TestCronJobStore_Upsert_Idempotent (0.03s)
+=== RUN   TestCronJobStore_ListByProvider
+--- PASS: TestCronJobStore_ListByProvider (0.02s)
+=== RUN   TestCronJobStore_GetNotFound
+--- PASS: TestCronJobStore_GetNotFound (0.02s)
+=== RUN   TestCronJobStore_NullableTimestamp
+--- PASS: TestCronJobStore_NullableTimestamp (0.03s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/storage/sqlite	0.800s
+
+Command: go test ./internal/storage/sqlite/... -run TestCronJob -v
+Date: 2026-05-30

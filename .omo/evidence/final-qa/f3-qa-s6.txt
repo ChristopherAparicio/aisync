@@ -1,0 +1,2 @@
+Error: requires at least one file argument or --project flag
+exit:1

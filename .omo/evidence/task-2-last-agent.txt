@@ -1,0 +1,4 @@
+=== RUN   TestProjectFileEntry_JSONIncludesLastAgent
+--- PASS: TestProjectFileEntry_JSONIncludesLastAgent (0.00s)
+PASS
+ok  	github.com/ChristopherAparicio/aisync/internal/session	0.416s

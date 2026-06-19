@@ -1,0 +1,112 @@
+== empty hermes home ==
+rc=0
+stdout:
+
+stderr:
+2026/05/30 13:40:57 [search] FTS5 engine initialized
+== fixture hermes home ==
+rc=0
+stdout:
+Captured session fixture-hermes-001
+  Provider: hermes
+  Branch:   master
+  Mode:     compact
+  Messages: 0
+  Summary:  fixture hermes session
+stderr:
+2026/05/30 13:40:59 [search] FTS5 engine initialized
+2026/05/30 13:40:59 INFO processing session events session_id=fixture-hermes-001 provider=hermes message_count=0
+2026/05/30 13:40:59 INFO extracted session events session_id=fixture-hermes-001 total_events=1 tool_calls=0 skills_loaded=0 commands=0 errors=0 images=0 unique_tools=0
+== list global hermes ==
+rc=0
+stdout:
+# 1 session(s) — scope: all projects — filters: provider=hermes
+
+ID            PROVIDER      PROJECT                         MESSAGES    TOKENS  CAPTURED
+----          --------      -------                         --------    ------  --------
+fixture-her…  hermes        .../dev/aisync                         0        18  927 days ago
+stderr:
+2026/05/30 13:41:01 [search] FTS5 engine initialized
+== auto-detect hermes ==
+rc=0
+stdout:
+Captured session ses_19aff520cffeuAed5NDIzTD8Hn
+  Provider: opencode
+  Branch:   master
+  Mode:     compact
+  Messages: 1804
+  Summary:  Plugin/hook identification in AI5 (fork #1)
+stderr:
+2026/05/30 13:42:59 [search] FTS5 engine initialized
+2026/05/30 13:43:01 INFO processing session events session_id=ses_19a15e015ffeUuX3KEDw4oXfAO provider=opencode message_count=22
+2026/05/30 13:43:01 INFO extracted session events session_id=ses_19a15e015ffeUuX3KEDw4oXfAO total_events=43 tool_calls=36 skills_loaded=0 commands=5 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:03 INFO processing session events session_id=ses_18a5a45a1ffeFG3vliXFYou9hg provider=opencode message_count=17
+2026/05/30 13:43:03 INFO extracted session events session_id=ses_18a5a45a1ffeFG3vliXFYou9hg total_events=62 tool_calls=59 skills_loaded=0 commands=0 errors=1 images=0 unique_tools=3
+2026/05/30 13:43:04 INFO processing session events session_id=ses_18a54d13fffeL9L37wEgjjtw1t provider=opencode message_count=36
+2026/05/30 13:43:04 INFO extracted session events session_id=ses_18a54d13fffeL9L37wEgjjtw1t total_events=66 tool_calls=63 skills_loaded=0 commands=1 errors=0 images=0 unique_tools=4
+2026/05/30 13:43:04 INFO processing session events session_id=ses_18a549f6effeLD7cYoVUGuDMYc provider=opencode message_count=28
+2026/05/30 13:43:04 INFO extracted session events session_id=ses_18a549f6effeLD7cYoVUGuDMYc total_events=76 tool_calls=74 skills_loaded=0 commands=0 errors=0 images=0 unique_tools=4
+2026/05/30 13:43:04 INFO processing session events session_id=ses_1884a7db8ffeARq3l6huu4FHua provider=opencode message_count=8
+2026/05/30 13:43:04 INFO extracted session events session_id=ses_1884a7db8ffeARq3l6huu4FHua total_events=6 tool_calls=4 skills_loaded=0 commands=0 errors=0 images=0 unique_tools=2
+2026/05/30 13:43:04 INFO processing session events session_id=ses_188456eb3ffeym5OT93ZhAKcyS provider=opencode message_count=13
+2026/05/30 13:43:04 INFO extracted session events session_id=ses_188456eb3ffeym5OT93ZhAKcyS total_events=12 tool_calls=10 skills_loaded=0 commands=0 errors=0 images=0 unique_tools=3
+2026/05/30 13:43:04 INFO processing session events session_id=ses_1879bae16ffe58ZYLPWa4UwsnY provider=opencode message_count=9
+2026/05/30 13:43:04 INFO extracted session events session_id=ses_1879bae16ffe58ZYLPWa4UwsnY total_events=14 tool_calls=11 skills_loaded=0 commands=1 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1879b4eb6ffeOO5mOmfqHvqUbn provider=opencode message_count=15
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1879b4eb6ffeOO5mOmfqHvqUbn total_events=32 tool_calls=24 skills_loaded=0 commands=5 errors=1 images=0 unique_tools=4
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1879af033ffeFDcnO3iBb5w9y5 provider=opencode message_count=22
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1879af033ffeFDcnO3iBb5w9y5 total_events=51 tool_calls=44 skills_loaded=0 commands=5 errors=0 images=0 unique_tools=9
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1879abdd9ffeqJjK6KDf0UtWMn provider=opencode message_count=11
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1879abdd9ffeqJjK6KDf0UtWMn total_events=20 tool_calls=15 skills_loaded=0 commands=3 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1879a5b9bffenSpnG1Y0kKGaSq provider=opencode message_count=27
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1879a5b9bffenSpnG1Y0kKGaSq total_events=65 tool_calls=40 skills_loaded=0 commands=23 errors=0 images=0 unique_tools=5
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1879a0ce6ffev4PRpbgAx1yDXJ provider=opencode message_count=48
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1879a0ce6ffev4PRpbgAx1yDXJ total_events=90 tool_calls=65 skills_loaded=0 commands=22 errors=1 images=0 unique_tools=6
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1878acdd3ffe9i1J14x8t0JBrp provider=opencode message_count=16
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1878acdd3ffe9i1J14x8t0JBrp total_events=29 tool_calls=22 skills_loaded=0 commands=5 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1878a86b6ffevqi8OurVKxUrRH provider=opencode message_count=22
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1878a86b6ffevqi8OurVKxUrRH total_events=37 tool_calls=28 skills_loaded=0 commands=6 errors=1 images=0 unique_tools=7
+2026/05/30 13:43:05 INFO processing session events session_id=ses_1878a2ca5ffeFle3GzFxFZLIjn provider=opencode message_count=21
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_1878a2ca5ffeFle3GzFxFZLIjn total_events=46 tool_calls=34 skills_loaded=0 commands=10 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:05 INFO processing session events session_id=ses_187833924ffe36761QpRg2g8hR provider=opencode message_count=29
+2026/05/30 13:43:05 INFO extracted session events session_id=ses_187833924ffe36761QpRg2g8hR total_events=57 tool_calls=44 skills_loaded=0 commands=11 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:06 INFO processing session events session_id=ses_1877a80adffe7za4e19E0rPNER provider=opencode message_count=12
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_1877a80adffe7za4e19E0rPNER total_events=20 tool_calls=16 skills_loaded=0 commands=1 errors=1 images=0 unique_tools=5
+2026/05/30 13:43:06 INFO processing session events session_id=ses_1877a24d7ffeU8hbPfqFAs3tv3 provider=opencode message_count=17
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_1877a24d7ffeU8hbPfqFAs3tv3 total_events=28 tool_calls=23 skills_loaded=0 commands=3 errors=0 images=0 unique_tools=7
+2026/05/30 13:43:06 INFO processing session events session_id=ses_18779662affeYQ0SOKEml4DJWY provider=opencode message_count=18
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_18779662affeYQ0SOKEml4DJWY total_events=31 tool_calls=25 skills_loaded=0 commands=4 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:06 INFO processing session events session_id=ses_1877245d1ffeOX7t25ZO9G2KD6 provider=opencode message_count=7
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_1877245d1ffeOX7t25ZO9G2KD6 total_events=21 tool_calls=14 skills_loaded=0 commands=4 errors=1 images=0 unique_tools=4
+2026/05/30 13:43:06 INFO processing session events session_id=ses_187685ca7ffeuVyuombXM1B4st provider=opencode message_count=12
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_187685ca7ffeuVyuombXM1B4st total_events=24 tool_calls=21 skills_loaded=0 commands=0 errors=1 images=0 unique_tools=4
+2026/05/30 13:43:06 INFO processing session events session_id=ses_18767cc65ffeuW8SgmqZ5aVEpN provider=opencode message_count=27
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_18767cc65ffeuW8SgmqZ5aVEpN total_events=47 tool_calls=42 skills_loaded=0 commands=3 errors=0 images=0 unique_tools=7
+2026/05/30 13:43:06 INFO processing session events session_id=ses_18756bb2fffexOdTGff3nPo5as provider=opencode message_count=21
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_18756bb2fffexOdTGff3nPo5as total_events=30 tool_calls=25 skills_loaded=0 commands=3 errors=0 images=0 unique_tools=5
+2026/05/30 13:43:06 INFO processing session events session_id=ses_187565bb9ffeL9jYDDzHxgUKnj provider=opencode message_count=17
+2026/05/30 13:43:06 INFO extracted session events session_id=ses_187565bb9ffeL9jYDDzHxgUKnj total_events=26 tool_calls=21 skills_loaded=0 commands=3 errors=0 images=0 unique_tools=6
+2026/05/30 13:43:07 INFO processing session events session_id=ses_1875615deffe92D2JB6x6Xa7bg provider=opencode message_count=28
+2026/05/30 13:43:07 INFO extracted session events session_id=ses_1875615deffe92D2JB6x6Xa7bg total_events=54 tool_calls=45 skills_loaded=0 commands=6 errors=1 images=0 unique_tools=7
+2026/05/30 13:43:07 INFO processing session events session_id=ses_19aff520cffeuAed5NDIzTD8Hn provider=opencode message_count=1804
+2026/05/30 13:43:07 INFO extracted session events session_id=ses_19aff520cffeuAed5NDIzTD8Hn total_events=2652 tool_calls=1816 skills_loaded=4 commands=798 errors=9 images=0 unique_tools=21
+== hermes-only auto-detect ==
+rc=1
+stdout:
+
+stderr:
+package command-line-arguments
+	/tmp/aisync-cli-hermes-only.go:8:5: use of internal package github.com/ChristopherAparicio/aisync/internal/provider not allowed
+== hermes-only auto-detect ==
+rc=0
+stdout:
+Captured session fixture-hermes-001
+  Provider: hermes
+  Branch:   master
+  Mode:     compact
+  Messages: 0
+  Summary:  fixture hermes session
+stderr:
+2026/05/30 13:44:25 [search] FTS5 engine initialized
+2026/05/30 13:44:25 INFO processing session events session_id=fixture-hermes-001 provider=hermes message_count=0
+2026/05/30 13:44:25 INFO extracted session events session_id=fixture-hermes-001 total_events=1 tool_calls=0 skills_loaded=0 commands=0 errors=0 images=0 unique_tools=0
