@@ -15,38 +15,44 @@ import (
 
 // Session represents a captured AI coding session.
 type Session struct {
-	ExportedAt      time.Time    `json:"exported_at"`
-	CreatedAt       time.Time    `json:"created_at"`
-	ProjectPath     string       `json:"project_path"`
-	ExportedBy      string       `json:"exported_by,omitempty"`
-	ParentID        string       `json:"parent_id,omitempty"`
-	OwnerID         string       `json:"owner_id,omitempty"`
-	StorageMode     string       `json:"storage_mode"`
-	Summary         string       `json:"summary,omitempty"`
-	ID              string       `json:"id"`
-	Provider        string       `json:"provider"`
-	Agent           string       `json:"agent"`
-	Branch          string       `json:"branch,omitempty"`
-	CommitSHA       string       `json:"commit_sha,omitempty"`
-	Messages        []Message    `json:"messages,omitempty"`
-	Links           []Link       `json:"links,omitempty"`
-	FileChanges     []FileChange `json:"file_changes,omitempty"`
-	TokenUsage      TokenUsage   `json:"token_usage"`
-	ForkedAtMessage int          `json:"forked_at_message,omitempty"`
-	Version         int          `json:"version"`
+	ExportedAt        time.Time    `json:"exported_at"`
+	CreatedAt         time.Time    `json:"created_at"`
+	ProjectPath       string       `json:"project_path"`
+	ExportedBy        string       `json:"exported_by,omitempty"`
+	ParentID          string       `json:"parent_id,omitempty"`
+	OwnerID           string       `json:"owner_id,omitempty"`
+	StorageMode       string       `json:"storage_mode"`
+	RetentionTier     string       `json:"retention_tier,omitempty"`
+	RetentionFidelity string       `json:"retention_fidelity,omitempty"`
+	CompactedAt       time.Time    `json:"compacted_at"`
+	LastAccessedAt    time.Time    `json:"last_accessed_at"`
+	Summary           string       `json:"summary,omitempty"`
+	ID                string       `json:"id"`
+	Provider          string       `json:"provider"`
+	Agent             string       `json:"agent"`
+	Branch            string       `json:"branch,omitempty"`
+	CommitSHA         string       `json:"commit_sha,omitempty"`
+	Messages          []Message    `json:"messages,omitempty"`
+	Links             []Link       `json:"links,omitempty"`
+	FileChanges       []FileChange `json:"file_changes,omitempty"`
+	TokenUsage        TokenUsage   `json:"token_usage"`
+	ForkedAtMessage   int          `json:"forked_at_message,omitempty"`
+	Version           int          `json:"version"`
 }
 
 // Summary is a lightweight session representation for listings.
 type Summary struct {
-	CreatedAt    time.Time `json:"created_at"`
-	ID           string    `json:"id"`
-	OwnerID      string    `json:"owner_id,omitempty"`
-	Provider     string    `json:"provider"`
-	Agent        string    `json:"agent"`
-	Branch       string    `json:"branch,omitempty"`
-	Summary      string    `json:"summary,omitempty"`
-	MessageCount int       `json:"message_count"`
-	TotalTokens  int       `json:"total_tokens"`
+	CreatedAt         time.Time `json:"created_at"`
+	ID                string    `json:"id"`
+	OwnerID           string    `json:"owner_id,omitempty"`
+	Provider          string    `json:"provider"`
+	Agent             string    `json:"agent"`
+	Branch            string    `json:"branch,omitempty"`
+	Summary           string    `json:"summary,omitempty"`
+	RetentionTier     string    `json:"retention_tier,omitempty"`
+	RetentionFidelity string    `json:"retention_fidelity,omitempty"`
+	MessageCount      int       `json:"message_count"`
+	TotalTokens       int       `json:"total_tokens"`
 }
 
 // Message represents a single message in an AI conversation.
@@ -239,6 +245,8 @@ type RestoreResult struct {
 	Session     *Session `json:"Session"`
 	Method      string   `json:"Method"`
 	ContextPath string   `json:"ContextPath"`
+	Fidelity    string   `json:"Fidelity,omitempty"`
+	Warning     string   `json:"Warning,omitempty"`
 }
 
 // Restore looks up a session and imports it into a target provider.
@@ -745,6 +753,7 @@ type WorkItemsOptions struct {
 	ProjectPath string
 	RemoteURL   string
 	Kind        string
+	Source      string
 }
 
 // WorkItems lists external tracker references with aggregated cost.
@@ -758,6 +767,9 @@ func (c *Client) WorkItems(opts WorkItemsOptions) (*WorkItemList, error) {
 	}
 	if opts.Kind != "" {
 		q.Set("kind", opts.Kind)
+	}
+	if opts.Source != "" {
+		q.Set("source", opts.Source)
 	}
 
 	path := "/api/v1/work-items"
@@ -774,12 +786,31 @@ func (c *Client) WorkItems(opts WorkItemsOptions) (*WorkItemList, error) {
 }
 
 // WorkItem returns a single ticket reference with its linked sessions and cost.
-func (c *Client) WorkItem(ref string) (*WorkItem, error) {
+func (c *Client) WorkItem(ref string, filters ...WorkItemsOptions) (*WorkItem, error) {
 	if ref == "" {
 		return nil, fmt.Errorf("ref parameter is required")
 	}
 
-	data, err := c.doGet("/api/v1/work-items/" + url.PathEscape(ref))
+	q := url.Values{}
+	if len(filters) > 0 {
+		opts := filters[0]
+		if opts.ProjectPath != "" {
+			q.Set("project", opts.ProjectPath)
+		}
+		if opts.RemoteURL != "" {
+			q.Set("remote_url", opts.RemoteURL)
+		}
+		if opts.Source != "" {
+			q.Set("source", opts.Source)
+		}
+	}
+
+	path := "/api/v1/work-items/" + url.PathEscape(ref)
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+
+	data, err := c.doGet(path)
 	if err != nil {
 		return nil, err
 	}

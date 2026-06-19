@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -507,15 +509,66 @@ func TestHandleBlame_FilesArray(t *testing.T) {
 	text := requireTextResult(t, result)
 
 	var blameResult struct {
-		Entries []struct {
-			SessionID string `json:"session_id"`
-		} `json:"Entries"`
+		FilesGrouped []struct {
+			File     string `json:"file"`
+			Sessions []struct {
+				SessionID string `json:"session_id"`
+			} `json:"sessions"`
+		} `json:"FilesGrouped"`
 	}
 	if err := json.Unmarshal([]byte(text), &blameResult); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if len(blameResult.Entries) < 1 {
-		t.Errorf("expected at least 1 blame entry for files array, got %d", len(blameResult.Entries))
+	if len(blameResult.FilesGrouped) != 2 {
+		t.Fatalf("expected 2 file groups (src/main.go, other.go), got %d", len(blameResult.FilesGrouped))
+	}
+	if blameResult.FilesGrouped[0].File != "src/main.go" {
+		t.Errorf("first group file = %q, want src/main.go", blameResult.FilesGrouped[0].File)
+	}
+	if len(blameResult.FilesGrouped[0].Sessions) < 1 {
+		t.Errorf("expected at least 1 session for src/main.go, got %d", len(blameResult.FilesGrouped[0].Sessions))
+	}
+	if len(blameResult.FilesGrouped[1].Sessions) != 0 {
+		t.Errorf("expected 0 sessions for untouched other.go, got %d", len(blameResult.FilesGrouped[1].Sessions))
+	}
+}
+
+func TestHandleBlame_FilesFrom(t *testing.T) {
+	h, svc := newTestHandlers(t)
+	seedSession(t, svc, "blame-ff-1")
+
+	manifest := filepath.Join(t.TempDir(), "files.txt")
+	if err := os.WriteFile(manifest, []byte("src/main.go\n# comment\nother.go\n"), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	req := callToolReq("aisync_blame", map[string]any{
+		"files_from": manifest,
+	})
+
+	result, err := h.handleBlame(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handleBlame error: %v", err)
+	}
+
+	text := requireTextResult(t, result)
+
+	var blameResult struct {
+		FilesGrouped []struct {
+			File     string `json:"file"`
+			Sessions []struct {
+				SessionID string `json:"session_id"`
+			} `json:"sessions"`
+		} `json:"FilesGrouped"`
+	}
+	if err := json.Unmarshal([]byte(text), &blameResult); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(blameResult.FilesGrouped) != 2 {
+		t.Fatalf("expected 2 file groups from manifest, got %d", len(blameResult.FilesGrouped))
+	}
+	if blameResult.FilesGrouped[0].File != "src/main.go" || len(blameResult.FilesGrouped[0].Sessions) < 1 {
+		t.Errorf("expected src/main.go group with sessions, got %+v", blameResult.FilesGrouped[0])
 	}
 }
 

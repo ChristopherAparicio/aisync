@@ -499,6 +499,7 @@ func (s *Server) handleWorkItems(w http.ResponseWriter, r *http.Request) {
 		ProjectPath: q.Get("project"),
 		RemoteURL:   q.Get("remote_url"),
 		Kind:        q.Get("kind"),
+		Source:      q.Get("source"),
 	})
 	if err != nil {
 		mapServiceError(w, err)
@@ -513,7 +514,12 @@ func (s *Server) handleWorkItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ref is required")
 		return
 	}
-	result, err := s.sessionSvc.WorkItem(r.Context(), ref)
+	q := r.URL.Query()
+	result, err := s.sessionSvc.WorkItem(r.Context(), ref, service.WorkItemRequest{
+		ProjectPath: q.Get("project"),
+		RemoteURL:   q.Get("remote_url"),
+		Source:      q.Get("source"),
+	})
 	if err != nil {
 		mapServiceError(w, err)
 		return

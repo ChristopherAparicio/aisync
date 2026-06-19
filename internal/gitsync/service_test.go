@@ -1,6 +1,7 @@
 package gitsync
 
 import (
+	"encoding/json"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -275,6 +276,74 @@ func TestPushThenPull(t *testing.T) {
 	}
 	if got2.Summary != s2.Summary {
 		t.Errorf("Summary = %q, want %q", got2.Summary, s2.Summary)
+	}
+}
+
+func TestPull_NormalizesAbsolutePaths(t *testing.T) {
+	repoDir := initTestRepo(t)
+	gitClient := git.NewClient(repoDir)
+	if err := gitClient.InitSyncBranch(); err != nil {
+		t.Fatalf("InitSyncBranch() error = %v", err)
+	}
+
+	sess := testSession("sess-pull-abs")
+	sess.ProjectPath = "/home/user/teamproj"
+	sess.FileChanges = []session.FileChange{
+		{FilePath: "/home/user/teamproj/src/handler.go", ChangeType: session.ChangeModified},
+		{FilePath: "/tmp/external.log", ChangeType: session.ChangeModified},
+	}
+	sessJSON, err := json.MarshalIndent(sess, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal session: %v", err)
+	}
+
+	idx := Index{
+		Version:   1,
+		UpdatedAt: time.Now(),
+		Entries: []IndexEntry{{
+			ID:        sess.ID,
+			Provider:  sess.Provider,
+			Agent:     sess.Agent,
+			Branch:    sess.Branch,
+			CreatedAt: sess.CreatedAt,
+		}},
+	}
+	idxJSON, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal index: %v", err)
+	}
+
+	files := map[string][]byte{
+		string(sess.ID) + ".json": sessJSON,
+		"index.json":              idxJSON,
+	}
+	if err := gitClient.WriteSyncFiles(files, "seed absolute-path session"); err != nil {
+		t.Fatalf("WriteSyncFiles() error = %v", err)
+	}
+
+	storeB := mustOpenStore(t)
+	svcB := NewService(gitClient, storeB)
+	result, err := svcB.Pull(false)
+	if err != nil {
+		t.Fatalf("Pull() error = %v", err)
+	}
+	if result.Pulled != 1 {
+		t.Fatalf("Pulled = %d, want 1", result.Pulled)
+	}
+
+	records, err := storeB.GetSessionFileChanges(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionFileChanges() error = %v", err)
+	}
+	got := make(map[string]bool, len(records))
+	for _, r := range records {
+		got[r.FilePath] = true
+	}
+	if !got["src/handler.go"] {
+		t.Errorf("pulled in-project path not normalized to relative; stored %v", got)
+	}
+	if !got["/tmp/external.log"] {
+		t.Errorf("pulled out-of-project path should stay absolute; stored %v", got)
 	}
 }
 

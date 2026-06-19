@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -338,14 +339,27 @@ func (h *handlers) handleSearch(ctx context.Context, req mcp.CallToolRequest) (*
 
 func (h *handlers) handleBlame(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var args struct {
-		File     string   `json:"file"`
-		Files    []string `json:"files"`
-		Branch   string   `json:"branch"`
-		Provider string   `json:"provider"`
-		All      bool     `json:"all"`
+		File      string   `json:"file"`
+		Files     []string `json:"files"`
+		FilesFrom string   `json:"files_from"`
+		Branch    string   `json:"branch"`
+		Provider  string   `json:"provider"`
+		All       bool     `json:"all"`
 	}
 	if err := req.BindArguments(&args); err != nil {
 		return toolError(err), nil
+	}
+
+	if args.FilesFrom != "" {
+		content, readErr := os.ReadFile(args.FilesFrom)
+		if readErr != nil {
+			return toolError(fmt.Errorf("reading files manifest: %w", readErr)), nil
+		}
+		manifestFiles, parseErr := service.ParseFileManifest(content)
+		if parseErr != nil {
+			return toolError(parseErr), nil
+		}
+		args.Files = append(args.Files, manifestFiles...)
 	}
 
 	if args.File == "" && len(args.Files) == 0 {
